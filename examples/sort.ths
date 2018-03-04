@@ -1,0 +1,79 @@
+import Peano
+import Bool
+
+-- have a way of talking about 'x :: 0' explicitely. 
+
+-- iso acc :: Num * Num * Num <-> Num * Num * Num
+-- | x, y                          <-> lab $ inL (x, y)
+-- | lab $ inL (x, y)              <-> iter $ x, y, Z
+-- | lab $ inR (diverge (n, m, x)) <-> S n, S m, x
+-- | iter $ S n, S m, x            <-> iter $ n, m, S x
+-- | iter $ Z, Z, x                <-> Z, Z, x
+-- | iter $ S n, Z, x              <-> S n, Z, x
+-- | iter $ Z, S n, x              <-> Z, S n, x
+-- where lab :: x + 0 
+--       iter :: Num * Num * Num 
+
+iso lessOrEq :: Num * Num <-> Num * Num * Bool
+| x, y               <-> down $ x, y, Z
+| down $ S n, S m, x <-> down $ n, m, S x
+| down $ Z, S m, x   <-> up $ Z, S m, x, makeFalse ()
+| down $ Z, Z, x     <-> up $ Z, Z, x, makeFalse ()
+| down $ S n, Z, x   <-> up $ S n, Z, x, makeTrue ()
+| up $ x, y, S n, b  <-> up $ S x, S y, n, b
+| up $ x, y, Z, b    <-> x, y, b
+where down :: Num * Num * Num 
+      up :: Num * Num * Num * Bool
+
+eval lessOrEq Z, Z 
+eval lessOrEq S Z, Z 
+eval lessOrEq Z, S Z 
+
+-- sort 2 nums
+iso sort2 :: Num * Num <-> Num * Num * Bool
+| x, y <-> ret $ lessOrEq (x, y)
+| ret $ x, y, True <-> y, x, True
+| ret $ x, y, False <-> x, y, False
+where ret :: Num * Num * Bool
+
+eval sort2 Z, Z 
+eval sort2 S Z, Z 
+eval sort2 Z, S Z 
+
+-- sort 3 nums
+iso sort3 :: Num * Num * Num <-> Num * Num * Num * (Bool * Bool * Bool)
+| x, y, z                    <-> r1 $ (sort2 (x, y)), z
+| r1 $ (x, y, b1), z         <-> r2 $ x, b1, (sort2 (y, z))
+| r2 $ x, b1, (y, z, b2)     <-> r3 $ (sort2 (x, y)), z, b1, b2
+| r3 $ (x, y, b3), z, b1, b2 <-> x, y, z, (b1, b2, b3)
+where r1 :: (Num * Num * Bool) * Num 
+      r2 :: Num * Bool * (Num * Num * Bool)
+      r3 :: (Num * Num * Bool) * Num * Bool * Bool
+
+eval sort3 Z, Z, Z 
+eval sort3 S Z, Z, S S Z
+eval sort3 Z, S Z, S S Z
+eval sort3 S S Z, S Z, Z
+
+-- extensible tuple sort
+iso sortN :: s:(ns * Num <-> ns * Num * bs) 
+          -> (ns * Num * Num  <-> ns * Num * Num * (bs * Bool * bs))
+| ns, m                       <-> r1 $ m, s ns
+| r1 $ m, ((ns, n), bs)       <-> r2 $ sort2 (n, m), ns, bs
+| r2 $ (n, m, b), ns, bs      <-> r3 $ s (ns, n), m, (bs, b)
+| r3 $ (ns1, bs1), m, (bs, b) <-> ns1, m, (bs, b, bs1)
+where r1 :: Num * ((ns * Num) *bs)
+      r2 :: (Num * Num * Bool) * ns * bs 
+      r3 :: ((ns * Num) * bs) * Num * (bs * Bool) 
+ 
+-- sort 3 nums
+eval sortN ~s:sort2 Z, Z, Z 
+eval sortN ~s:sort2 S Z, Z, S S Z
+eval sortN ~s:sort2 Z, S Z, S S Z
+eval sortN ~s:sort2 S S Z, S Z, Z
+
+-- sort 4 nums
+eval sortN ~s:(sortN ~s:sort2) Z, Z, Z, Z 
+eval sortN ~s:(sortN ~s:sort2) S Z, Z, S S S Z, S S Z
+eval sortN ~s:(sortN ~s:sort2) Z, S Z, S S Z, S S S Z
+eval sortN ~s:(sortN ~s:sort2) S S S Z, S S Z, S Z, Z

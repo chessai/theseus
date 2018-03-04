@@ -1,0 +1,110 @@
+-- This a Peano style unary number encoding
+-- 0 = Z
+-- 1 = S Z
+-- 2 = S S Z
+-- 3 = S S S Z
+import Bool
+import Ordering
+import Partial
+
+data Num = Z 
+         | S Num 
+
+iso parity :: Num * Bool <-> Num * Bool
+| n, x             <-> lab $ n, Z, x
+| lab $ S n, m, x  <-> lab $ n, S m, not x
+| lab $ Z, m, x    <-> m, x
+where lab :: Num * Num * Bool
+
+-- Note: Application of constructors is right associative. This makes
+-- sense in this language since (1) we don't have any first class
+-- functions and (2) All constructors behave like unary operators.
+
+-- Run one or more expressions like this.  We should think some more
+-- about what the top level interface should be. Writing eval
+-- expressions like this is clearly not ideal. Maybe we should have a
+-- Theseus REPL.
+eval parity S S S Z, True
+eval parity S S Z, True
+eval parity S Z, True
+eval parity Z, True
+
+-- add1 x <-> S x
+iso add1 :: Num <-> Num 
+| x            <-> ret $ just x
+| ret $ inL () <-> Z
+| ret $ inR n  <-> S n 
+where ret :: 1 + Num 
+
+-- just for reference, this is the fully inlined version of add1. 
+iso add1_inlined :: Num <-> Num 
+| x            <-> ret $ inR x
+| lab $ Z      <-> ret $ inL () 
+| lab $ S n    <-> lab $ n
+| ret $ inL () <-> Z
+| ret $ inR n  <-> S n
+where ret :: 1 + Num
+      lab :: Num
+
+-- sub1 S x <-> x
+-- sub1 0 <-> undef 
+iso sub1 :: Num <-> Num
+| add1 x        <-> x
+
+eval add1 Z
+eval add1 S Z
+eval sub1 S Z
+eval sub1 S S Z
+
+-- add (x, y) <-> (x, x+y)
+iso add :: Num * Num <-> Num * Num
+| x, y               <-> iter $ x, Z, y
+| iter $ Z, m, n     <-> m, n
+| iter $ S x, m, n   <-> iter $ x, S m, add1 n
+where iter :: Num * Num * Num
+
+eval add Z, Z
+eval add S Z, Z
+eval add S S Z, S S Z
+
+-- times x, y, z <-> x, y, (z + x * y)
+iso times :: Num * Num * Num <-> Num * Num * Num 
+| x, y, z                    <-> iter $ x, Z, (y, z)
+| iter $ Z, c, (y, z)        <-> c, y, z
+| iter $ S x, c, (y, z)      <-> iter $ x, S c, add (y, z)
+where iter :: Num * Num * (Num * Num)
+
+eval times S S Z, S S Z, Z
+
+iso compare :: Num * Num * Ordering <-> Num * Num * Ordering
+| x, y, ord                      <-> iter $ x, y, Z, ord
+| iter $ Z, S n, c, ord          <-> unwind $ c, Z, S n, orderDown ord
+| iter $ Z, Z, c, ord            <-> unwind $ c, Z, Z,   ord
+| iter $ S m, Z, c, ord          <-> unwind $ c, S m, Z, orderUp ord
+| iter $ S m, S n, c, ord        <-> iter $ m, n, S c, ord 
+| unwind $ S c, x, y, ord        <-> unwind $ c, S x, S y, ord
+| unwind $ Z, x, y, ord          <-> x, y, ord
+where iter :: Num * Num * Num * Ordering
+      unwind :: Num * Num * Num * Ordering      
+
+eval compare S Z, S S Z, EQ
+eval compare S Z, S Z, EQ
+eval compare S S Z, S Z, EQ
+
+iso div2 :: Num   <-> Num * Bool
+| x               <-> iter $ x, Z
+| iter $ Z, n     <-> n, False
+| iter $ S Z, n   <-> n, True
+| iter $ S S x, n <-> iter $ x, S n
+where iter :: Num * Num
+
+eval div2 Z
+eval div2 S Z
+eval div2 S S Z
+eval div2 S S S Z
+eval div2 S S S S Z
+
+-- -- I would like to write this. 
+-- iso makeZero :: 1 <-> Num
+-- | ()              <-> Z
+-- | diverge n       <-> S n

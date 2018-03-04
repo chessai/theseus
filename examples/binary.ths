@@ -1,0 +1,28 @@
+-- This is a base 2 number enconding.
+-- 0 = E
+-- 1 = N (False, E)
+-- 2 = N (True, E)
+-- 3 = N (False, N (False, E))
+-- 4 = N (False, N (True, E)) 
+
+import Bool
+import Peano
+
+data Binary = E 
+            | N (Bool * Binary)
+
+
+
+iso num2bin :: Num   <-> Binary
+| x                  <-> iter $ x, E
+| iter $ Z, bin      <-> bin
+| iter $ S x, bin    <-> div $ div2 x, bin
+| div $ x, bool, bin <-> iter $ x, N (bool, bin)
+where iter :: Num * Binary
+      div :: Num * Bool * Binary
+
+eval num2bin Z 
+eval num2bin S Z 
+eval num2bin S S Z 
+eval num2bin S S S Z 
+eval num2bin S S S S Z 

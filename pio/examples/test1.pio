@@ -1,0 +1,58 @@
+
+-- A tiny pio program
+
+{-- datatype declarations --}
+
+data Bool = 1 + 1
+data Nat  = 1 + Nat
+
+{-- constant abbreviations --}
+
+const false : Bool = fold Bool (inL tt)
+const true  : Bool = fold Bool (inR tt)
+
+const zero : Nat = fold Nat (inL tt)
+const one  : Nat = fold Nat (inR zero)
+const two  : Nat = fold Nat (inR one) 
+
+{-- combinator abbreviations --}
+
+iso not : Bool <-> Bool = 
+  unfold Bool ; swap+ ; fold Bool
+
+iso cnot : Bool * Bool <-> Bool * Bool = 
+  (unfold Bool * id) ; 
+  distrib ; 
+  ((id * not) + id) ; 
+  factor ; 
+  (fold Bool * id)
+
+iso ccnot : Bool * (Bool * Bool) <-> Bool * (Bool * Bool) = 
+  (unfold Bool * id) ; 
+  distrib ; 
+  ((id * cnot) + id) ; 
+  factor ; 
+  (fold Bool * id)
+
+iso toffoli : (Bool * Bool) * Bool <-> (Bool * Bool) * Bool = 
+  assocr* ; ccnot ; assocl*
+
+iso incdec : Nat * Nat <-> Nat * Nat = 
+  swap* ; 
+  (unfold Nat * id) ;
+  distrib ; 
+  (id + swap*) ; 
+  factor ; 
+  (fold Nat * id)
+
+iso inc : Nat <-> Nat = 
+  trace (((unfold Nat ; swap+) + id) ; 
+         assocr+ ; 
+         (id + fold Nat))
+
+iso introT : 1 <-> Bool = 
+  trace (assocr+ ; ((unfold Nat ; swap+) + fold Bool))
+
+{-- main program --} 
+
+main = introT @ tt

@@ -1,0 +1,12 @@
+-- Haskell style ordering type
+data Ordering = LT
+              | EQ
+              | GT
+
+iso orderUp :: Ordering <-> Ordering
+| EQ <-> GT
+| LT <-> EQ
+| GT <-> LT
+
+iso orderDown :: Ordering <-> Ordering
+| orderUp x <-> x

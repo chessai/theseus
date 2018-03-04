@@ -1,0 +1,23 @@
+import Bool
+
+iso up :: f:(a <-> a) -> a * Bool <-> a * Bool
+| a, False <-> a, True
+| a, True <-> f a, False
+
+data Byte = Byte (Bool * Bool * Bool * Bool * Bool * Bool * Bool * Bool)
+
+iso next :: Byte <-> Byte
+| Byte x <-> Byte (up ~f:(up ~f:(up ~f:(up ~f:(up ~f:(up ~f:(up ~f:not)))))) x)
+  
+eval next Byte (True, True, True, True, True, True, True, True)
+eval next Byte (True, True, True, True, True, True, True, False)
+eval next Byte (True, True, True, True, True, True, False, True)
+eval next Byte (False, True, True, True, True, True, True, True)
+
+iso prev :: Byte <-> Byte
+| next x <-> x
+
+eval prev Byte (True, True, True, True, True, True, True, True)
+eval prev Byte (True, True, True, True, True, True, True, False)
+eval prev Byte (True, True, True, True, True, True, False, True)
+eval prev Byte (False, True, True, True, True, True, True, True)
