@@ -1,3 +1,8 @@
+## Credit:
+Credit for design and implementation of Theseus goes entirely to
+Roshan P. James and Amr Sabry of Indiana University. This is currently
+just a mirror, though it would be cool to hack on it.
+
 # Theseus, the programming language.
 
 Why create another programming language in this time and age? And why
