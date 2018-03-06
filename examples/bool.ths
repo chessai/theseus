@@ -3,40 +3,40 @@ import Partial
 data Bool = True | False
 
 -- identity
-iso id :: a <-> a
-| x <-> x
+iso id : a = a
+| x = x
 
 -- boolean not 
-iso not :: Bool <-> Bool
-| True <-> False
-| False <-> True
+iso not : Bool = Bool
+| True = False
+| False = True
 
 -- conditionals over bool
-iso if :: then:(a <-> a) -> else:(a <-> a) -> (Bool * a <-> Bool * a)
-| True, x  <-> True, then x
-| False, x <-> False, else x
+iso if : then:(a = a) -> else:(a = a) -> (Bool * a = Bool * a)
+| True, x  = True, then x
+| False, x = False, else x
 
 -- controlled not
-iso cnot :: Bool * Bool <-> Bool * Bool
-| x <-> if ~then:not ~else:id x
+iso cnot : Bool * Bool = Bool * Bool
+| x = if ~then:not ~else:id x
 
 -- toffoli gate
-iso toffoli :: Bool * (Bool * Bool) <-> Bool * (Bool * Bool)
-| x <-> if ~then:cnot ~else:id x
+iso toffoli : Bool * (Bool * Bool) = Bool * (Bool * Bool)
+| x = if ~then:cnot ~else:id x
 
 eval toffoli True, (True, True)
 eval toffoli True, (True, False)
 eval toffoli True, (False, True)
 eval toffoli True, (False, False)
 
-iso makeTrue :: 1 <-> Bool
-| ()           <-> let $ just ()
-| let $ inL () <-> False
-| let $ inR () <-> True
-where let :: 1 + 1
+iso makeTrue : 1 = Bool
+| ()           = let $ just ()
+| let $ inL () = False
+| let $ inR () = True
+where let : 1 + 1
 
-iso makeFalse :: 1 <-> Bool
-| () <-> not (makeTrue ())
+iso makeFalse : 1 = Bool
+| () = not (makeTrue ())
 
 -- make constants
 eval makeTrue ()

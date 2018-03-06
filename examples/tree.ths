@@ -8,15 +8,15 @@ data Ctxt = Empty
           | L (Ctxt * Tree)
           | R (Tree * Ctxt)
 
-iso treeWalk :: f:(Num <-> Num) -> Tree <-> Tree
-| tr                         <-> walk $ tr, Empty
-| walk $ Leaf b, ctxt        <-> reconst $ ctxt, Leaf (f b) 
-| walk $ Node (b1, b2), ctxt <-> walk $ b1, L (ctxt, b2) 
-| reconst $ Empty, tr        <-> tr
-| reconst $ L (ctxt, b2), b1 <-> walk $ b2, R (b1, ctxt)
-| reconst $ R (b1, ctxt), b2 <-> reconst $ ctxt, Node (b1, b2)  
-  where walk     :: Tree * Ctxt 
-        reconst  :: Ctxt * Tree
+iso treeWalk : f:(Num = Num) -> Tree = Tree
+| tr                         = walk $ tr, Empty
+| walk $ Leaf b, ctxt        = reconst $ ctxt, Leaf (f b) 
+| walk $ Node (b1, b2), ctxt = walk $ b1, L (ctxt, b2) 
+| reconst $ Empty, tr        = tr
+| reconst $ L (ctxt, b2), b1 = walk $ b2, R (b1, ctxt)
+| reconst $ R (b1, ctxt), b2 = reconst $ ctxt, Node (b1, b2)  
+  where walk     : Tree * Ctxt 
+        reconst  : Ctxt * Tree
 
 eval treeWalk ~f:add1 (Leaf Z)
 eval treeWalk ~f:add1 (Node (Leaf Z, Leaf Z))

@@ -55,7 +55,7 @@ data Typ = One
          | Neg Typ
            deriving (Eq, Ord)
 
-data ITyp = ITyp Typ Typ -- t <-> t
+data ITyp = ITyp Typ Typ -- t = t
             deriving (Eq, Ord)
                      
 data PVal = Unit               -- unit
@@ -125,7 +125,7 @@ ppDef :: Def -> Doc
 ppDef (DataTyp t alts) = 
   hsep [text "data", text t, equals, ppAlts alts]
 ppDef (Iso name args ityp labels clauses) = 
-    vcat [hsep [text "iso", text name, text "::", ppFArgs args, ppITyp ityp],
+    vcat [hsep [text "iso", text name, text ":", ppFArgs args, ppITyp ityp],
           vcat (map ppClause clauses),
           ppLabels labels]
 ppDef (Eval func val) = 
@@ -160,7 +160,7 @@ ppTyp (Times t1 t2) = hsep [ppTypParen t1, text "*", ppTypParen t2]
 ppTyp (Plus t1 t2)  = hsep [ppTypParen t1, text "+", ppTypParen t2]
 
 ppITyp :: ITyp -> Doc
-ppITyp (ITyp b1 b2) = hsep [ppTyp b1, text "<->", ppTyp b2]
+ppITyp (ITyp b1 b2) = hsep [ppTyp b1, text "=", ppTyp b2]
 
 
 ppTypParen :: Typ -> Doc
@@ -173,7 +173,7 @@ ppTypParen t =
 ppLabels :: [(LName, Typ)] -> Doc
 ppLabels [] = empty
 ppLabels ((label, typ):labels) = 
-    vcat [ hsep [text "where", text label, text "::", ppTyp typ],
+    vcat [ hsep [text "where", text label, text ":", ppTyp typ],
            ppLabels labels ]
 
 ppVal :: PVal -> Doc 
@@ -234,7 +234,7 @@ lexer = makeTokenParser $
                  , identStart = letter <|> char '_'
                  , identLetter = alphaNum <|> char '_'
                  , reservedNames = ["data", "inL", "inR", "eval", "where", "iso"]
-                 , reservedOpNames = ["+","*",",", ";", "<->", "::", "()"]
+                 , reservedOpNames = ["+","*",",", ";", "=", ":", "()"]
                  , caseSensitive = True }
       
 progParser :: Parsec String () Prog
@@ -255,7 +255,7 @@ defParser =
     <|>
     (do reserved lexer "iso"
         fname <- try (do fname <- identifier lexer
-                         reserved lexer "::"
+                         reserved lexer ":"
                          return fname)
         fparams <- many (try (do arg <- identifier lexer
                                  symbol lexer ":"
@@ -265,13 +265,13 @@ defParser =
         ityp <- itypParser
         clauses <- many (do symbol lexer "|" 
                             p1 <- valParserWithLabel 
-                            symbol lexer "<->"
+                            symbol lexer "="
                             p2 <- valParserWithLabel
                             return (Clause p1 p2))
         labels <- option [] -- now I need a "where" per label.
                   (do reserved lexer "where"
                       many1 (do label <- identifier lexer
-                                symbol lexer "::" 
+                                symbol lexer ":" 
                                 typ <- typParser
                                 return (label, typ)))
         return (Iso fname fparams ityp labels clauses))
@@ -358,7 +358,7 @@ itypParser = try parse
              <|> parens lexer parse
     where 
       parse = typParser >>= \t1 -> 
-              symbol lexer "<->" >>
+              symbol lexer "=" >>
               typParser >>= \t2 -> 
               return (ITyp t1 t2)
 

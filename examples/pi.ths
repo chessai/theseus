@@ -4,58 +4,58 @@ import Bool -- Note: Pi doesn't resuppose Bool, but its handy for unit
 -----------------------------------------------
 -- Pi primtives
 
-iso swapPlus :: a + b <-> b + a
-| inL a <-> inR a
-| inR b <-> inL b
+iso swapPlus : a + b = b + a
+| inL a = inR a
+| inR b = inL b
 
-iso swapTimes :: a * b <-> b * a
-| x, y <-> y, x
+iso swapTimes : a * b = b * a
+| x, y = y, x
 
-iso distrib :: a * (b + c) <-> a * b + a * c
-| a, inL b <-> inL (a, b)
-| a, inR c <-> inR (a, c)
+iso distrib : a * (b + c) = a * b + a * c
+| a, inL b = inL (a, b)
+| a, inR c = inR (a, c)
 
-iso factor :: a * b + a * c <-> a * (b + c)
-| distrib x <-> x
+iso factor : a * b + a * c = a * (b + c)
+| distrib x = x
 
 -----------------------------------------------
 -- Various Composition Forms
 
 -- adjoints
-iso adjoint :: f:(a <-> b) -> (b <-> a)
-| f x <-> x
+iso adjoint : f:(a = b) -> (b = a)
+| f x = x
 
 eval adjoint ~f:(if ~then:not ~else:id) (True, True)
 eval adjoint ~f:(if ~then:not ~else:id) (False, True)
 
 -- sequencing
-iso fseq :: f:(a <-> b) -> g:(b <-> c) -> (a <-> c)
-| x <-> g (f x)
+iso fseq : f:(a = b) -> g:(b = c) -> (a = c)
+| x = g (f x)
 
 eval fseq ~f:not ~g:not True
 
 -- multiplicative parallel
-iso ftimes :: f:(a <-> b) -> g:(c <-> d) -> (a * c <-> b * d)
-| x, y <-> f x, g y 
+iso ftimes : f:(a = b) -> g:(c = d) -> (a * c = b * d)
+| x, y = f x, g y 
 
 eval ftimes ~f:not ~g:not True, True
 
 -- additive parallel
-iso fplus :: f:(a <-> b) -> g:(c <-> d) -> (a + c <-> b + d)
-| inL x <-> inL f x
-| inR y <-> inR g y 
+iso fplus : f:(a = b) -> g:(c = d) -> (a + c = b + d)
+| inL x = inL f x
+| inR y = inR g y 
 
 eval fplus ~f:not ~g:not (inL True)
 eval fplus ~f:not ~g:not (inR True)
 
 -- additive trace
-iso trace :: f:(a + b <-> a + c) -> (b <-> c)
-| x           <-> trace $ inR x
-| trace $ x   <-> ret $ f x
-| ret $ inL a <-> trace $ inL a
-| ret $ inR c <-> c
-where trace :: a + b
-      ret :: a + c
+iso trace : f:(a + b = a + c) -> (b = c)
+| x           = trace $ inR x
+| trace $ x   = ret $ f x
+| ret $ inL a = trace $ inL a
+| ret $ inR c = c
+where trace : a + b
+      ret : a + c
 
 -- trace ~f:swapPlus = id
 eval trace ~f:swapPlus True

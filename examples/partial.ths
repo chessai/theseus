@@ -5,19 +5,19 @@ data Inf = Start
          | Step Inf
 
 -- increases the state-space by 1. 
-iso just :: a <-> 1 + a
-| x             <-> inR x
-| iter $ Start  <-> inL ()
-| iter $ Step n <-> iter $ n
-where iter :: Inf
+iso just : a = 1 + a
+| x             = inR x
+| iter $ Start  = inL ()
+| iter $ Step n = iter $ n
+where iter : Inf
 
 eval just ()
 
 -- this will diverge on any input. This is the empty map. 
-iso diverge :: a <-> 0
-| x           <-> iter $ x, Start
-| iter $ x, n <-> iter $ x, Step n
-where iter :: a * Inf
+iso diverge : a  = 0
+| x           = iter $ x, Start
+| iter $ x, n = iter $ x, Step n
+where iter : a * Inf
 
 -- this will diverge
 -- eval diverge True
