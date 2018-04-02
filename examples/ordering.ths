@@ -3,10 +3,10 @@ data Ordering = LT
               | EQ
               | GT
 
-iso orderUp :: Ordering <-> Ordering
-| EQ <-> GT
-| LT <-> EQ
-| GT <-> LT
+iso orderUp : Ordering = Ordering
+| EQ = GT
+| LT = EQ
+| GT = LT
 
-iso orderDown :: Ordering <-> Ordering
-| orderUp x <-> x
+iso orderDown : Ordering = Ordering
+| orderUp x = x
