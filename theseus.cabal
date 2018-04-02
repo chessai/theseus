@@ -1,0 +1,30 @@
+name:                theseus
+version:             0.0.0.1
+synopsis:            lang
+description:         Theseus, functional language with fully reversible computation 
+homepage:            https://github.com/chessai/theseus.git
+license:             MIT
+license-file:        LICENSE
+author:              chessai
+maintainer:          chessai1996@gmail.com
+copyright:           (c) 2018 chessai 
+category:            Language
+build-type:          Simple
+extra-source-files:  ChangeLog.md
+cabal-version:       >=1.10
+
+library
+  exposed-modules:
+  build-depends:
+      base >=4.10 && <5
+    , bound
+    , constrictor
+    , containers
+    , mtl
+    , parsec 
+    , parsix 
+    , prettyprinter
+    , prettyprinter-ansi-terminal
+    , transformers
+    , vector
+  default-language:    Haskell2010
