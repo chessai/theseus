@@ -1,7 +1,9 @@
 ## Credit:
-Credit for design and implementation of Theseus goes entirely to
-Roshan P. James and Amr Sabry of Indiana University. This is currently
-just a mirror, though it would be cool to hack on it.
+Credit for design and original implementation of Theseus goes to
+Roshan P. James and Amr Sabry of Indiana University. This is my fork
+of their implementation, which I intend to keep as a pet project.
+
+The original project can be found [here](https://bitbucket.org/roshanjames/theseus).
 
 # Theseus, the programming language.
 
