@@ -1,7 +1,14 @@
-module Theseus.AbstractSyntax where
+{-# language LambdaCase #-}
 
-debug :: Bool
-debug = False
+module Theseus.AbstractSyntax
+  ( Prog, Constr, TName, FName, Var, LName, ModuleName, Formals, Val
+  , PVal(..)
+  , Def(..)
+  , Typ(..)
+  , ITyp(..)
+  , Func(..)
+  , Clause(..)
+  ) where
 
 type Prog = [Def]
 
@@ -14,78 +21,80 @@ type LName = String      -- Label names
 type ModuleName = String -- Module names are filenames without ".ths"
                          -- and with the first letter capitalized
 
-data Def = DataTyp TName [(Constr,Typ)] 
-           -- e.g.: data Tree = Leaf Nat | Node (Tree * Tree) 
-         | Iso FName Formals ITyp [(LName, Typ)] [Clause]
-         | Eval Func PVal
-         | Import ModuleName
-           deriving (Eq, Ord)
+data Def
+  = DataTyp TName [(Constr,Typ)]
+  | Iso FName Formals ITyp [(LName, Typ)] [Clause]
+  | Eval Func PVal
+  | Import ModuleName
+  deriving (Eq, Ord)
+
 type Formals = [(FName, ITyp)]
 
-data Typ = One 
-         | Zero
-         | Times Typ Typ
-         | Plus Typ Typ -- plus is not essential, but it is convenient
-                        -- to have so that one does not have to define
-                        -- a new type for every sum. 
-         | TName TName  -- for user defined types 
-         | Neg Typ
-           deriving (Eq, Ord)
+data Typ
+  = One
+  | Zero
+  | Times Typ Typ
+  | Plus Typ Typ
+  | TName TName
+  | Neg Typ
+  deriving (Eq, Ord)
 
-data ITyp = ITyp Typ Typ -- t <-> t
-            deriving (Eq, Ord)
-                     
-data PVal = Unit               -- unit
-          | Pair PVal PVal     -- pairs
-          | LeftE PVal         -- sum
-          | RightE PVal        -- sum
-          | Constr Constr PVal -- a pattern starting with a constructor
-          | Minus PVal         -- a negative value
-          -- all the subsequent cases cannot show up in values. 
-          | Var Var            -- pattern variable  
-          | App Func PVal      -- function call
-            deriving Eq
+-- | Isomorphisms, `a = b`.
+data ITyp = ITyp Typ Typ
+  deriving (Eq, Ord)
+
+data PVal
+  = Unit -- ^ unit
+  | Pair PVal PVal -- ^ pairs
+  | LeftE PVal -- ^ sum (left con)
+  | RightE PVal -- ^ sum (right con)
+  | Constr Constr PVal -- ^ pattern starting with constructor
+  | Minus PVal -- ^ a negative value
+  | Var Var -- ^ pattern variable (cannot show up in values)
+  | App Func PVal -- ^ function call (cannot show up in values)
+  deriving (Eq, Show)
 
 ordSeq :: Ordering -> Ordering -> Ordering
-ordSeq EQ x = x
-ordSeq x _ = x
+ordSeq = \case
+  EQ -> id
+  x  -> const x
 
 ctorNum :: PVal -> Int
-ctorNum Unit = 0
-ctorNum (Pair _ _) = 1
-ctorNum (LeftE _) = 2
-ctorNum (RightE _) = 3
-ctorNum (Constr _ _) = 4
-ctorNum (Minus _) = 5
-ctorNum (Var _) = -1
-ctorNum (App _ _) = -1
+ctorNum = \case
+  Unit -> 0
+  Pair{} -> 1
+  LeftE{} -> 2
+  RightE{} -> 3
+  Constr{} -> 4
+  Minus{} -> 5
+  Var{} -> -1
+  App{} -> -1
 
 instance Ord PVal where
-  compare p1 p2 =
-    (compare (ctorNum p1) (ctorNum  p2)) `ordSeq` (comp p1 p2)
-    where 
+  compare p p' =
+    (compare (ctorNum p) (ctorNum  p')) `ordSeq` (comp p p')
+    where
       comp Unit Unit = EQ
-      comp (Pair a b) (Pair x y) =
-        (compare a x) `ordSeq` (compare b y)
-      comp (LeftE a) (LeftE b) = compare a b
-      comp (RightE a) (RightE b) = compare a b
-      comp (Constr a b) (Constr x y) =
-        (compare a x) `ordSeq` (compare b y)
-      comp (Minus a) (Minus b) = compare a b
+      comp (Pair p1 p2) (Pair p1' p2') =
+        (compare p1 p1') `ordSeq` (compare p2 p2')
+      comp (LeftE p1) (LeftE p2) = compare p1 p2
+      comp (RightE p1) (RightE p2) = compare p1 p2
+      comp (Constr c1 p1) (Constr c2 p2) =
+        (compare c1 c2) `ordSeq` (compare p1 p2)
+      comp (Minus p1) (Minus p2) = compare p1 p2
       comp (Var _) (Var _) = EQ
       comp (Var _) (App _ _) = EQ
       comp (App _ _) (Var _) = EQ
       comp (App _ _) (App _ _) = EQ
+      comp p1 p2 = compare (ctorNum p1) (ctorNum p2)
 
--- CR rjames: In the case of App, we want to ensure that the PVal
--- covers the type.
-
--- we itend this to mean just the value fragement of PVal, but there
+-- we intend this to mean just the value fragement of PVal, but there
 -- is no nice way of saying that right now.
 type Val = PVal
 
 data Func = Func FName [(String, Maybe Func)]
-          deriving (Show, Eq, Ord)
+  deriving (Show, Eq, Ord)
 
 data Clause = Clause (Maybe LName, PVal) (Maybe LName, PVal)
-              deriving (Eq, Ord)
+  deriving (Show, Eq, Ord)
+

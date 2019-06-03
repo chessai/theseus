@@ -2,7 +2,7 @@ import Bool -- Note: Pi doesn't resuppose Bool, but its handy for unit
             -- tests using "eval"
 
 -----------------------------------------------
--- Pi primtives
+-- Pi primitives
 
 iso swapPlus : a + b = b + a
 | inL a = inR a

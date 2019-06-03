@@ -1,26 +1,26 @@
-import Partial
+use Partial
 
 data Bool = True | False
 
--- identity
+# identity
 iso id : a = a
 | x = x
 
--- boolean not 
+# boolean not 
 iso not : Bool = Bool
 | True = False
 | False = True
 
--- conditionals over bool
+# conditionals over bool
 iso if : then:(a = a) -> else:(a = a) -> (Bool * a = Bool * a)
 | True, x  = True, then x
 | False, x = False, else x
 
--- controlled not
+# controlled not
 iso cnot : Bool * Bool = Bool * Bool
 | x = if ~then:not ~else:id x
 
--- toffoli gate
+# toffoli gate
 iso toffoli : Bool * (Bool * Bool) = Bool * (Bool * Bool)
 | x = if ~then:cnot ~else:id x
 
@@ -38,6 +38,6 @@ where let : 1 + 1
 iso makeFalse : 1 = Bool
 | () = not (makeTrue ())
 
--- make constants
+# make constants
 eval makeTrue ()
 eval makeFalse ()
