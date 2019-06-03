@@ -1,77 +1,80 @@
-{-# language LambdaCase #-}
+{-# language ScopedTypeVariables #-}
+{-# language ViewPatterns #-}
 
 module Theseus.Repl
-  ( run
+  ( repl
   ) where
 
-import Data.Char as Char
+import System.Console.Repline
+import Control.Monad.IO.Class
+import Data.List
+import System.Exit
 import Text.Parsec (runParser)
 
-import Theseus.AbstractSyntax
-import Theseus.Pretty
-import Theseus.Parse
 import Theseus.Coverage
-import Theseus.Semantics
+import Theseus.Eval (run)
+import Theseus.Parse (progParser)
 
--- this is not exactly right since all the defs are put
--- into one big list. This will cause different things to be available
--- in scope. For now I am going to ignore this.
-loadImports :: [Def] -> [String]-> IO [Def]
-loadImports [] _files = return []
-loadImports (x@(DataTyp _ _) : rest) files =
-  do defs <- loadImports rest files
-     return $ x:defs
-loadImports (x@(Iso _ _ _ _ _) : rest) files =
-  do defs <- loadImports rest files
-     return $ x:defs
-loadImports (x@(Eval _ _) : rest) files =
-  do defs <- loadImports rest files
-     return $ x:defs
-loadImports (Import [] : rest) _files = pure rest
-loadImports (Import (f:fs) : rest) files =
-  do let filename = ((Char.toLower f) : fs) ++ ".ths"
-     if elem filename files
-     then do defs <- loadImports rest files
-             return $ defs
-     else do
-       putStr $ "-- {Loading " ++ filename ++ "}\n";
-       input <- readFile filename
-       case runParser progParser () filename input of
-         Left err -> do
-           print err
-           return []
-         Right newdefs -> do
-           defs <- loadImports (newdefs ++ rest) (filename:files)
-           return defs
+type Repl a = HaskelineT IO a
 
-------------------------------------------------------------------------
--- Read, process, print
+data Line = Load FilePath | BadCmd
 
-type Filename = String
+parseCommand :: [String] -> Line
+parseCommand ["load", f] = Load f
+parseCommand _ = BadCmd
 
-repIO :: Filename -> (Prog -> IO ()) -> IO ()
-repIO ifile processProg = do
-  input <- readFile ifile
-  either print processProg (runParser progParser () ifile input)
+banner :: Repl String
+banner = pure ">>> "
 
--- typecheck and evaluate
-run :: Filename -> IO ()
-run ifile = repIO ifile $ \initial -> do
-  p <- loadImports initial [ifile]
-  putStr "Typechecking...\n"
-  case tProg p of
+initialiser :: Repl ()
+initialiser = liftIO $ putStrLn "Welcome to THCi"
+
+commandF :: String -> Repl ()
+commandF input = parseOneLine input
+
+optionsList :: [(String, [String] -> Repl ())]
+optionsList =
+  [ ("help", help), ("h", help)
+  , ("load", load), ("l", load)
+  , ("quit", quit), ("q", quit)
+  ]
+
+help :: [String] -> Repl ()
+help = const (pure ())
+
+load :: [String] -> Repl ()
+load cmdStr = case parseCommand cmdStr of
+  Load f -> tryAction $ do
+    liftIO $ run f
+  BadCmd -> do
+    liftIO $ putStrLn $ "unknown command"
+
+quit :: [String] -> Repl ()
+quit = const $ do
+  liftIO $ do
+    putStrLn "Exiting TCHi."
+    exitSuccess
+
+completer :: WordCompleter IO
+completer n = do
+  let names = ["kirk", "spock", "mccoy"]
+  pure $ filter (isPrefixOf n) names
+
+repl :: IO ()
+repl = evalRepl
+  banner
+  commandF
+  optionsList
+  (Just ':')
+  (Word completer)
+  initialiser
+
+parseOneLine :: String -> Repl ()
+parseOneLine parseThis = case runParser progParser () "" parseThis of
+  Left err -> liftIO $ do
+    print err
+  Right tcThis -> case tProg tcThis of
     [] -> do
-      putStr "Evaluating...\n"
-      (_fenv, res) <- evalProg p (FEnv []) True
-      print_each res
-    errs -> reportErrors errs
-  where
-    print_each = \case
-      [] -> return ()
-      ((func, val, res):rs) -> do
-        putStr $
-          "eval " ++ show (ppFunc func) ++ " " ++ show (ppVal val)
-          ++ " = " ++ show (curVal res) ++ "\n"
-        print_each rs
-
-
+      pure ()
+    errs -> do
+      liftIO $ reportErrors errs

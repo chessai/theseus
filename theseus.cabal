@@ -33,6 +33,7 @@ library
     Theseus
     Theseus.AbstractSyntax
     Theseus.Coverage
+    Theseus.Eval
     Theseus.Parse
     Theseus.Pretty
     Theseus.Repl

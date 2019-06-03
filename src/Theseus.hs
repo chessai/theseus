@@ -3,12 +3,14 @@ module Theseus
   )
   where
 
-import Theseus.Repl
+--import Theseus.Eval (run)
+import Theseus.Repl (repl)
 import System.IO (hFlush, getLine, stdout)
 
 main :: IO ()
 main = repl
 
+{-
 replRead :: IO String
 replRead = do
   putStr "> "
@@ -32,3 +34,4 @@ data Command = Load FilePath | BadCmd
 parseCommand :: [String] -> Command
 parseCommand ["load", f] = Load f
 parseCommand _ = BadCmd
+-}

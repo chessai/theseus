@@ -26,7 +26,7 @@ data Def
   | Iso FName Formals ITyp [(LName, Typ)] [Clause]
   | Eval Func PVal
   | Import ModuleName
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
 type Formals = [(FName, ITyp)]
 
@@ -37,11 +37,11 @@ data Typ
   | Plus Typ Typ
   | TName TName
   | Neg Typ
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
 -- | Isomorphisms, `a = b`.
 data ITyp = ITyp Typ Typ
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
 data PVal
   = Unit -- ^ unit

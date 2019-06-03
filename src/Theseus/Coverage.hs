@@ -6,22 +6,8 @@ module Theseus.Coverage
   , tProg
   ) where
 
-import Control.Monad.Identity
-import Control.Monad.Trans.Reader
-import Data.Char as Char
-import Data.Foldable (asum)
-import Data.Functor (($>))
 import Data.List as List
 import Debug.Trace
-import Text.Parsec
-import Text.Parsec.Expr
-import Text.Parsec.Language
-import Text.Parsec.String
-import Text.Parsec.Token
-import Text.PrettyPrint.HughesPJ hiding (char,comma,parens,integer,space)
-import Text.Printf
-import qualified Control.Monad.State as ST
-import qualified Text.PrettyPrint.HughesPJ as PP (char,comma,parens,integer,space)
 
 import Theseus.AbstractSyntax
 import Theseus.Debug
@@ -29,10 +15,11 @@ import Theseus.Debug
 type TypEnv = [(TName, [(Constr, Typ)])]
 type CurTyp = (Typ, TypEnv)
 
-lookup_exn v as = f (lookup v as)
+lookup_exn :: (Eq a, Show a) => a -> [(a, b)] -> b
+lookup_exn v0 as = f (lookup v0 as)
     where
       f (Just v) = v
-      f Nothing = error ("can't find " ++ (show v))
+      f Nothing = error ("can't find " ++ (show v0))
 
 matchesAny :: PVal -> Bool
 matchesAny = \case

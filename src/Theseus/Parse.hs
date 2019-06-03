@@ -94,7 +94,7 @@ evalParser = do
 importParser :: Parsec String () Def
 importParser = do
   reserved lexer "use"
-  modname <- uppercaseParse "module name"
+  modname <- lowercaseParse "module name"
   return (Import modname)
 
 defParser :: Parsec String () Def
@@ -185,7 +185,8 @@ itypParser = try parse <|> parens lexer parse
       return (ITyp t1 t2)
 
 startsWithUpper :: String -> Bool
-startsWithUpper s = Char.isUpper (s !! 0)
+startsWithUpper [] = False
+startsWithUpper (x:_) = Char.isUpper x
 
 uppercaseParse :: String -> Parsec String () String
 uppercaseParse msg = try $ do
@@ -200,5 +201,4 @@ lowercaseParse msg = try $ do
   if startsWithUpper name
     then fail msg
     else return name
-
 
