@@ -1,0 +1,10 @@
+[package]
+name = "theseus-syntax"
+description = "Surface AST, spans, lexer/parser, pretty-printer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,5 @@
+-- D0004: the flagship error — 'a' is erased (missing on the right).
+type Bit = O | I
+
+iso drop : (Bit, Bit) <-> Bit
+| (a, b) <-> b

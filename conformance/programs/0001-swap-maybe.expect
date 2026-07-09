@@ -1,0 +1,4 @@
+# iso: swapMaybe
+Nothing |-> Nothing
+Just O |-> Just I
+Just I |-> Just O

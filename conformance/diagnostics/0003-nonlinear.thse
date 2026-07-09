@@ -1,0 +1,5 @@
+-- D0003: variable used twice on one side.
+type Bit = O | I
+
+iso diag : (Bit, Bit) <-> (Bit, Bit)
+| (b, b) <-> (b, b)

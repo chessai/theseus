@@ -1,0 +1,10 @@
+[package]
+name = "theseus-emit"
+description = "Typed Verilog mini-AST and emitter; later: Sky130 cell mapping"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

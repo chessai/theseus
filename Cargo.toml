@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/theseus-syntax",
+  "crates/theseus-core",
+  "crates/theseus-check",
+  "crates/theseus-eval",
+  "crates/theseus-netlist",
+  "crates/theseus-emit",
+  "crates/theseus-verify",
+  "crates/theseus-spice",
+  "crates/theseus-cli",
+]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/chessai/theseus"
+
+# Dependency versions are declared here as they are adopted, per ADR-0020.
+# The skeleton is deliberately dependency-free so the workspace builds
+# before any component lands. Planned (see docs/src/design/crate-map.md):
+#
+# [workspace.dependencies]
+# logos, ariadne-or-codespan (taste call), miette, la-arena, lasso,
+# petgraph, indexmap, rustc-hash, pretty, serde, ron, proptest, arbitrary,
+# insta, rayon, vcd, clap, tracing, tracing-subscriber, thiserror, camino,
+# splr, cadical-or-kissat bindings (via CnfSolver trait, ADR-0020 amended)
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+todo = "allow"        # skeleton phase only; flips to "deny" at v0.1 freeze

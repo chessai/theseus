@@ -1,0 +1,8 @@
+-- D0002: overlap on both sides, witness Just O, clauses 1 & 2.
+type Bit = O | I
+type MaybeBit = Nothing | Just Bit
+
+iso dup : MaybeBit <-> MaybeBit
+| Just O <-> Just O
+| Just b <-> Just b
+| Nothing <-> Nothing

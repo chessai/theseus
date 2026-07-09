@@ -1,0 +1,13 @@
+-- Conformance P0009 (dialect: synthesizable)
+type Bit = O | I
+
+iso notb : Bit <-> Bit
+| O <-> I
+| I <-> O
+
+iso idb : Bit <-> Bit
+| O <-> O
+| I <-> I
+
+iso flipfst : (Bit, Bit) <-> (Bit, Bit)
+= notb * idb

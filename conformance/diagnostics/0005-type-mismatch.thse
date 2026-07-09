@@ -1,0 +1,7 @@
+-- D0005: constructor of the wrong type across <->.
+type Bit = O | I
+type MaybeBit = Nothing | Just Bit
+
+iso bad : Bit <-> Bit
+| O <-> Nothing
+| I <-> I

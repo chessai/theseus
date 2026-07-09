@@ -1,0 +1,6 @@
+-- D0006: unknown constructor.
+type Bit = O | I
+
+iso bad : Bit <-> Bit
+| O <-> Flurb
+| I <-> I

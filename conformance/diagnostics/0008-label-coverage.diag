@@ -1,0 +1,7 @@
+error: T0303
+side: left
+witness: $go I
+
+error: T0301
+side: right
+witness: I

@@ -1,0 +1,6 @@
+-- Conformance P0015 (dialect: synthesizable)
+-- Pure re-association; canonicalizes to the identity Permute (test-spec-m1 ex. 4).
+type Bit = O | I
+
+iso assoc : (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)
+| (a, (b, c)) <-> ((a, b), c)

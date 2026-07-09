@@ -1,0 +1,12 @@
+-- Conformance P0011 (dialect: synthesizable)
+-- Label loop: net identity via a 2-bit counter walk.
+-- Static bound MUST be <= 8 (|u| for (Bit,(Bit,Bit))); actual steps: 4.
+-- Done at fuel >= 5 (entry + 3 counter steps + exit).
+type Bit = O | I
+
+iso spin : Bit <-> Bit
+| b <-> $go (b, (O, O))
+| $go (b, (O, O)) <-> $go (b, (O, I))
+| $go (b, (O, I)) <-> $go (b, (I, O))
+| $go (b, (I, O)) <-> $go (b, (I, I))
+| $go (b, (I, I)) <-> b

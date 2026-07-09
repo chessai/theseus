@@ -1,0 +1,9 @@
+# Formatting is uniform across the repo (ADR-0019). Run: treefmt
+[formatter.rust]
+command = "rustfmt"
+options = ["--edition", "2021"]
+includes = ["*.rs"]
+
+[formatter.nix]
+command = "alejandra"
+includes = ["*.nix"]

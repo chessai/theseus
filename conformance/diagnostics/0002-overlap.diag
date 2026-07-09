@@ -1,0 +1,9 @@
+error: T0302
+side: left
+witness: Just O
+clauses: 1 2
+
+error: T0302
+side: right
+witness: Just O
+clauses: 1 2

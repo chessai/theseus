@@ -1,0 +1,4 @@
+-- Conformance P0012 (dialect: synthesizable)
+-- Typecheck-only: matches the conformance test registry (test-spec-m1).
+-- No .expect: prim semantics come from the registry, not this file.
+prim id8 : U8 <-> U8 = "theseus.test.id8"

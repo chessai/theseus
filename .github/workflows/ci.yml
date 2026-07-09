@@ -1,0 +1,31 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+  schedule:
+    - cron: "0 7 * * *"   # nightly tier (ADR-0018)
+
+jobs:
+  fast:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v14
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - run: nix flake check --print-build-logs
+      - name: ADR citation lint (ADR-0021)
+        run: nix develop --command bash ci/adr-citation-lint.sh
+
+  nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v14
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      # Placeholders wire up as components land (ADR-0018 nightly tier):
+      - run: echo "cargo fuzz run ... (time-budgeted)"
+      - run: echo "cargo mutants --workspace"
+      - run: echo "theseus --verify-lowering over lemma obligations (SAT tier)"
+      - run: echo "full Verilator differential sweep"

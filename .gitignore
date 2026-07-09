@@ -1,0 +1,7 @@
+/target
+/result
+/docs/book
+*.vcd
+/mutants.out*
+/corpus
+/artifacts

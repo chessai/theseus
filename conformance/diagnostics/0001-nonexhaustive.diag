@@ -1,0 +1,7 @@
+error: T0301
+side: left
+witness: Just I
+
+error: T0301
+side: right
+witness: Just I

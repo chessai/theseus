@@ -1,0 +1,11 @@
+-- Conformance D0001: expected T0301 on BOTH sides (each side is checked
+-- independently, spec/static-semantics.md). Witness on each: Just I.
+-- Note: with ground clauses, a missing value on one side forces a miss on
+-- the other; a one-sided-only T0301 requires variable patterns and is a
+-- separate future case.
+type Bit = O | I
+type MaybeBit = Nothing | Just Bit
+
+iso bad : MaybeBit <-> MaybeBit
+| Nothing <-> Nothing
+| Just O  <-> Just O

@@ -1,0 +1,5 @@
+-- D0007: parse error (malformed clause arrow).
+type Bit = O | I
+
+iso bad : Bit <-> Bit
+| O <- I

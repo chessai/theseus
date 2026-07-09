@@ -1,0 +1,5 @@
+-- Conformance P0005 (dialect: synthesizable)
+type Bit = O | I
+
+iso swp : (Bit, Bit) <-> (Bit, Bit)
+| (a, b) <-> (b, a)
