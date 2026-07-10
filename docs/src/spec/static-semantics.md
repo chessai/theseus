@@ -84,7 +84,11 @@ label vs. plain witnesses is specified there.
 
 A clause set passing all four checks denotes a **total bijection** `A ≅ B`,
 whose inverse is the same clauses read right-to-left (`| rᵢ <-> lᵢ`). This is
-TH-4a (`theory/coverage-bijectivity.md`), proved for the plain fragment. The
+TH-4a (`theory/coverage-bijectivity.md`), proved for the plain fragment. A
+conforming implementation MUST elaborate the checked iso to a core term
+denoting this bijection; the elaboration *algorithm* is `design/elaboration.md`
+and is normative only up to denotational equality (the canonicalizer decides
+`≅`, ADR-0014). The
 checks are also complete: a rejected clause set fails a necessary condition
 for bijectivity, so there are no false rejections. The shipped algorithm is
 differentially tested against the brute-force enumeration oracle on generated

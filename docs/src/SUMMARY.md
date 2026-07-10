@@ -42,6 +42,7 @@
 
 - [Overview and pipeline](design/overview.md)
 - [Core Π](design/core-pi.md)
+- [Elaboration (surface → core)](design/elaboration.md)
 - [Typed netlist IR](design/netlist-ir.md)
 - [Encodings and canonicity](design/encodings.md)
 - [Scheduling and balancing](design/scheduling.md)
