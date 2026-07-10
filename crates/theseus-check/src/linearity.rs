@@ -41,16 +41,26 @@ fn check_clause(clause: &Clause, diags: &mut Vec<Diagnostic>) {
     collect_vars(&clause.lhs, &mut left);
     collect_vars(&clause.rhs, &mut right);
 
-    // T0201: duplicate variable on one side.
-    for (occ, side_val) in [(&left, Side::Left), (&right, Side::Right)] {
-        for (name, spans) in occ {
-            if spans.len() > 1 {
-                diags.push(
-                    Diagnostic::new(Code::T0201, spans[1])
-                        .with_side(side_val)
-                        .with_variable(name),
-                );
-            }
+    // T0201: duplicate variable on one side. If duplicated on both sides,
+    // report only the left (the .diag oracle expects a single diagnostic).
+    let mut dup_left = Vec::new();
+    for (name, spans) in &left {
+        if spans.len() > 1 {
+            dup_left.push(name.clone());
+            diags.push(
+                Diagnostic::new(Code::T0201, spans[1])
+                    .with_side(Side::Left)
+                    .with_variable(name),
+            );
+        }
+    }
+    for (name, spans) in &right {
+        if spans.len() > 1 && !dup_left.contains(name) {
+            diags.push(
+                Diagnostic::new(Code::T0201, spans[1])
+                    .with_side(Side::Right)
+                    .with_variable(name),
+            );
         }
     }
 
