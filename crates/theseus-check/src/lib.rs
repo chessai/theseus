@@ -1,26 +1,55 @@
-//! Elaboration: surface clauses → core Π, with the coverage checker.
+//! `theseus-check` — the elaborator and static-semantics checker.
 //!
-//! This crate is the named highest technical risk (ADR-0004) and the soul
-//! of the language: a clause set elaborates iff both sides are exhaustive
-//! and non-overlapping under linear pattern variables — which is exactly
-//! the theorem that the hardware muxes are invertible (ADR-0012).
+//! The crate implements the four static-semantics stages in the order fixed by
+//! `docs/src/spec/static-semantics.md` — Names (T0101), Typing (T0102),
+//! Linearity (T0201/T0202), Coverage (T0301/T0302) — under **global gating**:
+//! a later stage runs only if every earlier stage reported nothing. This makes
+//! diagnostics from a downstream stage trustworthy (they never depend on
+//! artifacts a failed upstream stage could not establish).
 //!
-//! Obligations (ADR-0018):
-//! - Differential test against the brute-force semantic definition
-//!   (enumerate values; each matches exactly one clause per side).
-//! - Errors carry concrete witnesses (the unmatched value; the value
-//!   matched twice) — a tested obligation, not a nicety (ADR-0020 amended).
-//! - Label state spaces (`$name`, ADR-0017) extend coverage checking and
-//!   elaborate to `trace` (ADR-0009); WCET surfaces as a diagnostic note.
+//! # Module layout
+//! * [`diagnostics`] — the structured [`Diagnostic`] shared by every stage.
+//! * [`env`] — the resolution [`Env`] and surface→core type lowering.
+//! * [`testkit`] — the conformance harness (public; called from stage tests).
+//! * [`names`], [`typing`], [`linearity`], [`coverage`] — the four stages.
+//! * [`elaborate`] — surface→core iso elaboration.
 
-pub mod elaborate {}
+pub mod coverage;
+pub mod diagnostics;
+pub mod elaborate;
+pub mod env;
+pub mod linearity;
+pub mod names;
+pub mod testkit;
+pub mod typing;
 
-pub mod coverage {
-    //! Maranget-style pattern matrices, bidirectional, with linearity.
-    //! Lightly research territory — prototype earliest (risk register).
-}
+pub use diagnostics::{Code, Diagnostic, Side};
 
-pub mod diagnostics {
-    //! Structured values with `T0xxx` codes; `--explain` pages are spec
-    //! sections shared by include-machinery (ADR-0021).
+use theseus_syntax::ast::Program;
+
+/// Run the full staged static-semantics judgment with global gating.
+///
+/// Builds the [`env::Env`] once, then runs [`names::check`]; if it reported
+/// anything, those diagnostics are returned and no later stage runs. Otherwise
+/// [`typing::check`] runs, then [`linearity::check`], then [`coverage::check`],
+/// each gated on the previous being clean.
+pub fn check(program: &Program) -> Vec<Diagnostic> {
+    let env = env::resolve(program);
+
+    let names = names::check(program, &env);
+    if !names.is_empty() {
+        return names;
+    }
+
+    let typing = typing::check(program, &env);
+    if !typing.is_empty() {
+        return typing;
+    }
+
+    let linearity = linearity::check(program, &env);
+    if !linearity.is_empty() {
+        return linearity;
+    }
+
+    coverage::check(program, &env)
 }

@@ -91,6 +91,11 @@ dependencies = [
 [[package]]
 name = "theseus-check"
 version = "0.1.0-dev"
+dependencies = [
+ "theseus-core",
+ "theseus-eval",
+ "theseus-syntax",
+]
 
 [[package]]
 name = "theseus-cli"
