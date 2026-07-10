@@ -5,7 +5,7 @@
 //! guided by the surface [`Type`] and resolution [`Env`].
 
 use theseus_check::env::Env;
-use theseus_core::prim::Value;
+use theseus_core::prim::{enumerate_values, Value};
 use theseus_syntax::ast::Type;
 
 /// A parsed surface value — either a constructor application or a tuple.
@@ -132,6 +132,13 @@ fn is_atom_start(toks: &[String], pos: usize) -> bool {
     t == "(" || is_ctor_name(t) || is_numeric(t)
 }
 
+/// Is `name` a builtin `U<n>` numeric type (power-of-two bit-width)?
+fn is_un_type(name: &str) -> bool {
+    name.strip_prefix('U')
+        .and_then(|d| d.parse::<u32>().ok())
+        .is_some_and(|n| n > 0 && n.is_power_of_two())
+}
+
 // ── Surface→Core conversion ──────────────────────────────────────────────
 
 /// Convert a surface value to a core [`Value`], guided by the surface [`Type`]
@@ -174,7 +181,21 @@ fn tuple_to_core(elems: &[SVal], ty: &Type, env: &Env) -> Value {
     }
 }
 
-fn ctor_to_core(name: &str, args: &[SVal], _ty: &Type, env: &Env) -> Value {
+fn ctor_to_core(name: &str, args: &[SVal], ty: &Type, env: &Env) -> Value {
+    // Numeric literal at a U<n> type: the k-th enumerated value.
+    if is_numeric(name) && args.is_empty() {
+        if let Type::Name(n) = strip_paren_ty(ty) {
+            if is_un_type(&n.text) {
+                let k: usize = name.parse().unwrap_or_else(|_| panic!("bad numeric literal: {name}"));
+                let core_ty = env.lower(ty);
+                let values = enumerate_values(&core_ty);
+                return values.into_iter().nth(k).unwrap_or_else(|| {
+                    panic!("literal {k} out of range for type {}", n.text)
+                });
+            }
+        }
+    }
+
     let ci = env
         .ctor(name)
         .unwrap_or_else(|| panic!("unknown constructor in surface value: {name}"));
@@ -233,6 +254,22 @@ pub fn render(v: &Value, ty: &Type, env: &Env) -> String {
 }
 
 fn render_named(v: &Value, type_name: &str, env: &Env) -> String {
+    // U<n> builtin: render as the numeric index of the value in the enumeration.
+    if is_un_type(type_name) {
+        let ty = Type::Name(theseus_syntax::ast::UpperName {
+            text: type_name.into(),
+            span: theseus_syntax::ast::Span { start: 0, end: 0 },
+        });
+        let core_ty = env.lower(&ty);
+        let values = enumerate_values(&core_ty);
+        for (i, val) in values.iter().enumerate() {
+            if val == v {
+                return i.to_string();
+            }
+        }
+        panic!("value {v:?} does not match any inhabitant of {type_name}");
+    }
+
     let ti = env
         .type_info(type_name)
         .unwrap_or_else(|| panic!("unknown type in render: {type_name}"));

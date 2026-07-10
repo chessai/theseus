@@ -10,10 +10,9 @@
 //!   - a product swap `(a,b)<->(b,a)`                   → [`Iso::SwapProd`]
 //!   - a product reassoc `(a,(b,c))<->((a,b),c)`        → [`Iso::AssocLProd`]
 //!
-//! NOT yet elaborated (returns `Err(Vec::new())` = "not elaborated", per the
-//! stub convention): mixed-sum clause tables (e.g. `swapMaybe`), controlled
-//! multi-clause ops (`cnot`/`toffoli` — need the general demux;perm;sym(demux)
-//! synthesis), and `U<n>` literal isos. These are the deferred "full E3" work.
+//! Also elaborated via general clause synthesis (oracle + structural
+//! decomposition): mixed-sum clause tables (e.g. `swapMaybe`), controlled
+//! multi-clause ops (`cnot`/`toffoli`), and `U<n>` literal isos (e.g. `flip1`).
 
 use std::collections::BTreeMap;
 
@@ -202,7 +201,7 @@ fn elab_clauses_general(
     if core_lhs != core_rhs {
         return None;
     }
-    let sigma = compute_bijection(cs, &core_lhs, env)?;
+    let sigma = compute_bijection(cs, &core_lhs, lhs_ty, rhs_ty, env)?;
     synthesize(&sigma, &core_lhs)
 }
 
@@ -211,14 +210,16 @@ fn elab_clauses_general(
 fn compute_bijection(
     cs: &[Clause],
     core_ty: &CoreType,
+    lhs_ty: &SurfType,
+    rhs_ty: &SurfType,
     env: &Env,
 ) -> Option<BTreeMap<Value, Value>> {
     let values = enumerate_values(core_ty);
     let mut sigma = BTreeMap::new();
     for v in &values {
         for c in cs {
-            if let Some(bindings) = match_bind(v, &c.lhs, env) {
-                let output = instantiate(&c.rhs, &bindings, env)?;
+            if let Some(bindings) = match_bind(v, &c.lhs, lhs_ty, env) {
+                let output = instantiate(&c.rhs, &bindings, rhs_ty, env)?;
                 sigma.insert(v.clone(), output);
                 break;
             }
@@ -233,10 +234,10 @@ fn compute_bijection(
 // ── Oracle: match_bind + instantiate ─────────────────────────────────────
 
 /// Pattern-match a core `Value` against a surface `Pattern`, returning variable
-/// bindings on success.
-fn match_bind(value: &Value, pattern: &Pattern, env: &Env) -> Option<BTreeMap<String, Value>> {
+/// bindings on success. The surface type `ty` is threaded to resolve `Nat` literals.
+fn match_bind(value: &Value, pattern: &Pattern, ty: &SurfType, env: &Env) -> Option<BTreeMap<String, Value>> {
     let mut bindings = BTreeMap::new();
-    if match_bind_inner(value, pattern, env, &mut bindings) {
+    if match_bind_inner(value, pattern, ty, env, &mut bindings) {
         Some(bindings)
     } else {
         None
@@ -246,18 +247,20 @@ fn match_bind(value: &Value, pattern: &Pattern, env: &Env) -> Option<BTreeMap<St
 fn match_bind_inner(
     value: &Value,
     pattern: &Pattern,
+    ty: &SurfType,
     env: &Env,
     bindings: &mut BTreeMap<String, Value>,
 ) -> bool {
+    let ty = strip_paren_ty(ty);
     match strip_paren_pat(pattern) {
         Pattern::Var(n) => {
             bindings.insert(n.text.clone(), value.clone());
             true
         }
-        Pattern::Tuple(a, b, _) => match value {
-            Value::Pair(va, vb) => {
-                match_bind_inner(va, a, env, bindings)
-                    && match_bind_inner(vb, b, env, bindings)
+        Pattern::Tuple(a, b, _) => match (value, ty) {
+            (Value::Pair(va, vb), SurfType::Prod(ta, tb, _)) => {
+                match_bind_inner(va, a, ta, env, bindings)
+                    && match_bind_inner(vb, b, tb, env, bindings)
             }
             _ => false,
         },
@@ -268,9 +271,15 @@ fn match_bind_inner(
             let Some(payload) = navigate_inj(value, &info.path) else {
                 return false;
             };
-            match_bind_args(payload, args, env, bindings)
+            match_bind_args(payload, args, info.payload.as_ref(), env, bindings)
         }
-        Pattern::Paren(inner, _) => match_bind_inner(value, inner, env, bindings),
+        Pattern::Nat(k, _) => {
+            let core_ty = env.lower(ty);
+            let values = enumerate_values(&core_ty);
+            let k = *k as usize;
+            k < values.len() && *value == values[k]
+        }
+        Pattern::Paren(inner, _) => match_bind_inner(value, inner, ty, env, bindings),
         _ => false,
     }
 }
@@ -278,16 +287,38 @@ fn match_bind_inner(
 fn match_bind_args(
     value: &Value,
     args: &[Pattern],
+    payload_ty: Option<&SurfType>,
     env: &Env,
     bindings: &mut BTreeMap<String, Value>,
 ) -> bool {
     match args {
         [] => true,
-        [single] => match_bind_inner(value, single, env, bindings),
+        [single] => {
+            if let Some(ty) = payload_ty {
+                match_bind_inner(value, single, ty, env, bindings)
+            } else {
+                // Nullary — only var patterns can match here.
+                if let Pattern::Var(n) = strip_paren_pat(single) {
+                    bindings.insert(n.text.clone(), value.clone());
+                    true
+                } else {
+                    false
+                }
+            }
+        }
         [first, rest @ ..] => match value {
             Value::Pair(l, r) => {
-                match_bind_inner(l, first, env, bindings)
-                    && match_bind_args(r, rest, env, bindings)
+                if let Some(ty) = payload_ty {
+                    let ty = strip_paren_ty(ty);
+                    if let SurfType::Prod(ta, tb, _) = ty {
+                        match_bind_inner(l, first, ta, env, bindings)
+                            && match_bind_args(r, rest, Some(tb), env, bindings)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
             }
             _ => false,
         },
@@ -309,25 +340,36 @@ fn navigate_inj<'a>(value: &'a Value, path: &[Inj]) -> Option<&'a Value> {
 }
 
 /// Instantiate a surface `Pattern` with variable bindings to produce a core
-/// `Value`.
+/// `Value`. The surface type `ty` is threaded to resolve `Nat` literals.
 fn instantiate(
     pattern: &Pattern,
     bindings: &BTreeMap<String, Value>,
+    ty: &SurfType,
     env: &Env,
 ) -> Option<Value> {
+    let ty = strip_paren_ty(ty);
     match strip_paren_pat(pattern) {
         Pattern::Var(n) => bindings.get(&n.text).cloned(),
         Pattern::Tuple(a, b, _) => {
-            let va = instantiate(a, bindings, env)?;
-            let vb = instantiate(b, bindings, env)?;
-            Some(Value::pair(va, vb))
+            if let SurfType::Prod(ta, tb, _) = ty {
+                let va = instantiate(a, bindings, ta, env)?;
+                let vb = instantiate(b, bindings, tb, env)?;
+                Some(Value::pair(va, vb))
+            } else {
+                None
+            }
         }
         Pattern::Ctor(name, args, _) => {
             let info = env.ctor(&name.text)?;
-            let payload = instantiate_args(args, bindings, env)?;
+            let payload = instantiate_args(args, bindings, info.payload.as_ref(), env)?;
             Some(inject_value(payload, &info.path))
         }
-        Pattern::Paren(inner, _) => instantiate(inner, bindings, env),
+        Pattern::Nat(k, _) => {
+            let core_ty = env.lower(ty);
+            let values = enumerate_values(&core_ty);
+            values.get(*k as usize).cloned()
+        }
+        Pattern::Paren(inner, _) => instantiate(inner, bindings, ty, env),
         _ => None,
     }
 }
@@ -335,15 +377,36 @@ fn instantiate(
 fn instantiate_args(
     args: &[Pattern],
     bindings: &BTreeMap<String, Value>,
+    payload_ty: Option<&SurfType>,
     env: &Env,
 ) -> Option<Value> {
     match args {
         [] => Some(Value::Unit),
-        [single] => instantiate(single, bindings, env),
+        [single] => {
+            if let Some(ty) = payload_ty {
+                instantiate(single, bindings, ty, env)
+            } else {
+                // No payload type — try as variable.
+                if let Pattern::Var(n) = strip_paren_pat(single) {
+                    bindings.get(&n.text).cloned()
+                } else {
+                    None
+                }
+            }
+        }
         [first, rest @ ..] => {
-            let l = instantiate(first, bindings, env)?;
-            let r = instantiate_args(rest, bindings, env)?;
-            Some(Value::pair(l, r))
+            if let Some(ty) = payload_ty {
+                let ty = strip_paren_ty(ty);
+                if let SurfType::Prod(ta, tb, _) = ty {
+                    let l = instantiate(first, bindings, ta, env)?;
+                    let r = instantiate_args(rest, bindings, Some(tb), env)?;
+                    Some(Value::pair(l, r))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         }
     }
 }
@@ -714,6 +777,20 @@ mod tests {
                 assert_eq!(run(&sym_f, run(&f, v.clone())), v);
             }
         }
+    }
+
+    #[test]
+    fn flip1_0014() {
+        let f = fixture("0014-literal-u1.thse", "flip1");
+        // U1: 0 = Left(Unit), 1 = Right(Unit)
+        let u0 = Value::left(Value::Unit);
+        let u1 = Value::right(Value::Unit);
+        assert_eq!(run(&f, u0.clone()), u1.clone());
+        assert_eq!(run(&f, u1.clone()), u0.clone());
+        // round-trip via adjoint
+        let sym_f = Iso::sym(f.clone());
+        assert_eq!(run(&sym_f, run(&f, u0.clone())), u0);
+        assert_eq!(run(&sym_f, run(&f, u1.clone())), u1);
     }
 
     #[test]

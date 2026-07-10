@@ -9,7 +9,7 @@ use theseus_core::prim::{enumerate_values, Value};
 use theseus_syntax::ast::{Clause, Decl, IsoBody, IsoDecl, Pattern, Program, Span, Type as SurfType};
 
 use crate::diagnostics::{Code, Diagnostic, Side};
-use crate::env::{Env, Inj};
+use crate::env::Env;
 
 /// Run the coverage check over a whole program.
 pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
@@ -55,7 +55,7 @@ fn check_side(
                     Side::Left => &clause.lhs,
                     Side::Right => &clause.rhs,
                 };
-                matches_value(value, pat, env)
+                matches_value(value, pat, surf_ty, env)
             })
             .map(|(i, _)| i + 1)
             .collect();
@@ -81,13 +81,17 @@ fn check_side(
     }
 }
 
-/// Does a core `Value` match a surface `Pattern` given the env's ctor→injection mapping?
-fn matches_value(value: &Value, pattern: &Pattern, env: &Env) -> bool {
+/// Does a core `Value` match a surface `Pattern` given the env's ctor→injection
+/// mapping? The surface type `ty` is threaded through to resolve `Nat` literals.
+fn matches_value(value: &Value, pattern: &Pattern, ty: &SurfType, env: &Env) -> bool {
+    let ty = peel_paren_type(ty);
     match pattern {
         Pattern::Var(_) => true,
-        Pattern::Paren(inner, _) => matches_value(value, inner, env),
-        Pattern::Tuple(a, b, _) => match value {
-            Value::Pair(va, vb) => matches_value(va, a, env) && matches_value(vb, b, env),
+        Pattern::Paren(inner, _) => matches_value(value, inner, ty, env),
+        Pattern::Tuple(a, b, _) => match (value, ty) {
+            (Value::Pair(va, vb), SurfType::Prod(ta, tb, _)) => {
+                matches_value(va, a, ta, env) && matches_value(vb, b, tb, env)
+            }
             _ => false,
         },
         Pattern::Ctor(name, args, _) => {
@@ -97,12 +101,15 @@ fn matches_value(value: &Value, pattern: &Pattern, env: &Env) -> bool {
             let Some(payload) = navigate(value, &info.path) else {
                 return false;
             };
-            match_args(payload, args, env)
+            match_args(payload, args, info.payload.as_ref(), env)
         }
-        // Nat literals are sugar for builtin U<n> types which lower to Zero
-        // (no inhabitants) in slice 1, so this branch is unreachable for valid
-        // programs.
-        Pattern::Nat(..) => false,
+        Pattern::Nat(k, _) => {
+            // The k-th enumerated value of the type at this position.
+            let core_ty = env.lower(ty);
+            let values = enumerate_values(&core_ty);
+            let k = *k as usize;
+            k < values.len() && *value == values[k]
+        }
         // Labels are slice-2; not checked.
         Pattern::Label(..) => false,
     }
@@ -111,12 +118,12 @@ fn matches_value(value: &Value, pattern: &Pattern, env: &Env) -> bool {
 /// Navigate a value through an injection path. Each `L` expects `Left`,
 /// each `R` expects `Right`. Returns the payload at the end, or `None` on
 /// mismatch.
-fn navigate<'a>(value: &'a Value, path: &[Inj]) -> Option<&'a Value> {
+fn navigate<'a>(value: &'a Value, path: &[crate::env::Inj]) -> Option<&'a Value> {
     let mut v = value;
     for step in path {
         match (step, v) {
-            (Inj::L, Value::Left(inner)) => v = inner,
-            (Inj::R, Value::Right(inner)) => v = inner,
+            (crate::env::Inj::L, Value::Left(inner)) => v = inner,
+            (crate::env::Inj::R, Value::Right(inner)) => v = inner,
             _ => return None,
         }
     }
@@ -126,14 +133,51 @@ fn navigate<'a>(value: &'a Value, path: &[Inj]) -> Option<&'a Value> {
 /// Match a payload value against a constructor's argument patterns.
 /// Zero args means nullary (payload is Unit, nothing to check).
 /// One arg matches directly. Multiple args match a right-nested product.
-fn match_args(value: &Value, args: &[Pattern], env: &Env) -> bool {
+fn match_args(value: &Value, args: &[Pattern], payload_ty: Option<&SurfType>, env: &Env) -> bool {
     match args {
         [] => true,
-        [single] => matches_value(value, single, env),
+        [single] => {
+            if let Some(ty) = payload_ty {
+                matches_value(value, single, ty, env)
+            } else {
+                // Nullary ctor with no payload type — structural match only.
+                pattern_is_var(single)
+            }
+        }
         [first, rest @ ..] => match value {
-            Value::Pair(l, r) => matches_value(l, first, env) && match_args(r, rest, env),
+            Value::Pair(l, r) => {
+                if let Some(ty) = payload_ty {
+                    let ty = peel_paren_type(ty);
+                    if let SurfType::Prod(ta, tb, _) = ty {
+                        matches_value(l, first, ta, env)
+                            && match_args(r, rest, Some(tb), env)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
             _ => false,
         },
+    }
+}
+
+fn pattern_is_var(p: &Pattern) -> bool {
+    matches!(strip_paren_pat(p), Pattern::Var(_))
+}
+
+fn strip_paren_pat(p: &Pattern) -> &Pattern {
+    match p {
+        Pattern::Paren(inner, _) => strip_paren_pat(inner),
+        _ => p,
+    }
+}
+
+fn peel_paren_type(ty: &SurfType) -> &SurfType {
+    match ty {
+        SurfType::Paren(inner, _) => peel_paren_type(inner),
+        _ => ty,
     }
 }
 

@@ -170,6 +170,10 @@ impl Env {
 
     /// Lower a named ADT into its right-nested sum-of-products.
     fn lower_named(&self, name: &str) -> CoreType {
+        // Builtin U<n> types are not user-declared; intercept before ADT lookup.
+        if let Some(ct) = lower_un(name) {
+            return ct;
+        }
         let Some(info) = self.types.get(name) else {
             // Unknown type: total fallback. Names reports the real error.
             return CoreType::Zero;
@@ -215,10 +219,47 @@ fn injection_path(index: usize, count: usize) -> Vec<Inj> {
 
 /// The blessed stdlib numeric types `U<n>` (ADR-0017): `U1`, `U2`, `U4`, `U8`,
 /// `U16`, … — builtin, not user-declared, so name resolution treats them as
-/// known. (Their structural lowering is a later-task concern.)
+/// known.
 fn is_builtin_type(name: &str) -> bool {
-    name.strip_prefix('U')
-        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+    parse_un_bits(name).is_some()
+}
+
+/// Parse a `U<n>` name and return the bit-width `n` if it is a valid builtin
+/// numeric type (a power of two ≥ 1).
+fn parse_un_bits(name: &str) -> Option<u32> {
+    let digits = name.strip_prefix('U')?;
+    if digits.is_empty() {
+        return None;
+    }
+    let n: u32 = digits.parse().ok()?;
+    if n == 0 || !n.is_power_of_two() {
+        return None;
+    }
+    Some(n)
+}
+
+/// Lower a `U<n>` builtin numeric type to its core encoding (ADR-0017).
+///
+/// Fixed little-endian-pair representation:
+/// * `U1 = 1 + 1`  (2 values — a single bit)
+/// * `U<n> = U<n/2> × U<n/2>`  for `n > 1`  (doubles the bit-width via product)
+///
+/// So `U2 = (1+1) × (1+1)` (4 values), `U4 = U2 × U2` (16 values), etc.
+fn lower_un(name: &str) -> Option<CoreType> {
+    let n = parse_un_bits(name)?;
+    Some(lower_un_bits(n))
+}
+
+/// Recursive helper: build the core type for a `U<n>` with `n` bits.
+fn lower_un_bits(n: u32) -> CoreType {
+    if n == 1 {
+        // U1 = 1 + 1
+        CoreType::Sum(Box::new(CoreType::One), Box::new(CoreType::One))
+    } else {
+        // U<n> = U<n/2> × U<n/2>
+        let half = lower_un_bits(n / 2);
+        CoreType::Prod(Box::new(half.clone()), Box::new(half))
+    }
 }
 
 /// Build the resolution environment for a program (infallible).
@@ -273,4 +314,61 @@ pub fn resolve(program: &Program) -> Env {
 /// field; adapt via `Display`-free stringification to avoid formatting policy.
 fn prim_key_text(pd: &ast::PrimDecl) -> String {
     pd.key.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use theseus_core::prim::enumerate_values;
+
+    #[test]
+    fn lower_u1_has_2_values() {
+        let env = Env::default();
+        let ty = SurfType::Name(ast::UpperName {
+            text: "U1".into(),
+            span: ast::Span { start: 0, end: 0 },
+        });
+        let core = env.lower(&ty);
+        assert_eq!(enumerate_values(&core).len(), 2);
+    }
+
+    #[test]
+    fn lower_u2_has_4_values() {
+        let env = Env::default();
+        let ty = SurfType::Name(ast::UpperName {
+            text: "U2".into(),
+            span: ast::Span { start: 0, end: 0 },
+        });
+        let core = env.lower(&ty);
+        assert_eq!(enumerate_values(&core).len(), 4);
+    }
+
+    #[test]
+    fn lower_u4_has_16_values() {
+        let env = Env::default();
+        let ty = SurfType::Name(ast::UpperName {
+            text: "U4".into(),
+            span: ast::Span { start: 0, end: 0 },
+        });
+        let core = env.lower(&ty);
+        assert_eq!(enumerate_values(&core).len(), 16);
+    }
+
+    #[test]
+    fn lower_u8_has_256_values() {
+        let env = Env::default();
+        let ty = SurfType::Name(ast::UpperName {
+            text: "U8".into(),
+            span: ast::Span { start: 0, end: 0 },
+        });
+        let core = env.lower(&ty);
+        assert_eq!(enumerate_values(&core).len(), 256);
+    }
+
+    #[test]
+    fn non_power_of_two_is_not_builtin() {
+        assert!(parse_un_bits("U3").is_none());
+        assert!(parse_un_bits("U0").is_none());
+        assert!(parse_un_bits("U5").is_none());
+    }
 }
