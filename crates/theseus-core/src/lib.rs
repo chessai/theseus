@@ -11,17 +11,15 @@
 //!   belong to the canonicalizer, not here (ADR-0016). Fixed-order rewrite
 //!   pipeline in v0.1; equality saturation is a v0.3+ candidate (ADR-0010).
 
-pub mod ty {
-    //! Types: 0, 1, sums, products. Finite in the synthesizable dialect
-    //! (ADR-0006); sizes are exact and drive exhaustive-mode testing.
-}
+pub mod ty;
+pub mod prim;
+pub mod iso;
+pub mod typing;
+pub mod adjoint;
+pub mod rewrite;
 
-pub mod iso {
-    //! Enumerated combinators (the ten structural isos + distrib + trace),
-    //! sequential/parallel/choice composition, `PrimRef` opaque nodes
-    //! resolved at elaboration and verified offline (ADR-0013/ADR-0016).
-}
-
-pub mod adjoint {}
-
-pub mod rewrite {}
+pub use adjoint::adjoint;
+pub use iso::Iso;
+pub use prim::{admit, enumerate_values, PrimDef, Value};
+pub use ty::Type;
+pub use typing::{type_of, TypeError};
