@@ -50,6 +50,26 @@ the second gets M3a.
 7. **M4-v2 / M5:** ring machine (gated on C2.4 wake); tape-out (gated on
    ADR-0032 rung 3+ and S2LAL trigger evaluation, ADR-0023).
 
+## M1 slicing (language track)
+
+M1 lands in two slices to keep the highest-risk work on plain, decidable
+ground first (decision 2026-07-09):
+
+- **Slice 1 — plain isos.** Parser, coverage/linearity checker, elaborator,
+  and interpreter for label-free clause isos (conformance P0001–P0010,
+  P0012–P0015). Coverage ranges over the plain declared type; soundness is
+  TH-4a, *proved* (`theory/coverage-bijectivity.md`). This is the buildable
+  first milestone: grammar, static semantics, and Core Π (typing + adjoint +
+  eval) are frozen; elaboration is the last spec gate.
+- **Slice 2 — labels.** `$`-patterns, label-type inference, elaboration to
+  `trace`, the fuel/`:step` accounting, and the `T0301`/`T0303` split
+  (conformance P0011). Gated on resolving TH-1 (finite-trace totality, exact
+  bound — currently sketched) before the interpreter's bound is reported as
+  WCET.
+
+Slice 1 unblocks M2 (typed IR → FPGA lowering) for plain isos independently of
+Slice 2.
+
 ## Version → feature mapping
 
 - **v0.1** — finite dialect; trace-only core; FPGA + adiabatic backends;

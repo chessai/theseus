@@ -21,6 +21,13 @@ no separate table — every row backward under `~` (right column maps to
 left column). Tables are exhaustive over the input type; harnesses
 SHOULD additionally check the T1 round-trip on every row.
 
+**Typecheck-only positive** (a `.thse` with **no** `.expect` sidecar): the
+program MUST parse and pass all four static checks (`spec/static-semantics.md`)
+with **no diagnostics**, but there is no forward table to reproduce (its
+semantics come from elsewhere — e.g. the prim registry). The harness treats a
+missing `.expect` as "must elaborate cleanly, nothing to run." P0012 (`prim
+id8`) is the example; it is graded on clean elaboration alone.
+
 **Negative** (`conformance/diagnostics/NNNN-name.thse` + `.diag`): the
 `.diag` sidecar lists expected diagnostics as blocks:
 
@@ -31,10 +38,28 @@ witness: Just O
 clauses: 1 2
 ```
 
-Comparison is **set-based** (order-insensitive); every listed block MUST
-be reported; extra diagnostics of the same codes on the same sides are
-tolerated, other extras are failures. `witness` compares as a value,
-not a string rendering. `clauses` are 1-indexed in declaration order.
+A block is `error:` (the `T0xxx` code, required) followed by any of these
+payload keys, each present exactly when the code carries that datum:
+
+| Key | Value | Used by |
+|---|---|---|
+| `side:` | `left` \| `right` | clause-scoped codes: T0102, T0201, T0202, T0301, T0302, T0303 |
+| `witness:` | a value (compared as a value, not a string) | T0301, T0302, T0303 |
+| `clauses:` | 1-indexed indices, declaration order, compared as a set | T0302 (a pair), T0102 |
+| `variable:` | a variable name | T0201, T0202 |
+| `name:` | an identifier | T0101, T0401 |
+
+A listed block **matches** a reported diagnostic iff the `error` code is equal
+and every listed payload key is equal (`witness` as a value; `name`/`variable`
+as identifiers; `clauses` as a set). No other keys are defined; an
+implementation MUST NOT require unlisted keys to match.
+
+Comparison is **set-based** (order-insensitive): every listed block MUST be
+reported. Extra reported diagnostics are tolerated only when they share the
+`error` code — and, for codes carrying `side:`, the same `side:` — as some
+listed block; any other extra is a failure. (Codes without a `side:` — T0001,
+T0401, and a T0101 in an `= expr` body — compare on code plus listed payload
+only.)
 
 ## Parser: done means
 
