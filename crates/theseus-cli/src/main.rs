@@ -4,18 +4,20 @@ use std::fs;
 use std::process;
 
 use theseus_cli::pipeline;
+use theseus_cli::repl::Repl;
 use theseus_cli::value;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("usage: theseus <check|run> ...");
+        eprintln!("usage: theseus <check|run|repl> ...");
         process::exit(1);
     }
 
     match args[1].as_str() {
         "check" => cmd_check(&args[2..]),
         "run" => cmd_run(&args[2..]),
+        "repl" => cmd_repl(&args[2..]),
         other => {
             eprintln!("unknown subcommand: {other}");
             process::exit(1);
@@ -100,4 +102,35 @@ fn cmd_run(args: &[String]) {
     });
 
     println!("{}", value::render(&result, &sig.rhs, &ep.env));
+}
+
+fn cmd_repl(args: &[String]) {
+    if args.is_empty() {
+        eprintln!("usage: theseus repl <FILE>");
+        process::exit(1);
+    }
+    let src = fs::read_to_string(&args[0]).unwrap_or_else(|e| {
+        eprintln!("error reading {}: {e}", args[0]);
+        process::exit(1);
+    });
+
+    let ep = match pipeline::elaborate(&src) {
+        Ok(ep) => ep,
+        Err(pipeline::ElabError::Parse(e)) => {
+            eprintln!("parse error: {e:?}");
+            process::exit(1);
+        }
+        Err(pipeline::ElabError::Check(diags)) => {
+            for d in &diags {
+                eprintln!("{d:?}");
+            }
+            process::exit(1);
+        }
+    };
+
+    let mut repl = Repl::new(ep);
+    let stdin = std::io::stdin();
+    let mut input = std::io::BufReader::new(stdin.lock());
+    let mut output = std::io::stdout();
+    repl.run(&mut input, &mut output);
 }
