@@ -29,3 +29,13 @@ Lemma budget is countable (ADR-0014 makes it ~3 structural + Branch +
 TraceLoop + Reg + per-prim). `Par` with unequal-latency arms requires the
 path-balancing pass (ADR-0015) — why `Reg` exists before any pipelining
 ambitions.
+
+## Amendment (2026-07-09): prim admission is a mutual-inverse check
+The Decision's `Prim` admission — "a mechanically discharged **bijectivity**
+check" — is too weak. Bijectivity of `forward` alone does not make the
+supplied `backward` its inverse; a `backward` that is *a* bijection but not
+`forward⁻¹` passes bijectivity yet makes `(prim p)† = prim p̄` denote the wrong
+map, breaking `f† ∘ f ≡ id` (ADR-0008 T1) at run time instead of at admission.
+Admission MUST check the pair are **mutual inverses**: `backward ∘ forward =
+id_A` and `forward ∘ backward = id_B` over the finite domains (exhaustive at
+prim widths). See `design/core-pi.md` → Prim admission.
