@@ -72,7 +72,7 @@ fn check_pattern(
                 return;
             };
             // The ctor must belong to the type at this position.
-            if !type_admits_ctor(ty, &ctor_info.type_name, env) {
+            if !type_admits_ctor(ty, &ctor_info.type_name) {
                 diags.push(
                     Diagnostic::new(Code::T0102, name.span)
                         .with_side(side)
@@ -156,12 +156,12 @@ fn check_curried_args(
 }
 
 /// Does the surface type `ty` admit a constructor belonging to `type_name`?
-fn type_admits_ctor(ty: &SurfType, type_name: &str, env: &Env) -> bool {
+fn type_admits_ctor(ty: &SurfType, type_name: &str) -> bool {
     let ty = peel_paren_type(ty);
     match ty {
         SurfType::Name(n) => n.text == type_name,
         SurfType::Sum(a, b, _) => {
-            type_admits_ctor(a, type_name, env) || type_admits_ctor(b, type_name, env)
+            type_admits_ctor(a, type_name) || type_admits_ctor(b, type_name)
         }
         _ => false,
     }
