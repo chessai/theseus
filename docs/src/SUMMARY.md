@@ -70,6 +70,7 @@
 # Theory Notes
 
 - [Proof-obligation ledger](theory/obligation-ledger.md)
+- [Coverage ⇔ bijectivity (TH-4a)](theory/coverage-bijectivity.md)
 - [Finite-trace totality](theory/finite-trace-totality.md)
 - [The bidirectional-descent trap](theory/bidirectional-descent.md)
 - [Coherence and canonical permutations](theory/coherence.md)

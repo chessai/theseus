@@ -25,3 +25,21 @@ possibly a contribution.
 Warn-and-continue (unsound: unsynthesizable circuits); semantic-only
 checking by enumeration (kept, but as the *test oracle* for the real
 algorithm, per ADR-0018).
+
+## Amendment (2026-07-09): the "bidirectional variant" decomposes
+The Consequences called the bidirectional check "no off-the-shelf treatment
+… possibly a contribution." On working it through for the plain fragment, the
+risk is lower than framed: the check **decomposes** into standard pieces
+rather than requiring a novel unified matrix. It is (1) a syntactic linearity
+pass per clause (`vars(lᵢ) = vars(rᵢ)`, each once — `T0201`/`T0202`) plus
+(2) ordinary Maranget usefulness/exhaustiveness run **independently on each
+column**, LHS over `A` and RHS over `B` (`T0301`/`T0302`), staged after names
+and typing (`spec/static-semantics.md`, global gating). What had no citation
+was *unifying* the two sides into one pass; we do not need that. The
+sufficiency of "both columns partition + per-clause linear variable
+correspondence ⇒ total bijection" is now **proved** for the plain fragment as
+TH-4a (`theory/coverage-bijectivity.md`) — so "coverage *is* the
+invertibility" (Context) is a theorem, not an assertion. The padded-encoding
+half (mux/demux invertibility, ADR-0012) is split off as TH-4b and remains a
+downstream M2 obligation. Label-extended coverage (`T0303`) is deferred to the
+second M1 slice.
