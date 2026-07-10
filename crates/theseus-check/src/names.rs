@@ -62,26 +62,25 @@ fn check_clause(clause: &Clause, env: &Env, diags: &mut Vec<Diagnostic>) {
 fn check_pattern(pat: &Pattern, env: &Env, side: Side, diags: &mut Vec<Diagnostic>) {
     match pat {
         Pattern::Var(_) => {}
-        Pattern::Nat(_) => {}
-        Pattern::Label(_) => {}
-        Pattern::Ctor(name, arg) => {
-            if !env.has_ctor(name.text()) {
+        Pattern::Nat(_, _) => {}
+        Pattern::Label(..) => {}
+        Pattern::Ctor(name, args, _) => {
+            if !env.has_ctor(&name.text) {
                 diags.push(
-                    Diagnostic::new(Code::T0101, name.span())
+                    Diagnostic::new(Code::T0101, name.span)
                         .with_side(side)
-                        .with_name(name.text().to_string()),
+                        .with_name(name.text.to_string()),
                 );
             }
-            if let Some(inner) = arg {
+            for inner in args {
                 check_pattern(inner, env, side, diags);
             }
         }
-        Pattern::Tuple(items) => {
-            for item in items {
-                check_pattern(item, env, side, diags);
-            }
+        Pattern::Tuple(a, b, _) => {
+            check_pattern(a, env, side, diags);
+            check_pattern(b, env, side, diags);
         }
-        Pattern::Paren(inner) => check_pattern(inner, env, side, diags),
+        Pattern::Paren(inner, _) => check_pattern(inner, env, side, diags),
     }
 }
 
@@ -90,9 +89,9 @@ fn check_type_refs(ty: &SurfType, env: &Env, side: Option<Side>, diags: &mut Vec
     match ty {
         SurfType::Empty(_) | SurfType::Unit(_) | SurfType::Var(_) => {}
         SurfType::Name(n) => {
-            if !env.has_type(n.text()) {
+            if !env.has_type(&n.text) {
                 let mut d =
-                    Diagnostic::new(Code::T0101, n.span()).with_name(n.text().to_string());
+                    Diagnostic::new(Code::T0101, n.span).with_name(n.text.to_string());
                 if let Some(s) = side {
                     d = d.with_side(s);
                 }

@@ -96,7 +96,7 @@ impl Env {
 
     /// Is `name` a declared type?
     pub fn has_type(&self, name: &str) -> bool {
-        self.types.contains_key(name)
+        self.types.contains_key(name) || is_builtin_type(name)
     }
 
     /// Look up a constructor.
@@ -164,7 +164,7 @@ impl Env {
             SurfType::Sum(a, b, _) => {
                 CoreType::Sum(Box::new(self.lower(a)), Box::new(self.lower(b)))
             }
-            SurfType::Name(n) => self.lower_named(n.text()),
+            SurfType::Name(n) => self.lower_named(&n.text),
         }
     }
 
@@ -213,18 +213,26 @@ fn injection_path(index: usize, count: usize) -> Vec<Inj> {
     path
 }
 
+/// The blessed stdlib numeric types `U<n>` (ADR-0017): `U1`, `U2`, `U4`, `U8`,
+/// `U16`, … — builtin, not user-declared, so name resolution treats them as
+/// known. (Their structural lowering is a later-task concern.)
+fn is_builtin_type(name: &str) -> bool {
+    name.strip_prefix('U')
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Build the resolution environment for a program (infallible).
 pub fn resolve(program: &Program) -> Env {
     let mut env = Env::default();
     for decl in &program.decls {
         match decl {
             Decl::Type(td) => {
-                let type_name = td.name.text().to_string();
+                let type_name = td.name.text.to_string();
                 let ctor_names: Vec<String> =
-                    td.ctors.iter().map(|c| c.name.text().to_string()).collect();
+                    td.ctors.iter().map(|c| c.name.text.to_string()).collect();
                 let count = ctor_names.len();
-                for (index, Ctor { name, payload }) in td.ctors.iter().enumerate() {
-                    let cname = name.text().to_string();
+                for (index, Ctor { name, payload, .. }) in td.ctors.iter().enumerate() {
+                    let cname = name.text.to_string();
                     env.ctors.insert(
                         cname,
                         CtorInfo {
@@ -239,7 +247,7 @@ pub fn resolve(program: &Program) -> Env {
             }
             Decl::Iso(id) => {
                 env.isos.insert(
-                    id.name.text().to_string(),
+                    id.name.text.to_string(),
                     IsoSig {
                         lhs: id.lhs.clone(),
                         rhs: id.rhs.clone(),
@@ -248,7 +256,7 @@ pub fn resolve(program: &Program) -> Env {
             }
             Decl::Prim(pd) => {
                 env.prims.insert(
-                    pd.name.text().to_string(),
+                    pd.name.text.to_string(),
                     PrimSig {
                         lhs: pd.lhs.clone(),
                         rhs: pd.rhs.clone(),
