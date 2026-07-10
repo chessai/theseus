@@ -430,12 +430,12 @@ fn synthesize_sum(
             let gi = synthesize(&r2l, b)?;
             return Some(Iso::seq(
                 Iso::plus(fi, gi),
-                Iso::SwapSum(a.as_ref().clone(), b.as_ref().clone()),
+                Iso::SwapSum(a.clone(), b.clone()),
             ));
         }
         // Different summand types: only simple tag-swap (payloads unchanged).
         if l2r.iter().all(|(k, v)| k == v) && r2l.iter().all(|(k, v)| k == v) {
-            return Some(Iso::SwapSum(a.as_ref().clone(), b.as_ref().clone()));
+            return Some(Iso::SwapSum(a.clone(), b.clone()));
         }
     }
     None
@@ -451,7 +451,7 @@ fn synthesize_prod(
     if let Some(iso) = synthesize_prod_factor(sigma, a, b) {
         return Some(iso);
     }
-    if let CoreType::Sum(al, ar) = a.as_ref() {
+    if let CoreType::Sum(al, ar) = a {
         return synthesize_controlled(sigma, a, al, ar, b);
     }
     None
