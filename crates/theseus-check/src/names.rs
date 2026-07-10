@@ -9,7 +9,7 @@
 //! The check reads the [`Env`] built by [`crate::env::resolve`]; it never
 //! mutates it.
 
-use theseus_syntax::ast::{Clause, Decl, IsoBody, IsoDecl, Pattern, Program, Type as SurfType};
+use theseus_syntax::ast::{Clause, Decl, Expr, IsoBody, IsoDecl, Pattern, Program, Type as SurfType};
 
 use crate::diagnostics::{Code, Diagnostic, Side};
 use crate::env::Env;
@@ -39,17 +39,46 @@ pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
 fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
     check_type_refs(&id.lhs, env, Some(Side::Left), diags);
     check_type_refs(&id.rhs, env, Some(Side::Right), diags);
-    if let IsoBody::Clauses(clauses) = &id.body {
-        for clause in clauses {
-            check_clause(clause, env, diags);
+    match &id.body {
+        IsoBody::Clauses(clauses) => {
+            for clause in clauses {
+                check_clause(clause, env, diags);
+            }
+        }
+        IsoBody::Expr(e) => {
+            // An `= expr` body references other isos/prims by name; a reference
+            // resolves against the top-level isos/prims OR this iso's own
+            // `where`-bound isos (in scope for its body).
+            let local: Vec<&str> = id.wheres.iter().map(|w| w.name.text.as_str()).collect();
+            check_expr(e, env, &local, diags);
         }
     }
-    // `= expr` iso bodies reference other isos/prims. Slice-1 conformance
-    // programs express their isos as clause tables, so unknown-iso-in-body
-    // resolution is deferred to the typing stage's elaboration pass rather than
-    // pattern-matched here against the (unstable) expression AST.
     for w in &id.wheres {
         check_iso(w, env, diags);
+    }
+}
+
+/// Walk an `= expr` combinator body; report `T0101` for an unknown iso/prim
+/// reference (`Expr::Var`) or an unknown constructor used as a combinator
+/// (`Expr::Ctor`). `local` holds the in-scope `where`-bound iso names.
+fn check_expr(e: &Expr, env: &Env, local: &[&str], diags: &mut Vec<Diagnostic>) {
+    match e {
+        Expr::Var(n) => {
+            if !env.has_iso(&n.text) && !env.has_prim(&n.text) && !local.contains(&n.text.as_str()) {
+                diags.push(Diagnostic::new(Code::T0101, n.span).with_name(n.text.to_string()));
+            }
+        }
+        Expr::Ctor(n) => {
+            if !env.has_ctor(&n.text) {
+                diags.push(Diagnostic::new(Code::T0101, n.span).with_name(n.text.to_string()));
+            }
+        }
+        Expr::Adjoint(inner, _) | Expr::Paren(inner, _) => check_expr(inner, env, local, diags),
+        Expr::Bin(_, l, r, _) | Expr::Tuple(l, r, _) => {
+            check_expr(l, env, local, diags);
+            check_expr(r, env, local, diags);
+        }
+        Expr::Id(_) | Expr::Unit(_) => {}
     }
 }
 
