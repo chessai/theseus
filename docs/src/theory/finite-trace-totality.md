@@ -148,3 +148,20 @@ Two different quantities, two different units — conflating them is an off-by-o
   effectively-infinite fuel — so "Done within fuel = static bound" is untested.
   Slice-2 must pin ONE fuel unit (body applications), thread the `|u|+1` budget,
   and specify how nested-trace fuel composes.
+
+## Provenance (what is borrowed vs. novel)
+
+* **Borrowed (cited, not re-proved here):** the combinator and adjoint laws,
+  including the definitional `(trace f)† = trace(f†)`, are Π (Sabry et al.) over a
+  symmetric rig category (Mac Lane; Laplaza — coherence, ledger TH-3). The
+  categorical semantics of the reversible `trace`/iteration operator — under which
+  a bijection over finite state has only finite entering trajectories — is
+  Kaarsgaard et al. (join inverse categories; ADR-0005). The exhaustiveness half of
+  the bijection hypothesis (via TH-4a) rests on Maranget's pattern matrices.
+* **Novel here:** the *exact quantitative* bound (`|u|` iterations / `|u|+1`
+  applications) packaged for WCET diagnostics and hardware counter sizing, the
+  both-directions-as-one-reversed-trajectory (mutual-inverse) statement, and the
+  immediate-exit constant. The prior art gives the *qualitative* termination and
+  the laws; the compiler-usable constants and their register/fuel corollaries are
+  theseus's (roadmap publication item #1). The ancestor Theseus paper (James &
+  Sabry) supplies the clause/label *syntax*, not this quantitative meta-theory.
