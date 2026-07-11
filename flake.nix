@@ -41,6 +41,12 @@
         targetToolsEnv = {
           THESEUS_VERILATOR = "${pkgs.verilator}/bin/verilator";
           THESEUS_YOSYS = "${pkgs.yosys}/bin/yosys";
+          # Physics seam: the SPICE harness locates ngspice through this, never
+          # PATH-luck. Populated for every shell so the maestro daemon (which
+          # runs from the default shell and whose workers inherit its env) can
+          # both find the harness's simulator AND let a worker invoke `ngspice`
+          # directly during circuit iteration (allowlisted in .claude/settings.json).
+          THESEUS_NGSPICE = "${pkgs.ngspice}/bin/ngspice";
         };
       in {
         packages.default = theseus;
@@ -66,6 +72,10 @@
           env = targetToolsEnv;
           packages = with pkgs; [
             rustToolchain
+
+            # physics flow (M3a): SPICE simulator for worker circuit iteration
+            # and the harness. On PATH here so daemon-spawned workers inherit it.
+            ngspice
 
             # hardware flow (L2/L3)
             verilator
@@ -128,8 +138,7 @@
           inputsFrom = [ theseus ];
           env = targetToolsEnv;
           packages = with pkgs; [ rustToolchain cargo-nextest ngspice ];
-          # The harness locates the simulator through this seam, never PATH-luck.
-          THESEUS_NGSPICE = "${pkgs.ngspice}/bin/ngspice";
+          # THESEUS_NGSPICE comes from targetToolsEnv (shared across all shells).
         };
       });
 }
