@@ -9,7 +9,7 @@ use theseus_check::env::resolve;
 use theseus_check::testkit;
 use theseus_cli::value;
 use theseus_core::iso::Iso;
-use theseus_eval::interp::eval;
+use theseus_eval::interp::{eval, static_bound, EvalError};
 
 const FUEL: u64 = 1_000_000;
 
@@ -24,17 +24,29 @@ fn repo_root() -> std::path::PathBuf {
         .to_path_buf()
 }
 
+/// Parsed `.expect` sidecar header and rows.
+struct ExpectFixture {
+    iso_name: String,
+    rows: Vec<(String, String)>,
+    fuel_bound: Option<u64>,
+    steps: Option<u64>,
+}
+
 /// Parse the `.expect` sidecar header and rows using surface values.
-///
-/// Returns `(iso_name, Vec<(lhs_str, rhs_str)>)`.
-fn parse_expect_surface(text: &str) -> (String, Vec<(String, String)>) {
-    let mut name = String::new();
+fn parse_expect_surface(text: &str) -> ExpectFixture {
+    let mut iso_name = String::new();
     let mut rows = Vec::new();
+    let mut fuel_bound = None;
+    let mut steps = None;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             if let Some(rest) = line.strip_prefix("# iso:") {
-                name = rest.trim().to_string();
+                iso_name = rest.trim().to_string();
+            } else if let Some(rest) = line.strip_prefix("# fuel-bound:") {
+                fuel_bound = Some(rest.trim().parse::<u64>().expect("bad fuel-bound"));
+            } else if let Some(rest) = line.strip_prefix("# steps:") {
+                steps = Some(rest.trim().parse::<u64>().expect("bad steps"));
             }
             continue;
         }
@@ -42,7 +54,7 @@ fn parse_expect_surface(text: &str) -> (String, Vec<(String, String)>) {
             rows.push((lhs.trim().to_string(), rhs.trim().to_string()));
         }
     }
-    (name, rows)
+    ExpectFixture { iso_name, rows, fuel_bound, steps }
 }
 
 // ── Program fixtures (the main conformance test) ─────────────────────────
@@ -65,12 +77,6 @@ fn conformance_programs() {
     for thse_path in &fixtures {
         let stem = thse_path.file_stem().unwrap().to_str().unwrap();
 
-        // Skip 0011-label-loop (labels are out of slice-1 scope).
-        if stem == "0011-label-loop" {
-            eprintln!("[skip] {stem}: deferred (labels)");
-            continue;
-        }
-
         let expect_path = thse_path.with_extension("expect");
         if !expect_path.exists() {
             continue;
@@ -78,7 +84,9 @@ fn conformance_programs() {
 
         let expect_text = fs::read_to_string(&expect_path)
             .unwrap_or_else(|e| panic!("reading {}: {e}", expect_path.display()));
-        let (iso_name, rows) = parse_expect_surface(&expect_text);
+        let fixture = parse_expect_surface(&expect_text);
+        let iso_name = fixture.iso_name.as_str();
+        let rows = &fixture.rows;
         assert!(
             !iso_name.is_empty(),
             "no `# iso:` header in {}",
@@ -99,7 +107,7 @@ fn conformance_programs() {
         let env = resolve(&prog);
         let elab_map = elaborate_program(&prog, &env);
 
-        let iso_result = elab_map.get(&iso_name).unwrap_or_else(|| {
+        let iso_result = elab_map.get(iso_name).unwrap_or_else(|| {
             panic!("[{stem}] iso `{iso_name}` not in elaboration map")
         });
 
@@ -117,12 +125,12 @@ fn conformance_programs() {
         };
 
         // Get the iso signature for type-guided value conversion.
-        let sig = env.iso(&iso_name).unwrap_or_else(|| {
+        let sig = env.iso(iso_name).unwrap_or_else(|| {
             panic!("[{stem}] iso `{iso_name}` not in env")
         });
 
         // Grade each row — forward AND backward.
-        for (lhs_str, rhs_str) in &rows {
+        for (lhs_str, rhs_str) in rows {
             let lhs_sv = value::parse_surface_value(lhs_str);
             let rhs_sv = value::parse_surface_value(rhs_str);
             let lhs_val = value::to_core(&lhs_sv, &sig.lhs, &env);
@@ -150,6 +158,52 @@ fn conformance_programs() {
             );
         }
 
+        // ── Fuel-bound / steps assertions (label fixtures only) ─────────
+        if let Some(expected_bound) = fixture.fuel_bound {
+            let computed = static_bound(&iso);
+            assert_eq!(
+                computed, expected_bound,
+                "[{stem}] static_bound mismatch: got {computed}, expected {expected_bound}"
+            );
+
+            // Every row must Done within exactly the static bound.
+            for (lhs_str, _) in rows {
+                let lhs_sv = value::parse_surface_value(lhs_str);
+                let lhs_val = value::to_core(&lhs_sv, &sig.lhs, &env);
+                let mut fuel = expected_bound;
+                eval(&iso, lhs_val, &mut fuel).unwrap_or_else(|e| {
+                    panic!("[{stem}] fuel-bound eval failed on `{lhs_str}` with fuel={expected_bound}: {e:?}")
+                });
+            }
+            eprintln!("[pass] {stem}: fuel-bound={expected_bound}");
+        }
+
+        if let Some(n) = fixture.steps {
+            // Grant n fuel → every row Done.
+            for (lhs_str, _) in rows {
+                let lhs_sv = value::parse_surface_value(lhs_str);
+                let lhs_val = value::to_core(&lhs_sv, &sig.lhs, &env);
+                let mut fuel = n;
+                eval(&iso, lhs_val, &mut fuel).unwrap_or_else(|e| {
+                    panic!("[{stem}] steps={n} eval failed on `{lhs_str}`: {e:?}")
+                });
+            }
+            // Grant n-1 fuel → every row OutOfFuel.
+            for (lhs_str, _) in rows {
+                let lhs_sv = value::parse_surface_value(lhs_str);
+                let lhs_val = value::to_core(&lhs_sv, &sig.lhs, &env);
+                let mut fuel = n - 1;
+                let result = eval(&iso, lhs_val, &mut fuel);
+                assert_eq!(
+                    result,
+                    Err(EvalError::OutOfFuel),
+                    "[{stem}] expected OutOfFuel at fuel={}, got {result:?} on `{lhs_str}`",
+                    n - 1
+                );
+            }
+            eprintln!("[pass] {stem}: steps={n} (Done@{n}, OutOfFuel@{})", n - 1);
+        }
+
         graded += 1;
         eprintln!("[pass] {stem}: iso `{iso_name}` ({} rows)", rows.len());
     }
@@ -164,8 +218,8 @@ fn conformance_programs() {
 
     // At least the structural-core fixtures must have graded.
     assert!(
-        graded >= 8,
-        "expected at least 8 graded fixtures, got {graded}"
+        graded >= 9,
+        "expected at least 9 graded fixtures, got {graded}"
     );
 }
 
@@ -188,10 +242,10 @@ fn conformance_diagnostics() {
     for thse_path in &fixtures {
         let stem = thse_path.file_stem().unwrap().to_str().unwrap();
 
-        // Skip deferred-scope fixtures: 0008 (labels, T0303) and 0009 (prim/adjoint
-        // diagnostics, T0401) — both out of the M1 slice-1 static-check set.
-        if stem == "0008-label-coverage" || stem == "0009-prim-mismatch" {
-            eprintln!("[skip] diag {stem}: deferred scope (labels / prim diagnostics)");
+        // Skip deferred-scope fixtures: 0009 (prim/adjoint diagnostics, T0401)
+        // — out of the M1 slice-1 static-check set.
+        if stem == "0009-prim-mismatch" {
+            eprintln!("[skip] diag {stem}: deferred scope (prim diagnostics)");
             continue;
         }
 
