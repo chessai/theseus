@@ -30,7 +30,17 @@ fn collect_vars(pat: &Pattern, occ: &mut Occurrences) {
             collect_vars(b, occ);
         }
         Pattern::Paren(inner, _) => collect_vars(inner, occ),
-        Pattern::Nat(_, _) | Pattern::Label(..) => {}
+        // A label pattern `$ℓ p…` binds the variables of its argument patterns
+        // (the `$ℓ` tag itself binds nothing) — descend so a variable inside a
+        // label, e.g. `b` in `$go (b,(O,O))`, is counted on its side. Without
+        // this, label-clause variables are invisible to linearity and every
+        // label loop draws spurious T0201/T0202 (the L15 "end-to-end" gap).
+        Pattern::Label(_, args, _) => {
+            for arg in args {
+                collect_vars(arg, occ);
+            }
+        }
+        Pattern::Nat(_, _) => {}
     }
 }
 
@@ -158,10 +168,6 @@ mod tests {
     #[test]
     fn no_linearity_errors_on_valid_programs() {
         for path in testkit::program_fixtures() {
-            let file = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if file == "0011-label-loop.thse" {
-                continue;
-            }
             let program = testkit::load_program(&path);
             let env = crate::env::resolve(&program);
             let reported = linearity_only(check(&program, &env));
@@ -171,5 +177,24 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    /// End-to-end guard (the L15 gap): a label variable inside `$go (b,…)` must
+    /// be visible to linearity, so the FULL staged `check` reports nothing on
+    /// the `spin` label loop — otherwise the CLI pipeline never reaches E4.
+    #[test]
+    fn label_loop_variable_is_linear_end_to_end() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap()
+            .to_path_buf();
+        let path = root.join("conformance/programs/0011-label-loop.thse");
+        let program = testkit::load_program(&path);
+        let reported = crate::check(&program);
+        assert!(
+            reported.is_empty(),
+            "spin (0011) must pass all static checks end-to-end, got: {reported:?}"
+        );
     }
 }

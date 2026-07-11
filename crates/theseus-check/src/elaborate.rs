@@ -72,7 +72,14 @@ fn collect_where<'a>(iso: &'a IsoDecl, out: &mut BTreeMap<String, &'a IsoDecl>) 
 fn elab_iso(iso: &IsoDecl, env: &Env, isos: &BTreeMap<String, &IsoDecl>) -> ElabResult {
     match &iso.body {
         IsoBody::Expr(e) => elab_expr(e, env, isos),
-        IsoBody::Clauses(cs) => elab_clauses(cs, &iso.lhs, &iso.rhs, env),
+        IsoBody::Clauses(cs) => {
+            let labels = env.iso_labels(&iso.name.text);
+            if labels.is_empty() {
+                elab_clauses(cs, &iso.lhs, &iso.rhs, env)
+            } else {
+                elab_clauses_label(cs, &iso.lhs, &iso.rhs, labels, env)
+            }
+        }
     }
 }
 
@@ -602,6 +609,203 @@ fn synthesize_controlled(
     ))
 }
 
+// ── Label elaboration (E4): label clause sets → trace(u, Φ) ────────────
+
+/// Build the label carrier core type U = Σ_ℓ U_ℓ as a right-nested sum.
+fn build_label_carrier(labels: &[(String, SurfType)], env: &Env) -> CoreType {
+    let summands: Vec<CoreType> = labels.iter().map(|(_, ty)| env.lower(ty)).collect();
+    match summands.as_slice() {
+        [] => CoreType::Zero,
+        [last] => last.clone(),
+        [head, rest @ ..] => {
+            let mut acc = rest.last().unwrap().clone();
+            for s in rest.iter().rev().skip(1) {
+                acc = CoreType::Sum(Box::new(s.clone()), Box::new(acc));
+            }
+            CoreType::Sum(Box::new(head.clone()), Box::new(acc))
+        }
+    }
+}
+
+/// Injection path for the `index`-th label in a right-nested sum of `count`
+/// labels. Same encoding as `env::injection_path` for constructors.
+fn label_injection_path(index: usize, count: usize) -> Vec<Inj> {
+    if count <= 1 {
+        return Vec::new();
+    }
+    let mut path = vec![Inj::R; index];
+    if index < count - 1 {
+        path.push(Inj::L);
+    }
+    path
+}
+
+/// Elaborate a label iso to `Iso::trace(u, Φ)`.
+fn elab_clauses_label(
+    cs: &[Clause],
+    lhs_ty: &SurfType,
+    rhs_ty: &SurfType,
+    labels: &[(String, SurfType)],
+    env: &Env,
+) -> ElabResult {
+    // 1. Build carrier type u = Σ_ℓ U_ℓ.
+    let carrier = build_label_carrier(labels, env);
+
+    // 2. Build extended types: ext = Sum(u, boundary).
+    let boundary_lhs = env.lower(lhs_ty);
+    let boundary_rhs = env.lower(rhs_ty);
+    let ext_lhs = CoreType::Sum(Box::new(carrier.clone()), Box::new(boundary_lhs));
+    let ext_rhs = CoreType::Sum(Box::new(carrier.clone()), Box::new(boundary_rhs));
+
+    // 3. Only handle ext_lhs == ext_rhs (A == B) for now.
+    if ext_lhs != ext_rhs {
+        return unsupported();
+    }
+
+    // 4. Build the body bijection Φ over the extended type.
+    let values = enumerate_values(&ext_lhs);
+    let mut phi = BTreeMap::new();
+    for v in &values {
+        let mut matched = false;
+        for c in cs {
+            if let Some(bindings) = match_bind_extended(v, &c.lhs, lhs_ty, labels, env) {
+                if let Some(output) = instantiate_extended(&c.rhs, &bindings, rhs_ty, labels, env) {
+                    phi.insert(v.clone(), output);
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if !matched {
+            return unsupported();
+        }
+    }
+
+    // 5. Synthesize a core iso realizing the body bijection Φ. Structural
+    //    synthesis handles the shapes it knows; for an arbitrary permutation
+    //    (e.g. spin's counter walk) it returns None, and we fall back to an
+    //    opaque Prim carrying the (forward, backward) value tables. The Prim
+    //    body is denotationally correct (eval looks it up; it is mutual-inverse
+    //    by TH-4a-label) and has static bound 0, so B(trace) = |u|+1 holds.
+    //    M2 owes a structural (demux, design/elaboration.md §E4) refinement of
+    //    this body before hardware lowering; the Prim interim is eval-complete.
+    let body = match synthesize(&phi, &ext_lhs) {
+        Some(iso) => iso,
+        None => {
+            let backward: BTreeMap<Value, Value> =
+                phi.iter().map(|(k, v)| (v.clone(), k.clone())).collect();
+            // Injectivity guard: if two Φ keys share an image the naive inverse
+            // silently drops an entry, yielding a non-total backward map. Φ is a
+            // bijection by TH-4a-label on checked input, so this cannot fire for
+            // a well-formed iso — but `elaborate` is called unchecked in tests,
+            // so bail to `unsupported()` rather than emit a bad Prim.
+            if backward.len() != phi.len() {
+                return unsupported();
+            }
+            Iso::Prim(Box::new(theseus_core::PrimDef {
+                forward_name: "<trace-body>".into(),
+                backward_name: "<trace-body-inv>".into(),
+                input_ty: ext_lhs.clone(),
+                output_ty: ext_rhs.clone(),
+                forward: phi,
+                backward,
+            }))
+        }
+    };
+
+    // 6. Wrap in trace.
+    Ok(Iso::trace(carrier, body))
+}
+
+// ── Extended match/instantiate (label-aware) ────────────────────────────
+
+/// Match a value from the extended type `Sum(u, boundary)` against a pattern.
+fn match_bind_extended(
+    value: &Value,
+    pattern: &Pattern,
+    boundary_ty: &SurfType,
+    labels: &[(String, SurfType)],
+    env: &Env,
+) -> Option<BTreeMap<String, Value>> {
+    let mut bindings = BTreeMap::new();
+    if match_bind_extended_inner(value, pattern, boundary_ty, labels, env, &mut bindings) {
+        Some(bindings)
+    } else {
+        None
+    }
+}
+
+fn match_bind_extended_inner(
+    value: &Value,
+    pattern: &Pattern,
+    boundary_ty: &SurfType,
+    labels: &[(String, SurfType)],
+    env: &Env,
+    bindings: &mut BTreeMap<String, Value>,
+) -> bool {
+    match strip_paren_pat(pattern) {
+        Pattern::Label(name, args, _) => {
+            // Label pattern: matches Left(carrier_val).
+            let Value::Left(carrier_val) = value else {
+                return false;
+            };
+            let Some(label_idx) = labels.iter().position(|(l, _)| l == &name.text) else {
+                return false;
+            };
+            let path = label_injection_path(label_idx, labels.len());
+            let Some(payload) = navigate_inj(carrier_val, &path) else {
+                return false;
+            };
+            let carrier_ty = &labels[label_idx].1;
+            match_bind_args(payload, args, Some(carrier_ty), env, bindings)
+        }
+        Pattern::Var(n) => {
+            // Variable in extended context: matches boundary Right(val).
+            let Value::Right(inner) = value else {
+                return false;
+            };
+            bindings.insert(n.text.clone(), inner.as_ref().clone());
+            true
+        }
+        plain => {
+            // Other plain patterns: match boundary Right(val).
+            let Value::Right(inner) = value else {
+                return false;
+            };
+            match_bind_inner(inner, plain, boundary_ty, env, bindings)
+        }
+    }
+}
+
+/// Instantiate a pattern in extended context, producing a value of the
+/// extended type `Sum(u, boundary)`.
+fn instantiate_extended(
+    pattern: &Pattern,
+    bindings: &BTreeMap<String, Value>,
+    boundary_ty: &SurfType,
+    labels: &[(String, SurfType)],
+    env: &Env,
+) -> Option<Value> {
+    match strip_paren_pat(pattern) {
+        Pattern::Label(name, args, _) => {
+            let label_idx = labels.iter().position(|(l, _)| l == &name.text)?;
+            let carrier_ty = &labels[label_idx].1;
+            let payload = instantiate_args(args, bindings, Some(carrier_ty), env)?;
+            let path = label_injection_path(label_idx, labels.len());
+            let injected = inject_value(payload, &path);
+            Some(Value::left(injected))
+        }
+        Pattern::Var(n) => {
+            let val = bindings.get(&n.text)?;
+            Some(Value::right(val.clone()))
+        }
+        plain => {
+            let val = instantiate(plain, bindings, boundary_ty, env)?;
+            Some(Value::right(val))
+        }
+    }
+}
+
 // ── small structural helpers ──────────────────────────────────────────────
 
 fn strip_paren_pat(p: &Pattern) -> &Pattern {
@@ -791,6 +995,77 @@ mod tests {
         let sym_f = Iso::sym(f.clone());
         assert_eq!(run(&sym_f, run(&f, u0.clone())), u0);
         assert_eq!(run(&sym_f, run(&f, u1.clone())), u1);
+    }
+
+    // ── Label elaboration (E4): trace tests ───────────────────────────
+
+    #[test]
+    fn spin_0011_is_trace() {
+        let path = testkit::repo_root().join("conformance/programs/0011-label-loop.thse");
+        let prog = testkit::load_program(&path);
+        let env = crate::env::resolve(&prog);
+        let map = elaborate_program(&prog, &env);
+        let result = map.get("spin").expect("no iso spin");
+        let iso = result.as_ref().expect("spin was not elaborated");
+
+        // Carrier: lower((Bit, (Bit, Bit))) = Prod(Sum(1,1), Prod(Sum(1,1), Sum(1,1)))
+        let bit = CoreType::Sum(Box::new(CoreType::One), Box::new(CoreType::One));
+        let expected_u = CoreType::Prod(
+            Box::new(bit.clone()),
+            Box::new(CoreType::Prod(Box::new(bit.clone()), Box::new(bit.clone()))),
+        );
+
+        match iso {
+            Iso::Trace(u, _phi) => {
+                assert_eq!(*u, expected_u, "carrier type mismatch");
+            }
+            other => panic!("expected Trace, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spin_0011_body_bijection() {
+        let path = testkit::repo_root().join("conformance/programs/0011-label-loop.thse");
+        let prog = testkit::load_program(&path);
+        let env = crate::env::resolve(&prog);
+        let map = elaborate_program(&prog, &env);
+        let result = map.get("spin").expect("no iso spin");
+        let iso = result.as_ref().expect("spin was not elaborated");
+
+        let Iso::Trace(_, phi) = iso else {
+            panic!("expected Trace");
+        };
+
+        // Bit encoding: O = Left(Unit), I = Right(Unit)
+        // Extended value constructors: Right(v) = boundary, Left(v) = carrier state
+        // Carrier (single label $go): (Bit, (Bit, Bit))
+        // carrier val helper: (b, (c0, c1))
+        let cv = |b: Value, c0: Value, c1: Value| Value::pair(b, Value::pair(c0, c1));
+
+        // Clause 1: b <-> $go (b, (O, O))
+        // Right(O) → Left(cv(O, O, O))
+        assert_eq!(run(phi, Value::right(o())), Value::left(cv(o(), o(), o())));
+        // Right(I) → Left(cv(I, O, O))
+        assert_eq!(run(phi, Value::right(i())), Value::left(cv(i(), o(), o())));
+
+        // Clause 2: $go (b, (O, O)) <-> $go (b, (O, I))
+        // Left(cv(O, O, O)) → Left(cv(O, O, I))
+        assert_eq!(
+            run(phi, Value::left(cv(o(), o(), o()))),
+            Value::left(cv(o(), o(), i()))
+        );
+
+        // Clause 5: $go (b, (I, I)) <-> b
+        // Left(cv(O, I, I)) → Right(O)
+        assert_eq!(
+            run(phi, Value::left(cv(o(), i(), i()))),
+            Value::right(o())
+        );
+        // Left(cv(I, I, I)) → Right(I)
+        assert_eq!(
+            run(phi, Value::left(cv(i(), i(), i()))),
+            Value::right(i())
+        );
     }
 
     #[test]
