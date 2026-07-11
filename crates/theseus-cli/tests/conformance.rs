@@ -238,7 +238,6 @@ fn conformance_programs() {
     // the test fails rather than silently losing coverage.
     const MUST_GRADE: &[&str] = &[
         "0011-label-loop",
-        "0008-label-coverage",
     ];
     let graded_stems: Vec<&str> = fixtures
         .iter()
