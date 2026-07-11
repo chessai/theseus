@@ -30,6 +30,11 @@ repository = "https://github.com/chessai/theseus"
 # splr, cadical-or-kissat bindings (via CnfSolver trait, ADR-0020 amended)
 [workspace.dependencies]
 logos = "0.14"
+# Adopted per ADR-0020 (both listed in the planned set): serde for derive-based
+# (de)serialization, ron for the characterization-DB / energy-artifact format
+# (the artifact contract is literally RON) — replacing hand-rolled RON text.
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
