@@ -669,11 +669,15 @@ fn elab_clauses_label(
         let mut matched = false;
         for c in cs {
             if let Some(bindings) = match_bind_extended(v, &c.lhs, lhs_ty, labels, env) {
-                if let Some(output) = instantiate_extended(&c.rhs, &bindings, rhs_ty, labels, env) {
-                    phi.insert(v.clone(), output);
-                    matched = true;
-                    break;
-                }
+                let Some(output) = instantiate_extended(&c.rhs, &bindings, rhs_ty, labels, env) else {
+                    // Matched LHS but RHS instantiation failed (e.g. unbound
+                    // variable). Abort immediately — do not fall through to
+                    // later clauses, matching compute_bijection's behaviour.
+                    return unsupported();
+                };
+                phi.insert(v.clone(), output);
+                matched = true;
+                break;
             }
         }
         if !matched {
@@ -694,22 +698,22 @@ fn elab_clauses_label(
         None => {
             let backward: BTreeMap<Value, Value> =
                 phi.iter().map(|(k, v)| (v.clone(), k.clone())).collect();
-            // Injectivity guard: if two Φ keys share an image the naive inverse
-            // silently drops an entry, yielding a non-total backward map. Φ is a
-            // bijection by TH-4a-label on checked input, so this cannot fire for
-            // a well-formed iso — but `elaborate` is called unchecked in tests,
-            // so bail to `unsupported()` rather than emit a bad Prim.
-            if backward.len() != phi.len() {
-                return unsupported();
-            }
-            Iso::Prim(Box::new(theseus_core::PrimDef {
+            // Full admissibility guard (ADR-0013): verify the (forward,
+            // backward) pair are mutual inverses over the finite domains.
+            // This is strictly stronger than the old len-check — it also
+            // catches Φ outputs that fall outside the codomain type.
+            let def = theseus_core::PrimDef {
                 forward_name: "<trace-body>".into(),
                 backward_name: "<trace-body-inv>".into(),
                 input_ty: ext_lhs.clone(),
                 output_ty: ext_rhs.clone(),
                 forward: phi,
                 backward,
-            }))
+            };
+            if theseus_core::prim::admit(&def).is_err() {
+                return unsupported();
+            }
+            Iso::Prim(Box::new(def))
         }
     };
 
@@ -1091,5 +1095,52 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ── FIX 1 repro: ill-typed Prim body rejected by admit() guard ───
+
+    #[test]
+    fn label_illtyped_prim_rejected() {
+        // type Bit = O | I
+        // iso bad : Bit <-> Bit
+        //   | b <-> $go (b, b)
+        //   | $go p <-> p
+        //
+        // $go's payload type is Bit, but clause 1's RHS `$go (b, b)` produces
+        // a (Bit, Bit) payload — Φ maps boundary values into ill-typed carrier
+        // entries. The admit() guard must catch this.
+        let src = "type Bit = O | I\niso bad : Bit <-> Bit\n  | b <-> $go (b, b)\n  | $go p <-> p\n";
+        let prog = theseus_syntax::parse(src).expect("parses");
+        let env = crate::env::resolve(&prog);
+        let map = elaborate_program(&prog, &env);
+        let result = map.get("bad").expect("no iso bad");
+        assert!(
+            result.is_err(),
+            "ill-typed prim body should not elaborate, got: {result:?}"
+        );
+    }
+
+    // ── FIX 2 repro: instantiate failure must abort, not fall through ─
+
+    #[test]
+    fn label_instantiate_abort() {
+        // type Bit = O | I
+        // iso f : Bit <-> Bit
+        //   | b <-> $go b
+        //   | $go O <-> x       ← clause 2 RHS: `x` is unbound
+        //   | $go b <-> b
+        //
+        // When matching carrier value $go(O), clause 2 matches but its RHS
+        // instantiation fails (unbound `x`). The elaborator must abort
+        // immediately rather than silently falling through to clause 3.
+        let src = "type Bit = O | I\niso f : Bit <-> Bit\n  | b <-> $go b\n  | $go O <-> x\n  | $go b <-> b\n";
+        let prog = theseus_syntax::parse(src).expect("parses");
+        let env = crate::env::resolve(&prog);
+        let map = elaborate_program(&prog, &env);
+        let result = map.get("f").expect("no iso f");
+        assert!(
+            result.is_err(),
+            "instantiate failure should abort elaboration, got: {result:?}"
+        );
     }
 }
