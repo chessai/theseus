@@ -250,6 +250,83 @@ pub fn rc_ramp_closed_form(r_ohm: f64, c_farad: f64, v_volt: f64, period_s: f64)
     4.0 * c_farad * c_farad * v_volt * v_volt * r_ohm / period_s
 }
 
+// ---------------------------------------------------------------------------
+// Multi-axis sweep: ramp × load
+// ---------------------------------------------------------------------------
+
+/// Axes for a multi-axis parameter sweep.
+pub struct SweepAxes {
+    /// Clock periods (s) — outer loop.
+    pub ramps: Vec<f64>,
+    /// Load capacitances (F) — inner loop.
+    pub loads: Vec<f64>,
+}
+
+/// A single measured point in the sweep grid.
+pub struct SweepPoint {
+    /// Clock period (s).
+    pub period_s: f64,
+    /// Load capacitance (F).
+    pub load_f: f64,
+    /// Measured energy (J).
+    pub energy_j: f64,
+}
+
+/// Sweep a netlist template over a grid of (ramp, load) pairs.
+///
+/// `netlist_template` must contain `{PERIOD}` and `{LOAD}` placeholders.
+/// An optional `{HALF}` placeholder is also substituted with `period / 2`
+/// (useful for triangle-wave PWL sources).
+/// For each (ramp, load) pair the placeholders are substituted (scientific
+/// notation) and the netlist is run via [`run_energy`]. Deterministic order:
+/// ramps outer, loads inner.
+pub fn sweep_grid(
+    netlist_template: &str,
+    meas_name: &str,
+    axes: &SweepAxes,
+) -> Vec<SweepPoint> {
+    let mut points = Vec::with_capacity(axes.ramps.len() * axes.loads.len());
+    for &ramp in &axes.ramps {
+        for &load in &axes.loads {
+            let netlist = netlist_template
+                .replace("{PERIOD}", &format!("{:.6e}", ramp))
+                .replace("{HALF}", &format!("{:.6e}", ramp / 2.0))
+                .replace("{LOAD}", &format!("{:.6e}", load));
+            let e = run_energy(&netlist, meas_name);
+            points.push(SweepPoint {
+                period_s: ramp,
+                load_f: load,
+                energy_j: e,
+            });
+        }
+    }
+    points
+}
+
+/// Group sweep points by load (ascending) and compute the log-log slope of
+/// energy vs period for each load group.
+///
+/// Returns `(load_f, slope)` per load, in ascending load order.
+pub fn slopes_by_load(points: &[SweepPoint]) -> Vec<(f64, f64)> {
+    // Collect unique loads in deterministic ascending order.
+    let mut loads: Vec<f64> = points.iter().map(|p| p.load_f).collect();
+    loads.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    loads.dedup();
+
+    loads
+        .iter()
+        .map(|&load| {
+            let series: Vec<(f64, f64)> = points
+                .iter()
+                .filter(|p| p.load_f == load)
+                .map(|p| (p.period_s, p.energy_j))
+                .collect();
+            let slope = log_log_slope(&series);
+            (load, slope)
+        })
+        .collect()
+}
+
 /// Gate 2: Ideal source driving an open circuit — one full charge/discharge
 /// cycle into a capacitor with zero resistance (ideal wires).
 ///
@@ -415,5 +492,109 @@ esource              =  3.14159e-12
             vcap, v, rel_err * 100.0,
         );
         eprintln!("DC probe PASS: vcap = {:.6e} V (rel_err={:.4}%)", vcap, rel_err * 100.0);
+    }
+
+    // ----- Multi-axis sweep: ramp × load -----
+
+    #[test]
+    fn multi_axis_ramp_load_sweep() {
+        require_ngspice!();
+
+        let r: f64 = 1e3;  // 1 kΩ
+        let v: f64 = 1.0;   // 1 V
+        let loads = vec![0.5e-12, 1e-12, 2e-12]; // 0.5 pF, 1 pF, 2 pF
+        let rc_max = r * 2e-12; // 2 ns (largest load)
+
+        // Sweep T from 100·RC_max to 10_000·RC_max (2 decades), 6 pts/decade.
+        let t_min = 100.0 * rc_max; // 200 ns
+        let t_max = 10_000.0 * rc_max; // 20 µs
+        let decades = (t_max / t_min).log10();
+        let points_per_decade = 6;
+        let n_points = (decades * points_per_decade as f64).ceil() as usize + 1;
+        let mut ramps: Vec<f64> = Vec::new();
+        for i in 0..n_points {
+            let frac = i as f64 / (n_points - 1) as f64;
+            let t = t_min * 10_f64.powf(frac * decades);
+            ramps.push(t);
+        }
+
+        // tstep must resolve both the period (T/2000) and the RC dynamics
+        // (RC/10). For a fixed tstep across all combos, use the smallest
+        // RC_min/10 = R * C_min / 10 = 5e-11.
+        let tstep = r * loads[0] / 10.0; // 5e-11 for R=1kΩ, C=0.5pF
+
+        // Template with {PERIOD}, {HALF} (= period/2), and {LOAD}.
+        // sweep_grid substitutes all three.
+        let template = format!(
+            "\
+RC ramp multi-axis sweep
+Vsrc vdd 0 PWL(0 0 {{HALF}} {v} {{PERIOD}} 0)
+R1 vdd cap {r}
+C1 cap 0 {{LOAD}}
+
+.ic V(cap)=0
+
+Bpwr pwr 0 V = -V(vdd)*I(Vsrc)
+
+.control
+tran {tstep:.15e} {{PERIOD}} uic
+meas tran esource INTEG V(pwr) FROM=0 TO={{PERIOD}}
+.endc
+.end
+",
+            v = v,
+            r = r,
+            tstep = tstep,
+        );
+
+        let axes = SweepAxes {
+            ramps: ramps.clone(),
+            loads: loads.clone(),
+        };
+
+        let points = sweep_grid(&template, "esource", &axes);
+
+        // (a) Check slope of energy vs period for each load ≈ -1 ± 0.1.
+        let slopes = slopes_by_load(&points);
+        for &(load, slope) in &slopes {
+            eprintln!(
+                "  load={:.3e} F  slope={:.4}",
+                load, slope,
+            );
+            assert!(
+                (slope - (-1.0)).abs() < 0.1,
+                "multi-axis slope FAIL: load={:.3e}, slope={:.4} (expected -1 ± 0.1)",
+                load, slope,
+            );
+        }
+
+        // (b) At a fixed period (middle of sweep), check energy scales as C²
+        //     (adiabatic RC dissipation E = 4C²V²R/T ∝ C²).
+        let mid_idx = ramps.len() / 2;
+        let t_fixed = ramps[mid_idx];
+        let energies_at_t: Vec<(f64, f64)> = points
+            .iter()
+            .filter(|p| (p.period_s - t_fixed).abs() < 1e-20)
+            .map(|p| (p.load_f, p.energy_j))
+            .collect();
+
+        // Log-log slope of energy vs C should be ≈ 2 (E ∝ C²).
+        let c_slope = log_log_slope(&energies_at_t);
+        eprintln!(
+            "  energy-vs-C slope at T={:.3e}: {:.4} (expected ~2)",
+            t_fixed, c_slope,
+        );
+        assert!(
+            (c_slope - 2.0).abs() < 0.3,
+            "multi-axis C-scaling FAIL: slope={:.4} (expected 2 ± 0.3 for E ∝ C²)",
+            c_slope,
+        );
+
+        eprintln!(
+            "Multi-axis sweep PASS: {} loads × {} ramps = {} points",
+            loads.len(),
+            ramps.len(),
+            points.len(),
+        );
     }
 }
