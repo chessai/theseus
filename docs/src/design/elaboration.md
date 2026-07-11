@@ -7,8 +7,8 @@ bijection (TH-4a, `theory/coverage-bijectivity.md`) and is a *total* function
 on accepted isos. Its output is normative only **up to denotational equality**:
 the canonicalizer (ADR-0014) is the equality decision procedure and owns the
 canonical form, so elaboration needs only to be *correct and deterministic*,
-not minimal. Scope: the plain fragment (no labels; `trace`/label elaboration
-is deferred with the second M1 slice).
+not minimal. Scope: the plain fragment (E1–E3 below) plus **label elaboration
+to `trace`** (E4), the M1 slice-2 addition. Guards remain out (v0.2).
 
 ## Expression bodies
 
@@ -87,6 +87,67 @@ routing. With all `permᵢ = id`, `⟦cnot⟧ = demux_L ; sym(demux_R)` sends
 reduces this to the idiomatic `distrib ; (id + not) ; factor` — the elaborator
 need not find that form itself.
 
+## Labels (E4): elaboration to `trace`
+
+A clause set with label patterns elaborates by **reducing to E3 over the
+label-extended type, then wrapping in `trace`** — no new demux machinery. The
+soundness of this reduction is `theory/coverage-bijectivity-labels.md`
+(TH-4a-label); this section is the *algorithm*.
+
+### Label-type inference (produces the carrier `u`)
+
+Each label `ℓ` (a `$name` pseudo-constructor) has a single **carrier type**
+`U_ℓ`, inferred (or checked against an annotation, ADR-0017):
+
+1. Collect every occurrence of `$ℓ` across both columns of the iso. A nullary
+   `$ℓ` has carrier `1`; a `$ℓ p₁ … p_k` has carrier the tuple of its
+   arguments' types.
+2. **Unify** those argument types across all occurrences of `$ℓ` (ordinary
+   type unification over the rig fragment, monomorphic). Failure — a label used
+   at two incompatible shapes — is a type error (`T0102` family), reported
+   before elaboration. Success fixes one `U_ℓ` used identically on both columns
+   (the "same-carrier" invariant TH-4a-label presupposes).
+3. The iso's **label state space** is the sum `u := Σ_ℓ U_ℓ` in a fixed label
+   order: **first occurrence under the canonical traversal** — clauses in
+   declaration order, the LHS pattern before the RHS, leftmost–outermost within
+   a pattern (deterministic, INV-DET; this is the same traversal E3's `demux`
+   uses). The extended matched types are `Â := u + A` (LHS) and `B̂ := u + B`
+   (RHS), with the carrier in the **left** summand.
+
+### The reduction
+
+Read each clause side as an ordinary pattern over the extended type: a plain
+pattern `p` is `inr p` (boundary summand); a label pattern `$ℓ p` is
+`inl (inj_ℓ p)` (the `ℓ`-summand of `u`). This turns the label clause set into
+an ordinary E3 clause set `Â ⇄ B̂`. Then:
+
+```text
+⟦f⟧  =  trace(u, ⟦extended clause set⟧_E3)
+     =  trace(u, demux_L ; (perm₁ + … + permₙ) ; sym(demux_R))
+```
+
+where `demux_L : Â ↔ Env(l₁)+…+Env(lₙ)` and `demux_R : B̂ ↔ Env(r₁)+…+Env(rₙ)`
+are the **same** recursive `demux` of E3, now over `Â`/`B̂` — the outermost
+`u + A` tag is just the first discriminator `demux` splits on. The body
+`Φ := demux_L ; (⊕ᵢ permᵢ) ; sym(demux_R) : (u + A) ↔ (u + B)` is exactly the
+bijection TH-4a-label certifies and the `u + a ↔ u + b` shape `trace` consumes;
+`trace` extracts `A ↔ B` by feeding the `inl`/`u` states back
+(`spec/dynamic-semantics.md`).
+
+**Determinism / termination** carry over from E3 unchanged (the label tag adds
+one outer `Split`), plus label-order fixed by first occurrence. **WCET note:**
+the compiler emits `≤ |u|` iterations (ADR-0007) with `|u| = Σ_ℓ |U_ℓ|`.
+
+### Worked example — `spin` (P0011)
+
+`spin : Bit<->Bit`, one label `$go` inferred at carrier `(Bit,(Bit,Bit))`, so
+`u = go·(Bit,(Bit,Bit))`, `|u| = 8`, `Â = B̂ = u + Bit`. The five clauses become
+an E3 set over `u + Bit`: clause 1's LHS `b` is `inr b`, its RHS `$go(b,(O,O))`
+is `inl(inj_go(b,(O,O)))`, etc. E3 elaborates this to `Φ : (u+Bit) ↔ (u+Bit)`;
+`⟦spin⟧ = trace(u, Φ)`. Evaluating forward on `O` feeds `inr O` in, walks four
+`inl` states (`(O,O)→(O,I)→(I,O)→(I,I)`), exits `inr O` — five body
+applications, inside the granted `|u|+1 = 9` fuel.
+
 ## Adjoint corollary
 
 Because `demux_L`, `demux_R` are built identically from the two columns,
@@ -94,14 +155,22 @@ Because `demux_L`, `demux_R` are built identically from the two columns,
 elaboration of the flipped clauses `[(rᵢ, lᵢ)]`. So the surface `~f` and the
 right-to-left reading agree, matching `spec/static-semantics.md` soundness and
 TH-4a's adjoint corollary — the syntactic adjoint is the semantic inverse with
-no separate obligation.
+no separate obligation. For a **label** iso this composes through `trace` via
+the definitional law `(trace Φ)† = trace(Φ†)` (`design/core-pi.md`): `⟦f⟧† =
+trace(u, Φ†)`, and `Φ†` is the E3 elaboration of the flipped extended clauses,
+so `~f` on a label iso is again the right-to-left reading — evaluated as the
+backward loop of `spec/dynamic-semantics.md`.
 
 ## What this pass may assume, and what it owes
 
-- **Assumes** its input passed names/typing/linearity/coverage — so it never
-  sees an unbound variable, a type error, or a non-partitioning column, and
-  needs no error paths (elaboration failures would be internal compiler
-  errors, ADR-0002 boundary contract).
-- **Owes** `eval ⟦f⟧ = F`, the bijection the clauses denote — validated by the
-  oracle chain (interpreter vs. brute-force table, ADR-0008/0018) and, at the
-  IR boundary, by canonicalizer round-trips.
+- **Assumes** its input passed names/typing/linearity/coverage (incl. the
+  label-extended checks and label-type inference for E4) — so it never sees an
+  unbound variable, a type error, an unresolved label carrier, or a
+  non-partitioning column, and needs no error paths (elaboration failures would
+  be internal compiler errors, ADR-0002 boundary contract).
+- **Owes** `eval ⟦f⟧ = F`, the bijection the clauses denote — for E4, `F` is the
+  boundary map `trace(u, Φ)` computes, i.e. `eval ⟦f⟧ = trace(Φ)` with `Φ` the
+  extended-clause bijection. Validated by the same oracle chain (interpreter vs.
+  brute-force table, ADR-0008/0018) and, at the IR boundary, by canonicalizer
+  round-trips. This is the standing (tested, not proved) obligation
+  TH-4a-label's discharge is modulo.

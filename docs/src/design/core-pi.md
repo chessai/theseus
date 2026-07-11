@@ -113,9 +113,10 @@ Because every clause is a bijection, `eval (sym f) = (eval f)⁻¹` holds
 definitionally — the backward run is the same term read through `†`, and no
 separate inverse interpreter is needed. This is the operational side of the
 coverage-checker soundness result (`theory/coverage-bijectivity.md`, TH-4a
-adjoint corollary). `trace` evaluation (iterate the `u`-carried loop to a
-fixpoint, fuel-counted) is specified with the label slice; the plain fragment
-does not produce `trace`.
+adjoint corollary). `trace` evaluation (feed the `u`-carried state back until
+the body exits on the `inr`/boundary side, fuel-counted one unit per body
+application) is specified in `spec/dynamic-semantics.md` and elaborated in
+`design/elaboration.md` §E4; the plain fragment does not produce `trace`.
 
 ## Prim admission (ADR-0013, amended)
 

@@ -95,20 +95,37 @@ differentially tested against the brute-force enumeration oracle on generated
 bijection-table programs (ADR-0018); TH-4a is what that test is entitled to
 conclude.
 
-## Labels (deferred)
+## Labels (M1 slice-2)
 
 Label patterns (`$name …`) extend the matched type to the iso's label state
-space `U + A` (LHS) / `U + B` (RHS), with `U = Σ_ℓ U_ℓ` the sum of inferred or
-annotated label carriers (ADR-0017), and add `T0303` (label state space not
-covered). The label-extended checks are exactly the plain checks over that
-extended type, with the exhaustiveness obligation split by top tag —
-`T0301` files the uncovered **boundary** (`A`/`B`) witnesses, `T0303` the
-uncovered **label-state** witnesses; this is normatively `theory/coverage-
-bijectivity-labels.md` (TH-4a-label), which also discharges TH-1's bijection
-hypothesis for the elaborated `trace`. Label elaboration to `trace` (ADR-0009)
-and its fuel accounting are specified with the second M1 slice; the first slice
-admits only plain isos. Guards are not part
-of v0.1 (ADR-0017 records the recomputability condition any future guard
-extension MUST satisfy). For finite-dialect programs with labels,
-implementations SHOULD report each label loop's static iteration bound
-(ADR-0007).
+space `U + A` (LHS) / `U + B` (RHS), with `U = Σ_ℓ U_ℓ` the sum of label
+carriers, and add `T0303` (label state space not covered).
+
+**Label-type inference.** Each label `ℓ` has one **carrier** `U_ℓ`, obtained by
+unifying the argument types of every `$ℓ` occurrence across both columns
+(monomorphic rig-fragment unification; a nullary `$ℓ` has carrier `1`, a
+`$ℓ p₁ … p_k` the argument tuple). An optional annotation is *checked* against
+that inference. Failure — one label used at two incompatible shapes — is a
+typing error (reported as `T0102` with `side:` the offending occurrence's column
+and `witness:` the label name), so the "same carrier on both columns" invariant
+holds by the time coverage runs. The carrier order in `U` is **first occurrence
+under the canonical traversal** (clauses in declaration order, LHS before RHS,
+leftmost–outermost within a pattern — deterministic). Full algorithm:
+`design/elaboration.md` §E4.
+
+**The checks.** The label-extended (typing, linearity, coverage) are exactly
+the plain checks over the extended type, with the coverage exhaustiveness
+obligation split by top tag — `T0301` files the uncovered **boundary** (`A`/`B`)
+witnesses, `T0303` the uncovered **label-state** witnesses; non-overlap
+(`T0302`) and linearity are unchanged. This is normatively
+`theory/coverage-bijectivity-labels.md` (TH-4a-label), which also discharges
+TH-1's bijection hypothesis for the elaborated `trace`.
+
+**Elaboration and evaluation.** A checked label iso elaborates to `trace`
+(`design/elaboration.md` §E4, ADR-0009) and evaluates by the fuel-counted trace
+loop (`spec/dynamic-semantics.md`), one fuel unit per label step, terminating
+within `|U|+1` applications. Implementations MUST report each label loop's
+static iteration bound `≤ |U|` as a WCET note (ADR-0007).
+
+Guards are not part of v0.1 (ADR-0017 records the recomputability condition any
+future guard extension MUST satisfy).

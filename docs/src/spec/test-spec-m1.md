@@ -83,14 +83,33 @@ only.)
 ## Interpreter: done means
 
 - The fuel contract (dynamic-semantics chapter) exactly; every positive
-  conformance table reproduced forward and backward; `Done` within fuel
-  = static bound on all finite-dialect programs (P0011 exercises this
-  with a 4-step label loop, bound |u| = 8).
-- REPL observable contract: `:step` performs one clause application and
-  prints the resulting value (or label state, rendered `$name value`);
-  `:unstep` exactly inverts the most recent `:step`; `:unstep` at
-  history start is a no-op with a notice. Output *format* is unstable
-  in v0.1 (TBD-7); the step/unstep inverse relation is normative now.
+  conformance table reproduced forward and backward.
+- **`Done` within fuel = static bound**, made testable by three optional
+  `.expect` header keys the harness reads for a fixture whose iso uses labels.
+  Two different quantities — keep them distinct:
+  - `# fuel-bound: N` — the program's **static** bound `B` (dynamic-semantics
+    `B(·)` recurrence over the elaborated term; `N = |u|+1` for a single
+    structural-body loop). Tests *sufficiency*: the harness computes `B`, grants
+    exactly `N`, and every row MUST `Done`. It does **not** test tightness — `B`
+    is a worst-case bound over the carrier class, and a given program may finish
+    well inside it.
+  - `# steps: n` — the **actual** body-application count, uniform across the
+    fixture's rows (use only when it is uniform). Tests the accounting tightly:
+    grant `n` → every row `Done`; grant `n-1` → `OutOfFuel { steps_taken: n-1 }`.
+    This is what catches an off-by-one or a stray per-node charge — `n` is a
+    real trajectory length, not the loose `B`.
+  - `# wcet: M` — the reported WCET *iteration* note (`M = |u|`); the harness
+    asserts the compiler's diagnostic note equals `≤ M`.
+  P0011 carries `# fuel-bound: 9`, `# steps: 5`, `# wcet: 8` (a 4-state walk of
+  an `|u| = 8` carrier: `Done` at the granted static `9`; tight at `5`
+  applications — `Done` at 5, `OutOfFuel` at 4; note `≤ 8`). Absent these keys a
+  fixture is graded on its value table only (all plain fixtures).
+- REPL observable contract: `:step` performs one **body application** — for a
+  label loop, one label step (printing the intermediate label state, rendered
+  `$name value`); for a plain iso, the single application to the result;
+  `:unstep` exactly inverts the most recent `:step`; `:unstep` at history start
+  is a no-op with a notice. Output *format* is unstable in v0.1 (TBD-7); the
+  step/unstep inverse relation is normative now.
 
 ## Elaborator and canonicalizer: worked examples (normative modulo ≅)
 
@@ -107,8 +126,11 @@ is the equality decision procedure, ADR-0014):
 4. `| (a,(b,c)) <-> ((a,b),c)` canonicalizes to `Permute(×, [0,1,2])`
    over the flattened 3-leaf layer — i.e., pure re-association is the
    identity permutation and costs nothing (ADR-0014).
-5. P0011's label set elaborates to `trace` over `u ≅ Bit×(Bit×Bit)`
-   (|u| = 8); the reported static bound MUST be ≤ 8.
+5. P0011's label set elaborates to `trace(u, Φ)` over `u ≅ Bit×(Bit×Bit)`
+   (|u| = 8), `Φ` the E3 elaboration of the extended clause set over `u + Bit`
+   (`design/elaboration.md` §E4); reported WCET note MUST be `≤ 8`, static fuel
+   bound `B = |u|+1 = 9`, actual trajectory `5` applications (asserted via the
+   `# fuel-bound` / `# steps` / `# wcet` keys).
 
 ## `--emit` contract (all stages)
 

@@ -62,9 +62,10 @@ loop:
         inl(w) => s := inl(w)   -- feed the u-state back and iterate
 ```
 
-Fuel is charged **one unit per body application** — the spec's "one per *clause
-application*, including each label step" (`spec/dynamic-semantics.md`); the two
-coincide on v0.1 label-elaborated trace bodies (see the fuel-unit note below).
+Fuel is charged **one unit per body application** `t := f(s)` — exactly the
+spec's normative fuel unit (`spec/dynamic-semantics.md`: "one per `trace` body
+application," equivalently one per label step; structural formers are free). A
+label loop is granted `|u|+1` such units (see the fuel-unit note below).
 Let the trajectory of `x` be the body outputs `t₁, …, tₙ` with `t₁ = f(inr x)`,
 `t_{k+1} = f(inl w_k)` while `t_k = inl(w_k)`, and `tₙ` the first `inr`. Write
 `s₀ = inr(x)` and `s_k = inl(w_k)`, so `t_k = f(s_{k-1})`. The **loop-states** are
