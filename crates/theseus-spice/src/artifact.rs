@@ -68,6 +68,7 @@ impl std::fmt::Display for StampError {
 fn family_for_dut(dut: &str) -> &'static str {
     match dut {
         "adiabatic-tg" => "adiabatic-tg",
+        "pfal" => "pfal",
         "cmos-static" => "cmos-static",
         _ => "unknown",
     }
