@@ -129,6 +129,14 @@ fn conformance_programs() {
             panic!("[{stem}] iso `{iso_name}` not in env")
         });
 
+        // Guard: a delimiter drift (e.g. `|->` mistyped) makes rows empty —
+        // the per-row loops would iterate zero times, a vacuous pass.
+        assert!(
+            !rows.is_empty(),
+            "[{stem}] fixture has zero rows — likely a delimiter problem in {}",
+            expect_path.display()
+        );
+
         // Grade each row — forward AND backward.
         for (lhs_str, rhs_str) in rows {
             let lhs_sv = value::parse_surface_value(lhs_str);
@@ -179,6 +187,10 @@ fn conformance_programs() {
         }
 
         if let Some(n) = fixture.steps {
+            assert!(
+                n >= 1,
+                "[{stem}] `# steps: 0` is invalid — need at least 1 step to test the OutOfFuel boundary"
+            );
             // Grant n fuel → every row Done.
             for (lhs_str, _) in rows {
                 let lhs_sv = value::parse_surface_value(lhs_str);
@@ -212,14 +224,44 @@ fn conformance_programs() {
         "\nConformance: {graded} graded, {} skipped",
         skipped_names.len()
     );
-    if !skipped_names.is_empty() {
-        eprintln!("Skipped: {}", skipped_names.join(", "));
+
+    // Nothing should be silently skipped now that labels elaborate.
+    // If a fixture regresses to "not elaborated", the test must FAIL,
+    // not silently drop its fuel-bound/steps assertions.
+    assert!(
+        skipped_names.is_empty(),
+        "fixtures were silently skipped (elaboration regression?): {}",
+        skipped_names.join(", ")
+    );
+
+    // Must-grade stems: if any of these stop appearing in the graded set,
+    // the test fails rather than silently losing coverage.
+    const MUST_GRADE: &[&str] = &[
+        "0011-label-loop",
+        "0008-label-coverage",
+    ];
+    let graded_stems: Vec<&str> = fixtures
+        .iter()
+        .filter_map(|p| {
+            let s = p.file_stem()?.to_str()?;
+            let expect_path = p.with_extension("expect");
+            if expect_path.exists() { Some(s) } else { None }
+        })
+        .collect();
+    for must in MUST_GRADE {
+        // We only check that the stem was among the fixture files with
+        // .expect sidecars — the per-fixture assertions above already
+        // guarantee it actually graded (not skipped).
+        assert!(
+            graded_stems.iter().any(|s| s == must),
+            "must-grade fixture `{must}` not found among program fixtures"
+        );
     }
 
-    // At least the structural-core fixtures must have graded.
+    // Floor: at least 14 fixtures grade today.
     assert!(
-        graded >= 9,
-        "expected at least 9 graded fixtures, got {graded}"
+        graded >= 14,
+        "expected at least 14 graded fixtures, got {graded}"
     );
 }
 
@@ -298,6 +340,26 @@ fn conformance_diagnostics() {
     }
 
     eprintln!("\nDiagnostic conformance: {tested} tested");
+
+    // Floor: a parser regression could turn all diag fixtures into
+    // parse-error skips, leaving tested == 0 with the test still green.
+    // Must-test stems: ensure critical diagnostic fixtures are not silently skipped.
+    const MUST_TEST_DIAG: &[&str] = &["0008-label-coverage"];
+    let diag_stems: Vec<&str> = fixtures
+        .iter()
+        .filter_map(|p| p.file_stem()?.to_str())
+        .collect();
+    for must in MUST_TEST_DIAG {
+        assert!(
+            diag_stems.iter().any(|s| s == must),
+            "must-test diagnostic fixture `{must}` not found"
+        );
+    }
+    assert!(
+        tested >= 7,
+        "expected at least 7 diagnostic fixtures tested, got {tested} \
+         (parser regression turning fixtures into skips?)"
+    );
 }
 
 /// Extract the expected `(code, side)` blocks from a `.diag` sidecar: the code
