@@ -12,7 +12,9 @@ use theseus_core::{adjoint, Iso, Type, Value};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EvalError {
     /// Fuel budget exhausted before evaluation completed.
-    OutOfFuel,
+    /// `steps_taken` equals the initial fuel granted (the budget hit zero only
+    /// after that many body applications).
+    OutOfFuel { steps_taken: u64 },
     /// The input value does not match the combinator's expected domain shape.
     DomainError(String),
 }
@@ -26,29 +28,37 @@ pub enum EvalError {
 /// - [`EvalError::OutOfFuel`] if the fuel budget reaches zero mid-trace.
 /// - [`EvalError::DomainError`] if the value shape doesn't match the iso.
 pub fn eval(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalError> {
+    let initial = *fuel;
+    eval_inner(iso, value, fuel).map_err(|e| match e {
+        EvalError::OutOfFuel { .. } => EvalError::OutOfFuel { steps_taken: initial },
+        other => other,
+    })
+}
+
+fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalError> {
     match iso {
         Iso::Id(_) => Ok(value),
 
         Iso::Sym(f) => {
             let adj = adjoint(f);
-            eval(&adj, value, fuel)
+            eval_inner(&adj, value, fuel)
         }
 
         Iso::Seq(f, g) => {
-            let mid = eval(f, value, fuel)?;
-            eval(g, mid, fuel)
+            let mid = eval_inner(f, value, fuel)?;
+            eval_inner(g, mid, fuel)
         }
 
         Iso::Plus(f, g) => match value {
-            Value::Left(v) => Ok(Value::left(eval(f, *v, fuel)?)),
-            Value::Right(v) => Ok(Value::right(eval(g, *v, fuel)?)),
+            Value::Left(v) => Ok(Value::left(eval_inner(f, *v, fuel)?)),
+            Value::Right(v) => Ok(Value::right(eval_inner(g, *v, fuel)?)),
             other => Err(domain_err("Plus", &other)),
         },
 
         Iso::Times(f, g) => match value {
             Value::Pair(a, b) => {
-                let ra = eval(f, *a, fuel)?;
-                let rb = eval(g, *b, fuel)?;
+                let ra = eval_inner(f, *a, fuel)?;
+                let rb = eval_inner(g, *b, fuel)?;
                 Ok(Value::pair(ra, rb))
             }
             other => Err(domain_err("Times", &other)),
@@ -155,10 +165,10 @@ pub fn eval(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalError>
             loop {
                 // Charge 1 fuel for this body application.
                 if *fuel == 0 {
-                    return Err(EvalError::OutOfFuel);
+                    return Err(EvalError::OutOfFuel { steps_taken: 0 });
                 }
                 *fuel -= 1;
-                let t = eval(body, s, fuel)?;
+                let t = eval_inner(body, s, fuel)?;
                 match t {
                     Value::Right(y) => return Ok(*y), // exit on b-side
                     Value::Left(w) => s = Value::Left(w), // feed u-state back
@@ -523,8 +533,23 @@ mod tests {
         let mut fuel = 2;
         assert_eq!(
             eval(&iso, Value::Unit, &mut fuel),
-            Err(EvalError::OutOfFuel),
+            Err(EvalError::OutOfFuel { steps_taken: 2 }),
         );
+    }
+
+    #[test]
+    fn out_of_fuel_steps_taken_equals_initial_fuel() {
+        // The counter body needs 3 body applications. Granting k < 3 fuel
+        // should return OutOfFuel { steps_taken: k }.
+        let iso = Iso::trace(bit_ty(), counter_body());
+        for k in 0..3 {
+            let mut fuel = k;
+            assert_eq!(
+                eval(&iso, Value::Unit, &mut fuel),
+                Err(EvalError::OutOfFuel { steps_taken: k }),
+                "granting {k} fuel should report steps_taken={k}",
+            );
+        }
     }
 
     #[test]

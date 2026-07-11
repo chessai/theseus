@@ -200,7 +200,7 @@ fn conformance_programs() {
                     panic!("[{stem}] steps={n} eval failed on `{lhs_str}`: {e:?}")
                 });
             }
-            // Grant n-1 fuel → every row OutOfFuel.
+            // Grant n-1 fuel → every row OutOfFuel with steps_taken == n-1.
             for (lhs_str, _) in rows {
                 let lhs_sv = value::parse_surface_value(lhs_str);
                 let lhs_val = value::to_core(&lhs_sv, &sig.lhs, &env);
@@ -208,9 +208,9 @@ fn conformance_programs() {
                 let result = eval(&iso, lhs_val, &mut fuel);
                 assert_eq!(
                     result,
-                    Err(EvalError::OutOfFuel),
-                    "[{stem}] expected OutOfFuel at fuel={}, got {result:?} on `{lhs_str}`",
-                    n - 1
+                    Err(EvalError::OutOfFuel { steps_taken: n - 1 }),
+                    "[{stem}] expected OutOfFuel {{ steps_taken: {} }} at fuel={}, got {result:?} on `{lhs_str}`",
+                    n - 1, n - 1
                 );
             }
             eprintln!("[pass] {stem}: steps={n} (Done@{n}, OutOfFuel@{})", n - 1);

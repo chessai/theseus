@@ -179,7 +179,7 @@ impl Repl {
                     active.history.push(next);
                     let _ = writeln!(out, "{label}: {:?}", active.history.last().unwrap());
                 }
-                Err(EvalError::OutOfFuel) => {
+                Err(EvalError::OutOfFuel { .. }) => {
                     let _ = writeln!(out, "error: out of fuel evaluating `{}`", active.name);
                 }
                 Err(e) => {
@@ -200,7 +200,7 @@ impl Repl {
                 active.history.push(next);
                 let _ = writeln!(out, "{rendered}");
             }
-            Err(EvalError::OutOfFuel) => {
+            Err(EvalError::OutOfFuel { .. }) => {
                 let _ = writeln!(out, "error: out of fuel evaluating `{}`", active.name);
             }
             Err(e) => {

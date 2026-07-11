@@ -152,18 +152,12 @@ bound as `≤`, never `=`: it is exact over the *class* of carriers, not
 per-program (P0011 walks a 4-state sub-space of its `|u| = 8` carrier and
 reports `≤ 8`).
 
-## Implementation obligation (owed by the label slice)
+## Implementation obligation (discharged)
 
-The v0.1 plain interpreter (`crates/theseus-eval`) charges one fuel unit per
-*combinator node* and stubs `Trace` as unimplemented — a pre-label placeholder,
-harmless only because the plain conformance harness runs with effectively
-infinite fuel. The label slice MUST replace that with the unit defined here:
-structural formers free, `Trace` charging one unit per body application, and the
-conformance harness threading the term's static bound `B` (computed from the
-elaborated core term by the recurrence above) so that "`Done` within fuel =
-static bound" is actually exercised, not assumed (`spec/test-spec-m1.md` P0011).
-Concretely this requires: (i) `EvalError::OutOfFuel` to carry `steps_taken`
-(currently a unit variant); (ii) a `B(·)` pass over the elaborated term; and
-(iii) a conformance-harness rule/fixture key that grants exactly `B` and asserts
-`Done` (see `spec/test-spec-m1.md`). Until then the identity is specified but
-untested.
+All items below have been implemented in the label slice:
+
+1. ~~`EvalError::OutOfFuel` to carry `steps_taken`~~ — **done**: `OutOfFuel { steps_taken: u64 }`, where `steps_taken` equals the initial fuel granted.
+2. ~~A `B(·)` pass over the elaborated term~~ — **done**: `static_bound` in `crates/theseus-eval/src/interp.rs` implements the recurrence above.
+3. ~~A conformance-harness rule/fixture key that grants exactly `B` and asserts `Done`~~ — **done**: the `# fuel-bound:` and `# steps:` fixture keys in the conformance harness (`crates/theseus-cli/tests/conformance.rs`) grant the static bound and assert `Done`, and grant one less to assert `OutOfFuel { steps_taken }` with the correct count.
+
+The interpreter charges fuel as specified: structural formers are free, `Trace` charges one unit per body application against the single global budget.
