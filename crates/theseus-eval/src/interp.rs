@@ -6,7 +6,7 @@
 //! values and cost ZERO fuel. Only the `trace` loop charges fuel (one
 //! unit per body evaluation). See `docs/src/spec/dynamic-semantics.md`.
 
-use theseus_core::{adjoint, enumerate_values, Iso, Value};
+use theseus_core::{adjoint, Iso, Type, Value};
 
 /// Errors during evaluation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,6 +188,18 @@ fn domain_err(iso: &str, value: &Value) -> EvalError {
     EvalError::DomainError(format!("{iso}: unexpected value shape: {value:?}"))
 }
 
+/// Compute `|ty|` (number of inhabitants) structurally, saturating at
+/// `u64::MAX` so that enormous carriers never overflow or panic.
+/// O(term size), not O(|ty|).
+fn cardinality_u64(ty: &Type) -> u64 {
+    match ty {
+        Type::Zero => 0,
+        Type::One => 1,
+        Type::Sum(a, b) => cardinality_u64(a).saturating_add(cardinality_u64(b)),
+        Type::Prod(a, b) => cardinality_u64(a).saturating_mul(cardinality_u64(b)),
+    }
+}
+
 /// Compute the static bound `B(iso)` — the maximum fuel an evaluation of
 /// `iso` can consume. See `docs/src/spec/dynamic-semantics.md`.
 pub fn static_bound(iso: &Iso) -> u64 {
@@ -217,7 +229,7 @@ pub fn static_bound(iso: &Iso) -> u64 {
         Iso::Sym(f) => static_bound(f),
 
         Iso::Trace(u, body) => {
-            let carrier_size = enumerate_values(u).len() as u64;
+            let carrier_size = cardinality_u64(u);
             // (|u| + 1) * (1 + B(Φ))
             carrier_size
                 .saturating_add(1)
@@ -229,7 +241,6 @@ pub fn static_bound(iso: &Iso) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use theseus_core::Type;
 
     const FUEL: u64 = 1000;
 
@@ -581,5 +592,30 @@ mod tests {
             static_bound(&Iso::Distrib(Type::One, Type::One, Type::One)),
             0,
         );
+    }
+
+    #[test]
+    fn static_bound_nested_trace() {
+        // u = Bit (|u| = 2), u' = 1+1+1 (|u'| = 3)
+        // inner body ψ is structural => B(ψ) = 0
+        // B(inner) = B(Trace(u', ψ)) = (|u'|+1)*(1+0) = 4
+        // B(outer) = B(Trace(u, inner)) = (|u|+1)*(1+B(inner)) = 3*(1+4) = 15
+        // i.e. (|u|+1)*(1 + (|u'|+1))
+        let u = bit_ty(); // |u| = 2
+        let u_prime = Type::sum(Type::One, Type::sum(Type::One, Type::One)); // |u'| = 3
+        let inner_body = Iso::SwapSum(u_prime.clone(), Type::One);
+        let inner = Iso::trace(u_prime, inner_body);
+        let outer = Iso::trace(u, inner);
+        // (|u|+1)*(1 + (|u'|+1)) = 3 * (1 + 4) = 15
+        assert_eq!(static_bound(&outer), 15);
+    }
+
+    #[test]
+    fn static_bound_sym_trace() {
+        // B(Sym(Trace(...))) == B(Trace(...))
+        let body = Iso::SwapSum(bit_ty(), Type::One);
+        let t = Iso::trace(bit_ty(), body);
+        let sym_t = Iso::Sym(Box::new(t.clone()));
+        assert_eq!(static_bound(&sym_t), static_bound(&t));
     }
 }
