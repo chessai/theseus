@@ -384,21 +384,21 @@ pub fn resolve(program: &Program) -> Env {
 /// and the duplicate is NOT inserted (the first declaration wins).
 fn insert_iso_shallow(id: &ast::IsoDecl, env: &mut Env) {
     let name = id.name.text.to_string();
-    if env.isos.contains_key(&name) {
-        env.iso_collisions.push(IsoCollision {
-            name,
-            span: id.name.span,
-        });
-    } else {
-        env.isos.insert(
-            name,
-            IsoSig {
+    match env.isos.entry(name) {
+        std::collections::btree_map::Entry::Occupied(e) => {
+            env.iso_collisions.push(IsoCollision {
+                name: e.key().clone(),
+                span: id.name.span,
+            });
+        }
+        std::collections::btree_map::Entry::Vacant(e) => {
+            e.insert(IsoSig {
                 lhs: id.lhs.clone(),
                 rhs: id.rhs.clone(),
                 labels: Vec::new(),
                 label_clashes: Vec::new(),
-            },
-        );
+            });
+        }
     }
     for w in &id.wheres {
         insert_iso_shallow(w, env);
