@@ -26,5 +26,6 @@ pub mod cells {
 }
 pub mod deck {}
 pub mod bench;
+pub mod adiabatic;
 pub mod chardb {}
 pub mod energy {}
