@@ -1,0 +1,43 @@
+theseus M3a money plot — rung0 (generic level-1 models, ngspice)
+Reference snapshot; regenerate: cargo run -p theseus-spice --example money_plot
+Headline: adiabatic energy recovery (slope ~-1) vs static CMOS (flat).
+
+=== Money Plot (energy per op vs period, log-log) ===
+
+--- adiabatic-tg [family: adiabatic-tg, slope: -0.9738] ---
+    rung: rung0-ideal-models, pdk: generic-level1, sim: ngspice
+        period (s)        E/op (J)  bar
+    --------------  --------------  ----------------------------------------
+       1.000000e-8    3.788100e-13  ########################################
+       3.160000e-8    1.451300e-13  ##################################
+       1.000000e-7    4.748430e-14  ############################
+       3.160000e-7    1.512690e-14  #####################
+       1.000000e-6    4.789120e-15  ##############
+       3.160000e-6    1.518190e-15  #######
+       1.000000e-5    4.858680e-16  
+
+--- pfal [family: pfal, slope: -0.8812] ---
+    rung: rung0-ideal-models, pdk: generic-level1, sim: ngspice
+        period (s)        E/op (J)  bar
+    --------------  --------------  ----------------------------------------
+       1.000000e-8    4.748440e-15  ########################################
+       3.160000e-8    1.511130e-15  ################################
+       1.000000e-7    4.756390e-16  ########################
+       3.160000e-7    1.513620e-16  ################
+       1.000000e-6    4.874820e-17  ########
+       3.160000e-6    1.829370e-17  #
+       1.000000e-5    1.485330e-17  
+
+--- cmos-static [family: cmos-static, slope: 0.0025] ---
+    rung: rung0-ideal-models, pdk: generic-level1, sim: ngspice
+        period (s)        E/op (J)  bar
+    --------------  --------------  ----------------------------------------
+       1.000000e-8    1.001790e-12  
+       3.160000e-8    1.005650e-12  
+       1.000000e-7    1.017890e-12  
+       3.160000e-7    1.019220e-12  
+       1.000000e-6    1.019220e-12  
+       3.160000e-6    1.019220e-12  
+       1.000000e-5    1.019230e-12  
+
+
