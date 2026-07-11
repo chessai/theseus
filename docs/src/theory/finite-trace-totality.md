@@ -26,12 +26,16 @@ that comes from, for a `trace` produced by elaborating a label loop:
 
 * **Plain body:** the coverage+linearity checker certifies it (TH-4a,
   `theory/coverage-bijectivity.md`).
-* **Label body — currently OWED.** v0.1 `trace` bodies are produced by label-loop
-  elaboration (`design/elaboration.md`), and TH-4a is proved for the **plain
-  fragment only** (its "Not proved here" list defers the label-extended case to
-  this same M1 slice-2). **Until TH-4a-label lands, every WCET corollary below is
-  conditional for real label programs.** This dependency is tracked in
-  `theory/obligation-ledger.md` (TH-4a row) and must be discharged alongside TH-1.
+* **Label body — DISCHARGED (TH-4a-label).** v0.1 `trace` bodies are produced by
+  label-loop elaboration (`design/elaboration.md`). Plain TH-4a covers only the
+  plain fragment, but **TH-4a-label** (`theory/coverage-bijectivity-labels.md`)
+  now certifies the label case: the label checks reduce to the plain checks over
+  the extended type `U + A ≅ U + B`, so the elaborated `trace Φ` has exactly the
+  total-bijection body this theorem needs — with the label carrier `U` already in
+  the fed-back `inl` summand. The WCET corollaries below are therefore
+  unconditional for well-typed finite-dialect label programs (modulo the standing,
+  tested elaboration-correctness obligation). Tracked in
+  `theory/obligation-ledger.md` (TH-4a / TH-1 rows).
 * **Prim body:** the prim mutual-inverse admission check (`design/core-pi.md`
   §Prim admission).
 * **Nested trace** (`f` itself contains a `trace`): TH-1 applied inductively —

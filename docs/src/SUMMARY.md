@@ -72,6 +72,7 @@
 
 - [Proof-obligation ledger](theory/obligation-ledger.md)
 - [Coverage ⇔ bijectivity (TH-4a)](theory/coverage-bijectivity.md)
+- [Label-extended coverage ⇔ bijectivity (TH-4a-label)](theory/coverage-bijectivity-labels.md)
 - [Finite-trace totality](theory/finite-trace-totality.md)
 - [The bidirectional-descent trap](theory/bidirectional-descent.md)
 - [Coherence and canonical permutations](theory/coherence.md)

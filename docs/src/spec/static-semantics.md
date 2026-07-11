@@ -98,10 +98,16 @@ conclude.
 ## Labels (deferred)
 
 Label patterns (`$name …`) extend the matched type to the iso's label state
-space, with label types inferred or annotated (ADR-0017), and add `T0303`
-(label state space not covered). Label elaboration to `trace` (ADR-0009), its
-fuel accounting, and the `T0301`/`T0303` assignment are specified with the
-second M1 slice; the first slice admits only plain isos. Guards are not part
+space `U + A` (LHS) / `U + B` (RHS), with `U = Σ_ℓ U_ℓ` the sum of inferred or
+annotated label carriers (ADR-0017), and add `T0303` (label state space not
+covered). The label-extended checks are exactly the plain checks over that
+extended type, with the exhaustiveness obligation split by top tag —
+`T0301` files the uncovered **boundary** (`A`/`B`) witnesses, `T0303` the
+uncovered **label-state** witnesses; this is normatively `theory/coverage-
+bijectivity-labels.md` (TH-4a-label), which also discharges TH-1's bijection
+hypothesis for the elaborated `trace`. Label elaboration to `trace` (ADR-0009)
+and its fuel accounting are specified with the second M1 slice; the first slice
+admits only plain isos. Guards are not part
 of v0.1 (ADR-0017 records the recomputability condition any future guard
 extension MUST satisfy). For finite-dialect programs with labels,
 implementations SHOULD report each label loop's static iteration bound
