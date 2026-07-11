@@ -25,7 +25,7 @@ pub fn ngspice_available() -> bool {
 }
 
 /// Write `netlist` to a unique temp file, run `ngspice -b`, return stdout.
-fn run_ngspice_raw(netlist: &str) -> io::Result<String> {
+pub(crate) fn run_ngspice_raw(netlist: &str) -> io::Result<String> {
     let pid = std::process::id();
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     let filename = format!("theseus_spice_{}_{}.cir", pid, seq);

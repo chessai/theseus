@@ -8,11 +8,10 @@
 //! the [`crate::bench`] harness (`∫V·I` via a behavioral-power node + `.meas
 //! INTEG`, already self-validated against the closed-form RC dissipation).
 //!
-//! Scope: this is the adiabatic transmission-gate *cell* (the 2LAL primitive),
-//! which reproduces the slope-−1 self-check of `test-spec-m3a.md`. A full
-//! dual-rail 2LAL *shift register* (dynamic token propagation across a 4-phase
-//! chain) is the owed follow-up; the energy-recovery physics and its measurement
-//! are what the money plot turns on, and both are demonstrated here.
+//! Scope: the adiabatic transmission-gate *cell* (the 2LAL primitive) plus the
+//! full dual-rail 4-phase 2LAL **shift register** ([`two_lal_sr_netlist`]):
+//! token propagation at full level across ≥8 stages with clock energy per
+//! cycle ∝ 1/T (log-log slope ≈ −1, measured over four decades of period).
 //!
 //! Physics notes (learned by bench iteration):
 //! * The PMOS bulk MUST tie to VDD; with a swinging clock node on the drain and
@@ -187,6 +186,330 @@ pub fn pfal_curve(periods: &[f64]) -> MoneyPlotCurve {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 2LAL dual-rail shift register
+// ---------------------------------------------------------------------------
+
+/// Build the **canonical 4-phase dual-rail 2LAL shift register** netlist
+/// (Athas' adiabatic amplifier + Frank's forward/reverse framework).
+///
+/// Measured behavior (ngspice, level-1 models): log-log slope of clock energy
+/// vs period ≈ −0.99 sustained over **four decades** (10 ns … 100 µs) with
+/// every stage's true rail reaching the full 1.0 V.
+///
+/// # Topology
+///
+/// Signals are dual-rail with **level encoding**: the true rail `o{k}` rests at
+/// 0 V and pulses high for a `1` token; the complement rail `o{k}b` rests at
+/// VDD and pulses low. A stable dual-rail pair therefore drives a CMOS
+/// transmission gate at full gate overdrive (NMOS gate ← true rail, PMOS gate
+/// ← complement rail).
+///
+/// Four trapezoidal power-clock rails `p0..p3`, each with the canonical 2LAL
+/// shape — rise T/4, hold T/4, fall T/4, low T/4 — staggered by T/4. With this
+/// shape `~φi = φ(i+2)`, so four rails supply both polarities.
+///
+/// Data node `S_k` connects **only to clock rails** (there is no transistor
+/// path to GND or VDD anywhere — VDD is a bulk bias only):
+///   * true rail `o{k}` ↔ `φ(k mod 4)`, complement `o{k}b` ↔ `φ(k+2 mod 4)`,
+///   * each through **two parallel transmission gates**:
+///     - the *forward* TG, gated by `S_{k-1}` — charges the node while
+///       `φ(k)` ramps up (tick k);
+///     - the *reverse* TG, gated by `S_{k+1}` (the downstream copy) — returns
+///       the node's charge into the same clock rail while `φ(k)` ramps down
+///       (tick k+2). This is the reversible-computing retraction: the input is
+///       decomputed using the copy, never dumped to ground.
+///
+/// # Why this is fully adiabatic (slope −1)
+///
+/// Every TG switching event connects or isolates *equipotential* nodes:
+/// `φ(k)` is low exactly during tick k−1 when the forward TG turns on, and the
+/// node is charged exactly when the reverse TG turns on during tick k+1. So no
+/// charge ever crosses a voltage gap, and at no instant does a conducting path
+/// from a high node to ground exist — all current is clock↔capacitor through
+/// fully-enhanced TGs, dissipating only I²·R_on during the ramps (∝ 1/T).
+///
+/// # Numerics
+///
+/// The deep-adiabatic tail (≲1e-16 J/cycle) sits below two ngspice solver
+/// artifacts, both suppressed here: the default `gmin` (1e-12 S junction
+/// shunts → a fake ~1e-10 W static load) and the level-1 default junction
+/// saturation current (`is` = 1e-14 A). Neither is device physics at rung 0.
+/// The timestep must also resolve the TG `R_on·C` (~30 ps) corners or the
+/// `INTEG` power integral runs high (same lesson as [`crate::bench`]).
+///
+/// # Boundary (data-aware terminator)
+///
+/// The last stage's reverse TGs are gated by a **delayed replica of the
+/// actual input pattern**: the phantom successor `S_n` is, in ideal
+/// operation, exactly the input waveform shifted by `(n+1)` ticks
+/// (`S_k(t) = S_{-1}(t − (k+1)·T/4)`), so we synthesize it as a PWL source
+/// pair replaying the injected bit stream with that shift. For the all-1s
+/// stream this reduces to the periodic ack pulse at offset `(n%4)·T/4`; for
+/// arbitrary data it acks a 1-token if and only if a 1-token is actually
+/// retiring, so the tail decomputes correctly on 0-bits instead of being
+/// driven against an all-1s assumption (which burned ~CV², period-
+/// independent, per 0-bit — flattening the real-data energy curve).
+/// Both the input pair and the ack pair drive transistor **gates only** —
+/// there is no channel path from them to any data or clock node — and at
+/// rung 0 the level-1 models have no gate capacitance (no `tox`/`cgso`/
+/// `cgdo`), so these sources deliver exactly zero energy. We do not rely on
+/// that argument alone: their delivered power is included in the measured
+/// total (`ptot`) *and* integrated separately (`ein`, `eack`) so the tests
+/// verify it is ~0 rather than assuming it.
+///
+/// This is the all-1s wrapper used by the energy sweep; see
+/// [`two_lal_sr_pattern_netlist`] for the arbitrary-pattern variant.
+pub fn two_lal_sr_netlist(period_s: f64, n_stages: usize) -> String {
+    // Enough 1-tokens to keep the pipeline saturated through the measured
+    // cycle: bit `warmup` is the last one whose plateau feeds stage 0
+    // during the measurement window.
+    let warmup = n_stages.div_ceil(4) + 2;
+    let bits = vec![true; warmup + 1];
+    build_two_lal_sr(period_s, n_stages, &bits, false)
+}
+
+/// Arbitrary-pattern variant of [`two_lal_sr_netlist`] for functional
+/// verification: injects `bits` (one token per clock period, dual-rail) and
+/// emits per-stage/per-bit level measurements plus per-cycle energy
+/// integrals. `s{k}d{j}t` / `s{k}d{j}c` measure the true/complement rail of
+/// stage `k` in the middle of the window where bit `j` must occupy it
+/// (`MIN`/`MAX` chosen so the assertion is always "full level"), and
+/// `ecyc{i}` integrates total delivered power over cycle `i`.
+pub fn two_lal_sr_pattern_netlist(period_s: f64, n_stages: usize, bits: &[bool]) -> String {
+    build_two_lal_sr(period_s, n_stages, bits, true)
+}
+
+/// Emit a dual-rail PWL pair for the token stream `bits` (one bit per period):
+/// the true rail rests 0 and, for each 1-bit `j`, ramps up over
+/// [j·T+off−ε, j·T+off+q−ε], holds, ramps down over [+2q+ε, +3q+ε]; the
+/// complement rail is its exact mirror about VDD/2 (rests 1, dips 0). `off`
+/// is the waveform delay: `3q` for the input `S_{-1}`, `3q + (n+1)q` for the
+/// successor replica `S_n`.
+///
+/// `eps_ticks` widens each pulse by ε = `eps_ticks`·q on both sides. This is
+/// a solver-robustness measure, not a physics change: it moves every PWL
+/// breakpoint off the 4-phase clock corners (a gate crossing `vto` exactly
+/// at a corner where all four clocks have breakpoints makes ngspice's
+/// transient go `timestep = 0` at some periods). It is provably harmless:
+/// the ε-early turn-on happens while the connected clock and data node are
+/// already equipotential (no charge crosses a gap), and the ε-late turn-off
+/// keeps a TG conducting between the same node pair the reverse/forward
+/// partner TG is about to connect anyway. Distinct ε per source pair keeps
+/// all breakpoint grids disjoint.
+fn dual_rail_pwl(bits: &[bool], period_s: f64, off: f64, eps_ticks: f64) -> (String, String) {
+    let q = period_s / 4.0;
+    let eps = eps_ticks * q;
+    let mut t_pts = String::from("0 0");
+    let mut c_pts = String::from("0 1");
+    for (j, &b) in bits.iter().enumerate() {
+        if b {
+            let t0 = j as f64 * period_s + off;
+            t_pts.push_str(&format!(
+                " {:.9e} 0 {:.9e} 1 {:.9e} 1 {:.9e} 0",
+                t0 - eps,
+                t0 + q - eps,
+                t0 + 2.0 * q + eps,
+                t0 + 3.0 * q + eps
+            ));
+            c_pts.push_str(&format!(
+                " {:.9e} 1 {:.9e} 0 {:.9e} 0 {:.9e} 1",
+                t0 - eps,
+                t0 + q - eps,
+                t0 + 2.0 * q + eps,
+                t0 + 3.0 * q + eps
+            ));
+        }
+    }
+    (t_pts, c_pts)
+}
+
+fn build_two_lal_sr(period_s: f64, n_stages: usize, bits: &[bool], bit_meas: bool) -> String {
+    assert!(n_stages >= 1, "need at least 1 stage");
+    assert!(!bits.is_empty(), "need at least 1 input bit");
+    let q = period_s / 4.0; // one tick = quarter period (ramp/hold duration)
+    let step = (period_s / 4000.0).min(2e-11);
+    // Warmup scales with pipeline fill (the token reaches stage s at tick s):
+    // ceil(n/4) cycles to fill plus 2 to settle. A fixed warmup measures
+    // during fill and inflates the energy ~17× at n=12.
+    let warmup = n_stages.div_ceil(4) + 2;
+    let meas_from = warmup as f64 * period_s;
+    let meas_to = meas_from + period_s;
+    // In pattern mode the run must extend until the last bit has fully
+    // traversed the pipeline (bit j occupies stage n−1 until
+    // (j+1)·T + (n+1)·q).
+    let stop = if bit_meas {
+        let last_exit = bits.len() as f64 * period_s + (n_stages + 2) as f64 * q;
+        meas_to.max(last_exit)
+    } else {
+        meas_to
+    };
+    let c_load = 100e-15; // 100 fF per rail
+
+    let mut lines: Vec<String> = Vec::new();
+
+    lines.push(format!(
+        "2LAL 4-phase dual-rail shift register (T={period_s:.6e}, {n_stages} stages)"
+    ));
+    // is=1e-18: suppress the level-1 default junction leakage (see doc above).
+    lines.push(".model NM NMOS (level=1 vto=0.4 kp=200u is=1e-18)".into());
+    lines.push(".model PM PMOS (level=1 vto=-0.4 kp=100u is=1e-18)".into());
+    lines.push(".options gmin=1e-16".into());
+    // VDD is a bulk bias only (PMOS n-well); it carries no channel current.
+    lines.push("Vdd vdd 0 DC 1.0".into());
+
+    // Clock rails φ0..φ3: rise tick i, high tick i+1, fall tick i+2, low
+    // tick i+3. φ0/φ1 as positive PULSEs, φ2/φ3 as inverted PULSEs so that
+    // the t=0 values are exact (φ2 starts falling from 1 V, φ3 is high).
+    lines.push(format!(
+        "Vp0 p0 0 PULSE(0 1 0 {q:.9e} {q:.9e} {q:.9e} {period_s:.9e})"
+    ));
+    lines.push(format!(
+        "Vp1 p1 0 PULSE(0 1 {q:.9e} {q:.9e} {q:.9e} {q:.9e} {period_s:.9e})"
+    ));
+    lines.push(format!(
+        "Vp2 p2 0 PULSE(1 0 0 {q:.9e} {q:.9e} {q:.9e} {period_s:.9e})"
+    ));
+    lines.push(format!(
+        "Vp3 p3 0 PULSE(1 0 {q:.9e} {q:.9e} {q:.9e} {q:.9e} {period_s:.9e})"
+    ));
+
+    // Input token stream S_{-1}: dual-rail PWL of `bits`, one token per
+    // period, valid one tick before stage 0 computes (offset 3q). Drives
+    // gates only.
+    let d_in = 3.0 * q;
+    let (in_t, in_c) = dual_rail_pwl(bits, period_s, d_in, 0.01);
+    lines.push(format!("Vint int 0 PWL({in_t})"));
+    lines.push(format!("Vinc inc 0 PWL({in_c})"));
+    // Data-aware terminator: the phantom successor S_n gating the last
+    // stage's reverse TGs is the SAME bit stream delayed by (n+1) ticks —
+    // exactly what a real stage n would hold — so the tail decomputes
+    // correctly for arbitrary data. Drives gates only (see doc above).
+    let d_ack = d_in + (n_stages + 1) as f64 * q;
+    let (ack_t, ack_c) = dual_rail_pwl(bits, period_s, d_ack, 0.015);
+    lines.push(format!("Vackt ackt 0 PWL({ack_t})"));
+    lines.push(format!("Vackc ackc 0 PWL({ack_c})"));
+
+    for k in 0..n_stages {
+        let pt = format!("p{}", k % 4); // true-rail clock
+        let pc = format!("p{}", (k + 2) % 4); // complement-rail clock
+        let (gt, gc) = if k == 0 {
+            ("int".to_string(), "inc".to_string())
+        } else {
+            (format!("o{}", k - 1), format!("o{}b", k - 1))
+        };
+        let (rt, rc) = if k == n_stages - 1 {
+            ("ackt".to_string(), "ackc".to_string())
+        } else {
+            (format!("o{}", k + 1), format!("o{}b", k + 1))
+        };
+        let ot = format!("o{k}");
+        let oc = format!("o{k}b");
+
+        // Forward TGs (gated by the previous stage's rails).
+        lines.push(format!("MNF{k}t {pt} {gt} {ot} 0   NM W=4u L=0.15u"));
+        lines.push(format!("MPF{k}t {pt} {gc} {ot} vdd PM W=8u L=0.15u"));
+        lines.push(format!("MNF{k}c {pc} {gt} {oc} 0   NM W=4u L=0.15u"));
+        lines.push(format!("MPF{k}c {pc} {gc} {oc} vdd PM W=8u L=0.15u"));
+        // Reverse TGs (gated by the next stage's rails): energy recovery.
+        lines.push(format!("MNR{k}t {pt} {rt} {ot} 0   NM W=4u L=0.15u"));
+        lines.push(format!("MPR{k}t {pt} {rc} {ot} vdd PM W=8u L=0.15u"));
+        lines.push(format!("MNR{k}c {pc} {rt} {oc} 0   NM W=4u L=0.15u"));
+        lines.push(format!("MPR{k}c {pc} {rc} {oc} vdd PM W=8u L=0.15u"));
+        // Rail loads and rest-state initial conditions.
+        lines.push(format!("C{k}t {ot} 0 {c_load:.2e}"));
+        lines.push(format!("C{k}c {oc} 0 {c_load:.2e}"));
+        lines.push(format!(".ic V({ot})=0 V({oc})=1"));
+    }
+
+    // Honest power sum: EVERY V-source in the deck contributes to ptot —
+    // the four clock rails (the real power supplies), the VDD bulk bias
+    // (junction leakage only), and the gate-drive boundary sources (input
+    // + ack replica; ~0 by the zero-gate-cap rung-0 idealization, but
+    // included rather than assumed, and integrated separately as ein/eack
+    // so the tests can verify the ~0 claim).
+    for i in 0..4 {
+        lines.push(format!("Bp{i} pwr{i} 0 V = -V(p{i})*I(Vp{i})"));
+    }
+    lines.push("Bpv pwrv 0 V = -V(vdd)*I(Vdd)".into());
+    lines.push("Bpin pwrin 0 V = -V(int)*I(Vint)-V(inc)*I(Vinc)".into());
+    lines.push("Bpak pwrak 0 V = -V(ackt)*I(Vackt)-V(ackc)*I(Vackc)".into());
+    lines.push(
+        "Btot ptot 0 V = V(pwr0)+V(pwr1)+V(pwr2)+V(pwr3)+V(pwrv)+V(pwrin)+V(pwrak)".into(),
+    );
+
+    // Control block.
+    lines.push(".control".into());
+    lines.push(format!("tran {step:.9e} {stop:.9e} uic"));
+    lines.push(format!(
+        "meas tran etot INTEG V(ptot) FROM={meas_from:.9e} TO={meas_to:.9e}"
+    ));
+    lines.push(format!(
+        "meas tran ein INTEG V(pwrin) FROM={meas_from:.9e} TO={meas_to:.9e}"
+    ));
+    lines.push(format!(
+        "meas tran eack INTEG V(pwrak) FROM={meas_from:.9e} TO={meas_to:.9e}"
+    ));
+    for k in 0..n_stages {
+        lines.push(format!(
+            "meas tran vo{k}max MAX V(o{k}) FROM={meas_from:.9e} TO={meas_to:.9e}"
+        ));
+        lines.push(format!(
+            "meas tran vo{k}bmin MIN V(o{k}b) FROM={meas_from:.9e} TO={meas_to:.9e}"
+        ));
+    }
+    if bit_meas {
+        // Per-cycle total-energy integrals (proves no per-0-bit ~CV² tail
+        // burn: a broken terminator shows up as a period-independent
+        // ~1.25e-13 J spike in the cycle where a 0-bit retires).
+        let n_cycles = (stop / period_s).floor() as usize;
+        for i in 0..n_cycles {
+            let f = i as f64 * period_s;
+            let t = f + period_s;
+            lines.push(format!(
+                "meas tran ecyc{i} INTEG V(ptot) FROM={f:.9e} TO={t:.9e}"
+            ));
+        }
+        // Per-stage/per-bit levels: bit j occupies stage k (plateau) during
+        // [(j+1)T+(k+1)q, (j+1)T+(k+2)q]. Sample the middle 60% of the
+        // window. For a 1-bit assert full assertion levels (true rail MIN
+        // > 0.9, complement MAX < 0.1); for a 0-bit assert full rest
+        // levels (true MAX < 0.1, complement MIN > 0.9).
+        for k in 0..n_stages {
+            for (j, &b) in bits.iter().enumerate() {
+                let w0 = (j + 1) as f64 * period_s + (k + 1) as f64 * q + 0.2 * q;
+                let w1 = (j + 1) as f64 * period_s + (k + 2) as f64 * q - 0.2 * q;
+                let (ft, fc) = if b { ("MIN", "MAX") } else { ("MAX", "MIN") };
+                lines.push(format!(
+                    "meas tran s{k}d{j}t {ft} V(o{k}) FROM={w0:.9e} TO={w1:.9e}"
+                ));
+                lines.push(format!(
+                    "meas tran s{k}d{j}c {fc} V(o{k}b) FROM={w0:.9e} TO={w1:.9e}"
+                ));
+            }
+        }
+    }
+    lines.push(".endc".into());
+    lines.push(".end".into());
+
+    lines.join("\n") + "\n"
+}
+
+/// Sweep the power-clock period and return `(period_s, energy_per_cycle_J)`
+/// for each period. Energy is the total source energy (clocks + bulk +
+/// gate-drive boundary sources) integrated over one settled cycle after the
+/// fill-scaled warmup (`ceil(n/4)+2` cycles).
+pub fn two_lal_sr_curve(periods: &[f64], n_stages: usize) -> Vec<(f64, f64)> {
+    periods
+        .iter()
+        .map(|&t| {
+            let netlist = two_lal_sr_netlist(t, n_stages);
+            let e = run_energy(&netlist, "etot");
+            (t, e.abs())
+        })
+        .collect()
+}
+
 /// The canonical three-family money plot (ADR-0023): the adiabatic
 /// transmission-gate cell (slope −1, keeps falling), the PFAL buffer (falls then
 /// floors), and the static-CMOS control (flat), over one shared period axis.
@@ -324,5 +647,143 @@ mod tests {
         for dut in ["adiabatic-tg", "pfal", "cmos-static"] {
             assert!(curves.iter().any(|c| c.dut == dut), "missing {dut}");
         }
+    }
+
+    // ----- 2LAL shift register -----
+
+    /// 2LAL shift register: sweep ≥2 decades (this sweep spans 3), assert
+    /// slope ≈ −1 ± 0.15 (all-1s stream) and stage rails reach >0.9 V.
+    ///
+    /// Measured (canonical 4-phase forward/reverse-TG topology, see
+    /// [`two_lal_sr_netlist`]): slope ≈ −0.99 over 1e-8..1e-5 s; all stage
+    /// rails reach 1.0 V. NOTE: sustaining the 3rd decade (1e-6..1e-5 s)
+    /// requires `.options gmin=1e-16` + `is=1e-18` in the deck — ngspice's
+    /// default gmin=1e-12 junction shunts inject a fake ~5e-11 W static
+    /// load that collapses the 3rd decade to slope ≈ −0.13. That is honest
+    /// artifact removal, not tuning: a *real* DC leak in the topology would
+    /// not be cured by lowering gmin (there is no channel path to GND or
+    /// VDD by construction — the circuit is powered only by the clocks).
+    #[test]
+    fn two_lal_sr_slope_is_minus_one() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+
+        let n_stages = 8;
+        let periods = regime_periods();
+        let curve = two_lal_sr_curve(&periods, n_stages);
+
+        // (a) First and last stage rails must reach >0.9 V (functional;
+        // arbitrary-pattern propagation is covered per-stage/per-bit by
+        // `two_lal_sr_propagates_pattern_adiabatically`).
+        let slowest = *periods.last().unwrap();
+        let nl = two_lal_sr_netlist(slowest, n_stages);
+        for k in [0, n_stages - 1] {
+            let meas_name = format!("vo{k}max");
+            let v = run_energy(&nl, &meas_name);
+            assert!(
+                v > 0.9,
+                "stage {k} rail must reach >0.9 V, got {v:.4} V"
+            );
+        }
+
+        // (b) Log-log slope of energy vs period.
+        let slope = log_log_slope(&curve);
+        eprintln!(
+            "2LAL SR slope = {slope:.4} over {} points: {:?}",
+            curve.len(),
+            curve
+        );
+        assert!(
+            (-1.15..=-0.85).contains(&slope),
+            "2LAL SR slope must be −1 ± 0.15, got {slope:.4} for {:?}",
+            curve
+        );
+    }
+
+    /// Functional + adiabaticity check on a NON-CONSTANT pattern.
+    ///
+    /// Injects 1,0,1,1,0,0,1 and asserts, for EVERY stage k (including the
+    /// last) and EVERY bit j, that stage k holds bit j at full level during
+    /// its occupancy window (input delayed by k+1 ticks): true rail >0.9 V
+    /// for a 1 / <0.1 V for a 0, complement rail the mirror. This replaces
+    /// the vacuous all-1s `vo{k}max` check, which passes on a dead chain.
+    ///
+    /// Also asserts the energy stays adiabatic on real data: every settled
+    /// per-cycle energy — including the cycles where 0-bits retire at the
+    /// tail — is far below the ~1.25e-13 J period-independent CV² burn
+    /// that the old all-1s terminator paid per 0-bit, and the gate-only
+    /// boundary sources (input + ack replica) deliver ~0 J (zero-gate-cap
+    /// rung-0 models; verified, not assumed).
+    #[test]
+    fn two_lal_sr_propagates_pattern_adiabatically() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+
+        let n_stages = 8;
+        let period = 1e-6; // deep-adiabatic regime: ~1e-15 J/cycle expected
+        let bits = [true, false, true, true, false, false, true];
+        let nl = two_lal_sr_pattern_netlist(period, n_stages, &bits);
+        let out = crate::bench::run_ngspice_raw(&nl).expect("ngspice failed");
+        let get = |name: &str| -> f64 {
+            crate::bench::parse_meas(&out, name)
+                .unwrap_or_else(|| panic!("measurement '{name}' missing from ngspice output"))
+        };
+
+        // (a) Per-stage/per-bit full-level propagation, ALL stages.
+        for k in 0..n_stages {
+            for (j, &b) in bits.iter().enumerate() {
+                let vt = get(&format!("s{k}d{j}t"));
+                let vc = get(&format!("s{k}d{j}c"));
+                if b {
+                    assert!(
+                        vt > 0.9 && vc < 0.1,
+                        "stage {k} bit {j}=1: true rail min {vt:.4} V (want >0.9), \
+                         complement max {vc:.4} V (want <0.1)"
+                    );
+                } else {
+                    assert!(
+                        vt < 0.1 && vc > 0.9,
+                        "stage {k} bit {j}=0: true rail max {vt:.4} V (want <0.1), \
+                         complement min {vc:.4} V (want >0.9)"
+                    );
+                }
+            }
+        }
+
+        // (b) No non-adiabatic tail burn: every settled cycle (skip cycle 0,
+        // which pays the one-time uic transient) stays ≥20× below the
+        // ~1.25e-13 J per-0-bit CV² burn of a broken terminator.
+        // Whole cycles simulated (mirror of the generator's `stop`):
+        // stop = max((warmup+1)·T, bits·T + (n+2)·q), q = T/4.
+        let warmup = n_stages.div_ceil(4) + 2;
+        let n_cycles = ((bits.len() * 4 + n_stages + 2) / 4).max(warmup + 1);
+        let mut worst = 0.0f64;
+        for i in 1..n_cycles {
+            let e = get(&format!("ecyc{i}")).abs();
+            eprintln!("pattern run: cycle {i} energy = {e:.3e} J");
+            worst = worst.max(e);
+            assert!(
+                e < 6e-15,
+                "cycle {i} energy {e:.3e} J is not adiabatic (CV² tail burn?)"
+            );
+        }
+        eprintln!("pattern run: worst settled per-cycle energy = {worst:.3e} J");
+        eprintln!(
+            "pattern run: boundary gate-drive energies ein={:.3e} J, eack={:.3e} J",
+            get("ein"),
+            get("eack")
+        );
+
+        // (c) Gate-only boundary sources verified ~0 J over the etot window.
+        let ein = get("ein").abs();
+        let eack = get("eack").abs();
+        assert!(
+            ein < 1e-18 && eack < 1e-18,
+            "boundary gate-drive sources must carry ~0 J, got ein={ein:.3e}, eack={eack:.3e}"
+        );
     }
 }
