@@ -18,6 +18,7 @@ pub mod coverage;
 pub mod diagnostics;
 pub mod elaborate;
 pub mod env;
+pub mod labels;
 pub mod linearity;
 pub mod names;
 pub mod testkit;

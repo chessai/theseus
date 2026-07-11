@@ -105,10 +105,14 @@ carriers, and add `T0303` (label state space not covered).
 unifying the argument types of every `$ℓ` occurrence across both columns
 (monomorphic rig-fragment unification; a nullary `$ℓ` has carrier `1`, a
 `$ℓ p₁ … p_k` the argument tuple). An optional annotation is *checked* against
-that inference. Failure — one label used at two incompatible shapes — is a
-typing error (reported as `T0102` with `side:` the offending occurrence's column
-and `witness:` the label name), so the "same carrier on both columns" invariant
-holds by the time coverage runs. The carrier order in `U` is **first occurrence
+that inference. Failure — one label used at two incompatible shapes, a label
+whose carrier cannot be inferred at all, or a label pattern nested below the
+clause root (`$` is only well-typed at the top of a side; see
+`theory/coverage-bijectivity-labels.md` scope item 3) — is a typing error
+(reported as `T0102` with `side:` the offending occurrence's column and `name:`
+the label name), so the "same carrier on both columns" invariant, carrier
+existence, and the top-level-tag discriminator all hold by the time coverage
+runs. The carrier order in `U` is **first occurrence
 under the canonical traversal** (clauses in declaration order, LHS before RHS,
 leftmost–outermost within a pattern — deterministic). Full algorithm:
 `design/elaboration.md` §E4.

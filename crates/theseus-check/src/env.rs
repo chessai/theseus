@@ -61,6 +61,9 @@ pub struct TypeInfo {
 pub struct IsoSig {
     pub lhs: SurfType,
     pub rhs: SurfType,
+    /// Ordered label state space: `(label_name, carrier_type)` in
+    /// first-occurrence order. Empty for plain (label-free) isos.
+    pub labels: Vec<(String, SurfType)>,
 }
 
 /// A primitive signature.
@@ -112,6 +115,15 @@ impl Env {
     /// Look up an iso signature.
     pub fn iso(&self, name: &str) -> Option<&IsoSig> {
         self.isos.get(name)
+    }
+
+    /// Return the ordered `(label, carrier)` list for an iso.
+    /// Empty slice for plain isos or unknown iso names.
+    pub fn iso_labels(&self, iso_name: &str) -> &[(String, SurfType)] {
+        self.isos
+            .get(iso_name)
+            .map(|sig| sig.labels.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Is `name` a declared iso?
@@ -287,13 +299,7 @@ pub fn resolve(program: &Program) -> Env {
                 env.types.insert(type_name, TypeInfo { ctors: ctor_names });
             }
             Decl::Iso(id) => {
-                env.isos.insert(
-                    id.name.text.to_string(),
-                    IsoSig {
-                        lhs: id.lhs.clone(),
-                        rhs: id.rhs.clone(),
-                    },
-                );
+                insert_iso_shallow(id, &mut env);
             }
             Decl::Prim(pd) => {
                 env.prims.insert(
@@ -307,7 +313,40 @@ pub fn resolve(program: &Program) -> Env {
             }
         }
     }
+    // Second pass: label inference (needs types/ctors populated).
+    for decl in &program.decls {
+        if let Decl::Iso(id) = decl {
+            infer_labels_recursive(id, &mut env);
+        }
+    }
     env
+}
+
+/// Insert an iso (and its nested `where` isos) into the env without labels.
+fn insert_iso_shallow(id: &ast::IsoDecl, env: &mut Env) {
+    env.isos.insert(
+        id.name.text.to_string(),
+        IsoSig {
+            lhs: id.lhs.clone(),
+            rhs: id.rhs.clone(),
+            labels: Vec::new(),
+        },
+    );
+    for w in &id.wheres {
+        insert_iso_shallow(w, env);
+    }
+}
+
+/// Run label inference for an iso and its nested `where` isos, storing
+/// the results in the env.
+fn infer_labels_recursive(id: &ast::IsoDecl, env: &mut Env) {
+    let (labels, _) = crate::labels::infer_iso_labels(id, env);
+    if let Some(sig) = env.isos.get_mut(&id.name.text) {
+        sig.labels = labels;
+    }
+    for w in &id.wheres {
+        infer_labels_recursive(w, env);
+    }
 }
 
 /// Extract the prim key as text. `PrimDecl::key` may itself be a string-ish

@@ -25,11 +25,22 @@ pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
 }
 
 fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
+    let (labels, clashes) = crate::labels::infer_iso_labels(id, env);
+
+    // Report carrier-unification clashes as T0102.
+    for clash in clashes {
+        diags.push(
+            Diagnostic::new(Code::T0102, clash.span)
+                .with_side(clash.side)
+                .with_name(clash.label),
+        );
+    }
+
     if let IsoBody::Clauses(clauses) = &id.body {
         for (i, clause) in clauses.iter().enumerate() {
             let clause_index = i + 1; // 1-indexed
-            check_pattern(&clause.lhs, &id.lhs, env, Side::Left, clause_index, diags);
-            check_pattern(&clause.rhs, &id.rhs, env, Side::Right, clause_index, diags);
+            check_pattern(&clause.lhs, &id.lhs, env, Side::Left, clause_index, &labels, true, diags);
+            check_pattern(&clause.rhs, &id.rhs, env, Side::Right, clause_index, &labels, true, diags);
         }
     }
     for w in &id.wheres {
@@ -38,12 +49,16 @@ fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
 }
 
 /// Check that `pat` is well-typed at surface type `ty`. If not, push a T0102.
+/// `at_root` is true only when `pat` is the top-level pattern of a clause side.
+#[allow(clippy::too_many_arguments)]
 fn check_pattern(
     pat: &Pattern,
     ty: &SurfType,
     env: &Env,
     side: Side,
     clause_index: usize,
+    labels: &[(String, SurfType)],
+    at_root: bool,
     diags: &mut Vec<Diagnostic>,
 ) {
     // Unwrap Paren on the type side.
@@ -63,8 +78,29 @@ fn check_pattern(
                 );
             }
         }
-        Pattern::Label(..) => {
-            // Labels are out of scope for typing in slice 1.
+        Pattern::Label(name, args, _) => {
+            // H2: a label pattern is only well-typed at the clause root.
+            if !at_root {
+                diags.push(
+                    Diagnostic::new(Code::T0102, pat.span())
+                        .with_side(side)
+                        .with_name(name.text.clone())
+                        .with_clauses(vec![clause_index]),
+                );
+                return;
+            }
+            // Check label args against the inferred carrier type.
+            if let Some((_, carrier)) = labels.iter().find(|(n, _)| n == &name.text) {
+                match args.len() {
+                    0 => { /* nullary label — carrier is unit, nothing to check */ }
+                    1 => {
+                        check_pattern(&args[0], carrier, env, side, clause_index, labels, false, diags);
+                    }
+                    _ => {
+                        check_curried_args(args, carrier, env, side, clause_index, labels, diags);
+                    }
+                }
+            }
         }
         Pattern::Ctor(name, args, _) => {
             let Some(ctor_info) = env.ctor(&name.text) else {
@@ -86,15 +122,10 @@ fn check_pattern(
                     // Nullary ctor applied to no args — fine.
                 }
                 (Some(payload_ty), [arg]) => {
-                    check_pattern(arg, payload_ty, env, side, clause_index, diags);
+                    check_pattern(arg, payload_ty, env, side, clause_index, labels, false, diags);
                 }
                 (Some(payload_ty), args) if args.len() > 1 => {
-                    // Multiple args — the ctor's payload is curried. The first
-                    // arg matches the outermost component and remaining args
-                    // match deeper levels. For ADTs in Theseus, a multi-arg
-                    // ctor `C a b` is sugar for `C (a, b)` — a single product
-                    // payload. Check each arg against its position in the product.
-                    check_curried_args(args, payload_ty, env, side, clause_index, diags);
+                    check_curried_args(args, payload_ty, env, side, clause_index, labels, diags);
                 }
                 _ => {
                     // Arity mismatch (e.g. nullary ctor given args, or
@@ -110,8 +141,8 @@ fn check_pattern(
         Pattern::Tuple(a, b, _) => {
             // A tuple pattern is well-typed against a product type.
             if let SurfType::Prod(ty_a, ty_b, _) = ty {
-                check_pattern(a, ty_a, env, side, clause_index, diags);
-                check_pattern(b, ty_b, env, side, clause_index, diags);
+                check_pattern(a, ty_a, env, side, clause_index, labels, false, diags);
+                check_pattern(b, ty_b, env, side, clause_index, labels, false, diags);
             } else {
                 diags.push(
                     Diagnostic::new(Code::T0102, pat.span())
@@ -121,7 +152,7 @@ fn check_pattern(
             }
         }
         Pattern::Paren(inner, _) => {
-            check_pattern(inner, ty, env, side, clause_index, diags);
+            check_pattern(inner, ty, env, side, clause_index, labels, at_root, diags);
         }
     }
 }
@@ -135,16 +166,17 @@ fn check_curried_args(
     env: &Env,
     side: Side,
     clause_index: usize,
+    labels: &[(String, SurfType)],
     diags: &mut Vec<Diagnostic>,
 ) {
     let ty = peel_paren_type(ty);
     if args.len() == 1 {
-        check_pattern(&args[0], ty, env, side, clause_index, diags);
+        check_pattern(&args[0], ty, env, side, clause_index, labels, false, diags);
         return;
     }
     if let SurfType::Prod(ty_a, ty_b, _) = ty {
-        check_pattern(&args[0], ty_a, env, side, clause_index, diags);
-        check_curried_args(&args[1..], ty_b, env, side, clause_index, diags);
+        check_pattern(&args[0], ty_a, env, side, clause_index, labels, false, diags);
+        check_curried_args(&args[1..], ty_b, env, side, clause_index, labels, diags);
     } else {
         // More args than product components — arity error.
         diags.push(
@@ -210,10 +242,6 @@ mod tests {
     #[test]
     fn no_t0102_on_valid_programs() {
         for path in testkit::program_fixtures() {
-            let file = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if file == "0011-label-loop.thse" {
-                continue; // label test — out of slice-1 scope
-            }
             let program = testkit::load_program(&path);
             let env = crate::env::resolve(&program);
             let reported = typing_only(check(&program, &env));
@@ -223,5 +251,59 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[test]
+    fn clash_emits_t0102() {
+        let src = "type Bit = O | I\n\
+                    iso bad : Bit <-> Bit\n\
+                    | O <-> $go O\n\
+                    | I <-> $go (O, O)\n";
+        let program = theseus_syntax::parse(src).unwrap();
+        let env = crate::env::resolve(&program);
+        let reported = typing_only(check(&program, &env));
+        assert!(!reported.is_empty(), "expected T0102 for label carrier clash");
+        let clash_diag = reported
+            .iter()
+            .find(|d| d.name.as_deref() == Some("go"))
+            .expect("expected a T0102 with name 'go'");
+        assert_eq!(clash_diag.code, Code::T0102);
+        assert_eq!(clash_diag.side, Some(Side::Right));
+    }
+
+    #[test]
+    fn carrier_not_inferable_emits_t0102() {
+        // H1: $go's carrier is never pinned — must not silently vanish.
+        let src = "type Bit = O | I\n\
+                    iso f : Bit <-> Bit\n\
+                    | $go x <-> $go x\n\
+                    | b <-> b\n";
+        let program = theseus_syntax::parse(src).unwrap();
+        let env = crate::env::resolve(&program);
+        let reported = typing_only(check(&program, &env));
+        assert!(!reported.is_empty(), "expected T0102 for carrier-not-inferable label");
+        let diag = reported
+            .iter()
+            .find(|d| d.name.as_deref() == Some("go"))
+            .expect("expected a T0102 with name 'go'");
+        assert_eq!(diag.code, Code::T0102);
+    }
+
+    #[test]
+    fn nested_label_emits_t0102() {
+        // H2: $go inside a tuple is nested — must be rejected.
+        let src = "type Bit = O | I\n\
+                    iso g : (Bit, Bit) <-> (Bit, Bit)\n\
+                    | (a, $go b) <-> (a, $go b)\n\
+                    | (a, b) <-> (b, a)\n";
+        let program = theseus_syntax::parse(src).unwrap();
+        let env = crate::env::resolve(&program);
+        let reported = typing_only(check(&program, &env));
+        assert!(!reported.is_empty(), "expected T0102 for nested label pattern");
+        let diag = reported
+            .iter()
+            .find(|d| d.name.as_deref() == Some("go"))
+            .expect("expected a T0102 with name 'go' for nested label");
+        assert_eq!(diag.code, Code::T0102);
     }
 }
