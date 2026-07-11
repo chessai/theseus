@@ -92,6 +92,58 @@ pub fn adiabatic_tg_curve(periods: &[f64]) -> MoneyPlotCurve {
     }
 }
 
+/// Build the non-adiabatic **CMOS baseline** netlist for one `period_s`: a
+/// static CMOS inverter driven by a full-swing square wave with FAST (non-
+/// adiabatic) edges. Each cycle dumps ~`CV²` from the rail irrespective of
+/// period → a FLAT energy-vs-period curve (the money plot's control).
+pub fn cmos_baseline_netlist(period_s: f64) -> String {
+    let half = period_s / 2.0;
+    let stop = period_s;
+    let edge = (period_s / 1000.0).min(1e-10); // fast edges: no energy recovery
+    let step = (period_s / 4000.0).min(5e-11);
+    format!(
+        "\
+static CMOS inverter, step-driven baseline (T={period_s:.6e} s)
+.model NM NMOS (level=1 vto=0.4 kp=200u)
+.model PM PMOS (level=1 vto=-0.4 kp=100u)
+Vdd vdd 0 DC 1.0
+Vin in 0 PULSE(0 1.0 0 {edge:.9e} {edge:.9e} {half:.9e} {stop:.9e})
+M1 out in 0   0   NM W=4u L=0.15u
+M2 out in vdd vdd PM W=8u L=0.15u
+Cout out 0 1p
+Bpwr pwr 0 V = V(vdd)*I(Vdd)
+.control
+tran {step:.9e} {stop:.9e} uic
+meas tran evdd INTEG V(pwr) FROM=0 TO={stop:.9e}
+print evdd
+.endc
+.end
+"
+    )
+}
+
+/// The CMOS baseline curve (energy per cycle vs period). Energy is reported as a
+/// positive magnitude (the rail-current convention makes the raw integral
+/// negative for energy leaving the source).
+pub fn cmos_baseline_curve(periods: &[f64]) -> MoneyPlotCurve {
+    let points = periods
+        .iter()
+        .map(|&t| (t, run_energy(&cmos_baseline_netlist(t), "evdd").abs()))
+        .collect();
+    MoneyPlotCurve {
+        dut: "cmos-static".to_string(),
+        points,
+    }
+}
+
+/// The money plot: the family of energy-per-op-vs-period curves at a shared set
+/// of periods. Presently the adiabatic transmission-gate cell (slope −1) and the
+/// static-CMOS control (flat); a PFAL curve (adiabatic-with-a-floor) is owed to
+/// complete the canonical three-family plot (ADR-0023).
+pub fn money_plot(periods: &[f64]) -> Vec<MoneyPlotCurve> {
+    vec![adiabatic_tg_curve(periods), cmos_baseline_curve(periods)]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +189,45 @@ mod tests {
         }
         let e = run_energy(&adiabatic_tg_netlist(1e-7), "esrc");
         assert!(e > 1e-16, "cell should dissipate a measurable amount, got {e:e}");
+    }
+
+    /// The CMOS control is FLAT: ~CV² per cycle regardless of period (slope ≈ 0),
+    /// and — crucially — at a slow period it dissipates FAR more than the
+    /// adiabatic cell (the whole point of the money plot).
+    #[test]
+    fn cmos_baseline_is_flat_and_dominates_adiabatic() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        let periods = regime_periods();
+        let cmos = cmos_baseline_curve(&periods);
+        let slope = cmos.slope();
+        assert!(
+            (-0.1..=0.1).contains(&slope),
+            "CMOS baseline must be flat (slope ≈ 0), got {slope:.4} for {:?}",
+            cmos.points
+        );
+        // At the slowest period the adiabatic cell must win by a wide margin.
+        let adia = adiabatic_tg_curve(&periods);
+        let (_, e_cmos_slow) = *cmos.points.last().unwrap();
+        let (_, e_adia_slow) = *adia.points.last().unwrap();
+        assert!(
+            e_adia_slow < e_cmos_slow / 100.0,
+            "adiabatic cell should beat CMOS by >100× at the slow end: adia={e_adia_slow:e}, cmos={e_cmos_slow:e}"
+        );
+    }
+
+    /// The money plot exposes both families over one period axis.
+    #[test]
+    fn money_plot_has_adiabatic_and_cmos() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        let curves = money_plot(&regime_periods());
+        assert_eq!(curves.len(), 2);
+        assert!(curves.iter().any(|c| c.dut == "adiabatic-tg"));
+        assert!(curves.iter().any(|c| c.dut == "cmos-static"));
     }
 }
