@@ -44,26 +44,45 @@ generator. INV-STAMP already refuses unstamped/rung-less curves, so the machiner
 is in place. Rungs 2–4 (source non-idealities, resonator, extracted parasitics)
 stay owed to M3b/M5 per ADR-0032.
 
-## 3. The load-bearing constraint: workers are blind on ngspice
+## 3. Worker/advisor split — workers now HAVE ngspice (constraint lifted)
 
-Hard-won operating lesson (see `theseus-overnight/m3a-plan.md`, and the memory
-`theseus-overnight-run`): **headless maestro workers cannot run ngspice** (denied
-in the sandbox), so any task whose gate needs a live SPICE round-trip *thrashes* —
-the worker edits a netlist it can't simulate, fails blind, and loses work. This
-splits every workstream cleanly:
+**History (now obsolete):** workers were "blind" on ngspice — the driven worker
+ran `claude --print --permission-mode acceptEdits` with no Bash allowlist, so a
+headless `ngspice` call was denied, and the daemon's default-shell env lacked
+ngspice on PATH. SPICE tasks thrashed (edit a netlist you can't run → fail blind →
+lose work), which forced an advisor-hand-craft-everything model.
 
-- **Advisor hand-craft (SPICE-touching):** PDK pinning, all `/cells` `.subckt`
-  authoring, reverse-drive netlist construction, and every *real* characterization
-  run. These need interactive ngspice iteration in `nix develop .#silicon`.
-- **Delegate to maestro (pure Rust):** harness structs, the multi-axis sweep
-  driver, admission-checklist *logic*, the DB fit/interpolation/rebuild, artifact
-  emission. These are worker-tractable **iff** they're built against golden
-  fixtures + a mock-ngspice seam (the `THESEUS_NGSPICE` env seam already exists in
-  `bench.rs`), so the gate never needs a real simulator.
+**Fixed 2026-07-11 (commit 501fd78):** two soft layers, both addressed —
+`.claude/settings.json` allowlists `Bash(ngspice:*)` (worktree checkouts inherit
+it), and the default devShell now ships ngspice on PATH + the `THESEUS_NGSPICE`
+seam, so daemon-spawned workers inherit both. Verified end-to-end: a delegated
+task requiring a live ngspice run reached `verify_passed` (worker wrote a netlist,
+ran `ngspice`, iterated, and its ngspice-gated test passed the gate + cross-model
+verifier). The profile is L0 (no bwrap), so allowlisting a simulator that reads a
+`.cir` from temp doesn't widen the OS blast radius.
 
-Rule of thumb: **if the gate needs a transistor to switch, the advisor does it;
-if the gate is `cargo test` over recorded numbers, maestro does it.** This is the
-throughput bottleneck — the advisor is the serial resource on SPICE work.
+**Revised split** — the axis is now *design difficulty*, not *access*:
+
+- **Delegate to maestro (most SPICE work is now in reach):** the multi-axis sweep
+  driver, typed decode, conservation measurement, admission logic, DB
+  fit/interpolation/rebuild, artifact emission — AND netlist-level tasks where the
+  worker can *iterate against real ngspice feedback* (parameterized cell decks,
+  sweep harnesses, DUT-matrix runs, per-cell characterization once a topology is
+  fixed). A worker that can see its `.meas` output can converge on netlist syntax
+  and RC/timestep issues on its own.
+- **Advisor still owns genuinely-hard circuit DESIGN:** PDK pinning (W0), and the
+  novel-topology / novel-physics calls where the failure is conceptual, not
+  syntactic — most sharply the **adiabatic 2LAL timing** (W1: the static-crowbar
+  path that pins slope at +1). Access ≠ competence: ngspice lets a worker *iterate*,
+  but the advisor still supplies domain judgment where the design space is open.
+
+Rule of thumb (updated): **delegate anything where success is a convergent
+iteration against a gate (now including live SPICE); the advisor takes the
+open-ended circuit-design calls.** The advisor is no longer the serial bottleneck
+on *all* SPICE work — only on the genuinely novel physics. Still prefer giving
+workers golden fixtures + the `THESEUS_NGSPICE` seam where a deterministic test is
+possible (faster, cheaper than a live sim every gate run), but a live run is no
+longer off-limits.
 
 ## 4. Workstreams (dependency-ordered)
 
@@ -79,8 +98,12 @@ flake-pinned store path.
   sky130 inverter under nix?" before committing to the full matrix.
 - **Does NOT block Rust scaffolding** — W2/W3/W4 proceed against fixtures.
 
-### W1 — Cell library (hand-authored SPICE). Advisor. Biggest domain chunk.
-Author `/cells/*.subckt` (the repo's *only* hand-authored SPICE, per ADR-0025):
+### W1 — Cell library (hand-authored SPICE). Advisor-led; worker-assistable.
+Author `/cells/*.subckt` (the repo's *only* hand-authored SPICE, per ADR-0025).
+Split: the advisor owns the **topology + adiabatic timing** (the hard, open part);
+a worker can now iterate the *parameterization* (Vt/body variant decks, source/
+sink cells, functional truth-table checks) against live ngspice once a topology is
+fixed. Contents:
 - k-CSWAP family: k0 buffer/latch, k1 1-CSWAP, k2 2-CSWAP — dual-rail,
   transmission-gate, **self-inverse** (each cell its own adjoint network, ADR-0027).
 - Baselines: static CMOS + PFAL. Bench source/sink cells.
@@ -99,8 +122,9 @@ Extend `bench.rs` from single-axis `sweep_period` to the closed sweep: ramp
   sampled mid-validity → truth-table verdict.
 - Conservation-closure measurement: source energy = dissipation + Δstored, the
   ≤1% gate (TBD-1). Builds on the existing `Bpwr`/`.meas … INTEG` pattern.
-- Keep the `THESEUS_NGSPICE` seam; add a recorded-output mode so tests run without
-  a simulator (this is what makes it delegable).
+- Prefer a recorded-output mode (deterministic tests, no live sim per gate run);
+  but a worker may also run live ngspice via the `THESEUS_NGSPICE` seam to develop
+  the netlist templates, now that workers have ngspice access.
 
 ### W3 — Admission checklist (Rust logic + advisor for SPICE side). Delegate core.
 The 5-gate executable (`test-spec-m3a.md` §1), pure logic over measurement structs:
@@ -147,8 +171,11 @@ W2 (sweep) ─► W3 (admission)┘      │
 - **Off the critical path (delegate now, parallel):** W2/W3/W4 Rust scaffolding
   against golden fixtures + mock ngspice. These land and merge before any sky130
   transistor switches.
-- **Critical path (advisor-serial):** W0 PDK pin → W1 cells (esp. the adiabatic SR)
-  → real sweep runs → W5 → W6. This is the throughput limit.
+- **Critical path (advisor-led, but no longer advisor-*serial* for all SPICE):**
+  W0 PDK pin → W1 cell topology + adiabatic SR → real sweep runs → W5 → W6. Since
+  workers now have ngspice, the advisor's serial load narrows to the *design*
+  decisions (W0 pinning, W1 topology/timing); the mechanical characterization runs
+  and parameter sweeps around a fixed topology are delegable, so W5 parallelizes.
 - Recommended kickoff: **(a)** an advisor spike on W0 ("sky130 inverter under nix
   ngspice?") to de-risk the PDK, in parallel with **(b)** a delegated W4 char-DB
   scaffold (fit + interpolation + rebuild, pure logic, high test surface) and a
