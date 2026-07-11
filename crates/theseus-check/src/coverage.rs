@@ -138,15 +138,21 @@ fn check_side_extended(
                         );
                     }
                 }
-                Value::Left(_)
+                Value::Left(carrier_val)
                     // Uncovered label state → T0303.
                     if !found_t0303 => {
                         found_t0303 = true;
-                        diags.push(
-                            Diagnostic::new(Code::T0303, span)
-                                .with_side(side)
-                                .with_witness(value.clone()),
-                        );
+                        let mut diag = Diagnostic::new(Code::T0303, span)
+                            .with_side(side);
+                        // Unwrap to the ℓ-th summand's payload and record the label name.
+                        if let Some((label_name, payload)) = resolve_label(carrier_val, labels) {
+                            diag = diag
+                                .with_witness(payload.clone())
+                                .with_name(format!("${label_name}"));
+                        } else {
+                            diag = diag.with_witness(value.clone());
+                        }
+                        diags.push(diag);
                     }
                 _ => {}
             }
@@ -154,14 +160,45 @@ fn check_side_extended(
 
         if matching.len() > 1 && !found_t0302 {
             found_t0302 = true;
-            diags.push(
-                Diagnostic::new(Code::T0302, span)
-                    .with_side(side)
-                    .with_witness(value.clone())
-                    .with_clauses(matching),
-            );
+            let mut diag = Diagnostic::new(Code::T0302, span)
+                .with_side(side);
+            // Unwrap the witness to the same domain as T0301/T0303.
+            match value {
+                Value::Right(inner) => {
+                    diag = diag.with_witness((**inner).clone());
+                }
+                Value::Left(carrier_val) => {
+                    if let Some((label_name, payload)) = resolve_label(carrier_val, labels) {
+                        diag = diag
+                            .with_witness(payload.clone())
+                            .with_name(format!("${label_name}"));
+                    } else {
+                        diag = diag.with_witness(value.clone());
+                    }
+                }
+                _ => {
+                    diag = diag.with_witness(value.clone());
+                }
+            }
+            diags.push(diag.with_clauses(matching));
         }
     }
+}
+
+/// Given a carrier value (the inner of a `Left(carrier_val)` in the extended
+/// type), find which label it belongs to and return `(label_name, payload)`.
+fn resolve_label<'a>(
+    carrier_val: &'a Value,
+    labels: &'a [(String, SurfType)],
+) -> Option<(&'a str, &'a Value)> {
+    let count = labels.len();
+    for (idx, (name, _)) in labels.iter().enumerate() {
+        let path = env::injection_path(idx, count);
+        if let Some(payload) = env::navigate(carrier_val, &path) {
+            return Some((name.as_str(), payload));
+        }
+    }
+    None
 }
 
 /// Match a value from the extended type (U + boundary) against a pattern.
@@ -408,20 +445,27 @@ mod tests {
 
         // stuck: T0303 side:left (uncovered label state $go I)
         //        T0301 side:right (uncovered boundary I)
-        let has_t0303_left = reported
-            .iter()
-            .any(|d| d.code == Code::T0303 && d.side == Some(Side::Left));
-        let has_t0301_right = reported
-            .iter()
-            .any(|d| d.code == Code::T0301 && d.side == Some(Side::Right));
-        assert!(
-            has_t0303_left,
-            "expected T0303 side:left in stuck, got: {reported:?}"
-        );
-        assert!(
-            has_t0301_right,
-            "expected T0301 side:right in stuck, got: {reported:?}"
-        );
+        // Bit = O | I  →  1 + 1, I = inr(unit)
+        let witness_i = Value::right(Value::Unit);
+        let expected = vec![
+            ExpectedDiag {
+                code: Code::T0303,
+                side: Some(Side::Left),
+                witness: Some(witness_i.clone()),
+                clauses: None,
+                variable: None,
+                name: Some("$go".to_string()),
+            },
+            ExpectedDiag {
+                code: Code::T0301,
+                side: Some(Side::Right),
+                witness: Some(witness_i),
+                clauses: None,
+                variable: None,
+                name: None,
+            },
+        ];
+        testkit::assert_diags(&reported, &expected);
     }
 
     #[test]
