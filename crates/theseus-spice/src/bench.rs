@@ -115,6 +115,44 @@ pub fn sweep_period(
         .collect()
 }
 
+/// DC probe: charge a capacitor through a resistor from a DC source and
+/// measure the steady-state cap voltage (should equal `v_volt`).
+///
+/// Builds a simple RC netlist with `.tran` long enough to reach steady state
+/// (≥ 20·RC) and uses `.meas tran vcap FIND v(cap) AT=<t_meas>` to read
+/// the cap voltage.
+pub fn ngspice_dc_probe(v_volt: f64, r_ohm: f64, c_farad: f64) -> f64 {
+    let rc = r_ohm * c_farad;
+    let t_meas = 20.0 * rc;
+    // Simulate slightly past the measurement point so AT is in interval.
+    let t_stop = t_meas + rc;
+    let t_step = rc / 10.0;
+
+    let netlist = format!(
+        "\
+DC probe (V={v_volt}, R={r_ohm}, C={c_farad})
+Vdc vdd 0 {v_volt}
+R1 vdd cap {r_ohm}
+C1 cap 0 {c_farad}
+.ic V(cap)=0
+
+.control
+tran {t_step:.15e} {t_stop:.15e} uic
+meas tran vcap FIND v(cap) AT={t_meas:.15e}
+.endc
+.end
+",
+        v_volt = v_volt,
+        r_ohm = r_ohm,
+        c_farad = c_farad,
+        t_step = t_step,
+        t_stop = t_stop,
+        t_meas = t_meas,
+    );
+
+    run_energy(&netlist, "vcap")
+}
+
 /// Perform a linear regression on log-log data and return the slope.
 pub fn log_log_slope(data: &[(f64, f64)]) -> f64 {
     let n = data.len() as f64;
@@ -358,5 +396,24 @@ esource              =  3.14159e-12
         );
 
         eprintln!("Gate 2 PASS: E_net = {:.6e} J", e_net);
+    }
+
+    // ----- DC probe: steady-state cap voltage -----
+
+    #[test]
+    fn dc_probe_steady_state() {
+        require_ngspice!();
+
+        let v = 1.0;
+        let r = 1e3;
+        let c = 1e-9;
+        let vcap = ngspice_dc_probe(v, r, c);
+        let rel_err = (vcap - v).abs() / v;
+        assert!(
+            rel_err < 0.01,
+            "DC probe FAIL: vcap={:.6e}, expected={:.6e}, rel_err={:.4}%",
+            vcap, v, rel_err * 100.0,
+        );
+        eprintln!("DC probe PASS: vcap = {:.6e} V (rel_err={:.4}%)", vcap, rel_err * 100.0);
     }
 }
