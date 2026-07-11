@@ -81,7 +81,7 @@ fn elab_iso(iso: &IsoDecl, env: &Env, isos: &BTreeMap<String, &IsoDecl>) -> Elab
             if labels.is_empty() {
                 elab_clauses(cs, &iso.lhs, &iso.rhs, env)
             } else {
-                elab_clauses_label(cs, &iso.lhs, &iso.rhs, labels, env)
+                elab_clauses_label(cs, &iso.lhs, &iso.rhs, labels, env, &iso.name.text)
             }
         }
     }
@@ -608,6 +608,7 @@ fn elab_clauses_label(
     rhs_ty: &SurfType,
     labels: &[(String, SurfType)],
     env: &Env,
+    iso_name: &str,
 ) -> ElabResult {
     // 1. Build carrier type u = Σ_ℓ U_ℓ.
     let carrier = env::label_carrier(labels, env);
@@ -646,14 +647,14 @@ fn elab_clauses_label(
         }
     }
 
-    // 5. Synthesize a core iso realizing the body bijection Φ. Structural
-    //    synthesis handles the shapes it knows; for an arbitrary permutation
-    //    (e.g. spin's counter walk) it returns None, and we fall back to an
-    //    opaque Prim carrying the (forward, backward) value tables. The Prim
-    //    body is denotationally correct (eval looks it up; it is mutual-inverse
-    //    by TH-4a-label) and has static bound 0, so B(trace) = |u|+1 holds.
-    //    M2 owes a structural (demux, design/elaboration.md §E4) refinement of
-    //    this body before hardware lowering; the Prim interim is eval-complete.
+    // 5. Synthesize a core iso realizing the body bijection Φ. For a real
+    //    label loop (any body that mixes tags — which is every iterating
+    //    loop), the Prim fallback is the EXPECTED path; structural (demux)
+    //    synthesis succeeding is a degenerate-case bonus. The Prim body is
+    //    denotationally correct (eval looks it up; it is mutual-inverse by
+    //    TH-4a-label) and has static bound 0, so B(trace) = |u|+1 holds.
+    //    The structural (demux) Φ is owed for M2 lowering
+    //    (design/elaboration.md §E4); the Prim interim is eval-complete.
     let body = match synthesize(&phi, &ext_lhs) {
         Some(iso) => iso,
         None => {
@@ -664,8 +665,8 @@ fn elab_clauses_label(
             // This is strictly stronger than the old len-check — it also
             // catches Φ outputs that fall outside the codomain type.
             let def = theseus_core::PrimDef {
-                forward_name: "<trace-body>".into(),
-                backward_name: "<trace-body-inv>".into(),
+                forward_name: format!("<trace-body:{iso_name}>"),
+                backward_name: format!("<trace-body-inv:{iso_name}>"),
                 input_ty: ext_lhs.clone(),
                 output_ty: ext_rhs.clone(),
                 forward: phi,
@@ -981,8 +982,16 @@ mod tests {
         );
 
         match iso {
-            Iso::Trace(u, _phi) => {
+            Iso::Trace(u, phi) => {
                 assert_eq!(*u, expected_u, "carrier type mismatch");
+                // The body should be a Prim whose name encodes the iso name.
+                if let Iso::Prim(def) = phi.as_ref() {
+                    assert!(
+                        def.forward_name.contains("spin"),
+                        "prim forward_name should contain the iso name, got: {}",
+                        def.forward_name,
+                    );
+                }
             }
             other => panic!("expected Trace, got {other:?}"),
         }
