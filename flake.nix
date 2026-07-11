@@ -28,6 +28,10 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
+        # SkyWater sky130 PDK (primitive devices), pinned via ciel-releases.
+        # ADR-0024: PDK version pinned in the flake like the toolchain.
+        sky130-pdk = import ./nix/sky130-pdk.nix { inherit pkgs; };
+
         src = craneLib.cleanCargoSource ./.;
         commonArgs = { inherit src; strictDeps = true; };
 
@@ -120,13 +124,19 @@
           SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
         };
 
-        # Thin silicon shell, awake since the pivot (ADR-0022/0024/0025).
-        # PDK: pin sky130A via open_pdks/volare; export PDK_ROOT here once
-        # pinned. OpenLane/layout tools stay out until the parasitics rung
-        # (ADR-0032 rung 4).
+        # Silicon shell, awake since the pivot (ADR-0022/0024/0025). sky130 PDK
+        # pinned via ciel-releases (nix/sky130-pdk.nix). OpenLane/layout tools
+        # stay out until the parasitics rung (ADR-0032 rung 4).
         devShells.silicon = pkgs.mkShell {
-          packages = with pkgs; [ ngspice xschem netgen gaw ];
-          # env.PDK_ROOT = "...pinned sky130A store path...";
+          packages = with pkgs; [ ngspice xschem netgen gaw sky130-pdk ];
+          env = targetToolsEnv // {
+            PDK_ROOT = "${sky130-pdk}";
+            # The harness reaches the sky130 ngspice models through this seam
+            # (mirrors THESEUS_NGSPICE); use `.lib "$THESEUS_SKY130_LIB" tt`.
+            THESEUS_SKY130_LIB = "${sky130-pdk}/sky130A/libs.tech/ngspice/sky130.lib.spice";
+            # INV-STAMP (ADR-0032): the pinned PDK build hash for energy stamps.
+            THESEUS_SKY130_VERSION = sky130-pdk.pdkVersion;
+          };
         };
 
         # Physics-track shell (M3a): the Rust toolchain PLUS the SPICE
