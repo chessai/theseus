@@ -375,11 +375,10 @@ iso spin : Bit <-> Bit
         // 5 steps total, proving per-body-application stepping (not whole-loop)
         assert_eq!(lines.len(), 6); // loaded + 5 steps
         // Steps 1-4 are intermediate label states
-        for i in 1..=4 {
+        for (i, line) in lines.iter().enumerate().take(5).skip(1) {
             assert!(
-                lines[i].starts_with("label:"),
-                "step {i} should be a label state, got: {}",
-                lines[i]
+                line.starts_with("label:"),
+                "step {i} should be a label state, got: {line}",
             );
         }
         // Step 5 is the exit
@@ -419,13 +418,13 @@ iso spin : Bit <-> Bit
         let lines = run_repl(SPIN_PROGRAM, script);
         assert_eq!(lines[0], "loaded: O");
         // Forward: 4 label + 1 exit = 5 steps
-        for i in 1..=4 {
-            assert!(lines[i].starts_with("label:"));
+        for line in lines.iter().take(5).skip(1) {
+            assert!(line.starts_with("label:"));
         }
         assert!(lines[5].starts_with("exit:"));
         // Backward: unstep mirrors the forward states in reverse
-        for i in 6..=9 {
-            assert!(lines[i].starts_with("label:"));
+        for line in lines.iter().take(10).skip(6) {
+            assert!(line.starts_with("label:"));
         }
         // Final unstep returns to the plain initial value
         assert_eq!(lines[10], "O");
