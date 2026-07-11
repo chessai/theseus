@@ -144,6 +144,42 @@ impl Repl {
 
         let current = active.current().clone();
         let mut fuel = STEP_FUEL;
+
+        // For Iso::Trace, step ONE body application at a time instead of
+        // evaluating the entire loop.
+        if let Iso::Trace(_u, body) = &active.iso {
+            // If we are at the initial (plain) value (history has only the
+            // loaded value), wrap it as Right(input) — the a-side boundary
+            // entry of the extended type (u + a).
+            let ext_input = if active.history.len() == 1 {
+                Value::right(current)
+            } else {
+                // Already in extended form from a prior step.
+                current
+            };
+
+            let body = body.clone();
+            match eval(&body, ext_input, &mut fuel) {
+                Ok(next) => {
+                    let label = match &next {
+                        Value::Left(_) => "label",
+                        Value::Right(_) => "exit",
+                        _ => "?",
+                    };
+                    active.history.push(next);
+                    let _ = writeln!(out, "{label}: {:?}", active.history.last().unwrap());
+                }
+                Err(EvalError::OutOfFuel) => {
+                    let _ = writeln!(out, "error: out of fuel evaluating `{}`", active.name);
+                }
+                Err(e) => {
+                    let _ = writeln!(out, "error: eval failed: {e:?}");
+                }
+            }
+            return;
+        }
+
+        // Plain (non-Trace) iso: evaluate the whole iso in one step.
         match eval(&active.iso, current, &mut fuel) {
             Ok(next) => {
                 let rendered = value::render(&next, &active.lhs_ty, &self.ep.env);
@@ -175,8 +211,20 @@ impl Repl {
 
         active.history.pop();
         let current = active.current();
-        let rendered = value::render(current, &active.lhs_ty, &self.ep.env);
-        let _ = writeln!(out, "{rendered}");
+
+        // For Trace isos, render the extended-type value (unless we popped
+        // back to the initial plain value at history[0]).
+        if matches!(&active.iso, Iso::Trace(..)) && active.history.len() > 1 {
+            let label = match current {
+                Value::Left(_) => "label",
+                Value::Right(_) => "exit",
+                _ => "?",
+            };
+            let _ = writeln!(out, "{label}: {current:?}");
+        } else {
+            let rendered = value::render(current, &active.lhs_ty, &self.ep.env);
+            let _ = writeln!(out, "{rendered}");
+        }
     }
 }
 
@@ -300,5 +348,106 @@ iso swp : (Bit, Bit) <-> (Bit, Bit)
     fn unstep_without_load() {
         let lines = run_repl(NOT_PROGRAM, ":unstep\n:quit\n");
         assert_eq!(lines[0], "error: no iso loaded; use :load first");
+    }
+
+    // ── Label-loop (Trace) stepping tests ────────────────────────
+
+    const SPIN_PROGRAM: &str = "\
+type Bit = O | I
+
+iso spin : Bit <-> Bit
+| b <-> $go (b, (O, O))
+| $go (b, (O, O)) <-> $go (b, (O, I))
+| $go (b, (O, I)) <-> $go (b, (I, O))
+| $go (b, (I, O)) <-> $go (b, (I, I))
+| $go (b, (I, I)) <-> b
+";
+
+    #[test]
+    fn label_loop_step_walks_intermediate_states() {
+        // spin with input O: 5 body applications (entry + 3 counter + exit).
+        // Steps 1-4 are label (Left) states; step 5 is exit (Right).
+        let script = ":load spin O\n\
+                       :step\n:step\n:step\n:step\n:step\n\
+                       :quit\n";
+        let lines = run_repl(SPIN_PROGRAM, script);
+        assert_eq!(lines[0], "loaded: O");
+        // 5 steps total, proving per-body-application stepping (not whole-loop)
+        assert_eq!(lines.len(), 6); // loaded + 5 steps
+        // Steps 1-4 are intermediate label states
+        for (i, line) in lines.iter().enumerate().take(5).skip(1) {
+            assert!(
+                line.starts_with("label:"),
+                "step {i} should be a label state, got: {line}",
+            );
+        }
+        // Step 5 is the exit
+        assert!(
+            lines[5].starts_with("exit:"),
+            "step 5 should be an exit state, got: {}",
+            lines[5]
+        );
+    }
+
+    #[test]
+    fn label_loop_step_then_unstep_returns_to_start() {
+        let script = ":load spin O\n\
+                       :step\n:step\n\
+                       :unstep\n:unstep\n\
+                       :quit\n";
+        let lines = run_repl(SPIN_PROGRAM, script);
+        assert_eq!(lines[0], "loaded: O");
+        // Step 1: label state
+        assert!(lines[1].starts_with("label:"));
+        // Step 2: label state
+        assert!(lines[2].starts_with("label:"));
+        // Unstep 1: back to step-1 state (label)
+        assert!(lines[3].starts_with("label:"));
+        assert_eq!(lines[3], lines[1], "unstep should return to prior label state");
+        // Unstep 2: back to initial plain value
+        assert_eq!(lines[4], "O");
+    }
+
+    #[test]
+    fn label_loop_all_steps_then_all_unsteps() {
+        // Step through the entire loop, then unstep all the way back.
+        let script = ":load spin O\n\
+                       :step\n:step\n:step\n:step\n:step\n\
+                       :unstep\n:unstep\n:unstep\n:unstep\n:unstep\n\
+                       :quit\n";
+        let lines = run_repl(SPIN_PROGRAM, script);
+        assert_eq!(lines[0], "loaded: O");
+        // Forward: 4 label + 1 exit = 5 steps
+        for line in lines.iter().take(5).skip(1) {
+            assert!(line.starts_with("label:"));
+        }
+        assert!(lines[5].starts_with("exit:"));
+        // Backward: unstep mirrors the forward states in reverse
+        for line in lines.iter().take(10).skip(6) {
+            assert!(line.starts_with("label:"));
+        }
+        // Final unstep returns to the plain initial value
+        assert_eq!(lines[10], "O");
+    }
+
+    #[test]
+    fn label_loop_intermediate_states_are_distinct() {
+        // Each label state should be different (the 2-bit counter advances).
+        let script = ":load spin O\n\
+                       :step\n:step\n:step\n:step\n\
+                       :quit\n";
+        let lines = run_repl(SPIN_PROGRAM, script);
+        // lines[1..=4] are the 4 label states — all should be distinct.
+        let label_states: Vec<&str> = lines[1..=4].iter().map(|s| s.as_str()).collect();
+        for i in 0..label_states.len() {
+            for j in (i + 1)..label_states.len() {
+                assert_ne!(
+                    label_states[i], label_states[j],
+                    "label states at step {} and {} should differ",
+                    i + 1,
+                    j + 1
+                );
+            }
+        }
     }
 }
