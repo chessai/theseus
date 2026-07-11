@@ -28,5 +28,5 @@ pub mod deck {}
 pub mod bench;
 pub mod adiabatic;
 pub mod artifact;
-pub mod chardb {}
-pub mod energy {}
+pub mod chardb;
+pub mod energy;
