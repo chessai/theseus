@@ -189,7 +189,7 @@ fn check_side_extended(
 /// type), find which label it belongs to and return `(label_name, payload)`.
 fn resolve_label<'a>(
     carrier_val: &'a Value,
-    labels: &[(String, SurfType)],
+    labels: &'a [(String, SurfType)],
 ) -> Option<(&'a str, &'a Value)> {
     let count = labels.len();
     for (idx, (name, _)) in labels.iter().enumerate() {
