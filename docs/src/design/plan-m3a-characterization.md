@@ -223,3 +223,25 @@ Both delegations use the standard theseus gate
 (`env -u LD_LIBRARY_PATH nix develop .#physics --command cargo test/clippy -p
 theseus-spice`) and must NOT require a live ngspice (fixtures + `THESEUS_NGSPICE`
 seam). Base branch `chessai/theseus-v2`; one task per delegation.
+
+## STATUS UPDATE (2026-07-11): harness self-validation COMPLETE
+All three §"Harness self-validation gates" are now green on theseus-v2:
+- RC-analytic ±5% ✓ (banked), ideal-source ✓ (banked)
+- **canonical 2LAL shift register slope −1 ✓ (NEW)** — the last gate. Built by a
+  Fable 5 panel (4 convergent strategies) → adversarial verification (energy honest,
+  −1 real) → synthesis: all-1s slope −0.9996 over 3 decades, data-aware terminator
+  so arbitrary patterns propagate full-level with no tail burn, honest all-source
+  energy sum, real non-constant-pattern test. See adiabatic.rs `two_lal_sr_*`.
+Char-DB CORE (energy fit + interpolation contract + serde/ron) also landed (W4b:
+chardb.rs/energy.rs). Sky130 PDK pinned (nix/sky130-pdk.nix). REMAINING for full
+M3a acceptance = the PDK-backed cell characterization: W1 cells → W3 admission →
+W5 DUT matrix → populated char DB (now unblocked by the PDK + the sweep harness).
+
+## PARKING LOT: parametric approach × data-pattern harness (see also theseus-overnight/m3a-plan.md)
+Make `two_lal_sr` generation parametric over the axes where the 4 panel approaches
+differed (terminator strategy, clock-edge (a,b) ratios, stage structure, gmin/is)
+× input data pattern (all-1s/alternating/sparse/dense/random); sweep and tabulate
+energy/slope/propagation to see what wins under which data. This is the natural
+instrument for TH-E2 (data-independence, ADR-0028 C3.4) — the verifiers proved the
+naive all-1s-boundary design violates it (0-bits burn CV²); the synthesized design
+fixes it, and this harness would quantify data-dependence per variant. Defer.
