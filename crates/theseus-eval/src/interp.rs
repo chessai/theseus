@@ -6,7 +6,7 @@
 //! values and cost ZERO fuel. Only the `trace` loop charges fuel (one
 //! unit per body evaluation). See `docs/src/spec/dynamic-semantics.md`.
 
-use theseus_core::{adjoint, enumerate_values, Iso, Type, Value};
+use theseus_core::{adjoint, enumerate_values, Iso, Value};
 
 /// Errors during evaluation.
 #[derive(Clone, Debug, PartialEq, Eq)]
