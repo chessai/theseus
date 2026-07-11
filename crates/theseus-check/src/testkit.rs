@@ -240,6 +240,7 @@ fn parse_code(s: &str) -> Code {
         "T0202" => Code::T0202,
         "T0301" => Code::T0301,
         "T0302" => Code::T0302,
+        "T0303" => Code::T0303,
         other => panic!("unknown diagnostic code: {other}"),
     }
 }

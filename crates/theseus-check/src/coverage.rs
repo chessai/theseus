@@ -1,11 +1,12 @@
-//! Coverage check (T0301/T0302).
+//! Coverage check (T0301/T0302/T0303).
 //!
 //! For each side of each iso with clause tables, enumerates all values of
 //! the side's core type and verifies every value is matched by exactly one
-//! clause. Values matched by no clause yield T0301; values matched by more
-//! than one clause yield T0302.
+//! clause. Values matched by no clause yield T0301 (boundary) or T0303
+//! (label state); values matched by more than one clause yield T0302.
 
 use theseus_core::prim::{enumerate_values, Value};
+use theseus_core::ty::Type as CoreType;
 use theseus_syntax::ast::{Clause, Decl, IsoBody, IsoDecl, Pattern, Program, Span, Type as SurfType};
 
 use crate::diagnostics::{Code, Diagnostic, Side};
@@ -24,15 +25,40 @@ pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
 
 fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
     if let IsoBody::Clauses(clauses) = &id.body {
-        check_side(clauses, &id.lhs, Side::Left, id.span, env, diags);
-        check_side(clauses, &id.rhs, Side::Right, id.span, env, diags);
+        let labels = env.iso_labels(&id.name.text);
+        if labels.is_empty() {
+            // Plain iso: check over boundary type directly.
+            check_side_plain(clauses, &id.lhs, Side::Left, id.span, env, diags);
+            check_side_plain(clauses, &id.rhs, Side::Right, id.span, env, diags);
+        } else {
+            // Label iso: check over extended type U + A / U + B.
+            check_side_extended(clauses, &id.lhs, Side::Left, id.span, labels, env, diags);
+            check_side_extended(clauses, &id.rhs, Side::Right, id.span, labels, env, diags);
+        }
     }
     for w in &id.wheres {
         check_iso(w, env, diags);
     }
 }
 
-fn check_side(
+/// Build the label carrier core type U = Σ_ℓ U_ℓ as a right-nested sum.
+fn build_label_carrier(labels: &[(String, SurfType)], env: &Env) -> CoreType {
+    let summands: Vec<CoreType> = labels.iter().map(|(_, ty)| env.lower(ty)).collect();
+    match summands.as_slice() {
+        [] => CoreType::Zero,
+        [last] => last.clone(),
+        [head, rest @ ..] => {
+            let mut acc = rest.last().unwrap().clone();
+            for s in rest.iter().rev().skip(1) {
+                acc = CoreType::Sum(Box::new(s.clone()), Box::new(acc));
+            }
+            CoreType::Sum(Box::new(head.clone()), Box::new(acc))
+        }
+    }
+}
+
+/// Plain side check (no labels) — original behavior.
+fn check_side_plain(
     clauses: &[Clause],
     surf_ty: &SurfType,
     side: Side,
@@ -81,6 +107,155 @@ fn check_side(
     }
 }
 
+/// Extended side check: enumerate values of U + boundary, route by top tag.
+fn check_side_extended(
+    clauses: &[Clause],
+    surf_ty: &SurfType,
+    side: Side,
+    span: Span,
+    labels: &[(String, SurfType)],
+    env: &Env,
+    diags: &mut Vec<Diagnostic>,
+) {
+    let boundary_core = env.lower(surf_ty);
+    let carrier_core = build_label_carrier(labels, env);
+    // Extended type: U + boundary (carrier left, boundary right).
+    let extended = CoreType::Sum(Box::new(carrier_core), Box::new(boundary_core));
+    let values = enumerate_values(&extended);
+
+    let mut found_t0301 = false;
+    let mut found_t0302 = false;
+    let mut found_t0303 = false;
+
+    for value in &values {
+        let matching: Vec<usize> = clauses
+            .iter()
+            .enumerate()
+            .filter(|(_, clause)| {
+                let pat = match side {
+                    Side::Left => &clause.lhs,
+                    Side::Right => &clause.rhs,
+                };
+                matches_extended_value(value, pat, surf_ty, labels, env)
+            })
+            .map(|(i, _)| i + 1)
+            .collect();
+
+        if matching.is_empty() {
+            match value {
+                Value::Right(inner) => {
+                    // Uncovered boundary value → T0301.
+                    if !found_t0301 {
+                        found_t0301 = true;
+                        diags.push(
+                            Diagnostic::new(Code::T0301, span)
+                                .with_side(side)
+                                .with_witness((**inner).clone()),
+                        );
+                    }
+                }
+                Value::Left(_) => {
+                    // Uncovered label state → T0303.
+                    if !found_t0303 {
+                        found_t0303 = true;
+                        diags.push(
+                            Diagnostic::new(Code::T0303, span)
+                                .with_side(side)
+                                .with_witness(value.clone()),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if matching.len() > 1 && !found_t0302 {
+            found_t0302 = true;
+            diags.push(
+                Diagnostic::new(Code::T0302, span)
+                    .with_side(side)
+                    .with_witness(value.clone())
+                    .with_clauses(matching),
+            );
+        }
+    }
+}
+
+/// Match a value from the extended type (U + boundary) against a pattern.
+///
+/// A plain pattern matches only boundary values (`Right(a)`); a label pattern
+/// `$ℓ args` matches only label-state values (`Left(inj_ℓ(payload))`).
+fn matches_extended_value(
+    value: &Value,
+    pattern: &Pattern,
+    boundary_surf: &SurfType,
+    labels: &[(String, SurfType)],
+    env: &Env,
+) -> bool {
+    let pattern = strip_paren_pat(pattern);
+    match pattern {
+        Pattern::Label(name, args, _) => {
+            // Must be Left(...) — a label-state value.
+            let Value::Left(carrier_val) = value else {
+                return false;
+            };
+            // Find the label's index in the label list.
+            let Some(label_idx) = labels.iter().position(|(l, _)| l == &name.text) else {
+                return false;
+            };
+            // Navigate to the label_idx-th summand of the right-nested sum.
+            let payload = navigate_sum(carrier_val, label_idx, labels.len());
+            let Some(payload) = payload else {
+                return false;
+            };
+            // Match args against payload, using the label's carrier type.
+            let carrier_ty = &labels[label_idx].1;
+            match_args(payload, args, Some(carrier_ty), env)
+        }
+        Pattern::Var(_) => {
+            // A variable pattern in an extended-type context matches only
+            // boundary values (Right), since label patterns use $ℓ.
+            match value {
+                Value::Right(inner) => {
+                    // Variable matches any boundary value.
+                    let _ = inner;
+                    true
+                }
+                _ => false,
+            }
+        }
+        _ => {
+            // Any other plain pattern: matches only boundary values (Right).
+            match value {
+                Value::Right(inner) => matches_value(inner, pattern, boundary_surf, env),
+                _ => false,
+            }
+        }
+    }
+}
+
+/// Navigate to the `idx`-th summand of a right-nested sum of `count` summands.
+/// Mirrors the injection path: R^idx then L (except the last summand which is R^(count-1)).
+fn navigate_sum<'a>(value: &'a Value, idx: usize, count: usize) -> Option<&'a Value> {
+    let mut v = value;
+    for _ in 0..idx {
+        match v {
+            Value::Right(inner) => v = inner,
+            _ => return None,
+        }
+    }
+    if idx < count - 1 {
+        // Not the last summand: expect Left.
+        match v {
+            Value::Left(inner) => Some(inner),
+            _ => None,
+        }
+    } else {
+        // Last summand: value is reached after all Rights.
+        Some(v)
+    }
+}
+
 /// Does a core `Value` match a surface `Pattern` given the env's ctor→injection
 /// mapping? The surface type `ty` is threaded through to resolve `Nat` literals.
 fn matches_value(value: &Value, pattern: &Pattern, ty: &SurfType, env: &Env) -> bool {
@@ -110,7 +285,7 @@ fn matches_value(value: &Value, pattern: &Pattern, ty: &SurfType, env: &Env) -> 
             let k = *k as usize;
             k < values.len() && *value == values[k]
         }
-        // Labels are slice-2; not checked.
+        // Label patterns in non-extended context: never match.
         Pattern::Label(..) => false,
     }
 }
@@ -255,14 +430,18 @@ mod tests {
     fn differential_no_coverage_errors_on_valid_programs() {
         for path in testkit::program_fixtures() {
             let file = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if file == "0011-label-loop.thse" || file == "0012-prim.thse" {
+            if file == "0012-prim.thse" {
                 continue;
             }
             let program = testkit::load_program(&path);
             let env = crate::env::resolve(&program);
             let reported: Vec<Diagnostic> = check(&program, &env)
                 .into_iter()
-                .filter(|d| d.code == Code::T0301 || d.code == Code::T0302)
+                .filter(|d| {
+                    d.code == Code::T0301
+                        || d.code == Code::T0302
+                        || d.code == Code::T0303
+                })
                 .collect();
             assert!(
                 reported.is_empty(),
@@ -270,5 +449,51 @@ mod tests {
                 path.display(),
             );
         }
+    }
+
+    #[test]
+    fn label_coverage_stuck_0008() {
+        let root = testkit::repo_root();
+        let path = root.join("conformance/diagnostics/0008-label-coverage.thse");
+        let program = testkit::load_program(&path);
+        let env = crate::env::resolve(&program);
+        let reported = check(&program, &env);
+
+        // stuck: T0303 side:left (uncovered label state $go I)
+        //        T0301 side:right (uncovered boundary I)
+        let has_t0303_left = reported
+            .iter()
+            .any(|d| d.code == Code::T0303 && d.side == Some(Side::Left));
+        let has_t0301_right = reported
+            .iter()
+            .any(|d| d.code == Code::T0301 && d.side == Some(Side::Right));
+        assert!(
+            has_t0303_left,
+            "expected T0303 side:left in stuck, got: {reported:?}"
+        );
+        assert!(
+            has_t0301_right,
+            "expected T0301 side:right in stuck, got: {reported:?}"
+        );
+    }
+
+    #[test]
+    fn label_coverage_spin_0011() {
+        let root = testkit::repo_root();
+        let path = root.join("conformance/programs/0011-label-loop.thse");
+        let program = testkit::load_program(&path);
+        let env = crate::env::resolve(&program);
+        let reported: Vec<Diagnostic> = check(&program, &env)
+            .into_iter()
+            .filter(|d| {
+                d.code == Code::T0301
+                    || d.code == Code::T0302
+                    || d.code == Code::T0303
+            })
+            .collect();
+        assert!(
+            reported.is_empty(),
+            "unexpected coverage error in spin: {reported:?}"
+        );
     }
 }

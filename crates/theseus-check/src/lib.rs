@@ -2,7 +2,7 @@
 //!
 //! The crate implements the four static-semantics stages in the order fixed by
 //! `docs/src/spec/static-semantics.md` — Names (T0101), Typing (T0102),
-//! Linearity (T0201/T0202), Coverage (T0301/T0302) — under **global gating**:
+//! Linearity (T0201/T0202), Coverage (T0301/T0302/T0303) — under **global gating**:
 //! a later stage runs only if every earlier stage reported nothing. This makes
 //! diagnostics from a downstream stage trustworthy (they never depend on
 //! artifacts a failed upstream stage could not establish).

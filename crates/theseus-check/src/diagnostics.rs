@@ -8,11 +8,10 @@
 use theseus_core::prim::Value;
 use theseus_syntax::ast::Span;
 
-/// The slice-1 static-semantics error codes.
+/// Static-semantics error codes.
 ///
-/// Room is intentionally left in the taxonomy for later codes (`T0303`
-/// coverage-overlap, `T0401` and beyond) which will be added by their own
-/// stages; only the codes reachable in slice 1 are enumerated here.
+/// Room is intentionally left in the taxonomy for later codes (`T0401`
+/// and beyond) which will be added by their own stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Code {
     /// Names: unresolved reference (unknown ctor/type/iso/prim).
@@ -27,6 +26,8 @@ pub enum Code {
     T0301,
     /// Coverage: overlap / redundant clause (T0302).
     T0302,
+    /// Coverage: uncovered label state (T0303).
+    T0303,
 }
 
 /// Which side of a clause (or iso signature) a diagnostic refers to.
