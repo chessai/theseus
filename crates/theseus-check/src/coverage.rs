@@ -154,9 +154,9 @@ fn check_side_extended(
                         );
                     }
                 }
-                Value::Left(_) => {
+                Value::Left(_)
                     // Uncovered label state → T0303.
-                    if !found_t0303 {
+                    if !found_t0303 => {
                         found_t0303 = true;
                         diags.push(
                             Diagnostic::new(Code::T0303, span)
@@ -164,7 +164,6 @@ fn check_side_extended(
                                 .with_witness(value.clone()),
                         );
                     }
-                }
                 _ => {}
             }
         }
@@ -236,7 +235,7 @@ fn matches_extended_value(
 
 /// Navigate to the `idx`-th summand of a right-nested sum of `count` summands.
 /// Mirrors the injection path: R^idx then L (except the last summand which is R^(count-1)).
-fn navigate_sum<'a>(value: &'a Value, idx: usize, count: usize) -> Option<&'a Value> {
+fn navigate_sum(value: &Value, idx: usize, count: usize) -> Option<&Value> {
     let mut v = value;
     for _ in 0..idx {
         match v {
