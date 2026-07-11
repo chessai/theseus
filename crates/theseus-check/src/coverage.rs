@@ -10,7 +10,7 @@ use theseus_core::ty::Type as CoreType;
 use theseus_syntax::ast::{Clause, Decl, IsoBody, IsoDecl, Pattern, Program, Span, Type as SurfType};
 
 use crate::diagnostics::{Code, Diagnostic, Side};
-use crate::env::Env;
+use crate::env::{self, Env};
 
 /// Run the coverage check over a whole program.
 pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
@@ -38,22 +38,6 @@ fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
     }
     for w in &id.wheres {
         check_iso(w, env, diags);
-    }
-}
-
-/// Build the label carrier core type U = Σ_ℓ U_ℓ as a right-nested sum.
-fn build_label_carrier(labels: &[(String, SurfType)], env: &Env) -> CoreType {
-    let summands: Vec<CoreType> = labels.iter().map(|(_, ty)| env.lower(ty)).collect();
-    match summands.as_slice() {
-        [] => CoreType::Zero,
-        [last] => last.clone(),
-        [head, rest @ ..] => {
-            let mut acc = rest.last().unwrap().clone();
-            for s in rest.iter().rev().skip(1) {
-                acc = CoreType::Sum(Box::new(s.clone()), Box::new(acc));
-            }
-            CoreType::Sum(Box::new(head.clone()), Box::new(acc))
-        }
     }
 }
 
@@ -118,7 +102,7 @@ fn check_side_extended(
     diags: &mut Vec<Diagnostic>,
 ) {
     let boundary_core = env.lower(surf_ty);
-    let carrier_core = build_label_carrier(labels, env);
+    let carrier_core = env::label_carrier(labels, env);
     // Extended type: U + boundary (carrier left, boundary right).
     let extended = CoreType::Sum(Box::new(carrier_core), Box::new(boundary_core));
     let values = enumerate_values(&extended);
@@ -203,7 +187,8 @@ fn matches_extended_value(
                 return false;
             };
             // Navigate to the label_idx-th summand of the right-nested sum.
-            let payload = navigate_sum(carrier_val, label_idx, labels.len());
+            let path = env::injection_path(label_idx, labels.len());
+            let payload = env::navigate(carrier_val, &path);
             let Some(payload) = payload else {
                 return false;
             };
@@ -233,28 +218,6 @@ fn matches_extended_value(
     }
 }
 
-/// Navigate to the `idx`-th summand of a right-nested sum of `count` summands.
-/// Mirrors the injection path: R^idx then L (except the last summand which is R^(count-1)).
-fn navigate_sum(value: &Value, idx: usize, count: usize) -> Option<&Value> {
-    let mut v = value;
-    for _ in 0..idx {
-        match v {
-            Value::Right(inner) => v = inner,
-            _ => return None,
-        }
-    }
-    if idx < count - 1 {
-        // Not the last summand: expect Left.
-        match v {
-            Value::Left(inner) => Some(inner),
-            _ => None,
-        }
-    } else {
-        // Last summand: value is reached after all Rights.
-        Some(v)
-    }
-}
-
 /// Does a core `Value` match a surface `Pattern` given the env's ctor→injection
 /// mapping? The surface type `ty` is threaded through to resolve `Nat` literals.
 fn matches_value(value: &Value, pattern: &Pattern, ty: &SurfType, env: &Env) -> bool {
@@ -272,7 +235,7 @@ fn matches_value(value: &Value, pattern: &Pattern, ty: &SurfType, env: &Env) -> 
             let Some(info) = env.ctor(&name.text) else {
                 return false;
             };
-            let Some(payload) = navigate(value, &info.path) else {
+            let Some(payload) = env::navigate(value, &info.path) else {
                 return false;
             };
             match_args(payload, args, info.payload.as_ref(), env)
@@ -287,21 +250,6 @@ fn matches_value(value: &Value, pattern: &Pattern, ty: &SurfType, env: &Env) -> 
         // Label patterns in non-extended context: never match.
         Pattern::Label(..) => false,
     }
-}
-
-/// Navigate a value through an injection path. Each `L` expects `Left`,
-/// each `R` expects `Right`. Returns the payload at the end, or `None` on
-/// mismatch.
-fn navigate<'a>(value: &'a Value, path: &[crate::env::Inj]) -> Option<&'a Value> {
-    let mut v = value;
-    for step in path {
-        match (step, v) {
-            (crate::env::Inj::L, Value::Left(inner)) => v = inner,
-            (crate::env::Inj::R, Value::Right(inner)) => v = inner,
-            _ => return None,
-        }
-    }
-    Some(v)
 }
 
 /// Match a payload value against a constructor's argument patterns.

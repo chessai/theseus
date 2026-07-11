@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 
+use theseus_core::prim::Value;
 use theseus_core::ty::Type as CoreType;
 use theseus_syntax::ast::{self, Ctor, Decl, Program, Type as SurfType};
 
@@ -206,7 +207,7 @@ impl Env {
 }
 
 /// Combine summands into a right-nested sum. Empty ⇒ `Zero`.
-fn right_nested_sum(summands: &[CoreType]) -> CoreType {
+pub(crate) fn right_nested_sum(summands: &[CoreType]) -> CoreType {
     match summands {
         [] => CoreType::Zero,
         [last] => last.clone(),
@@ -216,9 +217,10 @@ fn right_nested_sum(summands: &[CoreType]) -> CoreType {
     }
 }
 
-/// Compute the injection path selecting constructor `index` of a type with
-/// `count` constructors. See [`CtorInfo::path`] for the encoding.
-fn injection_path(index: usize, count: usize) -> Vec<Inj> {
+/// Compute the injection path selecting the `index`-th summand of a
+/// right-nested sum with `count` summands. See [`CtorInfo::path`] for the
+/// encoding.
+pub(crate) fn injection_path(index: usize, count: usize) -> Vec<Inj> {
     if count <= 1 {
         return Vec::new();
     }
@@ -227,6 +229,28 @@ fn injection_path(index: usize, count: usize) -> Vec<Inj> {
         path.push(Inj::L);
     }
     path
+}
+
+/// Build the label carrier core type `U = Σ_ℓ U_ℓ` as a right-nested sum
+/// of `env.lower`'d carrier types.
+pub(crate) fn label_carrier(labels: &[(String, SurfType)], env: &Env) -> CoreType {
+    let summands: Vec<CoreType> = labels.iter().map(|(_, ty)| env.lower(ty)).collect();
+    right_nested_sum(&summands)
+}
+
+/// Navigate a value through an injection path. Each [`Inj::L`] expects
+/// [`Value::Left`], each [`Inj::R`] expects [`Value::Right`]. Returns the
+/// payload at the end, or `None` on mismatch.
+pub(crate) fn navigate<'a>(value: &'a Value, path: &[Inj]) -> Option<&'a Value> {
+    let mut v = value;
+    for step in path {
+        match (step, v) {
+            (Inj::L, Value::Left(inner)) => v = inner,
+            (Inj::R, Value::Right(inner)) => v = inner,
+            _ => return None,
+        }
+    }
+    Some(v)
 }
 
 /// The blessed stdlib numeric types `U<n>` (ADR-0017): `U1`, `U2`, `U4`, `U8`,

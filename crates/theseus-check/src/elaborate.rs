@@ -1,4 +1,4 @@
-//! Elaboration: surface [`IsoDecl`] → core [`Iso`] (M1 slice-1 structural core).
+//! Elaboration: surface [`IsoDecl`] → core [`Iso`].
 //!
 //! Supported today:
 //! * `= expr` bodies — recursive translation to core combinators
@@ -13,6 +13,10 @@
 //! Also elaborated via general clause synthesis (oracle + structural
 //! decomposition): mixed-sum clause tables (e.g. `swapMaybe`), controlled
 //! multi-clause ops (`cnot`/`toffoli`), and `U<n>` literal isos (e.g. `flip1`).
+//!
+//! E4 label elaboration: label clause sets are elaborated to
+//! [`Iso::trace`]`(u, Φ)` where `u` is the label carrier and `Φ` is the
+//! body bijection over the extended type `Sum(u, boundary)`.
 
 use std::collections::BTreeMap;
 
@@ -22,7 +26,7 @@ use theseus_core::ty::Type as CoreType;
 use theseus_syntax::ast::{BinOp, Clause, Decl, Expr, IsoBody, IsoDecl, Pattern, Program, Type as SurfType};
 
 use crate::diagnostics::Diagnostic;
-use crate::env::{Env, Inj};
+use crate::env::{self, Env, Inj};
 
 type ElabResult = Result<Iso, Vec<Diagnostic>>;
 
@@ -275,7 +279,7 @@ fn match_bind_inner(
             let Some(info) = env.ctor(&name.text) else {
                 return false;
             };
-            let Some(payload) = navigate_inj(value, &info.path) else {
+            let Some(payload) = env::navigate(value, &info.path) else {
                 return false;
             };
             match_bind_args(payload, args, info.payload.as_ref(), env, bindings)
@@ -330,20 +334,6 @@ fn match_bind_args(
             _ => false,
         },
     }
-}
-
-/// Navigate a value through an injection path (`L` expects `Left`, `R` expects
-/// `Right`).
-fn navigate_inj<'a>(value: &'a Value, path: &[Inj]) -> Option<&'a Value> {
-    let mut v = value;
-    for step in path {
-        match (step, v) {
-            (Inj::L, Value::Left(inner)) => v = inner,
-            (Inj::R, Value::Right(inner)) => v = inner,
-            _ => return None,
-        }
-    }
-    Some(v)
 }
 
 /// Instantiate a surface `Pattern` with variable bindings to produce a core
@@ -611,35 +601,6 @@ fn synthesize_controlled(
 
 // ── Label elaboration (E4): label clause sets → trace(u, Φ) ────────────
 
-/// Build the label carrier core type U = Σ_ℓ U_ℓ as a right-nested sum.
-fn build_label_carrier(labels: &[(String, SurfType)], env: &Env) -> CoreType {
-    let summands: Vec<CoreType> = labels.iter().map(|(_, ty)| env.lower(ty)).collect();
-    match summands.as_slice() {
-        [] => CoreType::Zero,
-        [last] => last.clone(),
-        [head, rest @ ..] => {
-            let mut acc = rest.last().unwrap().clone();
-            for s in rest.iter().rev().skip(1) {
-                acc = CoreType::Sum(Box::new(s.clone()), Box::new(acc));
-            }
-            CoreType::Sum(Box::new(head.clone()), Box::new(acc))
-        }
-    }
-}
-
-/// Injection path for the `index`-th label in a right-nested sum of `count`
-/// labels. Same encoding as `env::injection_path` for constructors.
-fn label_injection_path(index: usize, count: usize) -> Vec<Inj> {
-    if count <= 1 {
-        return Vec::new();
-    }
-    let mut path = vec![Inj::R; index];
-    if index < count - 1 {
-        path.push(Inj::L);
-    }
-    path
-}
-
 /// Elaborate a label iso to `Iso::trace(u, Φ)`.
 fn elab_clauses_label(
     cs: &[Clause],
@@ -649,7 +610,7 @@ fn elab_clauses_label(
     env: &Env,
 ) -> ElabResult {
     // 1. Build carrier type u = Σ_ℓ U_ℓ.
-    let carrier = build_label_carrier(labels, env);
+    let carrier = env::label_carrier(labels, env);
 
     // 2. Build extended types: ext = Sum(u, boundary).
     let boundary_lhs = env.lower(lhs_ty);
@@ -756,8 +717,8 @@ fn match_bind_extended_inner(
             let Some(label_idx) = labels.iter().position(|(l, _)| l == &name.text) else {
                 return false;
             };
-            let path = label_injection_path(label_idx, labels.len());
-            let Some(payload) = navigate_inj(carrier_val, &path) else {
+            let path = env::injection_path(label_idx, labels.len());
+            let Some(payload) = env::navigate(carrier_val, &path) else {
                 return false;
             };
             let carrier_ty = &labels[label_idx].1;
@@ -795,7 +756,7 @@ fn instantiate_extended(
             let label_idx = labels.iter().position(|(l, _)| l == &name.text)?;
             let carrier_ty = &labels[label_idx].1;
             let payload = instantiate_args(args, bindings, Some(carrier_ty), env)?;
-            let path = label_injection_path(label_idx, labels.len());
+            let path = env::injection_path(label_idx, labels.len());
             let injected = inject_value(payload, &path);
             Some(Value::left(injected))
         }
