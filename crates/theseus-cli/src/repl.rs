@@ -25,8 +25,10 @@ pub struct Repl {
 struct ActiveIso {
     name: String,
     iso: Iso,
-    /// Surface lhs type (iso domain — used for rendering).
+    /// Surface lhs type (iso domain — used for rendering input).
     lhs_ty: theseus_syntax::ast::Type,
+    /// Surface rhs type (iso codomain — used for rendering forward-step results).
+    rhs_ty: theseus_syntax::ast::Type,
     /// History stack: history[0] is the initial value; history.last() is the
     /// current value. `:step` pushes; `:unstep` pops.
     history: Vec<Value>,
@@ -129,6 +131,7 @@ impl Repl {
             name: iso_name.to_string(),
             iso,
             lhs_ty: sig.lhs,
+            rhs_ty: sig.rhs,
             history: vec![core_val],
         });
     }
@@ -148,6 +151,13 @@ impl Repl {
         // For Iso::Trace, step ONE body application at a time instead of
         // evaluating the entire loop.
         if let Iso::Trace(_u, body) = &active.iso {
+            // Guard: if the loop already exited (current is Right and we are
+            // past the initial entry), refuse to step further.
+            if active.history.len() > 1 && matches!(current, Value::Right(_)) {
+                let _ = writeln!(out, "loop complete");
+                return;
+            }
+
             // If we are at the initial (plain) value (history has only the
             // loaded value), wrap it as Right(input) — the a-side boundary
             // entry of the extended type (u + a).
@@ -180,9 +190,13 @@ impl Repl {
         }
 
         // Plain (non-Trace) iso: evaluate the whole iso in one step.
+        // History entries alternate types: even indices are lhs_ty, odd are rhs_ty.
+        // After pushing, the new entry's index determines its type.
         match eval(&active.iso, current, &mut fuel) {
             Ok(next) => {
-                let rendered = value::render(&next, &active.lhs_ty, &self.ep.env);
+                let new_idx = active.history.len(); // index after push
+                let render_ty = if new_idx % 2 == 0 { &active.lhs_ty } else { &active.rhs_ty };
+                let rendered = value::render(&next, render_ty, &self.ep.env);
                 active.history.push(next);
                 let _ = writeln!(out, "{rendered}");
             }
@@ -222,7 +236,10 @@ impl Repl {
             };
             let _ = writeln!(out, "{label}: {current:?}");
         } else {
-            let rendered = value::render(current, &active.lhs_ty, &self.ep.env);
+            // Plain iso: even-indexed entries are lhs_ty, odd are rhs_ty.
+            let idx = active.history.len() - 1;
+            let render_ty = if idx % 2 == 0 { &active.lhs_ty } else { &active.rhs_ty };
+            let rendered = value::render(current, render_ty, &self.ep.env);
             let _ = writeln!(out, "{rendered}");
         }
     }
@@ -449,5 +466,60 @@ iso spin : Bit <-> Bit
                 );
             }
         }
+    }
+
+    // ── BUG 1: step past loop exit ──────────────────────────────
+
+    #[test]
+    fn label_loop_step_past_exit_prints_complete() {
+        // spin with O takes 5 body steps (4 label + 1 exit).
+        // Steps 6 and 7 should print "loop complete" and not push new states.
+        let script = ":load spin O\n\
+                       :step\n:step\n:step\n:step\n:step\n\
+                       :step\n:step\n\
+                       :quit\n";
+        let lines = run_repl(SPIN_PROGRAM, script);
+        assert_eq!(lines[0], "loaded: O");
+        // Steps 1-4: label states
+        for line in lines.iter().take(5).skip(1) {
+            assert!(line.starts_with("label:"), "expected label, got: {line}");
+        }
+        // Step 5: exit
+        assert!(lines[5].starts_with("exit:"), "expected exit, got: {}", lines[5]);
+        // Steps 6-7: loop complete (no panic, no new state)
+        assert_eq!(lines[6], "loop complete");
+        assert_eq!(lines[7], "loop complete");
+        // Exactly 8 output lines (loaded + 5 steps + 2 complete notices)
+        assert_eq!(lines.len(), 8);
+    }
+
+    // ── BUG 2: asymmetric iso rendering ─────────────────────────
+
+    const REASSOC_PROGRAM: &str = "\
+type Bit = O | I
+
+iso assoc : (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)
+| (a, (b, c)) <-> ((a, b), c)
+";
+
+    #[test]
+    fn asymmetric_iso_step_renders_with_rhs_type() {
+        // assoc maps (Bit, (Bit, Bit)) -> ((Bit, Bit), Bit).
+        // Previously this panicked because the result was rendered with lhs_ty.
+        let script = ":load assoc (O, (I, O))\n:step\n:quit\n";
+        let lines = run_repl(REASSOC_PROGRAM, script);
+        assert_eq!(lines[0], "loaded: (O, (I, O))");
+        // The result should render as ((O, I), O) using rhs_ty.
+        assert_eq!(lines[1], "((O, I), O)");
+    }
+
+    #[test]
+    fn asymmetric_iso_step_unstep_roundtrip() {
+        // Step forward then unstep back — initial value rendered with lhs_ty.
+        let script = ":load assoc (O, (I, O))\n:step\n:unstep\n:quit\n";
+        let lines = run_repl(REASSOC_PROGRAM, script);
+        assert_eq!(lines[0], "loaded: (O, (I, O))");
+        assert_eq!(lines[1], "((O, I), O)");   // rhs_ty
+        assert_eq!(lines[2], "(O, (I, O))");   // back to lhs_ty
     }
 }
