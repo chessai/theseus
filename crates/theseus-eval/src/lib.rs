@@ -12,7 +12,7 @@ pub mod interp;
 pub mod value;
 
 pub use enumerate::{cardinality, enumerate};
-pub use interp::{eval, EvalError};
+pub use interp::{eval, static_bound, EvalError};
 pub use value::{inhabits, Value};
 
 #[cfg(test)]

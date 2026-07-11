@@ -1,11 +1,12 @@
-//! Fuel-based interpreter over Core Π (plain fragment).
+//! Fuel-based interpreter over Core Π.
 //!
-//! Every call to [`eval`] decrements the fuel budget by one. Running out of
-//! fuel is a distinct error (`OutOfFuel`), never conflated with a domain
-//! error — per ADR-0005, fuel is the join-inverse-category partiality model
-//! in software.
+//! **Fuel unit = one `trace` body application.** Structural formers
+//! (`id`, `sym`, `;`, `+`, `×`, swap/assoc/unite/uniti/distrib/factor)
+//! and a single `prim` application are inductively total over finite
+//! values and cost ZERO fuel. Only the `trace` loop charges fuel (one
+//! unit per body evaluation). See `docs/src/spec/dynamic-semantics.md`.
 
-use theseus_core::{adjoint, Iso, Value};
+use theseus_core::{adjoint, enumerate_values, Iso, Type, Value};
 
 /// Errors during evaluation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -14,25 +15,17 @@ pub enum EvalError {
     OutOfFuel,
     /// The input value does not match the combinator's expected domain shape.
     DomainError(String),
-    /// Trace evaluation is deferred to the label slice (not in the plain fragment).
-    TraceNotImplemented,
 }
 
 /// Evaluate iso `f` on `value`, consuming fuel.
 ///
-/// Each combinator application costs one fuel unit. Composition and
-/// bifunctors recurse, paying fuel at each node.
+/// Structural formers and `prim` cost zero fuel. Only `trace` body
+/// applications charge fuel (one unit per iteration).
 ///
 /// # Errors
-/// - [`EvalError::OutOfFuel`] if the fuel budget reaches zero.
+/// - [`EvalError::OutOfFuel`] if the fuel budget reaches zero mid-trace.
 /// - [`EvalError::DomainError`] if the value shape doesn't match the iso.
-/// - [`EvalError::TraceNotImplemented`] if a `Trace` node is encountered.
 pub fn eval(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalError> {
-    if *fuel == 0 {
-        return Err(EvalError::OutOfFuel);
-    }
-    *fuel -= 1;
-
     match iso {
         Iso::Id(_) => Ok(value),
 
@@ -156,7 +149,27 @@ pub fn eval(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalError>
             other => Err(domain_err("Factor", &other)),
         },
 
-        Iso::Trace(_, _) => Err(EvalError::TraceNotImplemented),
+        Iso::Trace(_u, body) => {
+            // Enter on the a-side: a is the RIGHT summand.
+            let mut s = Value::right(value);
+            loop {
+                // Charge 1 fuel for this body application.
+                if *fuel == 0 {
+                    return Err(EvalError::OutOfFuel);
+                }
+                *fuel -= 1;
+                let t = eval(body, s, fuel)?;
+                match t {
+                    Value::Right(y) => return Ok(*y), // exit on b-side
+                    Value::Left(w) => s = Value::Left(w), // feed u-state back
+                    _ => {
+                        return Err(EvalError::DomainError(
+                            "Trace: body returned non-sum value".into(),
+                        ))
+                    }
+                }
+            }
+        }
 
         Iso::Prim(def) => def
             .forward
@@ -173,6 +186,44 @@ pub fn eval(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalError>
 
 fn domain_err(iso: &str, value: &Value) -> EvalError {
     EvalError::DomainError(format!("{iso}: unexpected value shape: {value:?}"))
+}
+
+/// Compute the static bound `B(iso)` — the maximum fuel an evaluation of
+/// `iso` can consume. See `docs/src/spec/dynamic-semantics.md`.
+pub fn static_bound(iso: &Iso) -> u64 {
+    match iso {
+        // Structural formers: free.
+        Iso::Id(_)
+        | Iso::SwapSum(_, _)
+        | Iso::SwapProd(_, _)
+        | Iso::AssocLSum(_, _, _)
+        | Iso::AssocRSum(_, _, _)
+        | Iso::AssocLProd(_, _, _)
+        | Iso::AssocRProd(_, _, _)
+        | Iso::UniteSum(_)
+        | Iso::UnitiSum(_)
+        | Iso::UniteProd(_)
+        | Iso::UnitiProd(_)
+        | Iso::Distrib(_, _, _)
+        | Iso::Factor(_, _, _)
+        | Iso::Prim(_) => 0,
+
+        Iso::Seq(f, g) | Iso::Times(f, g) => {
+            static_bound(f).saturating_add(static_bound(g))
+        }
+
+        Iso::Plus(f, g) => static_bound(f).max(static_bound(g)),
+
+        Iso::Sym(f) => static_bound(f),
+
+        Iso::Trace(u, body) => {
+            let carrier_size = enumerate_values(u).len() as u64;
+            // (|u| + 1) * (1 + B(Φ))
+            carrier_size
+                .saturating_add(1)
+                .saturating_mul(1u64.saturating_add(static_bound(body)))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -362,48 +413,23 @@ mod tests {
     }
 
     #[test]
-    fn fuel_exhaustion_returns_out_of_fuel() {
+    fn structural_iso_costs_zero_fuel() {
+        // Structural formers are free — fuel unchanged.
         let mut fuel = 0;
         assert_eq!(
-            eval(&Iso::Id(Type::One), Value::Unit, &mut fuel),
-            Err(EvalError::OutOfFuel)
-        );
-    }
-
-    #[test]
-    fn fuel_one_suffices_for_id() {
-        let mut fuel = 1;
-        assert_eq!(
             eval(&Iso::Id(Type::One), Value::Unit, &mut fuel).unwrap(),
-            Value::Unit
+            Value::Unit,
         );
         assert_eq!(fuel, 0);
     }
 
     #[test]
-    fn fuel_seq_costs_three() {
-        // Seq costs 1 (for Seq node) + 1 (for f) + 1 (for g) = 3
+    fn structural_seq_costs_zero_fuel() {
+        // Seq of structural isos is still free.
         let iso = Iso::seq(Iso::Id(Type::One), Iso::Id(Type::One));
-        let mut fuel = 3;
+        let mut fuel = 0;
         eval(&iso, Value::Unit, &mut fuel).unwrap();
         assert_eq!(fuel, 0);
-    }
-
-    #[test]
-    fn fuel_seq_insufficient() {
-        let iso = Iso::seq(Iso::Id(Type::One), Iso::Id(Type::One));
-        let mut fuel = 2;
-        assert_eq!(
-            eval(&iso, Value::Unit, &mut fuel),
-            Err(EvalError::OutOfFuel)
-        );
-    }
-
-    #[test]
-    fn trace_returns_not_implemented() {
-        let body = Iso::Id(Type::sum(Type::One, Type::One));
-        let iso = Iso::Trace(Type::One, Box::new(body));
-        assert_eq!(run(&iso, Value::Unit), Err(EvalError::TraceNotImplemented));
     }
 
     #[test]
@@ -413,5 +439,147 @@ mod tests {
             run(&iso, Value::Unit),
             Err(EvalError::DomainError(_))
         ));
+    }
+
+    // ─── Trace tests ───────────────────────────────────────────────
+
+    fn bit_ty() -> Type {
+        Type::sum(Type::One, Type::One)
+    }
+
+    /// Build a counter body Φ : (Bit + 1) ↔ (Bit + 1) as a Prim.
+    ///
+    /// Mapping (Bit = Left(Unit)|Right(Unit), a = b = Unit):
+    ///   Right(Unit)       → Left(Left(Unit))     -- entry: a-side → state O
+    ///   Left(Left(Unit))  → Left(Right(Unit))    -- state O → state I
+    ///   Left(Right(Unit)) → Right(Unit)           -- state I → b-side exit
+    ///
+    /// This cycles through both Bit states before exiting, costing 3 body
+    /// applications.
+    fn counter_body() -> Iso {
+        use std::collections::BTreeMap;
+        use theseus_core::PrimDef;
+
+        // Values in Bit + 1:
+        let r_unit = Value::right(Value::Unit);       // Right(Unit) — boundary
+        let l_left = Value::left(Value::left(Value::Unit));  // Left(Left(Unit)) — O
+        let l_right = Value::left(Value::right(Value::Unit)); // Left(Right(Unit)) — I
+
+        let mut fwd = BTreeMap::new();
+        fwd.insert(r_unit.clone(), l_left.clone());   // Right(()) → Left(O)
+        fwd.insert(l_left.clone(), l_right.clone());  // Left(O) → Left(I)
+        fwd.insert(l_right.clone(), r_unit.clone());  // Left(I) → Right(())
+
+        // Backward is the inverse permutation.
+        let mut bwd = BTreeMap::new();
+        bwd.insert(l_left.clone(), r_unit.clone());
+        bwd.insert(l_right.clone(), l_left.clone());
+        bwd.insert(r_unit.clone(), l_right.clone());
+
+        let ty = Type::sum(bit_ty(), Type::One);
+        Iso::Prim(Box::new(PrimDef {
+            forward_name: "counter".into(),
+            backward_name: "counter_inv".into(),
+            input_ty: ty.clone(),
+            output_ty: ty,
+            forward: fwd,
+            backward: bwd,
+        }))
+    }
+
+    #[test]
+    fn trace_counter_forward() {
+        let iso = Iso::trace(bit_ty(), counter_body());
+        let mut fuel = 100;
+        let result = eval(&iso, Value::Unit, &mut fuel).unwrap();
+        assert_eq!(result, Value::Unit);
+        // Started with 100, should have consumed exactly 3.
+        assert_eq!(fuel, 97);
+    }
+
+    #[test]
+    fn trace_counter_fuel_delta() {
+        let iso = Iso::trace(bit_ty(), counter_body());
+        let mut fuel = 3;
+        let result = eval(&iso, Value::Unit, &mut fuel).unwrap();
+        assert_eq!(result, Value::Unit);
+        assert_eq!(fuel, 0);
+    }
+
+    #[test]
+    fn trace_counter_out_of_fuel() {
+        let iso = Iso::trace(bit_ty(), counter_body());
+        let mut fuel = 2;
+        assert_eq!(
+            eval(&iso, Value::Unit, &mut fuel),
+            Err(EvalError::OutOfFuel),
+        );
+    }
+
+    #[test]
+    fn structural_tree_costs_zero_fuel() {
+        // A big structural tree: seq(times(swap⁺, swap⁺), seq(id, swap×))
+        let bt = bit_ty();
+        let s = Iso::SwapSum(Type::One, Type::One);
+        let iso = Iso::seq(
+            Iso::times(s.clone(), s),
+            Iso::seq(
+                Iso::Id(Type::prod(bt.clone(), bt.clone())),
+                Iso::SwapProd(bt.clone(), bt),
+            ),
+        );
+        let v = Value::pair(
+            Value::left(Value::Unit),
+            Value::right(Value::Unit),
+        );
+        let mut fuel = 0;
+        eval(&iso, v, &mut fuel).unwrap();
+        assert_eq!(fuel, 0, "structural tree should consume zero fuel");
+    }
+
+    // ─── static_bound tests ────────────────────────────────────────
+
+    #[test]
+    fn static_bound_structural_is_zero() {
+        let iso = Iso::seq(
+            Iso::SwapSum(Type::One, Type::One),
+            Iso::Id(Type::sum(Type::One, Type::One)),
+        );
+        assert_eq!(static_bound(&iso), 0);
+    }
+
+    #[test]
+    fn static_bound_trace_with_structural_body() {
+        // B(Trace(Bit, structural)) = (|Bit|+1)*(1+0) = 3*1 = 3
+        let body = Iso::SwapSum(bit_ty(), Type::One);
+        let iso = Iso::trace(bit_ty(), body);
+        assert_eq!(static_bound(&iso), 3);
+    }
+
+    #[test]
+    fn static_bound_seq_of_traces() {
+        // B(Trace ; Trace) = B(Trace) + B(Trace) = 3 + 3 = 6
+        let body = Iso::SwapSum(bit_ty(), Type::One);
+        let t = Iso::trace(bit_ty(), body);
+        let iso = Iso::seq(t.clone(), t);
+        assert_eq!(static_bound(&iso), 6);
+    }
+
+    #[test]
+    fn static_bound_plus_of_traces() {
+        // B(Trace + Trace) = max(3, 3) = 3
+        let body = Iso::SwapSum(bit_ty(), Type::One);
+        let t = Iso::trace(bit_ty(), body);
+        let iso = Iso::plus(t.clone(), t);
+        assert_eq!(static_bound(&iso), 3);
+    }
+
+    #[test]
+    fn static_bound_plain_structural_zero() {
+        assert_eq!(static_bound(&Iso::Id(Type::One)), 0);
+        assert_eq!(
+            static_bound(&Iso::Distrib(Type::One, Type::One, Type::One)),
+            0,
+        );
     }
 }
