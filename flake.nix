@@ -118,5 +118,18 @@
           packages = with pkgs; [ ngspice xschem netgen gaw ];
           # env.PDK_ROOT = "...pinned sky130A store path...";
         };
+
+        # Physics-track shell (M3a): the Rust toolchain PLUS the SPICE
+        # simulator, so the theseus-spice harness can `cargo test` AND shell out
+        # to `ngspice -b`. The M3a minimal money plot (2LAL slope −1) uses
+        # generic MOSFET models, so no sky130 PDK is required here yet; the full
+        # DUT matrix will add the pinned PDK (see devShells.silicon).
+        devShells.physics = pkgs.mkShell {
+          inputsFrom = [ theseus ];
+          env = targetToolsEnv;
+          packages = with pkgs; [ rustToolchain cargo-nextest ngspice ];
+          # The harness locates the simulator through this seam, never PATH-luck.
+          THESEUS_NGSPICE = "${pkgs.ngspice}/bin/ngspice";
+        };
       });
 }
