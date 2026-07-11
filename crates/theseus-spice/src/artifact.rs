@@ -13,12 +13,17 @@ use crate::adiabatic::MoneyPlotCurve;
 pub enum Rung {
     /// Ideal MOSFET models (level-1, no PDK).
     Rung0IdealModels,
+    /// sky130A foundry models, tt corner, 27 °C, ideal trapezoidal clocks,
+    /// leakage broken out (ADR-0032 rung 1). The PDK build hash is carried in
+    /// the `pdk` stamp; this string names the rung/corner.
+    Rung1Sky130Tt,
 }
 
 impl Rung {
     fn as_str(&self) -> &'static str {
         match self {
             Rung::Rung0IdealModels => "rung0-ideal-models",
+            Rung::Rung1Sky130Tt => "rung1-sky130-tt",
         }
     }
 }

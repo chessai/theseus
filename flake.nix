@@ -150,5 +150,19 @@
           packages = with pkgs; [ rustToolchain cargo-nextest ngspice ];
           # THESEUS_NGSPICE comes from targetToolsEnv (shared across all shells).
         };
+
+        # Characterization shell (M3a rung1): the physics shell PLUS the pinned
+        # sky130 PDK, so `cargo test` can run sky130-cell characterization decks
+        # through ngspice. (.#physics stays PDK-free for the rung0 harness;
+        # .#silicon has the PDK but no Rust.) This is the gate for rung1 work.
+        devShells.char = pkgs.mkShell {
+          inputsFrom = [ theseus ];
+          packages = with pkgs; [ rustToolchain cargo-nextest ngspice sky130-pdk ];
+          env = targetToolsEnv // {
+            PDK_ROOT = "${sky130-pdk}";
+            THESEUS_SKY130_LIB = "${sky130-pdk}/sky130A/libs.tech/ngspice/sky130.lib.spice";
+            THESEUS_SKY130_VERSION = sky130-pdk.pdkVersion;
+          };
+        };
       });
 }
