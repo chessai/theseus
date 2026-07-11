@@ -8,6 +8,17 @@ isomorphism. Quantitatively, a run applies the body at most `|u| + 1` times
 (equivalently: performs at most `|u|` loop iterations), and this bound is exact
 over the class of all such `f`.
 
+**Mechanization.** The forward-termination core of this proof — the Lemma
+(no loop-state repeats) and the Theorem (forward termination + the `|u|+1`
+upper bound), plus the tightness witness — is machine-checked in Lean 4 +
+Mathlib at `theseus-proofs/TheseusProofs/FiniteTrace.lean` (`lake build`,
+depending only on Mathlib's base axioms). Both hypotheses are kernel-verified
+load-bearing (explicit counterexamples when injectivity or finiteness is
+dropped) and the `|u|+1` constant is verified tight at `|u| = 2`. The
+mutual-inverse direction, the class-wide exactness claim, and the
+iteration-count corollaries below remain proved in this text only (see the
+scope note in the Lean file's header).
+
 ## Hypothesis and its discharge (read this first)
 
 TH-1 is *conditional* on its hypothesis — "`eval f` is a total bijection." Where

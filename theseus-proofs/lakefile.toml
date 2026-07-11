@@ -1,0 +1,13 @@
+name = "theseus_proofs"
+defaultTargets = ["TheseusProofs"]
+
+# Mathlib pinned to its v4.31.0 release, whose `lean-toolchain` matches ours
+# (leanprover/lean4:v4.31.0). Keep the two in lockstep on every bump, or
+# `lake exe cache get` will miss and Mathlib will rebuild from source.
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.31.0"
+
+[[lean_lib]]
+name = "TheseusProofs"

@@ -96,6 +96,20 @@
           ];
         };
 
+        # Proofs shell (ledger TH-*): Lean 4 + Mathlib. We ship `elan` rather
+        # than nixpkgs' `lean4` on purpose — Mathlib's binary cache
+        # (`lake exe cache get`) is keyed to the *official* release toolchain
+        # named in `theseus-proofs/lean-toolchain`, which a nixpkgs-built lean
+        # cannot consume. elan fetches that exact toolchain into ~/.elan; git +
+        # curl + cacert are what `lake`/`cache get` need to resolve deps and
+        # pull the cache over TLS.
+        devShells.proofs = pkgs.mkShell {
+          packages = with pkgs; [ elan git curl cacert ];
+          # Point TLS at the Nix-provided CA bundle so `cache get` (and any
+          # `lake` git fetch over https) verifies inside a pure-ish shell.
+          SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+        };
+
         # Thin silicon shell, awake since the pivot (ADR-0022/0024/0025).
         # PDK: pin sky130A via open_pdks/volare; export PDK_ROOT here once
         # pinned. OpenLane/layout tools stay out until the parasitics rung
