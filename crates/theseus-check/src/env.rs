@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 
 use theseus_core::prim::Value;
 use theseus_core::ty::Type as CoreType;
-use theseus_syntax::ast::{self, Ctor, Decl, Program, Type as SurfType};
+use theseus_syntax::ast::{self, Ctor, Decl, Program, Span, Type as SurfType};
+
+use crate::labels::Clash;
 
 /// One step of an injection path into a right-nested sum.
 ///
@@ -65,6 +67,8 @@ pub struct IsoSig {
     /// Ordered label state space: `(label_name, carrier_type)` in
     /// first-occurrence order. Empty for plain (label-free) isos.
     pub labels: Vec<(String, SurfType)>,
+    /// Carrier-unification clashes detected during label inference.
+    pub label_clashes: Vec<Clash>,
 }
 
 /// A primitive signature.
@@ -73,6 +77,15 @@ pub struct PrimSig {
     pub lhs: SurfType,
     pub rhs: SurfType,
     pub key: String,
+}
+
+/// A collision between two iso declarations that share the same bare name.
+#[derive(Debug, Clone)]
+pub struct IsoCollision {
+    /// The duplicated iso name.
+    pub name: String,
+    /// Span of the second (colliding) declaration's name.
+    pub span: Span,
 }
 
 /// The resolution environment: indexed lookup tables plus type lowering.
@@ -90,6 +103,9 @@ pub struct Env {
     isos: BTreeMap<String, IsoSig>,
     /// prim name → signature.
     prims: BTreeMap<String, PrimSig>,
+    /// Iso name collisions detected during resolution. The first iso wins;
+    /// later isos with the same name are recorded here and NOT inserted.
+    iso_collisions: Vec<IsoCollision>,
 }
 
 impl Env {
@@ -127,9 +143,23 @@ impl Env {
             .unwrap_or(&[])
     }
 
+    /// Return the carrier-unification clashes for an iso.
+    /// Empty slice for clash-free isos or unknown iso names.
+    pub fn iso_label_clashes(&self, iso_name: &str) -> &[Clash] {
+        self.isos
+            .get(iso_name)
+            .map(|sig| sig.label_clashes.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Is `name` a declared iso?
     pub fn has_iso(&self, name: &str) -> bool {
         self.isos.contains_key(name)
+    }
+
+    /// Return any iso name collisions detected during resolution.
+    pub fn iso_collisions(&self) -> &[IsoCollision] {
+        &self.iso_collisions
     }
 
     /// Look up a prim signature.
@@ -298,7 +328,10 @@ fn lower_un_bits(n: u32) -> CoreType {
     }
 }
 
-/// Build the resolution environment for a program (infallible).
+/// Build the resolution environment for a program.
+///
+/// Resolution itself does not emit diagnostics, but it records iso-name
+/// collisions (see [`Env::iso_collisions`]) for downstream stages to surface.
 pub fn resolve(program: &Program) -> Env {
     let mut env = Env::default();
     for decl in &program.decls {
@@ -347,26 +380,38 @@ pub fn resolve(program: &Program) -> Env {
 }
 
 /// Insert an iso (and its nested `where` isos) into the env without labels.
+/// If an iso with the same name already exists, the collision is recorded
+/// and the duplicate is NOT inserted (the first declaration wins).
 fn insert_iso_shallow(id: &ast::IsoDecl, env: &mut Env) {
-    env.isos.insert(
-        id.name.text.to_string(),
-        IsoSig {
-            lhs: id.lhs.clone(),
-            rhs: id.rhs.clone(),
-            labels: Vec::new(),
-        },
-    );
+    let name = id.name.text.to_string();
+    match env.isos.entry(name) {
+        std::collections::btree_map::Entry::Occupied(e) => {
+            env.iso_collisions.push(IsoCollision {
+                name: e.key().clone(),
+                span: id.name.span,
+            });
+        }
+        std::collections::btree_map::Entry::Vacant(e) => {
+            e.insert(IsoSig {
+                lhs: id.lhs.clone(),
+                rhs: id.rhs.clone(),
+                labels: Vec::new(),
+                label_clashes: Vec::new(),
+            });
+        }
+    }
     for w in &id.wheres {
         insert_iso_shallow(w, env);
     }
 }
 
 /// Run label inference for an iso and its nested `where` isos, storing
-/// the results in the env.
+/// the results (labels AND clashes) in the env.
 fn infer_labels_recursive(id: &ast::IsoDecl, env: &mut Env) {
-    let (labels, _) = crate::labels::infer_iso_labels(id, env);
+    let (labels, clashes) = crate::labels::infer_iso_labels(id, env);
     if let Some(sig) = env.isos.get_mut(&id.name.text) {
         sig.labels = labels;
+        sig.label_clashes = clashes;
     }
     for w in &id.wheres {
         infer_labels_recursive(w, env);
@@ -433,5 +478,81 @@ mod tests {
         assert!(parse_un_bits("U3").is_none());
         assert!(parse_un_bits("U0").is_none());
         assert!(parse_un_bits("U5").is_none());
+    }
+
+    #[test]
+    fn duplicate_iso_name_detected_as_collision() {
+        // Two where-isos with the same name should be detected, not silently
+        // overwritten. The first declaration wins; the second is recorded as
+        // a collision.
+        let src = "\
+type Bit = O | I
+
+iso outer1 : Bit <-> Bit
+| O <-> I
+| I <-> O
+where
+  iso helper : Bit <-> Bit
+  | O <-> O
+  | I <-> I
+
+iso outer2 : Bit <-> Bit
+| O <-> I
+| I <-> O
+where
+  iso helper : Bit <-> Bit
+  | O <-> I
+  | I <-> O
+";
+        let program = theseus_syntax::parse(src).unwrap();
+        let env = resolve(&program);
+        let collisions = env.iso_collisions();
+        assert_eq!(
+            collisions.len(),
+            1,
+            "expected exactly one iso-name collision, got {collisions:?}"
+        );
+        assert_eq!(collisions[0].name, "helper");
+        // The first `helper` should still be accessible (not overwritten).
+        let sig = env.iso("helper").expect("first 'helper' should survive");
+        // It should have the first declaration's signature (identity iso: O<->O, I<->I).
+        // Both have the same lhs/rhs (Bit <-> Bit), so just check it exists.
+        assert!(matches!(&sig.lhs, SurfType::Name(n) if n.text == "Bit"));
+    }
+
+    #[test]
+    fn duplicate_iso_name_emits_t0101() {
+        // End-to-end: the collision surfaces as a T0101 diagnostic via typing::check.
+        let src = "\
+type Bit = O | I
+
+iso outer1 : Bit <-> Bit
+| O <-> I
+| I <-> O
+where
+  iso helper : Bit <-> Bit
+  | O <-> O
+  | I <-> I
+
+iso outer2 : Bit <-> Bit
+| O <-> I
+| I <-> O
+where
+  iso helper : Bit <-> Bit
+  | O <-> I
+  | I <-> O
+";
+        let program = theseus_syntax::parse(src).unwrap();
+        let env = resolve(&program);
+        let diags = crate::typing::check(&program, &env);
+        let collision_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| d.code == crate::diagnostics::Code::T0101 && d.name.as_deref() == Some("helper"))
+            .collect();
+        assert_eq!(
+            collision_diags.len(),
+            1,
+            "expected exactly one T0101 for duplicate iso 'helper', got {collision_diags:?}"
+        );
     }
 }

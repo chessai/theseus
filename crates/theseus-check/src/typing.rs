@@ -18,6 +18,13 @@ use crate::env::Env;
 /// Run the typing check over a whole program.
 pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
+    // Surface iso-name collisions detected during resolution as T0101.
+    for collision in env.iso_collisions() {
+        diags.push(
+            Diagnostic::new(Code::T0101, collision.span)
+                .with_name(collision.name.clone()),
+        );
+    }
     for decl in &program.decls {
         if let Decl::Iso(id) = decl {
             check_iso(id, env, &mut diags);
@@ -27,14 +34,15 @@ pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
 }
 
 fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
-    let (labels, clashes) = crate::labels::infer_iso_labels(id, env);
+    let labels = env.iso_labels(&id.name.text);
+    let clashes = env.iso_label_clashes(&id.name.text);
 
     // Report carrier-unification clashes as T0102.
     for clash in clashes {
         diags.push(
             Diagnostic::new(Code::T0102, clash.span)
                 .with_side(clash.side)
-                .with_name(clash.label),
+                .with_name(clash.label.clone()),
         );
     }
 
@@ -42,8 +50,8 @@ fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
         for (i, clause) in clauses.iter().enumerate() {
             let clause_index = i + 1; // 1-indexed
             let mut var_types: BTreeMap<String, SurfType> = BTreeMap::new();
-            check_pattern(&clause.lhs, &id.lhs, env, Side::Left, clause_index, &labels, true, &mut var_types, diags);
-            check_pattern(&clause.rhs, &id.rhs, env, Side::Right, clause_index, &labels, true, &mut var_types, diags);
+            check_pattern(&clause.lhs, &id.lhs, env, Side::Left, clause_index, labels, true, &mut var_types, diags);
+            check_pattern(&clause.rhs, &id.rhs, env, Side::Right, clause_index, labels, true, &mut var_types, diags);
         }
     }
     for w in &id.wheres {
