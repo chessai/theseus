@@ -25,6 +25,7 @@ pub mod cells {
     //! bench source/sink; `.subckt` text lives in /cells (ADR-0027).
 }
 pub mod deck {}
+pub mod admission;
 pub mod bench;
 pub mod adiabatic;
 pub mod cswap;
