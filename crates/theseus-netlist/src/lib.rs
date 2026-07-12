@@ -30,6 +30,7 @@
 //! annotation over the characterization DB lives in
 //! `theseus-spice::annotate` (ADR-0028).
 
+pub mod balance;
 pub mod canonicalize;
 pub mod ir;
 pub mod lower;
@@ -52,6 +53,7 @@ pub mod sim_bits {
     //! is this slice's executor.
 }
 
+pub use balance::{balance, BalanceError};
 pub use canonicalize::canonicalize;
 pub use ir::cell::{Cell, CellKind, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT};
 pub use ir::typed::{Monoid, NodeKind, TypedNode};
