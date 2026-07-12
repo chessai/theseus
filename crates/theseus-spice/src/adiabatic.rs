@@ -25,6 +25,107 @@
 
 use crate::bench::{log_log_slope, run_energy};
 
+// ---------------------------------------------------------------------------
+// Device-model rungs (ADR-0032 idealization ladder)
+// ---------------------------------------------------------------------------
+
+/// The device-model idealization rung a netlist is generated against.
+///
+/// Rung 0 uses generic `level=1` MOSFETs (no PDK): zero gate capacitance, no
+/// junction diodes beyond the (suppressed) defaults, VDD = 1.0 V. Rung 1 uses
+/// the real SkyWater sky130 foundry models (sky130A, `tt` corner, BSIM4
+/// subcircuits with real gate capacitance, junction diodes, and sub-threshold
+/// conduction), VDD = 1.8 V (the 01v8 core devices).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeviceRung {
+    /// Ideal level-1 models — the rung-0 physics sandbox.
+    Rung0Level1,
+    /// sky130A foundry models, `tt` corner — real silicon behavior.
+    Rung1Sky130,
+}
+
+/// FET polarity, used by [`DeviceRung::fet`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FetKind {
+    Nmos,
+    Pmos,
+}
+
+impl DeviceRung {
+    /// The supply / full-swing voltage for this rung, in volts.
+    pub fn vdd(self) -> f64 {
+        match self {
+            DeviceRung::Rung0Level1 => 1.0,
+            DeviceRung::Rung1Sky130 => 1.8,
+        }
+    }
+
+    /// The model-header card(s) for a deck at this rung: `.model` lines at
+    /// rung 0, the pinned sky130 `.lib … tt` include at rung 1.
+    ///
+    /// # Panics
+    /// At rung 1, panics if `THESEUS_SKY130_LIB` is unset (the `.#char`
+    /// devShell exports it). Gate callers on [`sky130_available`].
+    pub fn model_header(self) -> String {
+        match self {
+            DeviceRung::Rung0Level1 => "\
+.model NM NMOS (level=1 vto=0.4 kp=200u)
+.model PM PMOS (level=1 vto=-0.4 kp=100u)"
+                .to_string(),
+            DeviceRung::Rung1Sky130 => {
+                let lib = std::env::var("THESEUS_SKY130_LIB")
+                    .expect("THESEUS_SKY130_LIB not set — run inside the .#char devShell");
+                format!(".lib \"{lib}\" tt")
+            }
+        }
+    }
+
+    /// One transistor instance card. `w_um`/`l_um` are in microns at both
+    /// rungs (the sky130 lib sets `.option scale=1.0u`, so its geometry
+    /// parameters are plain micron numbers — `W=4`, not `W=4u`).
+    ///
+    /// Pin order is drain gate source bulk at both rungs.
+    // A transistor card irreducibly has 4 pins + polarity + W + L; a
+    // params-struct would only rename the arity, not remove it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fet(
+        self,
+        name: &str,
+        kind: FetKind,
+        d: &str,
+        g: &str,
+        s: &str,
+        b: &str,
+        w_um: f64,
+        l_um: f64,
+    ) -> String {
+        match self {
+            DeviceRung::Rung0Level1 => {
+                let model = match kind {
+                    FetKind::Nmos => "NM",
+                    FetKind::Pmos => "PM",
+                };
+                format!("M{name} {d} {g} {s} {b} {model} W={w_um}u L={l_um}u")
+            }
+            DeviceRung::Rung1Sky130 => {
+                let model = match kind {
+                    FetKind::Nmos => "sky130_fd_pr__nfet_01v8",
+                    FetKind::Pmos => "sky130_fd_pr__pfet_01v8",
+                };
+                format!("XM{name} {d} {g} {s} {b} {model} W={w_um} L={l_um}")
+            }
+        }
+    }
+}
+
+/// True iff the sky130 PDK is reachable: `THESEUS_SKY130_LIB` is set and the
+/// file exists. Rung-1 tests skip (like `ngspice_available`) when false.
+pub fn sky130_available() -> bool {
+    std::env::var("THESEUS_SKY130_LIB")
+        .map(|p| std::path::Path::new(&p).is_file())
+        .unwrap_or(false)
+}
+
 /// A money-plot curve: energy-per-op versus power-clock period, log-log.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MoneyPlotCurve {
@@ -41,30 +142,70 @@ impl MoneyPlotCurve {
     }
 }
 
-/// Build the adiabatic transmission-gate netlist for one power-clock `period_s`.
+/// Build the adiabatic transmission-gate netlist for one power-clock
+/// `period_s` at rung 0 (ideal level-1 models). Wrapper over
+/// [`adiabatic_tg_netlist_rung`]; existing callers and tests are unchanged.
+pub fn adiabatic_tg_netlist(period_s: f64) -> String {
+    adiabatic_tg_netlist_rung(period_s, DeviceRung::Rung0Level1)
+}
+
+/// Build the adiabatic transmission-gate netlist for one power-clock
+/// `period_s` at the given [`DeviceRung`].
 ///
 /// A full CMOS transmission gate (held ON) connects a trapezoidal power-clock
 /// `pc` to an output load; the source energy delivered over one full
-/// charge/recover cycle is the (adiabatic) dissipation. Generic level-1 MOSFET
-/// models — no PDK. The `esrc` `.meas` name is what [`run_energy`] extracts.
-pub fn adiabatic_tg_netlist(period_s: f64) -> String {
+/// charge/recover cycle is the (adiabatic) dissipation. Devices are W=4/8 µm
+/// (N/P), L=0.15 µm at both rungs.
+///
+/// **Rung 0** (level-1, VDD=1.0): the devices carry no state (no gate
+/// capacitance, no junction charge), so cycle 0 from `uic` *is* the settled
+/// cycle; one cycle is simulated and the clock-source integral `esrc` is the
+/// whole story (bulk and gate sources deliver exactly 0 by construction).
+///
+/// **Rung 1** (sky130 tt, VDD=1.8): the BSIM4 devices have real gate/junction
+/// capacitance, so cycle 0 pays a one-time charge-up of internal state. Two
+/// cycles are simulated (`PWL … r=0` repeats the clock) and all measurements
+/// integrate over the settled second cycle. Honest accounting (ADR-0028
+/// C3.3): EVERY source contributes to the measured total —
+/// * `etot` — total energy from all sources over the settled cycle (this is
+///   the per-op figure; also aliased into `esrc` semantics for the curve),
+/// * `epc`  — the power-clock (the recoverable/adiabatic path),
+/// * `evdd` — the bulk bias (junction/well leakage),
+/// * `egat` — the input gate drivers (real gate capacitance now exists; the
+///   inputs are DC here so the settled-cycle net is ≈ leakage-only, but it is
+///   measured, not assumed),
+/// * `vmax` — output-rail peak, to prove the cell actually does work.
+pub fn adiabatic_tg_netlist_rung(period_s: f64, rung: DeviceRung) -> String {
     let q = period_s / 4.0; // ramp-up ends
     let h = period_s / 2.0; // hold ends
     let tq = 3.0 * period_s / 4.0; // ramp-down ends
-    let stop = period_s;
-    // Resolve the device R_on·C (~150 ps here) as well as the period.
-    let step = (period_s / 4000.0).min(5e-11);
-    format!(
-        "\
+    let vdd = rung.vdd();
+    // Resolve the device R_on·C (~150 ps rung0, ~660 ps rung1) as well as
+    // the period: ≥4000 points/cycle, tightened to 50 ps when the period
+    // allows. At rung 1 the 50 ps cap is floored at T/40000 (≤40k
+    // points/cycle) — a fixed 50 ps cap at T = 1 ms means 4×10⁸ steps and
+    // ngspice never finishes; the relaxed step was cross-checked against
+    // the strict one at the T = 1e-5 overlap point (etot agrees to 0.45%).
+    let step = match rung {
+        DeviceRung::Rung0Level1 => (period_s / 4000.0).min(5e-11),
+        DeviceRung::Rung1Sky130 => (period_s / 4000.0).min(5e-11).max(period_s / 40_000.0),
+    };
+    let header = rung.model_header();
+    let m1 = rung.fet("1", FetKind::Nmos, "pc", "ing", "out", "0", 4.0, 0.15);
+    let m2 = rung.fet("2", FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15);
+    match rung {
+        DeviceRung::Rung0Level1 => {
+            let stop = period_s;
+            format!(
+                "\
 adiabatic transmission-gate cell (T={period_s:.6e} s)
-.model NM NMOS (level=1 vto=0.4 kp=200u)
-.model PM PMOS (level=1 vto=-0.4 kp=100u)
-Vdd vdd 0 DC 1.0
-Vpc pc 0 PWL(0 0 {q:.9e} 1.0 {h:.9e} 1.0 {tq:.9e} 0 {stop:.9e} 0)
-Vin  ing 0 DC 1.0
+{header}
+Vdd vdd 0 DC {vdd}
+Vpc pc 0 PWL(0 0 {q:.9e} {vdd} {h:.9e} {vdd} {tq:.9e} 0 {stop:.9e} 0)
+Vin  ing 0 DC {vdd}
 Vinb inb 0 DC 0.0
-M1 pc ing out 0   NM W=4u L=0.15u
-M2 pc inb out vdd PM W=8u L=0.15u
+{m1}
+{m2}
 Cout out 0 1p
 Bpwr pwr 0 V = -V(pc)*I(Vpc)
 .control
@@ -74,7 +215,38 @@ print esrc
 .endc
 .end
 "
-    )
+            )
+        }
+        DeviceRung::Rung1Sky130 => {
+            let stop = 2.0 * period_s;
+            format!(
+                "\
+adiabatic transmission-gate cell, sky130 tt (T={period_s:.6e} s)
+{header}
+Vdd vdd 0 DC {vdd}
+Vpc pc 0 PWL(0 0 {q:.9e} {vdd} {h:.9e} {vdd} {tq:.9e} 0 {period_s:.9e} 0) r=0
+Vin  ing 0 DC {vdd}
+Vinb inb 0 DC 0.0
+{m1}
+{m2}
+Cout out 0 1p
+Bpc  ppc  0 V = -V(pc)*I(Vpc)
+Bvdd pvdd 0 V = -V(vdd)*I(Vdd)
+Bgat pgat 0 V = -V(ing)*I(Vin)-V(inb)*I(Vinb)
+Btot ptot 0 V = V(ppc)+V(pvdd)+V(pgat)
+.control
+tran {step:.9e} {stop:.9e} uic
+meas tran etot INTEG V(ptot) FROM={period_s:.9e} TO={stop:.9e}
+meas tran epc  INTEG V(ppc)  FROM={period_s:.9e} TO={stop:.9e}
+meas tran evdd INTEG V(pvdd) FROM={period_s:.9e} TO={stop:.9e}
+meas tran egat INTEG V(pgat) FROM={period_s:.9e} TO={stop:.9e}
+meas tran vmax MAX V(out) FROM={period_s:.9e} TO={stop:.9e}
+.endc
+.end
+"
+            )
+        }
+    }
 }
 
 /// Sweep the power-clock period across the adiabatic regime and return the
@@ -89,6 +261,76 @@ pub fn adiabatic_tg_curve(periods: &[f64]) -> MoneyPlotCurve {
         dut: "adiabatic-tg".to_string(),
         points,
     }
+}
+
+/// Rung-aware variant of [`adiabatic_tg_curve`]: sweeps energy-per-op vs
+/// period at the given rung. At rung 1 the extracted energy is `etot` — the
+/// sum over ALL sources (clock + bulk + gate drivers) over the settled
+/// second cycle — so gate-drive and leakage energy are counted, not hidden.
+pub fn adiabatic_tg_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCurve {
+    let (dut, meas) = match rung {
+        DeviceRung::Rung0Level1 => ("adiabatic-tg", "esrc"),
+        DeviceRung::Rung1Sky130 => ("adiabatic-tg-sky130", "etot"),
+    };
+    let points = periods
+        .iter()
+        .map(|&t| {
+            (
+                t,
+                run_energy(&adiabatic_tg_netlist_rung(t, rung), meas).abs(),
+            )
+        })
+        .collect();
+    MoneyPlotCurve {
+        dut: dut.to_string(),
+        points,
+    }
+}
+
+/// Static-leakage deck for the rung-1 sky130 adiabatic TG cell (ADR-0028
+/// C3.3: leakage is reported separately from switching energy).
+///
+/// Two copies of the cell hold the power-clock at its two rest states (high
+/// = output parked at VDD, low = output parked at 0), and the total power of
+/// every source attached to each copy is integrated over `window_s` after an
+/// equal settling window. `run_energy(…, "eh")/window_s` and `…("el")/…`
+/// give the static-power floor per state in watts; that floor times the
+/// period is the energy term that caps the adiabatic 1/T slope at slow T.
+pub fn adiabatic_tg_leakage_netlist(window_s: f64) -> String {
+    let rung = DeviceRung::Rung1Sky130;
+    let vdd = rung.vdd();
+    let header = rung.model_header();
+    let a1 = rung.fet("A1", FetKind::Nmos, "pch", "ing", "outh", "0", 4.0, 0.15);
+    let a2 = rung.fet("A2", FetKind::Pmos, "pch", "inb", "outh", "vdd", 8.0, 0.15);
+    let b1 = rung.fet("B1", FetKind::Nmos, "pcl", "ing", "outl", "0", 4.0, 0.15);
+    let b2 = rung.fet("B2", FetKind::Pmos, "pcl", "inb", "outl", "vdd", 8.0, 0.15);
+    let stop = 2.0 * window_s;
+    let step = window_s / 1000.0;
+    format!(
+        "\
+rung1 sky130 adiabatic TG static leakage (window={window_s:.3e} s)
+{header}
+Vdd vdd 0 DC {vdd}
+Vpch pch 0 DC {vdd}
+Vpcl pcl 0 DC 0.0
+Vin  ing 0 DC {vdd}
+Vinb inb 0 DC 0.0
+{a1}
+{a2}
+Ch outh 0 1p
+{b1}
+{b2}
+Cl outl 0 1p
+Bph pwh 0 V = -V(pch)*I(Vpch)-V(vdd)*I(Vdd)-V(ing)*I(Vin)-V(inb)*I(Vinb)
+Bpl pwl 0 V = -V(pcl)*I(Vpcl)
+.control
+tran {step:.9e} {stop:.9e} uic
+meas tran eh INTEG V(pwh) FROM={window_s:.9e} TO={stop:.9e}
+meas tran el INTEG V(pwl) FROM={window_s:.9e} TO={stop:.9e}
+.endc
+.end
+"
+    )
 }
 
 /// Build the non-adiabatic **CMOS baseline** netlist for one `period_s`: a
@@ -647,6 +889,67 @@ mod tests {
         for dut in ["adiabatic-tg", "pfal", "cmos-static"] {
             assert!(curves.iter().any(|c| c.dut == dut), "missing {dut}");
         }
+    }
+
+    // ----- rung 1: sky130 adiabatic TG -----
+
+    /// Rung-1 sky130 adiabatic-TG energy falls with period over the adiabatic
+    /// regime. Requires ngspice AND the sky130 PDK (the `.#char` devShell);
+    /// skipped otherwise, like the ngspice-gated rung-0 tests.
+    ///
+    /// Measured (sky130A tt, W=4/8 µm, L=0.15 µm, 1 pF load, settled 2nd
+    /// cycle, ALL sources summed): slope = −0.96 over 3.16e-8..1e-5 s —
+    /// real devices, not a clean −1. The curve is bounded on both ends:
+    /// at T = 1e-8 s the ramp (T/4 = 2.5 ns) approaches the TG's R_on·C ≈
+    /// 0.7 ns and the decade slope shallows to −0.78 (finite-ramp knee);
+    /// at slow T a static floor (junction/bulk leakage ≈ 3.3e-12 W through
+    /// the bulk at ngspice's default gmin, plus a similar clock-side term)
+    /// turns the curve around at T ≈ 1e-4 s (energy minimum ≈ 7.5e-16 J,
+    /// rising again by 3.16e-4 s). The bound −1.15 ≤ slope ≤ −0.85 keeps
+    /// margin around the measured −0.96 while still failing on any
+    /// qualitative regression (a leak path or a non-recovering cell
+    /// flattens the slope far above −0.85).
+    #[test]
+    fn sky130_adiabatic_tg_energy_falls_with_period() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        if !sky130_available() {
+            eprintln!("[skip] sky130 PDK unavailable (THESEUS_SKY130_LIB unset/missing)");
+            return;
+        }
+        // 2.5 decades, inside the adiabatic regime: above the fast-end knee
+        // (at T = 1e-8 the ramp T/4 = 2.5 ns approaches the TG's R_on·C ≈
+        // 0.7 ns and the decade slope shallows to ≈ −0.78) and below the
+        // slow-end leakage knee (≈ 1e-4 s, where the ~3e-12 W static floor
+        // crosses the shrinking adiabatic term).
+        let periods = [3.16e-8, 1e-7, 1e-6, 1e-5];
+        let curve = adiabatic_tg_curve_rung(&periods, DeviceRung::Rung1Sky130);
+        eprintln!("rung1 sky130 TG curve: {:?}", curve.points);
+        // Energy must be positive and strictly falling with period.
+        for w in curve.points.windows(2) {
+            assert!(
+                w[0].1 > 0.0 && w[1].1 > 0.0 && w[1].1 < w[0].1,
+                "rung1 energy must be positive and fall with period: {:?}",
+                curve.points
+            );
+        }
+        let slope = curve.slope();
+        eprintln!("rung1 sky130 TG slope = {slope:.4}");
+        assert!(
+            (-1.15..=-0.85).contains(&slope),
+            "rung1 adiabatic slope must be in [-1.15, -0.85], got {slope:.4} for {:?}",
+            curve.points
+        );
+        // The cell must actually do work: full-swing output on the settled
+        // cycle (vmax ≈ VDD), so the slope check cannot pass vacuously.
+        let nl = adiabatic_tg_netlist_rung(1e-7, DeviceRung::Rung1Sky130);
+        let vmax = run_energy(&nl, "vmax");
+        assert!(
+            vmax > 0.9 * DeviceRung::Rung1Sky130.vdd(),
+            "rung1 TG output must reach near VDD, got {vmax:.4} V"
+        );
     }
 
     // ----- 2LAL shift register -----
