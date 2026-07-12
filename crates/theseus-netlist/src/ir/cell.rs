@@ -60,7 +60,7 @@ impl RailPair {
     }
 }
 
-/// k-CSWAP cell kind (ADR-0027). All three are reversible and
+/// k-CSWAP cell kind (ADR-0027). All four are reversible and
 /// self-inverse; a controlled swap only routes charge, so the count of
 /// asserted rails is invariant per token (INV-TOKEN).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -71,6 +71,8 @@ pub enum CellKind {
     K1,
     /// 2-controlled swap: swap `(a, b)` iff `c1 ∧ c2`; controls pass.
     K2,
+    /// 3-controlled swap: swap `(a, b)` iff `c1 ∧ c2 ∧ c3`; controls pass.
+    K3,
 }
 
 impl CellKind {
@@ -82,6 +84,7 @@ impl CellKind {
             CellKind::K0 => 1,
             CellKind::K1 => 3,
             CellKind::K2 => 4,
+            CellKind::K3 => 5,
         }
     }
 
@@ -94,6 +97,7 @@ impl CellKind {
             CellKind::K0 => "cswap-k0",
             CellKind::K1 => "cswap-k1",
             CellKind::K2 => "cswap-k2",
+            CellKind::K3 => "cswap-k3",
         }
     }
 
@@ -106,6 +110,7 @@ impl CellKind {
             CellKind::K0 => 0,
             CellKind::K1 => 1,
             CellKind::K2 => 2,
+            CellKind::K3 => 3,
         };
         let mut out = bits.to_vec();
         if k > 0 && bits[..k].iter().all(|&c| c) {
@@ -570,7 +575,7 @@ mod tests {
 
     #[test]
     fn cell_eval_self_inverse() {
-        for kind in [CellKind::K0, CellKind::K1, CellKind::K2] {
+        for kind in [CellKind::K0, CellKind::K1, CellKind::K2, CellKind::K3] {
             let n = kind.arity();
             for x in 0..1u32 << n {
                 let bits: Vec<bool> = (0..n).map(|i| (x >> i) & 1 == 1).collect();

@@ -489,6 +489,10 @@ impl Builder {
         if w_in == 4 && w_out == 4 && prim_matches(def, |bits| CellKind::K2.eval(bits))? {
             return Ok(self.emit(CellKind::K2, ins));
         }
+        // 3-controlled swap `(c1, c2, c3, a, b)`: one K3.
+        if w_in == 5 && w_out == 5 && prim_matches(def, |bits| CellKind::K3.eval(bits))? {
+            return Ok(self.emit(CellKind::K3, ins));
+        }
 
         // TODO(B4.2): synthesize general CSWAP networks; until then the
         // registry is exactly the verified table above.
@@ -728,12 +732,12 @@ impl Builder {
             return Ok((current, cur_tag));
         }
 
-        // Check for K2 cells in the sub-builder (can't promote to K3).
+        // Check for K3 cells in the sub-builder (can't promote to K4).
         for cell in &sub.cells {
-            if cell.kind == CellKind::K2 {
+            if cell.kind == CellKind::K3 {
                 return Err(LowerError::Deferred {
-                    node: "Branch (K2 in arm)",
-                    plan: "K3 cell promotion not available",
+                    node: "Branch (K3 in arm)",
+                    plan: "K4 not in vocabulary",
                 });
             }
         }
@@ -779,8 +783,14 @@ impl Builder {
                         outputs: vec![out_pair],
                     });
                 }
-                CellKind::K1 => {
+                CellKind::K1 | CellKind::K2 => {
                     // Promote K1(c, a, b) → K2(tag, c, a, b).
+                    // Promote K2(c1, c2, a, b) → K3(tag, c1, c2, a, b).
+                    let promoted_kind = match cell.kind {
+                        CellKind::K1 => CellKind::K2,
+                        CellKind::K2 => CellKind::K3,
+                        _ => unreachable!(),
+                    };
                     let control_tag = if invert_tag {
                         cur_tag.rail_swapped()
                     } else {
@@ -813,7 +823,7 @@ impl Builder {
                     }
 
                     self.cells.push(Cell {
-                        kind: CellKind::K2,
+                        kind: promoted_kind,
                         depth: new_depth,
                         phase: new_phase,
                         inputs: new_inputs,
@@ -827,7 +837,7 @@ impl Builder {
                     };
                     cur_tag = tag_out;
                 }
-                CellKind::K2 => unreachable!("checked above"),
+                CellKind::K3 => unreachable!("checked above"),
             }
         }
 
