@@ -108,8 +108,7 @@ pub fn balance(net: &PhasedCellNetlist) -> Result<PhasedCellNetlist, BalanceErro
         let mut balanced_inputs = inputs;
         for (i, &arr) in input_arrivals.iter().enumerate() {
             let mut cur_pair = balanced_inputs[i];
-            let mut cur_arr = arr;
-            for _ in 0..(latest - arr) {
+            for cur_arr in arr..latest {
                 let out = alloc_pair(&mut next_line, &mut arrival_of, cur_arr + 1);
                 new_cells.push(Cell {
                     kind: CellKind::K0,
@@ -119,7 +118,6 @@ pub fn balance(net: &PhasedCellNetlist) -> Result<PhasedCellNetlist, BalanceErro
                     outputs: vec![out],
                 });
                 cur_pair = out;
-                cur_arr += 1;
             }
             balanced_inputs[i] = cur_pair;
         }
