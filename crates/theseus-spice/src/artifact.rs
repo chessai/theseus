@@ -69,12 +69,13 @@ impl std::fmt::Display for StampError {
     }
 }
 
-/// Map a DUT name to its curve family.
+/// Map a DUT name to its curve family. Both the rung-0 dut names and the
+/// rung-1 `-sky130`-suffixed names collapse to the same three families.
 fn family_for_dut(dut: &str) -> &'static str {
     match dut {
-        "adiabatic-tg" => "adiabatic-tg",
-        "pfal" => "pfal",
-        "cmos-static" => "cmos-static",
+        "adiabatic-tg" | "adiabatic-tg-sky130" => "adiabatic-tg",
+        "pfal" | "pfal-sky130" => "pfal",
+        "cmos-static" | "cmos-static-sky130" => "cmos-static",
         _ => "unknown",
     }
 }
@@ -246,8 +247,8 @@ pub fn render_ascii(records: &[MoneyPlotRecord]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adiabatic::{money_plot, MoneyPlotCurve};
-    use crate::bench::ngspice_available;
+    use crate::adiabatic::{money_plot, money_plot_rung, sky130_available, DeviceRung, MoneyPlotCurve};
+    use crate::bench::{log_log_slope, ngspice_available};
 
     fn regime_periods() -> Vec<f64> {
         vec![1e-8, 3.16e-8, 1e-7, 3.16e-7, 1e-6, 3.16e-6, 1e-5]
@@ -312,6 +313,105 @@ mod tests {
 
         eprintln!("--- Serialized artifact ---\n{}", text1);
         eprintln!("--- ASCII money plot ---\n{}", ascii);
+    }
+
+    /// Rung-1 (sky130) money-plot artifact (W6): the stamped record carries all
+    /// three dut names, the `rung1-sky130-tt` rung + the sky130 PDK version in
+    /// the pdk stamp, is byte-deterministic across two generations, and the
+    /// recorded slopes match the three-family shape. Gated on ngspice + the PDK
+    /// (the `.#char` devShell); skipped otherwise. Modest point count (sims slow).
+    #[test]
+    fn rung1_money_plot_artifact_shape_and_determinism() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        if !sky130_available() {
+            eprintln!("[skip] sky130 PDK unavailable (THESEUS_SKY130_LIB unset/missing)");
+            return;
+        }
+        // Modest log-spaced axis over the pinned 1e-8..1e-5 s rung-1 window.
+        let axis = [1e-8, 1e-7, 1e-6, 1e-5];
+        let pdk = std::env::var("THESEUS_SKY130_VERSION")
+            .unwrap_or_else(|_| "sky130A-unknown".to_string());
+        let stamps = Stamps {
+            pdk: pdk.clone(),
+            simulator: "ngspice".to_string(),
+            harness: "theseus-spice-w6-rung1-v0.1".to_string(),
+            db: "chardb-rung1-sky130".to_string(),
+        };
+
+        let curves = money_plot_rung(&axis, DeviceRung::Rung1Sky130);
+        let records =
+            stamped_money_plot(&curves, Rung::Rung1Sky130Tt, stamps.clone()).unwrap();
+
+        // (a) All three rung-1 dut names present.
+        for dut in ["adiabatic-tg-sky130", "pfal-sky130", "cmos-static-sky130"] {
+            assert!(
+                records.iter().any(|r| r.dut == dut),
+                "missing rung-1 dut {dut} in {:?}",
+                records.iter().map(|r| &r.dut).collect::<Vec<_>>()
+            );
+        }
+
+        // (b) Rung + PDK version carried in the stamp/rung.
+        let text = to_stamped_text(&records);
+        assert!(text.contains("rung1-sky130-tt"), "artifact missing rung1-sky130-tt");
+        assert!(
+            text.contains(&pdk),
+            "artifact pdk stamp must carry the sky130 version {pdk}"
+        );
+        for r in &records {
+            assert_eq!(r.rung, Rung::Rung1Sky130Tt);
+            assert_eq!(r.stamps.pdk, pdk);
+        }
+
+        // (c) Byte-deterministic across two independent generations.
+        let curves2 = money_plot_rung(&axis, DeviceRung::Rung1Sky130);
+        let records2 =
+            stamped_money_plot(&curves2, Rung::Rung1Sky130Tt, stamps).unwrap();
+        let text2 = to_stamped_text(&records2);
+        assert_eq!(
+            text.as_bytes(),
+            text2.as_bytes(),
+            "rung-1 money-plot artifact is not byte-deterministic"
+        );
+
+        // (d) Recorded slopes match the three-family shape.
+        let adia = records.iter().find(|r| r.dut == "adiabatic-tg-sky130").unwrap();
+        assert!(
+            (-1.15..=-0.7).contains(&adia.slope),
+            "adiabatic-TG slope {:.4} not in [-1.15, -0.7]",
+            adia.slope
+        );
+        let cmos = records.iter().find(|r| r.dut == "cmos-static-sky130").unwrap();
+        assert!(
+            cmos.slope.abs() < 0.15,
+            "CMOS slope {:.4} must be ≈ 0 (|slope| < 0.15)",
+            cmos.slope
+        );
+        // PFAL falls at the fast end then floors at the slow end: fast-half
+        // slope is clearly negative, slow-half slope is not still falling
+        // (floored/risen).
+        let pfal = records.iter().find(|r| r.dut == "pfal-sky130").unwrap();
+        let n = pfal.points.len();
+        let fast_slope = log_log_slope(&pfal.points[..n / 2 + 1]);
+        let slow_slope = log_log_slope(&pfal.points[n / 2..]);
+        eprintln!(
+            "rung1 slopes: adia={:.3} cmos={:.3} pfal(fast={:.3},slow={:.3})",
+            adia.slope, cmos.slope, fast_slope, slow_slope
+        );
+        assert!(
+            fast_slope < -0.4,
+            "PFAL fast-end must fall (slope {fast_slope:.3} should be < -0.4): {:?}",
+            pfal.points
+        );
+        assert!(
+            slow_slope > fast_slope + 0.3,
+            "PFAL slow-end must floor (slow slope {slow_slope:.3} should be well \
+             above fast slope {fast_slope:.3}): {:?}",
+            pfal.points
+        );
     }
 
     /// INV-STAMP: missing pdk is refused.

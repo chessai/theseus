@@ -936,6 +936,22 @@ pub fn money_plot(periods: &[f64]) -> Vec<MoneyPlotCurve> {
     ]
 }
 
+/// Rung-aware three-family money plot (W6): the same three families as
+/// [`money_plot`] — adiabatic transmission-gate, PFAL, static-CMOS control —
+/// but generated at the given [`DeviceRung`] via the `_rung` curve functions.
+///
+/// At [`DeviceRung::Rung1Sky130`] the dut names carry the `-sky130` suffix
+/// (`adiabatic-tg-sky130`, `pfal-sky130`, `cmos-static-sky130`), and the
+/// energies are the honest `etot` sum over all sources on the settled second
+/// cycle. This does NOT modify the rung-0 [`money_plot`]; it lives alongside it.
+pub fn money_plot_rung(periods: &[f64], rung: DeviceRung) -> Vec<MoneyPlotCurve> {
+    vec![
+        adiabatic_tg_curve_rung(periods, rung),
+        pfal_curve_rung(periods, rung),
+        cmos_baseline_curve_rung(periods, rung),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
