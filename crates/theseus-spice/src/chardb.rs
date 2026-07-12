@@ -86,8 +86,8 @@ pub fn rebuild(raw: &[(String, Vec<CharPoint>)]) -> CharDb {
 /// [`rebuild`] the results into a [`CharDb`] (ADR-0028 C3.1 / TH-E3).
 ///
 /// The admitted reversible library is the adiabatic transmission-gate buffer
-/// (`adiabatic-tg`) and the k-CSWAP family for k ∈ {0, 1, 2}
-/// (`cswap-k0`/`cswap-k1`/`cswap-k2`). For each cell we sweep energy-per-op vs
+/// (`adiabatic-tg`) and the k-CSWAP family for k ∈ {0, 1, 2, 3}
+/// (`cswap-k0`/`cswap-k1`/`cswap-k2`/`cswap-k3`). For each cell we sweep energy-per-op vs
 /// power-clock period at `rung`, convert each `(period, energy)` sample to a
 /// [`CharPoint`] `{ t_ramp: period, energy }`, and hand the whole raw set to
 /// [`rebuild`], which sorts each cell's points and fits the ADR-0028 energy
@@ -116,8 +116,8 @@ pub fn build_char_db(rung: DeviceRung, periods: &[f64]) -> CharDb {
             .collect(),
     ));
 
-    // Admitted cells 2-4: the k-CSWAP family (k = 0, 1, 2).
-    for k in 0..=2usize {
+    // Admitted cells 2-5: the k-CSWAP family (k = 0, 1, 2, 3).
+    for k in 0..=3usize {
         let sweep = cswap_energy_curve(k, rung, periods)
             .unwrap_or_else(|e| panic!("cswap-k{k} energy sweep failed: {e}"));
         raw.push((
@@ -179,8 +179,8 @@ mod tests {
     use crate::adiabatic::sky130_available;
     use crate::bench::ngspice_available;
 
-    /// The four admitted reversible cells, in the DB's deterministic key order.
-    const CELLS: [&str; 4] = ["adiabatic-tg", "cswap-k0", "cswap-k1", "cswap-k2"];
+    /// The five admitted reversible cells, in the DB's deterministic key order.
+    const CELLS: [&str; 5] = ["adiabatic-tg", "cswap-k0", "cswap-k1", "cswap-k2", "cswap-k3"];
 
     /// A fast rung-0 period axis: 4 points spanning ~3 decades (>=3 for the fit).
     fn rung0_periods() -> Vec<f64> {

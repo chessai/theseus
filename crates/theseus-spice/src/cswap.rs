@@ -1,5 +1,5 @@
 //! k-CSWAP adiabatic cell family (ADR-0027): the k-controlled dual-rail swap,
-//! k ∈ {0, 1, 2}, in the verified 2LAL forward/reverse transmission-gate
+//! k ∈ {0, 1, 2, 3}, in the verified 2LAL forward/reverse transmission-gate
 //! discipline of [`crate::adiabatic::two_lal_sr_netlist`], characterized at
 //! both device rungs (ADR-0032: rung 0 level-1 sandbox, rung 1 sky130 tt).
 //!
@@ -9,8 +9,10 @@
 //! * **k = 1** — the Fredkin gate: `(c, a, b) → (c, c?b:a, c?a:b)`.
 //! * **k = 2** — the 2-controlled swap: swap `(a, b)` iff `c1 ∧ c2`; both
 //!   controls pass through.
+//! * **k = 3** — the 3-controlled swap: swap `(a, b)` iff `c1 ∧ c2 ∧ c3`;
+//!   all three controls pass through.
 //!
-//! All three are reversible and self-inverse; a controlled swap only routes
+//! All four are reversible and self-inverse; a controlled swap only routes
 //! charge, so the count of active rails is invariant per token (INV-TOKEN).
 //!
 //! # Encoding: 1-of-2 token lines (why the SR's bare rail-pair is not enough)
@@ -96,12 +98,14 @@ use std::io;
 use crate::adiabatic::{DeviceRung, FetKind};
 use crate::bench::{log_log_slope, parse_meas, run_ngspice_raw};
 
-/// One k-CSWAP input token. `c1`/`c2` are the controls (`c1` doubles as the
-/// single control at k = 1; both ignored at k = 0), `a`/`b` the data.
+/// One k-CSWAP input token. `c1`/`c2`/`c3` are the controls (`c1` doubles as
+/// the single control at k = 1; c2/c3 ignored at k ≤ 1; c3 ignored at k ≤ 2),
+/// `a`/`b` the data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CswapToken {
     pub c1: bool,
     pub c2: bool,
+    pub c3: bool,
     pub a: bool,
     pub b: bool,
 }
@@ -111,6 +115,7 @@ impl CswapToken {
         match sig {
             "c" | "c1" => self.c1,
             "c2" => self.c2,
+            "c3" => self.c3,
             "a" => self.a,
             "b" => self.b,
             other => panic!("unknown signal {other}"),
@@ -125,7 +130,8 @@ pub fn cswap_out(k: usize, t: CswapToken) -> CswapToken {
         0 => false,
         1 => t.c1,
         2 => t.c1 && t.c2,
-        _ => panic!("k must be 0, 1, or 2"),
+        3 => t.c1 && t.c2 && t.c3,
+        _ => panic!("k must be 0, 1, 2, or 3"),
     };
     CswapToken {
         a: if swap { t.b } else { t.a },
@@ -141,7 +147,8 @@ pub fn cswap_signals(k: usize) -> &'static [&'static str] {
         0 => &["a"],
         1 => &["c", "a", "b"],
         2 => &["c1", "c2", "a", "b"],
-        _ => panic!("k must be 0, 1, or 2"),
+        3 => &["c1", "c2", "c3", "a", "b"],
+        _ => panic!("k must be 0, 1, 2, or 3"),
     }
 }
 
@@ -153,9 +160,10 @@ pub fn cswap_truth_tokens(k: usize) -> Vec<CswapToken> {
         .map(|j| {
             let bit = |i: usize| (j >> (n - 1 - i)) & 1 == 1;
             match k {
-                0 => CswapToken { c1: false, c2: false, a: bit(0), b: false },
-                1 => CswapToken { c1: bit(0), c2: false, a: bit(1), b: bit(2) },
-                2 => CswapToken { c1: bit(0), c2: bit(1), a: bit(2), b: bit(3) },
+                0 => CswapToken { c1: false, c2: false, c3: false, a: bit(0), b: false },
+                1 => CswapToken { c1: bit(0), c2: false, c3: false, a: bit(1), b: bit(2) },
+                2 => CswapToken { c1: bit(0), c2: bit(1), c3: false, a: bit(2), b: bit(3) },
+                3 => CswapToken { c1: bit(0), c2: bit(1), c3: bit(2), a: bit(3), b: bit(4) },
                 _ => unreachable!(),
             }
         })
@@ -187,6 +195,21 @@ fn cswap_branches(k: usize, out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
             vec![("c1", true), ("c2", true), ("a", pol)],
             vec![("c1", false), ("b", pol)],
             vec![("c2", false), ("b", pol)],
+        ],
+        (3, "c1") => vec![vec![("c1", pol)]],
+        (3, "c2") => vec![vec![("c2", pol)]],
+        (3, "c3") => vec![vec![("c3", pol)]],
+        (3, "a") => vec![
+            vec![("c1", true), ("c2", true), ("c3", true), ("b", pol)],
+            vec![("c1", false), ("a", pol)],
+            vec![("c2", false), ("a", pol)],
+            vec![("c3", false), ("a", pol)],
+        ],
+        (3, "b") => vec![
+            vec![("c1", true), ("c2", true), ("c3", true), ("a", pol)],
+            vec![("c1", false), ("b", pol)],
+            vec![("c2", false), ("b", pol)],
+            vec![("c3", false), ("b", pol)],
         ],
         other => panic!("no branch table for {other:?}"),
     }
@@ -257,7 +280,7 @@ pub fn cswap_netlist(
     tokens: &[CswapToken],
     functional: bool,
 ) -> String {
-    assert!(k <= 2, "k must be 0, 1, or 2");
+    assert!(k <= 3, "k must be 0, 1, 2, or 3");
     assert!(!tokens.is_empty(), "need at least one token");
     let q = period_s / 4.0;
     let vdd = rung.vdd();
@@ -566,7 +589,7 @@ pub struct CswapEnergyPoint {
 /// The all-active energy token: every control and both data high (the
 /// heaviest routing case — at k ≥ 1 the swap path is exercised).
 fn energy_token() -> CswapToken {
-    CswapToken { c1: true, c2: true, a: true, b: true }
+    CswapToken { c1: true, c2: true, c3: true, a: true, b: true }
 }
 
 /// The energy deck: the all-active token repeated so the measured settled
@@ -628,8 +651,8 @@ mod tests {
                 last_idx = r.token_idx;
                 let t = r.token;
                 eprintln!(
-                    "k{k} {rung:?} token {}: c1={} c2={} a={} b={} -> {:?}",
-                    r.token_idx, t.c1 as u8, t.c2 as u8, t.a as u8, t.b as u8,
+                    "k{k} {rung:?} token {}: c1={} c2={} c3={} a={} b={} -> {:?}",
+                    r.token_idx, t.c1 as u8, t.c2 as u8, t.c3 as u8, t.a as u8, t.b as u8,
                     cswap_out(k, t)
                 );
             }
@@ -693,6 +716,11 @@ mod tests {
         truth_table_rung0(2);
     }
 
+    #[test]
+    fn cswap_k3_truth_table_rung0() {
+        truth_table_rung0(3);
+    }
+
     /// Rung-0 adiabatic slope for the Fredkin cell: 3 decades, slope ≈ −1.
     #[test]
     fn cswap_k1_slope_rung0() {
@@ -718,6 +746,32 @@ mod tests {
         assert!(
             (-1.15..=-0.85).contains(&slope),
             "k1 rung0 slope must be ≈ −1, got {slope:.4}"
+        );
+    }
+
+    /// Rung-0 adiabatic slope for the 3-control CSWAP cell.
+    #[test]
+    fn cswap_k3_slope_rung0() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        let periods = [1e-8, 1e-7, 1e-6, 1e-5];
+        let curve = cswap_energy_curve(3, DeviceRung::Rung0Level1, &periods).unwrap();
+        for p in &curve {
+            eprintln!(
+                "k3 rung0 T={:.2e}: etot={:.3e} epc={:.3e} evdd={:.3e} ein={:.3e} eack={:.3e} vmax={:.3}",
+                p.period_s, p.etot, p.epc, p.evdd, p.ein, p.eack, p.vmax
+            );
+            assert!(p.etot > 0.0, "energy must be positive: {p:?}");
+            assert!(p.vmax > 0.9, "cell must do work (vmax {:.3} V)", p.vmax);
+            assert!(p.ein.abs() < 1e-17 && p.eack.abs() < 1e-17, "boundary sources must be ~0: {p:?}");
+        }
+        let slope = curve_slope(&curve);
+        eprintln!("k3 rung0 slope = {slope:.4}");
+        assert!(
+            (-1.15..=-0.85).contains(&slope),
+            "k3 rung0 slope must be ≈ −1, got {slope:.4}"
         );
     }
 
@@ -750,6 +804,11 @@ mod tests {
     #[test]
     fn cswap_k2_truth_table_sky130() {
         truth_table_sky130(2);
+    }
+
+    #[test]
+    fn cswap_k3_truth_table_sky130() {
+        truth_table_sky130(3);
     }
 
     /// Rung-1 slope over the adiabatic regime (2.5 decades). Real silicon:
@@ -817,5 +876,13 @@ mod tests {
     #[test]
     fn cswap_k2_slope_sky130() {
         slope_sky130(2, [1e-8, 1e-7, 1e-6], -1.15, -0.7);
+    }
+
+    // k = 3: 4 series TGs in the swap path push the R_on·C knee ~½ decade
+    // higher than k = 2; shift the window accordingly.
+
+    #[test]
+    fn cswap_k3_slope_sky130() {
+        slope_sky130(3, [3.16e-8, 3.16e-7, 3.16e-6], -1.15, -0.7);
     }
 }
