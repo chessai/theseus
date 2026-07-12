@@ -116,7 +116,7 @@ pub fn bits_of(value: &Value, ty: &Type) -> Result<Vec<bool>, LowerError> {
             let max_w = wa.max(wb);
             let mut bits = vec![true]; // tag = Left
             bits.extend(bits_of(a, ta)?);
-            bits.extend(std::iter::repeat(false).take(max_w - wa)); // pad
+            bits.extend(std::iter::repeat_n(false, max_w - wa)); // pad
             Ok(bits)
         }
         (Type::Sum(ta, tb), Value::Right(b)) => {
@@ -125,7 +125,7 @@ pub fn bits_of(value: &Value, ty: &Type) -> Result<Vec<bool>, LowerError> {
             let max_w = wa.max(wb);
             let mut bits = vec![false]; // tag = Right
             bits.extend(bits_of(b, tb)?);
-            bits.extend(std::iter::repeat(false).take(max_w - wb)); // pad
+            bits.extend(std::iter::repeat_n(false, max_w - wb)); // pad
             Ok(bits)
         }
         (Type::Prod(ta, tb), Value::Pair(a, b)) => {

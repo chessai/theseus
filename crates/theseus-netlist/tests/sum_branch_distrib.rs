@@ -352,7 +352,7 @@ fn all_netlists_validate() {
         Iso::SwapSum(bit(), Type::One),
     ];
     for iso in &isos {
-        let net = lower_iso(iso).expect(&format!("lowering {iso:?}"));
+        let net = lower_iso(iso).unwrap_or_else(|e| panic!("lowering {iso:?}: {e:?}"));
         assert_eq!(net.validate(), Ok(()), "validate failed for {iso:?}");
     }
 }
