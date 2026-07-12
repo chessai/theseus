@@ -765,12 +765,15 @@ impl Builder {
             match cell.kind {
                 CellKind::K0 => {
                     // K0: no promotion.  Recompute depth from actual
-                    // input arrival times.
+                    // input arrival times.  NB: the consumer may
+                    // reference the producer's pair rail-swapped (a
+                    // zero-cell NOT), so look up both orientations.
                     let in_pair = cell.inputs[0];
-                    let (_, in_depth) = pair_depth_map
+                    let in_depth = pair_depth_map
                         .get(&in_pair)
-                        .copied()
-                        .unwrap_or((in_pair, cell.depth));
+                        .or_else(|| pair_depth_map.get(&in_pair.swapped()))
+                        .map(|&(_, d)| d)
+                        .unwrap_or(cell.depth);
                     let new_depth = in_depth;
                     let out_pair = cell.outputs[0];
                     let out_depth = new_depth + 1;
@@ -797,10 +800,16 @@ impl Builder {
                         cur_tag
                     };
 
-                    // Recompute depth from actual arrivals.
+                    // Recompute depth from actual arrivals (looking up
+                    // both rail orientations — a consumer may see the
+                    // producer's pair swapped by a zero-cell NOT).
                     let mut latest = control_tag.depth;
                     for ip in &cell.inputs {
-                        if let Some(&(_, d)) = pair_depth_map.get(ip) {
+                        let d = pair_depth_map
+                            .get(ip)
+                            .or_else(|| pair_depth_map.get(&ip.swapped()))
+                            .map(|&(_, d)| d);
+                        if let Some(d) = d {
                             latest = latest.max(d);
                         } else {
                             latest = latest.max(cell.depth);
@@ -841,12 +850,17 @@ impl Builder {
             }
         }
 
-        // Reconstruct data_outs with correct depths from the map.
+        // Reconstruct data_outs with correct depths from the map
+        // (both rail orientations; keep the caller's orientation).
         let fixed_outs: Vec<BitAt> = sub_outs
             .iter()
             .map(|b| {
                 if let Some(&(pair, depth)) = pair_depth_map.get(&b.pair) {
                     BitAt { pair, depth }
+                } else if let Some(&(_, depth)) =
+                    pair_depth_map.get(&b.pair.swapped())
+                {
+                    BitAt { pair: b.pair, depth }
                 } else {
                     *b
                 }
@@ -855,7 +869,10 @@ impl Builder {
 
         // Update ancilla output depths from the promotion map.
         for anc in &mut self.ancilla_outputs {
-            if let Some(&(_, depth)) = pair_depth_map.get(&anc.0) {
+            if let Some(&(_, depth)) = pair_depth_map
+                .get(&anc.0)
+                .or_else(|| pair_depth_map.get(&anc.0.swapped()))
+            {
                 anc.1 = depth;
             }
         }
