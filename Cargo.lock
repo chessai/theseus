@@ -183,9 +183,11 @@ dependencies = [
 name = "theseus-netlist"
 version = "0.1.0-dev"
 dependencies = [
+ "theseus-check",
  "theseus-core",
  "theseus-eval",
  "theseus-spice",
+ "theseus-syntax",
 ]
 
 [[package]]
@@ -194,8 +196,11 @@ version = "0.1.0-dev"
 dependencies = [
  "ron",
  "serde",
+ "theseus-check",
  "theseus-core",
+ "theseus-eval",
  "theseus-netlist",
+ "theseus-syntax",
 ]
 
 [[package]]
