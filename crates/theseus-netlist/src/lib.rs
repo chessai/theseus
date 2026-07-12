@@ -22,23 +22,40 @@
 //! ([`ir::cell`], the ADR-0026 C2.7 artifact): k-CSWAP cells (ADR-0027)
 //! with phase = depth mod P (C2.3), rail-pair wires, typed ports.
 //!
-//! Later slices consume that artifact: the tick-level phased-sim with
-//! its per-tick INV-TOKEN assertion, the tick-exact balancer (C2.2), and
-//! the energy annotation over the characterization DB (ADR-0028).
+//! That artifact now has its tick-level executor: [`sim::simulate`]
+//! walks the cells in tick order, asserts the *dynamic* INV-TOKEN
+//! invariant every tick (exactly one line of each rail pair high at its
+//! valid tick), and returns decoded outputs + per-(kind, phase)
+//! occupancy. Later slices: the tick-exact balancer (C2.2); the energy
+//! annotation over the characterization DB lives in
+//! `theseus-spice::annotate` (ADR-0028).
 
 pub mod canonicalize;
 pub mod ir;
 pub mod lower;
+pub mod sim;
 
 pub mod schedule {}
 pub mod flatten {}
 pub mod sim_typed {
-    //! Asserts `scheduled-valid ⇒ well-formed` on every typed net, every
-    //! cycle, in test builds (ADR-0012). Emits typed-decoded VCD.
+    //! Typed-token simulation: the tick-level phased-sim ([`crate::sim`])
+    //! runs at typed-token granularity — one boolean token per rail pair
+    //! per tick — asserting the dynamic INV-TOKEN protocol every tick
+    //! (spirit of ADR-0012's always-on validity assertion).
+    pub use crate::sim::{simulate, SimError, SimResult};
 }
-pub mod sim_bits {}
+pub mod sim_bits {
+    //! TODO(bit-level sim): the electrical (rail, mirror) SR granularity
+    //! *below* the token line — per-phase trapezoid edges and C2.6
+    //! validity-window arithmetic, pinned empirically in B5 against the
+    //! reference decks. Deferred; the typed-token sim ([`crate::sim`])
+    //! is this slice's executor.
+}
 
 pub use canonicalize::canonicalize;
 pub use ir::cell::{Cell, CellKind, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT};
 pub use ir::typed::{Monoid, NodeKind, TypedNode};
-pub use lower::{lower, lower_iso, LowerError};
+pub use lower::{
+    bits_of, lower, lower_iso, prim_from_bits, rail_width, value_from_bits, LowerError,
+};
+pub use sim::{simulate, SimError, SimResult};

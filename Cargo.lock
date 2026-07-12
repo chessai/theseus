@@ -194,6 +194,8 @@ version = "0.1.0-dev"
 dependencies = [
  "ron",
  "serde",
+ "theseus-core",
+ "theseus-netlist",
 ]
 
 [[package]]

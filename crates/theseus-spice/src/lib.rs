@@ -16,7 +16,9 @@
 //!   INV-STAMP enforced (ADR-0028).
 
 pub mod phased {
-    //! Phased cell netlist + tick-level simulator (the C2.7 artifact).
+    //! The phased cell netlist + tick-level simulator (the C2.7
+    //! artifact) live in `theseus-netlist` (`ir::cell` + `sim`); this
+    //! crate consumes them for energy annotation ([`crate::annotate`]).
     //! Validity-window protocol checks carry window-TBD(bench) holes
     //! until C2.6 pinning (risk register).
 }
@@ -30,6 +32,7 @@ pub mod bench;
 pub mod adiabatic;
 pub mod cswap;
 pub mod artifact;
+pub mod annotate;
 pub mod chardb;
 pub mod dutmatrix;
 pub mod energy;

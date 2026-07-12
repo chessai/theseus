@@ -9,6 +9,15 @@ repository.workspace = true
 [dependencies]
 serde = { workspace = true }
 ron = { workspace = true }
+# Energy annotation (ADR-0028): Σ over the compiled cell netlist's cells
+# of char-DB energies. No cycle: theseus-netlist only *dev*-deps this
+# crate (for truth-function cross-checks), which cargo permits.
+theseus-netlist = { path = "../theseus-netlist" }
+
+[dev-dependencies]
+# The energy-ascent demo/tests compile real isos (Fredkin, Reg(n),
+# composites) before annotating them.
+theseus-core = { path = "../theseus-core" }
 
 [lints]
 workspace = true

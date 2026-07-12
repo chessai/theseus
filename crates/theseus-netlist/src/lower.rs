@@ -31,8 +31,9 @@
 //!   the balancer's worklist.
 
 use core::fmt;
+use std::collections::BTreeMap;
 
-use theseus_core::{enumerate_values, Iso, PrimDef, Type, TypeError, Value};
+use theseus_core::{admit, enumerate_values, Iso, PrimDef, Type, TypeError, Value};
 
 use crate::canonicalize::canonicalize;
 use crate::ir::cell::{Cell, CellKind, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT};
@@ -119,6 +120,76 @@ pub fn bits_of(value: &Value, ty: &Type) -> Result<Vec<bool>, LowerError> {
         }
         _ => Err(LowerError::UnsupportedType(ty.clone())),
     }
+}
+
+/// Rebuild a value of `ty` from its flattened bit string — the inverse
+/// of [`bits_of`]. Errors if `ty` has no dual-rail encoding.
+///
+/// # Panics
+///
+/// Panics if `bits.len() != rail_width(ty)` (a caller bug, not a data
+/// condition).
+pub fn value_from_bits(ty: &Type, bits: &[bool]) -> Result<Value, LowerError> {
+    fn go(ty: &Type, bits: &mut std::slice::Iter<'_, bool>) -> Result<Value, LowerError> {
+        match ty {
+            Type::One => Ok(Value::Unit),
+            t if is_bit(t) => {
+                let b = *bits.next().expect("bit string too short for type");
+                Ok(if b { Value::left(Value::Unit) } else { Value::right(Value::Unit) })
+            }
+            Type::Prod(a, b) => {
+                let va = go(a, bits)?;
+                let vb = go(b, bits)?;
+                Ok(Value::pair(va, vb))
+            }
+            _ => Err(LowerError::UnsupportedType(ty.clone())),
+        }
+    }
+    let mut it = bits.iter();
+    let v = go(ty, &mut it)?;
+    assert!(it.next().is_none(), "bit string too long for type");
+    Ok(v)
+}
+
+/// Build an admitted [`PrimDef`] from a bijective function on flattened
+/// bits (both truth tables enumerated over the finite domain). This is
+/// how demos, benches, and tests phrase "the Fredkin prim" without
+/// hand-writing truth tables.
+///
+/// Errors if either boundary type has no dual-rail encoding.
+///
+/// # Panics
+///
+/// Panics if the resulting def fails [`admit`] — i.e. `f` is not a
+/// bijection between the two types' bit strings (a caller bug).
+pub fn prim_from_bits(
+    name: &str,
+    input_ty: Type,
+    output_ty: Type,
+    f: impl Fn(&[bool]) -> Vec<bool>,
+) -> Result<PrimDef, LowerError> {
+    let mut forward = BTreeMap::new();
+    let mut backward = BTreeMap::new();
+    for v in enumerate_values(&input_ty) {
+        let out_bits = f(&bits_of(&v, &input_ty)?);
+        let w = value_from_bits(&output_ty, &out_bits)?;
+        forward.insert(v.clone(), w.clone());
+        backward.insert(w, v);
+    }
+    let def = PrimDef {
+        forward_name: name.into(),
+        backward_name: format!("{name}_inv"),
+        input_ty,
+        output_ty,
+        forward,
+        backward,
+    };
+    assert_eq!(
+        admit(&def),
+        Ok(()),
+        "prim_from_bits: {name:?} is not admissible (f not a bijection?)"
+    );
+    Ok(def)
 }
 
 /// A logical bit in flight: its rail pair and its arrival tick.
@@ -354,39 +425,10 @@ pub fn lower_iso(iso: &Iso) -> Result<PhasedCellNetlist, LowerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
-    use theseus_core::{admit, type_of};
+    use theseus_core::type_of;
 
     fn bit() -> Type {
         Type::sum(Type::One, Type::One)
-    }
-
-    fn tt() -> Value {
-        Value::left(Value::Unit) // the 1 token
-    }
-
-    fn ff() -> Value {
-        Value::right(Value::Unit) // the 0 token
-    }
-
-    /// Rebuild a value of `ty` from a bit string (inverse of `bits_of`).
-    fn value_from_bits(ty: &Type, bits: &mut std::slice::Iter<'_, bool>) -> Value {
-        match ty {
-            Type::One => Value::Unit,
-            t if is_bit(t) => {
-                if *bits.next().expect("enough bits") {
-                    tt()
-                } else {
-                    ff()
-                }
-            }
-            Type::Prod(a, b) => {
-                let va = value_from_bits(a, bits);
-                let vb = value_from_bits(b, bits);
-                Value::pair(va, vb)
-            }
-            _ => panic!("unencodable type {ty}"),
-        }
     }
 
     /// Build an admitted PrimDef from a bijective bit function.
@@ -396,24 +438,7 @@ mod tests {
         output_ty: Type,
         f: impl Fn(&[bool]) -> Vec<bool>,
     ) -> PrimDef {
-        let mut forward = BTreeMap::new();
-        let mut backward = BTreeMap::new();
-        for v in enumerate_values(&input_ty) {
-            let out_bits = f(&bits_of(&v, &input_ty).unwrap());
-            let w = value_from_bits(&output_ty, &mut out_bits.iter());
-            forward.insert(v.clone(), w.clone());
-            backward.insert(w, v);
-        }
-        let def = PrimDef {
-            forward_name: name.into(),
-            backward_name: format!("{name}_inv"),
-            input_ty,
-            output_ty,
-            forward,
-            backward,
-        };
-        assert_eq!(admit(&def), Ok(()), "test prim must be admissible");
-        def
+        prim_from_bits(name, input_ty, output_ty, f).expect("encodable test prim")
     }
 
     fn three_bits() -> Type {
@@ -746,7 +771,7 @@ mod tests {
         for ty in [bit(), three_bits(), four_bits(), Type::prod(Type::One, bit())] {
             for v in enumerate_values(&ty) {
                 let bits = bits_of(&v, &ty).unwrap();
-                assert_eq!(value_from_bits(&ty, &mut bits.iter()), v);
+                assert_eq!(value_from_bits(&ty, &bits), Ok(v));
             }
         }
     }
