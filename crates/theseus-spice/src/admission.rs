@@ -74,6 +74,7 @@ use std::io;
 
 use crate::adiabatic::{
     adiabatic_tg_curve_rung, cmos_baseline_curve_rung, pfal_curve_rung, DeviceRung, FetKind,
+    Sky130Variant,
 };
 use crate::bench::{parse_meas, run_ngspice_raw};
 use crate::cswap::{
@@ -763,7 +764,17 @@ fn tran_step(rung: DeviceRung, period: f64) -> f64 {
 /// energy integrals, hold/rest level measurements on cycles 1..3, cycle-
 /// boundary FINDs, and per-source integrals over cycle 2. `reversed`
 /// time-reverses the trapezoid (rise/hold/fall/low → low/rise/hold/fall).
-fn tg_admission_deck(rung: DeviceRung, period: f64, reversed: bool) -> String {
+///
+/// `variant` selects the rung-1 (Vt × body) device cards (ignored at rung 0,
+/// which has one device flavor); `c_load_f` is the output load. The
+/// pre-matrix behavior is `(Sky130Variant::default(), 1e-12)`.
+fn tg_admission_deck(
+    rung: DeviceRung,
+    period: f64,
+    reversed: bool,
+    variant: Sky130Variant,
+    c_load_f: f64,
+) -> String {
     let q = period / 4.0;
     let vdd = rung.vdd();
     let step = tran_step(rung, period);
@@ -777,7 +788,8 @@ fn tg_admission_deck(rung: DeviceRung, period: f64, reversed: bool) -> String {
     let (hold_off, rest_off) = if reversed { (2.0 * q, 0.0) } else { (q, 3.0 * q) };
     let mut l: Vec<String> = Vec::new();
     l.push(format!(
-        "adiabatic TG buffer admission deck, {rung:?} (T={period:.6e} s{})",
+        "adiabatic TG buffer admission deck, {rung:?} variant {} load {c_load_f:.4e} F (T={period:.6e} s{})",
+        variant.key(),
         if reversed { ", reversed phase sequence" } else { "" }
     ));
     l.push(rung.model_header());
@@ -785,9 +797,14 @@ fn tg_admission_deck(rung: DeviceRung, period: f64, reversed: bool) -> String {
     l.push(format!("Vpc pc 0 PWL({pwl}) r=0"));
     l.push(format!("Vin ing 0 DC {vdd}"));
     l.push("Vinb inb 0 DC 0.0".into());
-    l.push(rung.fet("1", FetKind::Nmos, "pc", "ing", "out", "0", 4.0, 0.15));
-    l.push(rung.fet("2", FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15));
-    l.push("Cout out 0 1p".into());
+    match rung {
+        DeviceRung::Rung0Level1 => {
+            l.push(rung.fet("1", FetKind::Nmos, "pc", "ing", "out", "0", 4.0, 0.15));
+            l.push(rung.fet("2", FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15));
+        }
+        DeviceRung::Rung1Sky130 => l.extend(variant.tg_cards("1", "2")),
+    }
+    l.push(format!("Cout out 0 {c_load_f:.4e}"));
     l.push("Bpc ppc 0 V = -V(pc)*I(Vpc)".into());
     l.push("Bvd pvd 0 V = -V(vdd)*I(Vdd)".into());
     l.push("Bgt pgt 0 V = -V(ing)*I(Vin)-V(inb)*I(Vinb)".into());
@@ -823,9 +840,37 @@ fn tg_admission_deck(rung: DeviceRung, period: f64, reversed: bool) -> String {
 }
 
 fn admit_tg(rung: DeviceRung) -> io::Result<AdmissionReport> {
+    admit_tg_impl(rung, Sky130Variant::default(), 1e-12, None)
+}
+
+/// Run the five TG-buffer admission gates for one rung-1 sky130 (Vt × body)
+/// `variant` at load `c_load_f` — the per-variant admission of the M3a W5
+/// bench DUT matrix.
+///
+/// `scaling_points` is the variant's own `(period_s, energy_J)` sweep
+/// (ascending, ≥ 5 points — the gate-5 minimum), normally the very curve the
+/// matrix driver just characterized into the DB, so admission re-simulates
+/// only the gate-1..4 functional/closure/reverse decks and never repeats the
+/// sweep. Gates and thresholds are identical to [`admit`] on
+/// [`CandidateCell::AdiabaticTg`]; the default variant at 1 pF reproduces it
+/// exactly.
+pub fn admit_tg_sky130_variant(
+    variant: Sky130Variant,
+    c_load_f: f64,
+    scaling_points: Vec<(f64, f64)>,
+) -> io::Result<AdmissionReport> {
+    admit_tg_impl(DeviceRung::Rung1Sky130, variant, c_load_f, Some(scaling_points))
+}
+
+fn admit_tg_impl(
+    rung: DeviceRung,
+    variant: Sky130Variant,
+    c_load_f: f64,
+    scaling_points: Option<Vec<(f64, f64)>>,
+) -> io::Result<AdmissionReport> {
     let period = functional_period(rung);
     let vdd = rung.vdd();
-    let out = run_ngspice_raw(&tg_admission_deck(rung, period, false))?;
+    let out = run_ngspice_raw(&tg_admission_deck(rung, period, false, variant, c_load_f))?;
 
     // Gate 1: single-row truth table (buffer passes the clock token), typed
     // single-rail decode, sampled mid-hold and mid-rest of the settled cycle.
@@ -861,9 +906,12 @@ fn admit_tg(rung: DeviceRung) -> io::Result<AdmissionReport> {
     let (e2, e3) = (meas(&out, "ecyc2"), meas(&out, "ecyc3"));
     let parts = meas(&out, "cpc") + meas(&out, "cvd") + meas(&out, "cgt");
     let (v0, v1) = (meas(&out, "sv0"), meas(&out, "ev0"));
-    let d_stored = 0.5 * 1e-12 * (v1 * v1 - v0 * v0);
+    let d_stored = 0.5 * c_load_f * (v1 * v1 - v0 * v0);
     let conservation = closure_result(
-        &format!("TG buffer, T={period:.1e} s, settled cycle 2→3"),
+        &format!(
+            "TG buffer [{} C={c_load_f:.4e} F], T={period:.1e} s, settled cycle 2→3",
+            variant.key()
+        ),
         e2,
         e3,
         parts,
@@ -872,7 +920,7 @@ fn admit_tg(rung: DeviceRung) -> io::Result<AdmissionReport> {
 
     // Gate 4: time-reversed trapezoid; the buffer is self-inverse (identity
     // adjoint), so the same single-row table must decode.
-    let reverse_drive = match run_ngspice_raw(&tg_admission_deck(rung, period, true)) {
+    let reverse_drive = match run_ngspice_raw(&tg_admission_deck(rung, period, true, variant, c_load_f)) {
         Err(e) => GateResult::fail(format!(
             "reverse-drive simulation failed outright ({e}) — recorded, non-blocking"
         )),
@@ -895,9 +943,13 @@ fn admit_tg(rung: DeviceRung) -> io::Result<AdmissionReport> {
         }
     };
 
-    // Gate 5: the cell's own E(period) curve.
-    let curve = adiabatic_tg_curve_rung(&sweep_periods(rung), rung);
-    let (scaling, scaling_evidence) = scaling_verdict(curve.points);
+    // Gate 5: the cell's own E(period) curve — the caller-supplied variant
+    // sweep when given (the matrix path), else the canonical-cell sweep.
+    let points = match scaling_points {
+        Some(p) => p,
+        None => adiabatic_tg_curve_rung(&sweep_periods(rung), rung).points,
+    };
+    let (scaling, scaling_evidence) = scaling_verdict(points);
     Ok(AdmissionReport {
         cell: CandidateCell::AdiabaticTg,
         rung,

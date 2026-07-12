@@ -23,7 +23,9 @@
 //! * Measure inside the adiabatic regime (`T ≫ R_on·C`) and with a load large
 //!   enough to keep the tiny recovered-energy signal above the solver noise floor.
 
-use crate::bench::{log_log_slope, run_energy};
+use std::io;
+
+use crate::bench::{log_log_slope, parse_meas, run_energy, run_ngspice_raw};
 
 // ---------------------------------------------------------------------------
 // Device-model rungs (ADR-0032 idealization ladder)
@@ -131,6 +133,339 @@ pub fn sky130_available() -> bool {
     std::env::var("THESEUS_SKY130_LIB")
         .map(|p| std::path::Path::new(&p).is_file())
         .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
+// sky130 device-variant axes (M3a W5 bench DUT matrix; ADR-0024 B2.3)
+// ---------------------------------------------------------------------------
+
+/// Threshold-voltage flavor for rung-1 sky130 1.8 V core devices — one of the
+/// two ADR-0024 B2.3 characterization axes (Vt flavor is *measured*, not
+/// pre-decided).
+///
+/// Discovered device mapping (sky130A, pinned PDK, `tt` section of
+/// `sky130.lib.spice`):
+///
+/// | flavor | NMOS                          | PMOS                          |
+/// |--------|-------------------------------|-------------------------------|
+/// | std    | `sky130_fd_pr__nfet_01v8`     | `sky130_fd_pr__pfet_01v8`     |
+/// | lvt    | `sky130_fd_pr__nfet_01v8_lvt` | `sky130_fd_pr__pfet_01v8_lvt` |
+/// | hvt    | — (see below)                 | `sky130_fd_pr__pfet_01v8_hvt` |
+///
+/// Two real PDK constraints, handled explicitly rather than hidden:
+/// * **There is no hvt NMOS in the sky130 1.8 V core family** (the closest
+///   things are 3.3/5 V native devices, unusable at VDD = 1.8 V). The `Hvt`
+///   axis point therefore emits the *std* NMOS and carries the hvt flavor on
+///   the PMOS only. The variant key still says `hvt`; this table is the
+///   record of what that actually means on this PDK.
+/// * The lvt PMOS is only binned for **L ≥ 0.35 µm** (`lmin = 3.5e-7` in
+///   `sky130_fd_pr__pfet_01v8_lvt__tt.corner.spice`; ngspice hard-errors
+///   "could not find a valid modelname" below it). [`Sky130Vt::fet`] clamps
+///   the lvt PMOS channel length up to 0.35 µm — the process minimum for
+///   that flavor, not a tuning choice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Sky130Vt {
+    /// Standard Vt (the rung-1 default; identical devices to [`DeviceRung::fet`]).
+    #[default]
+    Std,
+    /// Low Vt: lower R_on (T-gates like it), higher subthreshold leakage.
+    Lvt,
+    /// High Vt (PMOS only on this PDK — see the type-level table).
+    Hvt,
+}
+
+impl Sky130Vt {
+    /// All flavors, in axis order.
+    pub const ALL: [Sky130Vt; 3] = [Sky130Vt::Std, Sky130Vt::Lvt, Sky130Vt::Hvt];
+
+    /// Short key for DB/artifact naming.
+    pub fn key(self) -> &'static str {
+        match self {
+            Sky130Vt::Std => "std",
+            Sky130Vt::Lvt => "lvt",
+            Sky130Vt::Hvt => "hvt",
+        }
+    }
+
+    /// The sky130 NMOS subcircuit for this flavor. `Hvt` falls back to the
+    /// std device — no hvt NMOS exists in the 1.8 V core family (see the
+    /// type-level table).
+    pub fn nmos_model(self) -> &'static str {
+        match self {
+            Sky130Vt::Std | Sky130Vt::Hvt => "sky130_fd_pr__nfet_01v8",
+            Sky130Vt::Lvt => "sky130_fd_pr__nfet_01v8_lvt",
+        }
+    }
+
+    /// The sky130 PMOS subcircuit for this flavor (all three exist).
+    pub fn pmos_model(self) -> &'static str {
+        match self {
+            Sky130Vt::Std => "sky130_fd_pr__pfet_01v8",
+            Sky130Vt::Lvt => "sky130_fd_pr__pfet_01v8_lvt",
+            Sky130Vt::Hvt => "sky130_fd_pr__pfet_01v8_hvt",
+        }
+    }
+
+    /// One rung-1 sky130 transistor card at this Vt flavor. Same card shape
+    /// and units as [`DeviceRung::fet`] at rung 1 (microns, `XM` subcircuit
+    /// instance, pin order d g s b); `Std` emits byte-identical cards.
+    ///
+    /// The lvt PMOS channel length is clamped up to its 0.35 µm binning
+    /// minimum (a hard PDK limit; ngspice errors below it).
+    // Same irreducible arity as `DeviceRung::fet`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fet(
+        self,
+        name: &str,
+        kind: FetKind,
+        d: &str,
+        g: &str,
+        s: &str,
+        b: &str,
+        w_um: f64,
+        l_um: f64,
+    ) -> String {
+        let (model, l_um) = match kind {
+            FetKind::Nmos => (self.nmos_model(), l_um),
+            FetKind::Pmos => {
+                let l_min = if self == Sky130Vt::Lvt { 0.35 } else { 0.0 };
+                (self.pmos_model(), l_um.max(l_min))
+            }
+        };
+        format!("XM{name} {d} {g} {s} {b} {model} W={w_um} L={l_um}")
+    }
+}
+
+/// NMOS body configuration — the other ADR-0024 B2.3 axis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BodyConfig {
+    /// Baseline: NMOS bulk tied to GND (and PMOS bulk to VDD) — the shared
+    /// p-substrate configuration every existing rung-1 cell uses. The NMOS
+    /// pays the full body effect as its source swings above GND.
+    #[default]
+    BodyToRail,
+    /// Deep-n-well isolated NMOS body: the NMOS sits in its own p-well,
+    /// tied to the cell's load node (source-tied body — the body-bias the
+    /// DNW makes possible), inside a deep n-well tapped to VDD. The SPICE
+    /// realization is (a) the NMOS bulk pin wired to the load node instead
+    /// of GND, and (b) the PDK's DNW parasitic junction stack
+    /// ([`dnw_parasitic_stack`]) — the isolated p-well→DNW diode and the
+    /// substrate→DNW diode — so the isolation's capacitance and leakage are
+    /// paid, not idealized away. The PMOS n-well is isolated by
+    /// construction on this process and stays bulk-to-VDD.
+    DeepNWell,
+}
+
+impl BodyConfig {
+    /// Both configurations, in axis order.
+    pub const ALL: [BodyConfig; 2] = [BodyConfig::BodyToRail, BodyConfig::DeepNWell];
+
+    /// Short key for DB/artifact naming.
+    pub fn key(self) -> &'static str {
+        match self {
+            BodyConfig::BodyToRail => "b2r",
+            BodyConfig::DeepNWell => "dnw",
+        }
+    }
+}
+
+/// Assumed isolated-p-well footprint for the DNW parasitic stack, µm²
+/// (a 5 µm × 8 µm well enclosing the W=4 µm NMOS; the sky130 lib's
+/// `.option scale=1.0u` makes the diode `area`/`pj` instance parameters
+/// plain micron numbers, like the FET geometry).
+pub const DNW_WELL_AREA_UM2: f64 = 40.0;
+/// Perimeter of the same well footprint, µm.
+pub const DNW_WELL_PERIM_UM: f64 = 26.0;
+
+/// The deep-n-well parasitic junction stack (PDK models, included by the
+/// `tt` lib section via `all.spice`): the isolated p-well (`pw`, anode) into
+/// the deep n-well (`dnw`, cathode), and the p-substrate (`psub`, anode)
+/// into the same deep n-well. Both reverse-biased in normal operation with
+/// the DNW tap at VDD; their junction capacitance and (tiny, tt-corner)
+/// saturation current are what DNW isolation actually costs.
+pub fn dnw_parasitic_stack(pw: &str, dnw: &str, psub: &str) -> String {
+    format!(
+        "DPW {pw} {dnw} sky130_fd_pr__model__parasitic__diode_pw2dn \
+         area={DNW_WELL_AREA_UM2} pj={DNW_WELL_PERIM_UM}\n\
+         DPS {psub} {dnw} sky130_fd_pr__model__parasitic__diode_ps2dn \
+         area={DNW_WELL_AREA_UM2} pj={DNW_WELL_PERIM_UM}"
+    )
+}
+
+/// One point on the (Vt × body) variant grid for rung-1 sky130 cells.
+/// `Default` is `{Std, BodyToRail}` — exactly the devices and wiring the
+/// existing rung-1 cells emit, so all pre-variant behavior is unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Sky130Variant {
+    pub vt: Sky130Vt,
+    pub body: BodyConfig,
+}
+
+impl Sky130Variant {
+    /// The full 3 × 2 (Vt × body) grid, in deterministic axis order.
+    pub fn all() -> Vec<Sky130Variant> {
+        let mut v = Vec::with_capacity(6);
+        for vt in Sky130Vt::ALL {
+            for body in BodyConfig::ALL {
+                v.push(Sky130Variant { vt, body });
+            }
+        }
+        v
+    }
+
+    /// Short key for DB/artifact naming, e.g. `"lvt-dnw"`.
+    pub fn key(self) -> String {
+        format!("{}-{}", self.vt.key(), self.body.key())
+    }
+
+    /// The canonical adiabatic-TG device cards for this variant: the held-ON
+    /// transmission gate between the power-clock node `pc` and the load node
+    /// `out` (gates `ing`/`inb`, W=4/8 µm N/P, L=0.15 µm — same geometry as
+    /// the single-variant cell), with the NMOS bulk wired per [`BodyConfig`]
+    /// and the DNW parasitic stack appended when isolated. Shared by the
+    /// energy deck and the admission deck so the two always simulate the
+    /// same device under test.
+    pub fn tg_cards(self, n_name: &str, p_name: &str) -> Vec<String> {
+        let n_bulk = match self.body {
+            BodyConfig::BodyToRail => "0",
+            BodyConfig::DeepNWell => "out",
+        };
+        let mut cards = vec![
+            self.vt.fet(n_name, FetKind::Nmos, "pc", "ing", "out", n_bulk, 4.0, 0.15),
+            self.vt.fet(p_name, FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15),
+        ];
+        if self.body == BodyConfig::DeepNWell {
+            cards.push(dnw_parasitic_stack("out", "vdd", "0"));
+        }
+        cards
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Load axis (M3a spec: min / 4× / 16×)
+// ---------------------------------------------------------------------------
+
+/// The minimum load of the M3a load axis, farads. Chosen so that 16×min =
+/// 1 pF — the canonical load the existing single-variant rung-1 TG cell is
+/// hardcoded to (that cell is literally the (std, body-to-rail, 16×) corner
+/// of the matrix) — while still sitting well above the TG's own parasitics
+/// (a few fF of junction + gate capacitance at this geometry), so the load
+/// term stays the dominant capacitance at every axis point.
+pub const TG_LOAD_MIN_F: f64 = 62.5e-15;
+
+/// The spec's three-point load axis: min, 4×min, 16×min.
+pub fn tg_load_axis() -> [f64; 3] {
+    [TG_LOAD_MIN_F, 4.0 * TG_LOAD_MIN_F, 16.0 * TG_LOAD_MIN_F]
+}
+
+/// Build the rung-1 sky130 adiabatic transmission-gate netlist for one
+/// power-clock `period_s`, at a (Vt × body) `variant` and an explicit load.
+///
+/// Same physics and accounting as the rung-1 arm of
+/// [`adiabatic_tg_netlist_rung`] (settled second cycle, every source
+/// integrated: `etot`/`epc`/`evdd`/`egat`, plus `vmax`), with the device
+/// cards swapped per [`Sky130Variant::tg_cards`] and the load parameterized.
+/// With `variant = Sky130Variant::default()` and `c_load_f = 1e-12` this is
+/// electrically identical to the existing cell (asserted by test).
+pub fn adiabatic_tg_netlist_sky130(
+    period_s: f64,
+    variant: Sky130Variant,
+    c_load_f: f64,
+) -> String {
+    let rung = DeviceRung::Rung1Sky130;
+    let q = period_s / 4.0;
+    let h = period_s / 2.0;
+    let tq = 3.0 * period_s / 4.0;
+    let vdd = rung.vdd();
+    // Same timestep policy as adiabatic_tg_netlist_rung at rung 1.
+    let step = (period_s / 4000.0).min(5e-11).max(period_s / 40_000.0);
+    let header = rung.model_header();
+    let cards = variant.tg_cards("1", "2").join("\n");
+    let stop = 2.0 * period_s;
+    let key = variant.key();
+    format!(
+        "\
+adiabatic transmission-gate cell, sky130 tt, variant {key}, load {c_load_f:.4e} F (T={period_s:.6e} s)
+{header}
+Vdd vdd 0 DC {vdd}
+Vpc pc 0 PWL(0 0 {q:.9e} {vdd} {h:.9e} {vdd} {tq:.9e} 0 {period_s:.9e} 0) r=0
+Vin  ing 0 DC {vdd}
+Vinb inb 0 DC 0.0
+{cards}
+Cout out 0 {c_load_f:.4e}
+Bpc  ppc  0 V = -V(pc)*I(Vpc)
+Bvdd pvdd 0 V = -V(vdd)*I(Vdd)
+Bgat pgat 0 V = -V(ing)*I(Vin)-V(inb)*I(Vinb)
+Btot ptot 0 V = V(ppc)+V(pvdd)+V(pgat)
+.control
+tran {step:.9e} {stop:.9e} uic
+meas tran etot INTEG V(ptot) FROM={period_s:.9e} TO={stop:.9e}
+meas tran epc  INTEG V(ppc)  FROM={period_s:.9e} TO={stop:.9e}
+meas tran evdd INTEG V(pvdd) FROM={period_s:.9e} TO={stop:.9e}
+meas tran egat INTEG V(pgat) FROM={period_s:.9e} TO={stop:.9e}
+meas tran vmax MAX V(out) FROM={period_s:.9e} TO={stop:.9e}
+.endc
+.end
+"
+    )
+}
+
+/// One measured point of a variant sweep: the settled-cycle energy
+/// decomposition (all sources, ADR-0028 C3.3 honest accounting) plus the
+/// output peak proving the cell did work.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TgVariantPoint {
+    /// Power-clock period, seconds.
+    pub period_s: f64,
+    /// Total energy from ALL sources over the settled cycle (the per-op figure).
+    pub etot: f64,
+    /// Power-clock share (the adiabatic/recoverable path).
+    pub epc: f64,
+    /// VDD-rail share: PMOS n-well bias, and under deep-n-well isolation the
+    /// DNW tap — the well/junction bookkeeping lives here.
+    pub evdd: f64,
+    /// Input gate-driver share.
+    pub egat: f64,
+    /// Output peak, volts.
+    pub vmax: f64,
+}
+
+/// Simulate one (variant, load, period) point and decode every measurement.
+pub fn adiabatic_tg_sky130_point(
+    period_s: f64,
+    variant: Sky130Variant,
+    c_load_f: f64,
+) -> io::Result<TgVariantPoint> {
+    let out = run_ngspice_raw(&adiabatic_tg_netlist_sky130(period_s, variant, c_load_f))?;
+    let get = |name: &str| {
+        parse_meas(&out, name).unwrap_or_else(|| {
+            panic!(
+                "measurement '{name}' missing from ngspice output for variant {} @ T={period_s:e}",
+                variant.key()
+            )
+        })
+    };
+    Ok(TgVariantPoint {
+        period_s,
+        etot: get("etot"),
+        epc: get("epc"),
+        evdd: get("evdd"),
+        egat: get("egat"),
+        vmax: get("vmax"),
+    })
+}
+
+/// Sweep one (variant, load) cell of the DUT matrix over `periods`
+/// (ascending). Each point carries the full per-source decomposition.
+pub fn adiabatic_tg_sky130_curve(
+    periods: &[f64],
+    variant: Sky130Variant,
+    c_load_f: f64,
+) -> io::Result<Vec<TgVariantPoint>> {
+    periods
+        .iter()
+        .map(|&t| adiabatic_tg_sky130_point(t, variant, c_load_f))
+        .collect()
 }
 
 /// A money-plot curve: energy-per-op versus power-clock period, log-log.
@@ -1252,6 +1587,78 @@ mod tests {
             "PFAL slow-end must have floored (slope > −0.2), got {slow_slope:.3} for {:?}",
             curve.points
         );
+    }
+
+    // ----- sky130 variant axes (pure emission — no simulator needed) -----
+
+    /// The default variant emits byte-identical device cards to the
+    /// pre-variant rung-1 emitter, so every existing rung-1 cell is the
+    /// (std, body-to-rail) corner of the matrix by construction.
+    #[test]
+    fn default_variant_matches_rung1_fet_cards() {
+        let rung = DeviceRung::Rung1Sky130;
+        let vt = Sky130Vt::default();
+        assert_eq!(
+            vt.fet("1", FetKind::Nmos, "pc", "ing", "out", "0", 4.0, 0.15),
+            rung.fet("1", FetKind::Nmos, "pc", "ing", "out", "0", 4.0, 0.15),
+        );
+        assert_eq!(
+            vt.fet("2", FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15),
+            rung.fet("2", FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15),
+        );
+        // And the default-variant TG cards are exactly those two lines (no
+        // DNW stack).
+        let cards = Sky130Variant::default().tg_cards("1", "2");
+        assert_eq!(cards.len(), 2);
+        assert!(cards[0].contains("sky130_fd_pr__nfet_01v8 "));
+        assert!(cards[1].contains("sky130_fd_pr__pfet_01v8 "));
+    }
+
+    /// The discovered PDK mapping is encoded honestly: lvt exists for both
+    /// device types, hvt only for PMOS (NMOS falls back to std), and the
+    /// lvt PMOS L is clamped to its 0.35 µm binning minimum.
+    #[test]
+    fn variant_device_mapping_and_lvt_pmos_l_clamp() {
+        assert_eq!(Sky130Vt::Lvt.nmos_model(), "sky130_fd_pr__nfet_01v8_lvt");
+        assert_eq!(Sky130Vt::Lvt.pmos_model(), "sky130_fd_pr__pfet_01v8_lvt");
+        assert_eq!(Sky130Vt::Hvt.pmos_model(), "sky130_fd_pr__pfet_01v8_hvt");
+        // No hvt NMOS on this PDK: documented fallback to std.
+        assert_eq!(Sky130Vt::Hvt.nmos_model(), "sky130_fd_pr__nfet_01v8");
+        // lvt PMOS below its binning minimum is clamped up to L=0.35.
+        let card = Sky130Vt::Lvt.fet("2", FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15);
+        assert!(card.ends_with("W=8 L=0.35"), "lvt PMOS L not clamped: {card}");
+        // NMOS and non-lvt PMOS keep the requested L.
+        let n = Sky130Vt::Lvt.fet("1", FetKind::Nmos, "pc", "ing", "out", "0", 4.0, 0.15);
+        assert!(n.ends_with("W=4 L=0.15"), "{n}");
+        let h = Sky130Vt::Hvt.fet("2", FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15);
+        assert!(h.ends_with("W=8 L=0.15"), "{h}");
+    }
+
+    /// Deep-n-well wiring: NMOS bulk to the load node (source-tied body) and
+    /// the two PDK parasitic isolation diodes; the grid is the full 3 × 2.
+    #[test]
+    fn dnw_variant_cards_and_grid() {
+        let v = Sky130Variant { vt: Sky130Vt::Std, body: BodyConfig::DeepNWell };
+        let cards = v.tg_cards("1", "2");
+        assert_eq!(cards.len(), 3);
+        assert!(
+            cards[0].contains(" pc ing out out sky130_fd_pr__nfet_01v8 "),
+            "NMOS bulk must tie to the load node under DNW: {}",
+            cards[0]
+        );
+        assert!(cards[2].contains("diode_pw2dn"), "{}", cards[2]);
+        assert!(cards[2].contains("diode_ps2dn"), "{}", cards[2]);
+        assert_eq!(Sky130Variant::all().len(), 6);
+        let keys: Vec<String> = Sky130Variant::all().iter().map(|v| v.key()).collect();
+        assert_eq!(
+            keys,
+            ["std-b2r", "std-dnw", "lvt-b2r", "lvt-dnw", "hvt-b2r", "hvt-dnw"]
+        );
+        // Load axis: min / 4× / 16×, with 16× = the canonical 1 pF.
+        let loads = tg_load_axis();
+        assert_eq!(loads[1], 4.0 * loads[0]);
+        assert_eq!(loads[2], 16.0 * loads[0]);
+        assert_eq!(loads[2], 1e-12);
     }
 
     // ----- 2LAL shift register -----

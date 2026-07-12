@@ -31,4 +31,5 @@ pub mod adiabatic;
 pub mod cswap;
 pub mod artifact;
 pub mod chardb;
+pub mod dutmatrix;
 pub mod energy;
