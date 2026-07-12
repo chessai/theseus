@@ -340,24 +340,61 @@ meas tran el INTEG V(pwl) FROM={window_s:.9e} TO={stop:.9e}
     )
 }
 
-/// Build the non-adiabatic **CMOS baseline** netlist for one `period_s`: a
-/// static CMOS inverter driven by a full-swing square wave with FAST (non-
-/// adiabatic) edges. Each cycle dumps ~`CV²` from the rail irrespective of
-/// period → a FLAT energy-vs-period curve (the money plot's control).
+/// Build the non-adiabatic **CMOS baseline** netlist for one `period_s` at
+/// rung 0 (ideal level-1 models). Wrapper over [`cmos_baseline_netlist_rung`];
+/// existing callers and tests are unchanged.
 pub fn cmos_baseline_netlist(period_s: f64) -> String {
+    cmos_baseline_netlist_rung(period_s, DeviceRung::Rung0Level1)
+}
+
+/// Build the non-adiabatic **CMOS baseline** netlist for one `period_s` at the
+/// given [`DeviceRung`]: a static CMOS inverter driven by a full-swing square
+/// wave with FAST (non-adiabatic) edges. Each cycle dumps ~`CV²` from the rail
+/// irrespective of period → a FLAT energy-vs-period curve (the money plot's
+/// control). Devices are W=4/8 µm (N/P), L=0.15 µm at both rungs.
+///
+/// **Rung 0** (level-1, VDD=1.0): the devices carry no state (no gate
+/// capacitance, no junction charge), so cycle 0 from `uic` *is* the settled
+/// cycle; one cycle is simulated and the rail integral `evdd` is the whole
+/// story (the input source delivers exactly 0 by construction).
+///
+/// **Rung 1** (sky130 tt, VDD=1.8): the BSIM4 devices have real gate/junction
+/// capacitance, so cycle 0 pays a one-time charge-up of internal state. Two
+/// cycles are simulated (`PULSE` repeats the square wave) and all measurements
+/// integrate over the settled second cycle. Honest accounting (ADR-0028
+/// C3.3): EVERY source contributes to the measured total —
+/// * `etot` — total energy from all sources over the settled cycle (the
+///   per-op figure for the curve),
+/// * `evdd` — the rail (the ~½CV² switching path),
+/// * `ein`  — the input gate driver (real gate capacitance now exists; the
+///   input is a square wave so it delivers the gate-charge energy, measured
+///   not assumed),
+/// * `vmax`/`vmin` — output-rail extremes, to prove full-swing operation.
+pub fn cmos_baseline_netlist_rung(period_s: f64, rung: DeviceRung) -> String {
     let half = period_s / 2.0;
-    let stop = period_s;
     let edge = (period_s / 1000.0).min(1e-10); // fast edges: no energy recovery
-    let step = (period_s / 4000.0).min(5e-11);
-    format!(
-        "\
+    let vdd = rung.vdd();
+    // Same timestep policy as the TG cell: resolve the device R_on·C as well
+    // as the period, floored at T/40000 at rung 1 so a slow (ms) period still
+    // finishes (a fixed 50 ps cap never does).
+    let step = match rung {
+        DeviceRung::Rung0Level1 => (period_s / 4000.0).min(5e-11),
+        DeviceRung::Rung1Sky130 => (period_s / 4000.0).min(5e-11).max(period_s / 40_000.0),
+    };
+    let header = rung.model_header();
+    let m1 = rung.fet("1", FetKind::Nmos, "out", "in", "0", "0", 4.0, 0.15);
+    let m2 = rung.fet("2", FetKind::Pmos, "out", "in", "vdd", "vdd", 8.0, 0.15);
+    match rung {
+        DeviceRung::Rung0Level1 => {
+            let stop = period_s;
+            format!(
+                "\
 static CMOS inverter, step-driven baseline (T={period_s:.6e} s)
-.model NM NMOS (level=1 vto=0.4 kp=200u)
-.model PM PMOS (level=1 vto=-0.4 kp=100u)
-Vdd vdd 0 DC 1.0
-Vin in 0 PULSE(0 1.0 0 {edge:.9e} {edge:.9e} {half:.9e} {stop:.9e})
-M1 out in 0   0   NM W=4u L=0.15u
-M2 out in vdd vdd PM W=8u L=0.15u
+{header}
+Vdd vdd 0 DC {vdd}
+Vin in 0 PULSE(0 {vdd} 0 {edge:.9e} {edge:.9e} {half:.9e} {stop:.9e})
+{m1}
+{m2}
 Cout out 0 1p
 Bpwr pwr 0 V = V(vdd)*I(Vdd)
 .control
@@ -367,49 +404,130 @@ print evdd
 .endc
 .end
 "
-    )
+            )
+        }
+        DeviceRung::Rung1Sky130 => {
+            let stop = 2.0 * period_s;
+            format!(
+                "\
+static CMOS inverter, step-driven baseline, sky130 tt (T={period_s:.6e} s)
+{header}
+Vdd vdd 0 DC {vdd}
+Vin in 0 PULSE(0 {vdd} 0 {edge:.9e} {edge:.9e} {half:.9e} {period_s:.9e})
+{m1}
+{m2}
+Cout out 0 1p
+Bvdd pvdd 0 V = -V(vdd)*I(Vdd)
+Bin  pin  0 V = -V(in)*I(Vin)
+Btot ptot 0 V = V(pvdd)+V(pin)
+.control
+tran {step:.9e} {stop:.9e} uic
+meas tran etot INTEG V(ptot) FROM={period_s:.9e} TO={stop:.9e}
+meas tran evdd INTEG V(pvdd) FROM={period_s:.9e} TO={stop:.9e}
+meas tran ein  INTEG V(pin)  FROM={period_s:.9e} TO={stop:.9e}
+meas tran vmax MAX V(out) FROM={period_s:.9e} TO={stop:.9e}
+meas tran vmin MIN V(out) FROM={period_s:.9e} TO={stop:.9e}
+.endc
+.end
+"
+            )
+        }
+    }
 }
 
-/// The CMOS baseline curve (energy per cycle vs period). Energy is reported as a
-/// positive magnitude (the rail-current convention makes the raw integral
-/// negative for energy leaving the source).
+/// The CMOS baseline curve at rung 0 (energy per cycle vs period). Wrapper over
+/// [`cmos_baseline_curve_rung`]. Energy is reported as a positive magnitude
+/// (the rail-current convention makes the raw integral negative for energy
+/// leaving the source).
 pub fn cmos_baseline_curve(periods: &[f64]) -> MoneyPlotCurve {
+    cmos_baseline_curve_rung(periods, DeviceRung::Rung0Level1)
+}
+
+/// Rung-aware CMOS baseline curve: energy per cycle vs period at the given
+/// rung. At rung 1 the extracted energy is `etot` — the sum over ALL sources
+/// (rail + input gate driver) over the settled second cycle — so the gate-
+/// charge energy is counted, not hidden. Energy is a positive magnitude.
+pub fn cmos_baseline_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCurve {
+    let (dut, meas) = match rung {
+        DeviceRung::Rung0Level1 => ("cmos-static", "evdd"),
+        DeviceRung::Rung1Sky130 => ("cmos-static-sky130", "etot"),
+    };
     let points = periods
         .iter()
-        .map(|&t| (t, run_energy(&cmos_baseline_netlist(t), "evdd").abs()))
+        .map(|&t| {
+            (
+                t,
+                run_energy(&cmos_baseline_netlist_rung(t, rung), meas).abs(),
+            )
+        })
         .collect();
     MoneyPlotCurve {
-        dut: "cmos-static".to_string(),
+        dut: dut.to_string(),
         points,
     }
 }
 
 /// Build a **PFAL** (positive-feedback adiabatic logic) buffer netlist for one
-/// `period_s`: a cross-coupled PMOS latch powered by the trapezoidal clock, with
-/// an NMOS evaluation pair. It recovers energy (slope −1) at fast periods but
-/// **floors**: a static/crowbar path in the resolved latch dissipates a
-/// roughly-constant power, so at slow periods energy stops falling (and rises) —
-/// the partially-adiabatic middle curve, between 2LAL (keeps falling) and CMOS
-/// (flat everywhere).
+/// `period_s` at rung 0 (ideal level-1 models). Wrapper over
+/// [`pfal_netlist_rung`]; existing callers and tests are unchanged.
 pub fn pfal_netlist(period_s: f64) -> String {
-    let q = period_s / 4.0;
-    let h = period_s / 2.0;
-    let tq = 3.0 * period_s / 4.0;
-    let stop = period_s;
-    let step = (period_s / 4000.0).min(5e-11);
-    format!(
-        "\
+    pfal_netlist_rung(period_s, DeviceRung::Rung0Level1)
+}
+
+/// Build a **PFAL** (positive-feedback adiabatic logic) buffer netlist for one
+/// `period_s` at the given [`DeviceRung`]: a cross-coupled PMOS latch powered
+/// by the trapezoidal clock, with an NMOS evaluation pair. It recovers energy
+/// (slope −1) at fast periods but **floors**: a static/crowbar path in the
+/// resolved latch dissipates a roughly-constant power, so at slow periods
+/// energy stops falling (and rises) — the partially-adiabatic middle curve,
+/// between 2LAL (keeps falling) and CMOS (flat everywhere). Devices are
+/// W=8 µm (P latch) / W=4 µm (N eval), L=0.15 µm at both rungs.
+///
+/// **Rung 0** (level-1, VDD=1.0): the devices carry no state, so cycle 0 from
+/// `uic` *is* the settled cycle; one cycle is simulated and the clock integral
+/// `esrc` is the whole story.
+///
+/// **Rung 1** (sky130 tt, VDD=1.8): the BSIM4 devices have real gate/junction
+/// capacitance, so cycle 0 pays a one-time charge-up. Two cycles are simulated
+/// (`PWL … r=0` repeats the clock) and all measurements integrate over the
+/// settled second cycle. Honest accounting (ADR-0028 C3.3): EVERY source
+/// contributes to the measured total —
+/// * `etot` — total energy from all sources over the settled cycle (the
+///   per-op figure for the curve),
+/// * `epc`  — the power-clock (the recoverable/adiabatic path; dominant here),
+/// * `evdd` — the PMOS-latch bulk bias (junction/well leakage),
+/// * `egat` — the DC input drivers (measured, not assumed to be 0),
+/// * `vmax` — output-rail peak, to prove the latch actually resolves.
+pub fn pfal_netlist_rung(period_s: f64, rung: DeviceRung) -> String {
+    let q = period_s / 4.0; // ramp-up ends
+    let h = period_s / 2.0; // hold ends
+    let tq = 3.0 * period_s / 4.0; // ramp-down ends
+    let vdd = rung.vdd();
+    let step = match rung {
+        DeviceRung::Rung0Level1 => (period_s / 4000.0).min(5e-11),
+        DeviceRung::Rung1Sky130 => (period_s / 4000.0).min(5e-11).max(period_s / 40_000.0),
+    };
+    let header = rung.model_header();
+    // Pin order for fet() is drain gate source bulk.
+    let mp1 = rung.fet("P1", FetKind::Pmos, "pc", "out", "outb", "vdd", 8.0, 0.15);
+    let mp2 = rung.fet("P2", FetKind::Pmos, "pc", "outb", "out", "vdd", 8.0, 0.15);
+    let mn1 = rung.fet("N1", FetKind::Nmos, "pc", "in", "out", "0", 4.0, 0.15);
+    let mn2 = rung.fet("N2", FetKind::Nmos, "pc", "inb", "outb", "0", 4.0, 0.15);
+    match rung {
+        DeviceRung::Rung0Level1 => {
+            let stop = period_s;
+            format!(
+                "\
 PFAL buffer (cross-coupled PMOS latch + NMOS eval), T={period_s:.6e} s
-.model NM NMOS (level=1 vto=0.4 kp=200u)
-.model PM PMOS (level=1 vto=-0.4 kp=100u)
-Vdd vdd 0 DC 1.0
-Vpc pc 0 PWL(0 0 {q:.9e} 1.0 {h:.9e} 1.0 {tq:.9e} 0 {stop:.9e} 0)
-Vin  in  0 DC 1.0
+{header}
+Vdd vdd 0 DC {vdd}
+Vpc pc 0 PWL(0 0 {q:.9e} {vdd} {h:.9e} {vdd} {tq:.9e} 0 {stop:.9e} 0)
+Vin  in  0 DC {vdd}
 Vinb inb 0 DC 0.0
-MP1 pc out  outb vdd PM W=8u L=0.15u
-MP2 pc outb out  vdd PM W=8u L=0.15u
-MN1 pc in  out  0 NM W=4u L=0.15u
-MN2 pc inb outb 0 NM W=4u L=0.15u
+{mp1}
+{mp2}
+{mn1}
+{mn2}
 Cout  out  0 100f
 Coutb outb 0 100f
 Bpwr pwr 0 V = -V(pc)*I(Vpc)
@@ -420,17 +538,65 @@ print esrc
 .endc
 .end
 "
-    )
+            )
+        }
+        DeviceRung::Rung1Sky130 => {
+            let stop = 2.0 * period_s;
+            format!(
+                "\
+PFAL buffer (cross-coupled PMOS latch + NMOS eval), sky130 tt, T={period_s:.6e} s
+{header}
+Vdd vdd 0 DC {vdd}
+Vpc pc 0 PWL(0 0 {q:.9e} {vdd} {h:.9e} {vdd} {tq:.9e} 0 {period_s:.9e} 0) r=0
+Vin  in  0 DC {vdd}
+Vinb inb 0 DC 0.0
+{mp1}
+{mp2}
+{mn1}
+{mn2}
+Cout  out  0 100f
+Coutb outb 0 100f
+Bpc  ppc  0 V = -V(pc)*I(Vpc)
+Bvdd pvdd 0 V = -V(vdd)*I(Vdd)
+Bgat pgat 0 V = -V(in)*I(Vin)-V(inb)*I(Vinb)
+Btot ptot 0 V = V(ppc)+V(pvdd)+V(pgat)
+.control
+tran {step:.9e} {stop:.9e} uic
+meas tran etot INTEG V(ptot) FROM={period_s:.9e} TO={stop:.9e}
+meas tran epc  INTEG V(ppc)  FROM={period_s:.9e} TO={stop:.9e}
+meas tran evdd INTEG V(pvdd) FROM={period_s:.9e} TO={stop:.9e}
+meas tran egat INTEG V(pgat) FROM={period_s:.9e} TO={stop:.9e}
+meas tran vmax MAX V(out) FROM={period_s:.9e} TO={stop:.9e}
+.endc
+.end
+"
+            )
+        }
+    }
 }
 
-/// The PFAL curve (energy per op vs period) — falls then floors.
+/// The PFAL curve at rung 0 (energy per op vs period) — falls then floors.
+/// Wrapper over [`pfal_curve_rung`].
 pub fn pfal_curve(periods: &[f64]) -> MoneyPlotCurve {
+    pfal_curve_rung(periods, DeviceRung::Rung0Level1)
+}
+
+/// Rung-aware PFAL curve: energy per op vs period at the given rung. At rung 1
+/// the extracted energy is `etot` — the sum over ALL sources (clock + bulk +
+/// gate drivers) over the settled second cycle. Falls then floors on real
+/// devices: quasi-adiabatic recovery at fast periods, a non-recoverable
+/// residue at slow periods. Energy is a positive magnitude.
+pub fn pfal_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCurve {
+    let (dut, meas) = match rung {
+        DeviceRung::Rung0Level1 => ("pfal", "esrc"),
+        DeviceRung::Rung1Sky130 => ("pfal-sky130", "etot"),
+    };
     let points = periods
         .iter()
-        .map(|&t| (t, run_energy(&pfal_netlist(t), "esrc").abs()))
+        .map(|&t| (t, run_energy(&pfal_netlist_rung(t, rung), meas).abs()))
         .collect();
     MoneyPlotCurve {
-        dut: "pfal".to_string(),
+        dut: dut.to_string(),
         points,
     }
 }
@@ -956,6 +1122,119 @@ mod tests {
         assert!(
             vmax > 0.9 * DeviceRung::Rung1Sky130.vdd(),
             "rung1 TG output must reach near VDD, got {vmax:.4} V"
+        );
+    }
+
+    // ----- rung 1: sky130 baselines (CMOS control + PFAL) -----
+
+    /// Rung-1 sky130 CMOS baseline is FLAT: ~½CV² per switch, independent of
+    /// period. Requires ngspice AND the sky130 PDK; skipped otherwise.
+    ///
+    /// Measured (sky130A tt, W=4/8 µm, L=0.15 µm, 1 pF load, settled 2nd
+    /// cycle, ALL sources summed): etot ≈ 3.28e-12 J at every period from
+    /// 1e-8..1e-6 s (rail evdd ≈ 3.27e-12 J dominates; input gate-drive
+    /// ein ≈ 6.5e-15 J is negligible), for slope ≈ 0 — a real static-CMOS
+    /// control that dumps a fixed CV² per cycle whatever the clock does. The
+    /// output swings full rail (vmax ≈ 1.8 V, vmin ≈ 0). This is the baseline
+    /// the adiabatic cells must beat at slow periods; it never falls.
+    #[test]
+    fn sky130_cmos_baseline_is_flat() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        if !sky130_available() {
+            eprintln!("[skip] sky130 PDK unavailable (THESEUS_SKY130_LIB unset/missing)");
+            return;
+        }
+        // 2 decades is enough to expose flatness; kept modest (slope tests
+        // are slow). Well inside the regime where the fixed CV² dominates.
+        let periods = [1e-8, 1e-7, 1e-6];
+        let curve = cmos_baseline_curve_rung(&periods, DeviceRung::Rung1Sky130);
+        eprintln!("rung1 sky130 CMOS curve: {:?}", curve.points);
+        // Energy must be positive at every point.
+        for &(_, e) in &curve.points {
+            assert!(e > 0.0, "rung1 CMOS energy must be positive: {:?}", curve.points);
+        }
+        let slope = curve.slope();
+        eprintln!("rung1 sky130 CMOS slope = {slope:.4}");
+        assert!(
+            (-0.1..=0.1).contains(&slope),
+            "rung1 CMOS baseline must be flat (slope ≈ 0), got {slope:.4} for {:?}",
+            curve.points
+        );
+        // The inverter must actually switch full-rail (not pass vacuously).
+        let nl = cmos_baseline_netlist_rung(1e-7, DeviceRung::Rung1Sky130);
+        let vmax = run_energy(&nl, "vmax");
+        assert!(
+            vmax > 0.9 * DeviceRung::Rung1Sky130.vdd(),
+            "rung1 CMOS output must reach near VDD, got {vmax:.4} V"
+        );
+    }
+
+    /// Rung-1 sky130 PFAL FALLS THEN FLOORS: quasi-adiabatic recovery at fast
+    /// periods, a non-recoverable residue at slow periods. Requires ngspice
+    /// AND the sky130 PDK; skipped otherwise.
+    ///
+    /// Measured (sky130A tt, W=8 µm P / W=4 µm N, L=0.15 µm, 100 fF/rail,
+    /// settled 2nd cycle, ALL sources summed, etot ≈ epc — the clock is the
+    /// whole story, bulk/gate ≈ 0):
+    ///   T=1e-8: 2.71e-14   T=1e-7: 3.42e-15   T=1e-6: 6.19e-16 (min)
+    ///   T=1e-5: 2.56e-15 (risen again)
+    /// The fast half (1e-8..1e-6) falls at slope ≈ −0.82 (quasi-adiabatic,
+    /// NOT a clean −1 — real devices); the minimum is at T ≈ 1e-6 s and the
+    /// curve turns UP by 1e-5 s, so the slow-end pair 1e-6→1e-5 has slope ≈
+    /// +0.6, i.e. NOT still falling. The floor is the non-recoverable residue
+    /// of the resolved latch (a static/crowbar path). Between CMOS (flat) and
+    /// 2LAL (keeps falling), as intended.
+    #[test]
+    fn sky130_pfal_falls_then_floors() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        if !sky130_available() {
+            eprintln!("[skip] sky130 PDK unavailable (THESEUS_SKY130_LIB unset/missing)");
+            return;
+        }
+        // 3 decades bracketing the floor: fast end falls, slow end turns.
+        let periods = [1e-8, 1e-7, 1e-6, 1e-5];
+        let curve = pfal_curve_rung(&periods, DeviceRung::Rung1Sky130);
+        eprintln!("rung1 sky130 PFAL curve: {:?}", curve.points);
+        for &(_, e) in &curve.points {
+            assert!(e > 0.0, "rung1 PFAL energy must be positive: {:?}", curve.points);
+        }
+        // (a) Fast-end (first 3 points) is quasi-adiabatic: falls, slope < −0.5
+        // (measured ≈ −0.82; NOT asserted to be a clean −1, these are real
+        // devices with an imperfect recovery).
+        let fast_slope = log_log_slope(&curve.points[..3]);
+        eprintln!("rung1 sky130 PFAL fast-end slope = {fast_slope:.4}");
+        assert!(
+            fast_slope < -0.5,
+            "PFAL fast-end must fall (slope < −0.5), got {fast_slope:.3} for {:?}",
+            curve.points
+        );
+        // (b) It floors: the minimum is NOT at the slowest period (a clean
+        // adiabatic cell would keep falling), and the slow-end pair is no
+        // longer falling — slope near 0 or positive (measured ≈ +0.6).
+        let min_i = curve
+            .points
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1 .1.partial_cmp(&b.1 .1).unwrap())
+            .unwrap()
+            .0;
+        assert!(
+            min_i < curve.points.len() - 1,
+            "PFAL must floor (min energy before the slowest period), got min at index {min_i} of {:?}",
+            curve.points
+        );
+        let slow_slope = log_log_slope(&curve.points[curve.points.len() - 2..]);
+        eprintln!("rung1 sky130 PFAL slow-end slope = {slow_slope:.4}");
+        assert!(
+            slow_slope > -0.2,
+            "PFAL slow-end must have floored (slope > −0.2), got {slow_slope:.3} for {:?}",
+            curve.points
         );
     }
 
