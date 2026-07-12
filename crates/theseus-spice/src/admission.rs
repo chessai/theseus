@@ -61,7 +61,7 @@
 //!
 //! # Candidate cells
 //!
-//! The reversible library cells — the k-CSWAP family (k ∈ {0, 1, 2}) and the
+//! The reversible library cells — the k-CSWAP family (k ∈ {0, 1, 2, 3}) and the
 //! adiabatic TG buffer primitive — plus the two baseline DUTs (static CMOS
 //! inverter, PFAL buffer), which the checklist must *reject*: that the same
 //! five gates admit the reversible cells and reject the baselines is the
@@ -156,6 +156,8 @@ pub enum CandidateCell {
     CswapK1,
     /// k = 2 CSWAP: the 2-controlled swap.
     CswapK2,
+    /// k = 3 CSWAP: the 3-controlled swap.
+    CswapK3,
     /// The adiabatic transmission-gate buffer primitive (single-ended; see
     /// module docs for the INV-TOKEN degeneracy caveat).
     AdiabaticTg,
@@ -172,6 +174,7 @@ impl CandidateCell {
             CandidateCell::CswapK0 => Some(0),
             CandidateCell::CswapK1 => Some(1),
             CandidateCell::CswapK2 => Some(2),
+            CandidateCell::CswapK3 => Some(3),
             _ => None,
         }
     }
@@ -268,7 +271,7 @@ impl AdmissionReport {
 /// fails outright is *recorded* as a gate-4 failure rather than an error.
 pub fn admit(cell: CandidateCell, rung: DeviceRung) -> io::Result<AdmissionReport> {
     match cell {
-        CandidateCell::CswapK0 | CandidateCell::CswapK1 | CandidateCell::CswapK2 => {
+        CandidateCell::CswapK0 | CandidateCell::CswapK1 | CandidateCell::CswapK2 | CandidateCell::CswapK3 => {
             admit_cswap(cell, cell.cswap_k().expect("cswap cell"), rung)
         }
         CandidateCell::AdiabaticTg => admit_tg(rung),
@@ -448,6 +451,7 @@ fn token_sig(t: CswapToken, sig: &str) -> bool {
     match sig {
         "c" | "c1" => t.c1,
         "c2" => t.c2,
+        "c3" => t.c3,
         "a" => t.a,
         "b" => t.b,
         other => panic!("unknown signal {other}"),
@@ -464,27 +468,38 @@ fn token_sig(t: CswapToken, sig: &str) -> bool {
 /// −1.76 fJ/cycle on k0 at T = 1e-7 with the all-active token, versus
 /// ≈ 0 with this orbit.)
 fn closure_orbit(k: usize) -> Vec<CswapToken> {
-    let t = |c1, c2, a, b| CswapToken { c1, c2, a, b };
+    let t = |c1, c2, c3, a, b| CswapToken { c1, c2, c3, a, b };
     match k {
         // Both a-lines pulse.
-        0 => vec![t(false, false, true, false), t(false, false, false, false)],
+        0 => vec![t(false, false, false, true, false), t(false, false, false, false, false)],
         // Covers c∧b, c∧¬b, c∧a, c∧¬a, ¬c∧a, ¬c∧¬a, ¬c∧b, ¬c∧¬b.
         1 => vec![
-            t(true, false, true, false),
-            t(true, false, false, true),
-            t(false, false, true, false),
-            t(false, false, false, true),
+            t(true, false, false, true, false),
+            t(true, false, false, false, true),
+            t(false, false, false, true, false),
+            t(false, false, false, false, true),
         ],
         // Covers c1∧c2∧{a,¬a,b,¬b}, ¬c1∧{a,¬a,b,¬b}, ¬c2∧{a,¬a,b,¬b}.
         2 => vec![
-            t(true, true, true, false),
-            t(true, true, false, true),
-            t(false, true, true, false),
-            t(false, true, false, true),
-            t(true, false, true, false),
-            t(true, false, false, true),
+            t(true, true, false, true, false),
+            t(true, true, false, false, true),
+            t(false, true, false, true, false),
+            t(false, true, false, false, true),
+            t(true, false, false, true, false),
+            t(true, false, false, false, true),
         ],
-        _ => panic!("k must be 0, 1, or 2"),
+        // Covers c1∧c2∧c3∧{a,¬a,b,¬b}, ¬c1∧{a,¬a,b,¬b}, ¬c2∧{a,¬a,b,¬b}, ¬c3∧{a,¬a,b,¬b}.
+        3 => vec![
+            t(true, true, true, true, false),
+            t(true, true, true, false, true),
+            t(false, true, true, true, false),
+            t(false, true, true, false, true),
+            t(true, false, true, true, false),
+            t(true, false, true, false, true),
+            t(true, true, false, true, false),
+            t(true, true, false, false, true),
+        ],
+        _ => panic!("k must be 0, 1, 2, or 3"),
     }
 }
 
@@ -1311,6 +1326,15 @@ mod tests {
             return;
         }
         assert_admitted(CandidateCell::CswapK2, DeviceRung::Rung0Level1);
+    }
+
+    #[test]
+    fn admission_accepts_cswap_k3_rung0() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        assert_admitted(CandidateCell::CswapK3, DeviceRung::Rung0Level1);
     }
 
     #[test]
