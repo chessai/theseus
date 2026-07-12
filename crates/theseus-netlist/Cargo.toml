@@ -16,6 +16,10 @@ theseus-eval = { path = "../theseus-eval" }
 # Cross-check: CellKind::eval / char-DB keys against the characterized
 # k-CSWAP truth functions (pure functions only; no ngspice needed).
 theseus-spice = { path = "../theseus-spice" }
+# Elaboration pipeline for differential-oracle tests against elaborated
+# programs (conformance suite).
+theseus-check = { path = "../theseus-check" }
+theseus-syntax = { path = "../theseus-syntax" }
 
 [lints]
 workspace = true

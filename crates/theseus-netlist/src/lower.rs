@@ -243,6 +243,14 @@ impl BitAt {
 struct Builder {
     next_line: u32,
     cells: Vec<Cell>,
+    /// Ancilla input pairs needed by conditional-NOT constructions.
+    /// Each entry is (pair, initial_value).  These are appended to the
+    /// netlist's primary inputs by `lower()`.
+    ancilla_inputs: Vec<(RailPair, bool)>,
+    /// Garbage output pairs produced by conditional-NOT constructions.
+    /// Each entry is (pair, depth).  These are appended to the netlist's
+    /// primary outputs by `lower()`.
+    ancilla_outputs: Vec<(RailPair, u32)>,
 }
 
 impl Builder {
@@ -250,6 +258,21 @@ impl Builder {
         let pair = RailPair { line0: LineId(self.next_line), line1: LineId(self.next_line + 1) };
         self.next_line += 2;
         pair
+    }
+
+    /// Allocate an ancilla pair with a known initial value.  The pair
+    /// is recorded so that `lower()` can add it to the netlist's primary
+    /// inputs.
+    fn alloc_ancilla(&mut self, value: bool) -> BitAt {
+        let pair = self.fresh_pair();
+        self.ancilla_inputs.push((pair, value));
+        BitAt { pair, depth: 0 }
+    }
+
+    /// Record a garbage output pair produced by a conditional-NOT
+    /// construction.  `lower()` adds it to the netlist's primary outputs.
+    fn mark_garbage(&mut self, bit: BitAt) {
+        self.ancilla_outputs.push((bit.pair, bit.depth));
     }
 
     /// Place one cell. It fires when its latest input arrives (C2.2
@@ -545,10 +568,10 @@ impl Builder {
     /// Zero-cell rewiring (Permute) is unconditional.  For identity
     /// permutations this is correct (identity regardless of control).
     /// For non-identity zero-cell rewiring (e.g. rail swap / NOT),
-    /// unconditional application is incorrect in a controlled context:
-    /// the Branch caller ensures this case doesn't arise (e.g. by
-    /// verifying that the iso's arms lower to cells, not zero-cell
-    /// rewiring that differs from identity).
+    /// unconditional application would be incorrect.  Instead, we
+    /// synthesise conditional K1 cells: position permutations use K1
+    /// directly (conditional swap), and rail swaps (NOT) use an
+    /// ancilla-based splitter/selector K1 pair (see Phase 2 below).
     fn controlled_apply(
         &mut self,
         node: &TypedNode,
@@ -560,6 +583,8 @@ impl Builder {
         let mut sub = Builder {
             next_line: self.next_line,
             cells: Vec::new(),
+            ancilla_inputs: Vec::new(),
+            ancilla_outputs: Vec::new(),
         };
         // Create sub-builder inputs with the same pairs but depth 0
         // for line allocation purposes — we'll fix up depths below.
@@ -568,10 +593,139 @@ impl Builder {
         // Claim the sub-builder's line range.
         self.next_line = sub.next_line;
 
+        // Transfer any ancilla tracking from the sub-builder.
+        self.ancilla_inputs.extend_from_slice(&sub.ancilla_inputs);
+        self.ancilla_outputs.extend_from_slice(&sub.ancilla_outputs);
+
         if sub.cells.is_empty() {
-            // Pure rewiring — no cells to promote.  Apply the rewiring
-            // as-is (unconditionally).  Tag passes through unchanged.
-            return Ok((sub_outs, tag));
+            // Zero-cell arm.  If it's pure identity, return as-is.
+            let is_identity = sub_outs
+                .iter()
+                .zip(data_ins.iter())
+                .all(|(o, i)| o.pair == i.pair);
+            if is_identity {
+                return Ok((sub_outs, tag));
+            }
+
+            // Non-identity zero-cell rewiring (e.g. rail swap / NOT,
+            // position permutation).  We must synthesise conditional
+            // cells so the transformation only fires when the tag
+            // selects this arm.
+            //
+            // Analyse: for each output position, find which input it
+            // came from and whether a rail swap (NOT) was applied.
+            let n = data_ins.len();
+            let mut source = vec![0usize; n];
+            let mut flipped = vec![false; n];
+            for i in 0..n {
+                let out_pair = sub_outs[i].pair;
+                let mut found = false;
+                for j in 0..n {
+                    if out_pair == data_ins[j].pair {
+                        source[i] = j;
+                        flipped[i] = false;
+                        found = true;
+                        break;
+                    }
+                    if out_pair == data_ins[j].pair.swapped() {
+                        source[i] = j;
+                        flipped[i] = true;
+                        found = true;
+                        break;
+                    }
+                }
+                assert!(found, "zero-cell output pair matches no input");
+            }
+
+            let mut cur_tag = tag;
+            let mut current = data_ins.to_vec();
+
+            // Phase 1: conditional position permutation (K1 swaps).
+            // Decompose the permutation into transpositions via cycles.
+            let perm = source;
+            let mut visited = vec![false; n];
+            for i in 0..n {
+                if visited[i] || perm[i] == i {
+                    continue;
+                }
+                let cycle_start = i;
+                let mut cycle = vec![i];
+                let mut j = perm[i];
+                while j != cycle_start {
+                    cycle.push(j);
+                    visited[j] = true;
+                    j = perm[j];
+                }
+                visited[i] = true;
+                // Swap cycle_start with each subsequent element in
+                // reverse order to realise the cycle.
+                for &k in cycle[1..].iter().rev() {
+                    let control = if invert_tag {
+                        cur_tag.rail_swapped()
+                    } else {
+                        cur_tag
+                    };
+                    let outs = self.emit(CellKind::K1, &[control, current[cycle_start], current[k]]);
+                    cur_tag = if invert_tag {
+                        outs[0].rail_swapped()
+                    } else {
+                        outs[0]
+                    };
+                    current[cycle_start] = outs[1];
+                    current[k] = outs[2];
+                }
+            }
+
+            // Phase 2: conditional rail swaps (NOT) using ancilla-
+            // based K1 construction.
+            //
+            // For each flipped bit we synthesise two K1 cells:
+            //
+            //   Splitter: K1(bit, TRUE_anc, FALSE_anc)
+            //     → (bit_copy, NOT(bit), bit_dup)   [always, by K1 truth table]
+            //
+            //   Selector: K1(control, bit_copy, NOT(bit))
+            //     → control active:  (ctrl, NOT(bit), bit_copy)
+            //       control inactive: (ctrl, bit_copy, NOT(bit))
+            //
+            // The selector's output[1] is the conditional NOT.
+            //
+            // A K0 buffer on the tag keeps the selector's inputs
+            // tick-aligned with the splitter outputs (depth d → d+1).
+            for i in 0..n {
+                if !flipped[i] {
+                    continue;
+                }
+                let true_anc = self.alloc_ancilla(true);
+                let false_anc = self.alloc_ancilla(false);
+
+                // Splitter.
+                let split = self.emit(CellKind::K1, &[current[i], true_anc, false_anc]);
+                let bit_copy = split[0]; // = bit value on fresh pair
+                let not_bit = split[1]; // = NOT(bit) on fresh pair
+                self.mark_garbage(split[2]); // redundant bit copy
+
+                // Buffer the tag so it arrives at the same tick as the
+                // splitter outputs (both at depth = original + 1).
+                let control_raw = if invert_tag {
+                    cur_tag.rail_swapped()
+                } else {
+                    cur_tag
+                };
+                let control_buf = self.emit(CellKind::K0, &[control_raw])[0];
+
+                // Selector.
+                let sel = self.emit(CellKind::K1, &[control_buf, bit_copy, not_bit]);
+                cur_tag = if invert_tag {
+                    sel[0].rail_swapped()
+                } else {
+                    sel[0]
+                };
+                current[i] = sel[1]; // conditional NOT result
+                self.mark_garbage(sel[2]); // garbage
+            }
+
+            return Ok((current, cur_tag));
         }
 
         // Check for K2 cells in the sub-builder (can't promote to K3).
@@ -596,6 +750,10 @@ impl Builder {
         // current depth (these are primary inputs to the sub-network).
         for bit in data_ins {
             pair_depth_map.insert(bit.pair, (bit.pair, bit.depth));
+        }
+        // Also seed ancilla pairs (depth 0 primary inputs).
+        for &(pair, _) in &sub.ancilla_inputs {
+            pair_depth_map.insert(pair, (pair, 0));
         }
 
         let mut cur_tag = tag;
@@ -685,6 +843,13 @@ impl Builder {
             })
             .collect();
 
+        // Update ancilla output depths from the promotion map.
+        for anc in &mut self.ancilla_outputs {
+            if let Some(&(_, depth)) = pair_depth_map.get(&anc.0) {
+                anc.1 = depth;
+            }
+        }
+
         Ok((fixed_outs, cur_tag))
     }
 }
@@ -713,19 +878,37 @@ pub fn lower(net: &TypedNode) -> Result<PhasedCellNetlist, LowerError> {
     let w_in = rail_width(&net.input)?;
     let w_out = rail_width(&net.output)?;
 
-    let mut b = Builder { next_line: 0, cells: Vec::new() };
+    let mut b = Builder {
+        next_line: 0,
+        cells: Vec::new(),
+        ancilla_inputs: Vec::new(),
+        ancilla_outputs: Vec::new(),
+    };
     let ins: Vec<BitAt> = (0..w_in)
         .map(|_| BitAt { pair: b.fresh_pair(), depth: 0 })
         .collect();
     let outs = b.apply(net, &ins)?;
     debug_assert_eq!(outs.len(), w_out);
 
+    // Include ancilla inputs/outputs so every line has exactly one
+    // driver and one consumer (validate invariant).
+    let mut all_inputs: Vec<RailPair> = ins.iter().map(|x| x.pair).collect();
+    for &(pair, _) in &b.ancilla_inputs {
+        all_inputs.push(pair);
+    }
+    let mut all_outputs: Vec<RailPair> = outs.iter().map(|x| x.pair).collect();
+    let mut all_output_depths: Vec<u32> = outs.iter().map(|x| x.depth).collect();
+    for &(pair, depth) in &b.ancilla_outputs {
+        all_outputs.push(pair);
+        all_output_depths.push(depth);
+    }
+
     let netlist = PhasedCellNetlist {
         input_ty: net.input.clone(),
         output_ty: net.output.clone(),
-        inputs: ins.iter().map(|x| x.pair).collect(),
-        outputs: outs.iter().map(|x| x.pair).collect(),
-        output_depths: outs.iter().map(|x| x.depth).collect(),
+        inputs: all_inputs,
+        outputs: all_outputs,
+        output_depths: all_output_depths,
         cells: b.cells,
         num_lines: b.next_line,
     };
