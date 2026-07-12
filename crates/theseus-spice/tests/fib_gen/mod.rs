@@ -4,20 +4,20 @@
 //! Construction (all COMPOSITIONAL — no monolithic multi-bit truth tables):
 //!
 //! * `ha4`  : 4-wire preserved-input half adder
-//!            (a,b,s,c) <-> (a,b, s^(a^b), c^(a&b))            [16 clauses]
+//!   (a,b,s,c) <-> (a,b, s^(a^b), c^(a&b))            [16 clauses]
 //! * `fa5`  : 5-wire preserved-input full adder (proven building block)
-//!            (a,b,cin,s,c) <-> (a,b,cin, s^(a^b^cin), c^maj)  [32 clauses]
+//!   (a,b,cin,s,c) <-> (a,b,cin, s^(a^b^cin), c^maj)  [32 clauses]
 //! * routing: adjacent wire transpositions `t{k}` built ONLY from the
 //!   structural primitives the elaborator special-cases:
-//!     swbb    : (Bit,Bit)<->(Bit,Bit)      single clause (x,y)<->(y,x)   -> SwapProd
-//!     asc{k}  : (Bit,(Bit,R))<->((Bit,Bit),R)  clause (x,(y,z))<->((x,y),z) -> AssocLProd
-//!     idr{r}  : R<->R                      single clause w<->w           -> Id
-//!     step{k} = asc{k} ; (swbb * idr{r}) ; ~asc{k}
-//!     t{k}    = idb * (idb * ... * step{k})     (k leading ids)
+//!   swbb    : (Bit,Bit)<->(Bit,Bit)      single clause (x,y)<->(y,x)   -> SwapProd
+//!   asc{k}  : (Bit,(Bit,R))<->((Bit,Bit),R)  clause (x,(y,z))<->((x,y),z) -> AssocLProd
+//!   idr{r}  : R<->R                      single clause w<->w           -> Id
+//!   step{k} = asc{k} ; (swbb * idr{r}) ; ~asc{k}
+//!   t{k}    = idb * (idb * ... * step{k})     (k leading ids)
 //! * a ripple add A+B -> fresh sum register S with fresh carry chain K:
-//!     stage 0:            ha4(A0, B0, s0, k0)
-//!     stage 0 < i < wa:   fa5(Ai, Bi, k_{i-1}, si, ki)
-//!     stage wa <= i < wb: ha4(Bi, k_{i-1}, si, ki)
+//!   stage 0:            ha4(A0, B0, s0, k0)
+//!   stage 0 < i < wa:   fa5(Ai, Bi, k_{i-1}, si, ki)
+//!   stage wa <= i < wb: ha4(Bi, k_{i-1}, si, ki)
 //!   Each stage's wires are bubble-routed to the tuple tail, then the adder
 //!   is applied as `idb * (idb * ... * (ha4|fa5))`.
 //! * Fibonacci = unrolled chain of adds, Bennett-style: every fib term goes
