@@ -11,6 +11,7 @@
 //! | `Seq` / `Par` | composition / wiring | 0 |
 //! | `Branch(f,g)` | CSWAP demux/merge with K1 Fredkin routing (ADR-0031) | varies |
 //! | `Distrib`/`Factor` | tag-pair regrouping — pure rail reordering | 0 |
+//! | `TraceLoop` | full unroll ≤ \|u\|+1 iterations (ADR-0026 C2.4) | varies |
 //!
 //! Every template is verified **per instance** against the prim's finite
 //! `(forward)` semantics before use — exhaustive over the domain
@@ -19,7 +20,6 @@
 //!
 //! # Deferred (honest list, with owners)
 //!
-//! - TODO(TraceLoop): unroll per ADR-0026 C2.4 (static bound ≤ |u|).
 //! - TODO(B4.2): general CSWAP-network synthesis for prims beyond the
 //!   built-in template table.
 //! - Tick-exact balancing (C2.2) is *recorded, not repaired*:
@@ -454,12 +454,12 @@ impl Builder {
                 }
             }
 
-            // TODO(TraceLoop): unroll-only in v1, bound ≤ |u| (ADR-0026
-            // C2.4); per-stage phase advance.
-            NodeKind::TraceLoop { .. } => Err(LowerError::Deferred {
-                node: "TraceLoop",
-                plan: "unroll per ADR-0026 C2.4",
-            }),
+            // TraceLoop unrolling (ADR-0026 C2.4): a total trace runs at
+            // most |u|+1 body applications, so full unrolling is always
+            // sound. N = |u| + 1 iterations.
+            NodeKind::TraceLoop { carrier, body } => {
+                self.lower_trace(carrier, body, ins)
+            }
         }
     }
 
@@ -862,6 +862,109 @@ impl Builder {
 
         Ok((fixed_outs, cur_tag))
     }
+
+    /// Lower `TraceLoop { carrier, body }` by full unrolling (ADR-0026
+    /// C2.4). The trace runs at most `|carrier| + 1` body applications.
+    ///
+    /// Algorithm:
+    /// 1. Inject `Right(input)` into type `carrier + input_ty` (ancilla tag
+    ///    + padding).
+    /// 2. Apply body unconditionally (first iteration).
+    /// 3. For iterations 2..=N: duplicate the tag via K1 + ancillas, then
+    ///    apply body controlled by the tag copy (fires only when Left =
+    ///    still looping).
+    /// 4. Project: the final state is guaranteed Right; extract the output
+    ///    payload and mark tag + padding as garbage.
+    fn lower_trace(
+        &mut self,
+        carrier: &Type,
+        body: &TypedNode,
+        ins: &[BitAt],
+    ) -> Result<Vec<BitAt>, LowerError> {
+        // Verify carrier is encodable (not Zero or recursive).
+        let _w_u = rail_width(carrier)?;
+        // body.input = carrier + input_ty, body.output = carrier + output_ty
+        let w_body_in = rail_width(&body.input)?;
+        let w_body_out = rail_width(&body.output)?;
+
+        // Controlled unrolling requires equal body I/O width (the
+        // pass-through identity when inactive needs matching widths).
+        if w_body_in != w_body_out {
+            return Err(LowerError::UnsupportedType(body.input.clone()));
+        }
+        let w_body = w_body_in; // = 1 + max(w_u, w_a) = 1 + max(w_u, w_b)
+
+        // Extract the input/output payload types from the sum structure.
+        let input_ty_of_trace = match &body.input {
+            Type::Sum(_u, a) => a.as_ref(),
+            _ => return Err(LowerError::UnsupportedType(body.input.clone())),
+        };
+        let output_ty_of_trace = match &body.output {
+            Type::Sum(_u, b) => b.as_ref(),
+            _ => return Err(LowerError::UnsupportedType(body.output.clone())),
+        };
+        let w_a = rail_width(input_ty_of_trace)?;
+        let w_b = rail_width(output_ty_of_trace)?;
+        let max_payload = w_body - 1; // = max(w_u, w_a) = max(w_u, w_b)
+
+        debug_assert_eq!(ins.len(), w_a);
+
+        // N = |carrier| + 1: maximum number of body applications.
+        let n_iterations = enumerate_values(carrier).len() + 1;
+
+        // ── Step 1: Inject Right(input) into (carrier + input_ty) ────
+        // Encoding: [tag=false, input_bits(w_a), padding(max_payload - w_a)]
+        let mut state: Vec<BitAt> = Vec::with_capacity(w_body);
+        // Tag = false (Right injection)
+        state.push(self.alloc_ancilla(false));
+        // Input payload
+        state.extend_from_slice(ins);
+        // Padding (false = zero bits for unused payload region)
+        for _ in 0..(max_payload - w_a) {
+            state.push(self.alloc_ancilla(false));
+        }
+        debug_assert_eq!(state.len(), w_body);
+
+        // ── Step 2: First body application (unconditional) ───────────
+        state = self.apply(body, &state)?;
+        debug_assert_eq!(state.len(), w_body);
+
+        // ── Steps 3..=N: Guarded body applications ───────────────────
+        for _ in 1..n_iterations {
+            // Duplicate the tag (state[0]) using K1 + ancillas so we
+            // have one copy for body's data input and one for control.
+            // K1(c,a,b): c=true→(c,b,a), c=false→(c,a,b).
+            // K1(tag, TRUE, FALSE) → (tag, NOT(tag), tag_copy).
+            let true_anc = self.alloc_ancilla(true);
+            let false_anc = self.alloc_ancilla(false);
+            let split = self.emit(CellKind::K1, &[state[0], true_anc, false_anc]);
+            let state_tag = split[0]; // tag value → body's first data input
+            let not_tag = split[1];   // NOT(tag) → garbage
+            let tag_copy = split[2];  // tag value → control for conditional
+
+            self.mark_garbage(not_tag);
+            state[0] = state_tag;
+
+            // Apply body controlled by tag_copy (fires when tag=true=Left).
+            let (new_state, ctrl_out) =
+                self.controlled_apply(body, &state, tag_copy, false)?;
+            // The control value threads through and comes out unchanged;
+            // it's garbage now.
+            self.mark_garbage(ctrl_out);
+            state = new_state;
+        }
+
+        // ── Final: Project (carrier + output_ty) → output_ty ─────────
+        // State is guaranteed Right: tag=false, payload[..w_b] = output,
+        // payload[w_b..] = padding (zeros from the u-region, irrelevant).
+        // Mark tag and padding as garbage; return output bits.
+        self.mark_garbage(state[0]); // tag (guaranteed false)
+        let output = state[1..1 + w_b].to_vec();
+        for &bit in &state[1 + w_b..] {
+            self.mark_garbage(bit); // padding garbage
+        }
+        Ok(output)
+    }
 }
 
 /// Does `def.forward` compute exactly `f` on flattened bits, over the
@@ -884,6 +987,17 @@ fn prim_matches(
 /// Lower a typed net to the phased cell netlist. The result always
 /// satisfies [`PhasedCellNetlist::validate`] (asserted in debug builds).
 pub fn lower(net: &TypedNode) -> Result<PhasedCellNetlist, LowerError> {
+    lower_inner(net).map(|(netlist, _)| netlist)
+}
+
+/// Like [`lower`], but also returns the initial values for ancilla
+/// inputs (in netlist input order, after the data inputs). Needed by
+/// tests that simulate the netlist with correct ancilla seeding.
+pub fn lower_with_ancillas(net: &TypedNode) -> Result<(PhasedCellNetlist, Vec<bool>), LowerError> {
+    lower_inner(net)
+}
+
+fn lower_inner(net: &TypedNode) -> Result<(PhasedCellNetlist, Vec<bool>), LowerError> {
     net.validate()?;
     let w_in = rail_width(&net.input)?;
     let w_out = rail_width(&net.output)?;
@@ -903,6 +1017,7 @@ pub fn lower(net: &TypedNode) -> Result<PhasedCellNetlist, LowerError> {
     // Include ancilla inputs/outputs so every line has exactly one
     // driver and one consumer (validate invariant).
     let mut all_inputs: Vec<RailPair> = ins.iter().map(|x| x.pair).collect();
+    let ancilla_values: Vec<bool> = b.ancilla_inputs.iter().map(|&(_, v)| v).collect();
     for &(pair, _) in &b.ancilla_inputs {
         all_inputs.push(pair);
     }
@@ -923,7 +1038,7 @@ pub fn lower(net: &TypedNode) -> Result<PhasedCellNetlist, LowerError> {
         num_lines: b.next_line,
     };
     debug_assert_eq!(netlist.validate(), Ok(()));
-    Ok(netlist)
+    Ok((netlist, ancilla_values))
 }
 
 /// Lower a Core Π iso end to end: canonicalize (ADR-0014) then lower
@@ -931,6 +1046,12 @@ pub fn lower(net: &TypedNode) -> Result<PhasedCellNetlist, LowerError> {
 pub fn lower_iso(iso: &Iso) -> Result<PhasedCellNetlist, LowerError> {
     let net = canonicalize(iso)?;
     lower(&net)
+}
+
+/// Like [`lower_iso`], but also returns ancilla initial values.
+pub fn lower_iso_with_ancillas(iso: &Iso) -> Result<(PhasedCellNetlist, Vec<bool>), LowerError> {
+    let net = canonicalize(iso)?;
+    lower_with_ancillas(&net)
 }
 
 #[cfg(test)]
@@ -1013,17 +1134,20 @@ mod tests {
     /// untimed evaluation equals `eval(iso)`.
     fn assert_lowering_agrees(iso: &Iso) -> PhasedCellNetlist {
         let (in_ty, out_ty) = type_of(iso).expect("iso types");
-        let net = lower_iso(iso).expect("lowering succeeds");
+        let (net, ancilla_vals) = lower_iso_with_ancillas(iso).expect("lowering succeeds");
         assert_eq!(net.validate(), Ok(()), "lowered netlist validates");
+        let n_data_out = rail_width(&out_ty).unwrap();
         for v in enumerate_values(&in_ty) {
-            let bits = bits_of(&v, &in_ty).unwrap();
-            let got = eval_cells(&net, &bits);
+            let mut bits = bits_of(&v, &in_ty).unwrap();
+            bits.extend_from_slice(&ancilla_vals);
+            let got_full = eval_cells(&net, &bits);
+            let got = &got_full[..n_data_out];
             let mut fuel = 10_000u64;
             let expected = theseus_eval::eval(iso, v.clone(), &mut fuel)
                 .unwrap_or_else(|e| panic!("core eval failed on {v:?}: {e:?}"));
             assert_eq!(
                 got,
-                bits_of(&expected, &out_ty).unwrap(),
+                &bits_of(&expected, &out_ty).unwrap()[..],
                 "netlist disagrees with core eval on {v:?}"
             );
         }
@@ -1315,12 +1439,14 @@ mod tests {
     // ── Honest refusals: deferred vocabulary ─────────────────────────
 
     #[test]
-    fn trace_is_deferred() {
+    fn trace_trivial_one_step() {
+        // Trace(One, SwapSum(One, One)): carrier=One (|u|=1), body swaps
+        // Left↔Right. Body : (1+1) <-> (1+1) is just NOT on the tag.
+        // Semantics: s = Right(Unit); t = body(s) = Left(Unit);
+        // s = Left(Unit); t = body(s) = Right(Unit) → exit with Unit.
+        // So trace(One, SwapSum(1,1)) : One <-> One = identity.
         let iso = Iso::trace(Type::One, Iso::SwapSum(Type::One, Type::One));
-        assert!(matches!(
-            lower_iso(&iso),
-            Err(LowerError::Deferred { node: "TraceLoop", .. })
-        ));
+        assert_lowering_agrees(&iso);
     }
 
     #[test]
