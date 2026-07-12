@@ -75,7 +75,14 @@ impl DeviceRung {
             DeviceRung::Rung1Sky130 => {
                 let lib = std::env::var("THESEUS_SKY130_LIB")
                     .expect("THESEUS_SKY130_LIB not set — run inside the .#char devShell");
-                format!(".lib \"{lib}\" tt")
+                // gmin policy (uniform across ALL rung1 sky130 decks): ngspice's
+                // default gmin=1e-12 puts a ~1 pA/junction numerical shunt across
+                // every junction, a fake static-leakage floor ~20× real sky130 tt
+                // leakage. gmin=1e-16 cuts that artifact to ~0.2% of the real floor
+                // (so cross-cell leakage comparisons measure silicon, not the
+                // solver) while staying convergent. Do NOT go to 1e-18 — it buys
+                // nothing here and risks non-convergence.
+                format!(".lib \"{lib}\" tt\n.options gmin=1e-16")
             }
         }
     }
