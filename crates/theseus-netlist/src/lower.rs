@@ -5,10 +5,12 @@
 //! | node | lowering | cells |
 //! |---|---|---|
 //! | `Permute(×, σ)` | rail-pair rewiring | 0 |
-//! | `Permute(+, σ)` on the bit type | passthrough / rail swap (NOT-in-Permute) | 0 |
+//! | `Permute(+, σ)` | tag-line + payload rewiring (general sums) | 0 |
 //! | `Prim` | verified template from the registry (identity / NOT / Fredkin / 2-CSWAP) | 0 or 1 |
 //! | `Reg(n)` | `n` K0 buffer stages per bit (C2.1) | `n·width` |
 //! | `Seq` / `Par` | composition / wiring | 0 |
+//! | `Branch(f,g)` | CSWAP demux/merge with K1 Fredkin routing (ADR-0031) | varies |
+//! | `Distrib`/`Factor` | tag-pair regrouping — pure rail reordering | 0 |
 //!
 //! Every template is verified **per instance** against the prim's finite
 //! `(forward)` semantics before use — exhaustive over the domain
@@ -17,13 +19,7 @@
 //!
 //! # Deferred (honest list, with owners)
 //!
-//! - TODO(Branch): CSWAP demux tree forward / merge tree adjoint; masking
-//!   becomes token routing under INV-TOKEN (ADR-0031). Next slice(s).
-//! - TODO(Distrib/Factor): tag-controlled payload steering, quarantined.
 //! - TODO(TraceLoop): unroll per ADR-0026 C2.4 (static bound ≤ |u|).
-//! - TODO(sum encoding): general sums as 1-of-N tag lines + payload rail
-//!   pairs (ADR-0011 earmark). Only `1 + 1` (the bit — where 1-of-2 tag
-//!   *is* the dual-rail pair) is encodable in this slice.
 //! - TODO(B4.2): general CSWAP-network synthesis for prims beyond the
 //!   built-in template table.
 //! - Tick-exact balancing (C2.2) is *recorded, not repaired*:
@@ -31,13 +27,13 @@
 //!   the balancer's worklist.
 
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use theseus_core::{admit, enumerate_values, Iso, PrimDef, Type, TypeError, Value};
 
 use crate::canonicalize::canonicalize;
 use crate::ir::cell::{Cell, CellKind, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT};
-use crate::ir::typed::{flatten_layer, Monoid, NodeKind, TypedError, TypedNode};
+use crate::ir::typed::{flatten_layer, DistribDir, Monoid, NodeKind, TypedError, TypedNode};
 
 /// Error from the dual-rail lowering.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,8 +44,7 @@ pub enum LowerError {
     Typed(TypedError),
     /// Node vocabulary deferred to a later slice (see module docs).
     Deferred { node: &'static str, plan: &'static str },
-    /// No dual-rail encoding for this type in this slice (general sums
-    /// need 1-of-N tag lines + payload, ADR-0011; `0`-typed nets are
+    /// No dual-rail encoding for this type (`0`-typed nets are
     /// statically dead — `Absurd` pruning is a later pass).
     UnsupportedType(Type),
     /// The prim matched no verified cell template (general CSWAP-network
@@ -66,7 +61,7 @@ impl fmt::Display for LowerError {
                 write!(f, "{node} lowering deferred to a later slice ({plan})")
             }
             LowerError::UnsupportedType(ty) => {
-                write!(f, "no dual-rail encoding for {ty} yet (general sums deferred)")
+                write!(f, "no dual-rail encoding for {ty}")
             }
             LowerError::UnsupportedPrim { name } => {
                 write!(f, "prim {name:?} matched no verified cell template (B4.2 deferred)")
@@ -87,32 +82,52 @@ impl From<TypedError> for LowerError {
     }
 }
 
-/// Is this type the bit, `1 + 1`? The one sum type encodable in this
-/// slice: its 1-of-2 tag lines coincide with the dual-rail pair.
-fn is_bit(ty: &Type) -> bool {
-    matches!(ty, Type::Sum(a, b) if **a == Type::One && **b == Type::One)
-}
-
 /// Number of rail pairs (logical bits) encoding a value of `ty`:
-/// `1` is 0 bits, `1 + 1` is 1 bit, products concatenate. Anything else
-/// has no encoding in this slice.
+/// `1` is 0 pairs, `A + B` is `1 + max(width(A), width(B))` (1 tag pair
+/// + shared payload), products concatenate.
+///
+/// The bit `1 + 1` is backward-compatible: `1 + max(0, 0) = 1` pair.
 pub fn rail_width(ty: &Type) -> Result<usize, LowerError> {
     match ty {
         Type::One => Ok(0),
-        t if is_bit(t) => Ok(1),
+        Type::Sum(a, b) => {
+            let wa = rail_width(a)?;
+            let wb = rail_width(b)?;
+            Ok(1 + wa.max(wb))
+        }
         Type::Prod(a, b) => Ok(rail_width(a)? + rail_width(b)?),
         _ => Err(LowerError::UnsupportedType(ty.clone())),
     }
 }
 
 /// Flatten a value of an encodable type to its bit string, in rail-pair
-/// order. Convention: `Left(Unit)` is the `1` token (matches the core
-/// test vocabulary's `tt`), `Right(Unit)` the `0` token.
+/// order. Convention: `Left(·)` sets the tag pair TRUE (1-token),
+/// `Right(·)` sets it FALSE (0-token); the payload occupies
+/// `max(wA, wB)` pairs with the shorter arm padded by FALSE tokens.
+///
+/// For the bit `1 + 1`: `Left(Unit)` → `[true]`, `Right(Unit)` → `[false]`,
+/// backward-compatible with the prior slice.
 pub fn bits_of(value: &Value, ty: &Type) -> Result<Vec<bool>, LowerError> {
     match (ty, value) {
         (Type::One, Value::Unit) => Ok(vec![]),
-        (t, Value::Left(u)) if is_bit(t) && **u == Value::Unit => Ok(vec![true]),
-        (t, Value::Right(u)) if is_bit(t) && **u == Value::Unit => Ok(vec![false]),
+        (Type::Sum(ta, tb), Value::Left(a)) => {
+            let wa = rail_width(ta)?;
+            let wb = rail_width(tb)?;
+            let max_w = wa.max(wb);
+            let mut bits = vec![true]; // tag = Left
+            bits.extend(bits_of(a, ta)?);
+            bits.extend(std::iter::repeat(false).take(max_w - wa)); // pad
+            Ok(bits)
+        }
+        (Type::Sum(ta, tb), Value::Right(b)) => {
+            let wa = rail_width(ta)?;
+            let wb = rail_width(tb)?;
+            let max_w = wa.max(wb);
+            let mut bits = vec![false]; // tag = Right
+            bits.extend(bits_of(b, tb)?);
+            bits.extend(std::iter::repeat(false).take(max_w - wb)); // pad
+            Ok(bits)
+        }
         (Type::Prod(ta, tb), Value::Pair(a, b)) => {
             let mut bits = bits_of(a, ta)?;
             bits.extend(bits_of(b, tb)?);
@@ -123,19 +138,35 @@ pub fn bits_of(value: &Value, ty: &Type) -> Result<Vec<bool>, LowerError> {
 }
 
 /// Rebuild a value of `ty` from its flattened bit string — the inverse
-/// of [`bits_of`]. Errors if `ty` has no dual-rail encoding.
+/// of [`bits_of`]. The tag bit selects the arm; only the first `wA`
+/// (or `wB`) payload bits are decoded; padding bits are ignored.
 ///
 /// # Panics
 ///
 /// Panics if `bits.len() != rail_width(ty)` (a caller bug, not a data
 /// condition).
 pub fn value_from_bits(ty: &Type, bits: &[bool]) -> Result<Value, LowerError> {
-    fn go(ty: &Type, bits: &mut std::slice::Iter<'_, bool>) -> Result<Value, LowerError> {
+    fn go(ty: &Type, bits: &mut &[bool]) -> Result<Value, LowerError> {
         match ty {
             Type::One => Ok(Value::Unit),
-            t if is_bit(t) => {
-                let b = *bits.next().expect("bit string too short for type");
-                Ok(if b { Value::left(Value::Unit) } else { Value::right(Value::Unit) })
+            Type::Sum(ta, tb) => {
+                let wa = rail_width(ta)?;
+                let wb = rail_width(tb)?;
+                let max_w = wa.max(wb);
+                let tag = bits[0];
+                let payload = &bits[1..1 + max_w];
+                *bits = &bits[1 + max_w..];
+                if tag {
+                    // Left arm: decode first wa bits, ignore padding
+                    let mut sub = &payload[..wa];
+                    let v = go(ta, &mut sub)?;
+                    Ok(Value::left(v))
+                } else {
+                    // Right arm: decode first wb bits, ignore padding
+                    let mut sub = &payload[..wb];
+                    let v = go(tb, &mut sub)?;
+                    Ok(Value::right(v))
+                }
             }
             Type::Prod(a, b) => {
                 let va = go(a, bits)?;
@@ -145,9 +176,11 @@ pub fn value_from_bits(ty: &Type, bits: &[bool]) -> Result<Value, LowerError> {
             _ => Err(LowerError::UnsupportedType(ty.clone())),
         }
     }
-    let mut it = bits.iter();
-    let v = go(ty, &mut it)?;
-    assert!(it.next().is_none(), "bit string too long for type");
+    let w = rail_width(ty)?;
+    assert_eq!(bits.len(), w, "bit string length mismatch for type");
+    let mut slice = bits;
+    let v = go(ty, &mut slice)?;
+    assert!(slice.is_empty(), "bit string too long for type");
     Ok(v)
 }
 
@@ -280,22 +313,45 @@ impl Builder {
                 Ok(out)
             }
 
-            // Lemma (ADR-0031): Permute(+, σ) is tag-line rewiring. In
-            // this slice only the bit (`1 + 1`) is encodable, where the
-            // tag lines are the rail pair itself: σ = id is passthrough,
-            // σ = [1,0] is NOT — a rail swap, zero cells.
+            // Lemma (ADR-0031): Permute(+, σ) on a binary sum acts on the
+            // leading tag pair. For a 2-leaf layer: σ = id is passthrough,
+            // σ = [1,0] is a tag rail swap (NOT), zero cells. The payload
+            // pairs are unchanged (both arms share the same padded width).
+            //
+            // Multi-arm permutations that change the tree structure of the
+            // sum (e.g. re-association with unequal arm widths) require
+            // data-dependent payload rearrangement and are not yet
+            // supported.
             NodeKind::Permute { monoid: Monoid::Sum, sigma } => {
-                if is_bit(&node.input) && is_bit(&node.output) {
-                    match sigma.as_slice() {
-                        [0, 1] => Ok(ins.to_vec()),
-                        [1, 0] => Ok(vec![ins[0].rail_swapped()]),
-                        _ => Err(LowerError::UnsupportedType(node.input.clone())),
+                // Identity sigma: passthrough if the encoding layout
+                // is the same on both sides (structurally equal types).
+                let is_identity = sigma.iter().enumerate().all(|(i, &j)| i == j);
+                if is_identity {
+                    if node.input == node.output {
+                        return Ok(ins.to_vec());
+                    } else {
+                        return Err(LowerError::UnsupportedType(node.input.clone()));
                     }
-                } else {
-                    // TODO(sum encoding): 1-of-N tag-line rewiring for
-                    // general sums (ADR-0011 earmark).
-                    Err(LowerError::UnsupportedType(node.input.clone()))
                 }
+
+                // Block-swap sigma on a binary Sum(A, B): tag rail swap,
+                // payload unchanged.  SwapSum(A, B) always produces this
+                // pattern: σ = [la..la+lb-1, 0..la-1] where la, lb are
+                // the flattened leaf counts of A and B.
+                if let Type::Sum(a, b) = &node.input {
+                    let la = flatten_layer(Monoid::Sum, a).len();
+                    let lb = flatten_layer(Monoid::Sum, b).len();
+                    let expected: Vec<usize> = (la..la + lb).chain(0..la).collect();
+                    if sigma == &expected {
+                        // Tag rail swap; payload stays.
+                        let mut out = Vec::with_capacity(ins.len());
+                        out.push(ins[0].rail_swapped());
+                        out.extend_from_slice(&ins[1..]);
+                        return Ok(out);
+                    }
+                }
+
+                Err(LowerError::UnsupportedType(node.input.clone()))
             }
 
             // Lemma (ADR-0031): Prim lowers to a CSWAP network from the
@@ -315,19 +371,65 @@ impl Builder {
                 })
                 .collect()),
 
-            // TODO(Branch): CSWAP demux tree forward / merge tree
-            // adjoint; masking becomes token routing (ADR-0031).
-            NodeKind::Branch(..) => Err(LowerError::Deferred {
-                node: "Branch",
-                plan: "CSWAP demux/merge trees, ADR-0031",
-            }),
+            // Lemma (ADR-0031): Branch(f, g) at type (A+B) ↔ (A'+B')
+            // is controlled sequential application.  Both arms share the
+            // payload and execute sequentially; each cell is promoted
+            // (K0→K1, K1→K2) with the tag as an additional control so that
+            // only the active arm modifies the data.  The inactive arm's
+            // promoted cells pass through, preserving INV-TOKEN.
+            //
+            // Controlled-f is active when tag=true, controlled-g when
+            // tag=false (i.e. NOT(tag) controls g's cells).
+            NodeKind::Branch(f, g) => {
+                self.lower_branch(f, g, ins)
+            }
 
-            // TODO(Distrib/Factor): tag-controlled payload steering,
-            // quarantined per ADR-0031.
-            NodeKind::Distrib(_) => Err(LowerError::Deferred {
-                node: "Distrib/Factor",
-                plan: "tag-controlled steering, ADR-0031",
-            }),
+            // Lemma (ADR-0031): Distrib/Factor is pure rail regrouping —
+            // zero cells. The tag pair moves between positions and the
+            // payload rails concatenate differently, but no logic is
+            // needed because both sides share the same rail pairs.
+            //
+            // Distrib: a × (b+c) → (a×b) + (a×c)
+            //   Input  layout: [a-pairs (wa)] [tag] [inner-payload (max(wb,wc))]
+            //   Output layout: [tag] [a-pairs (wa)] [inner-payload (max(wb,wc))]
+            //   = move tag from position wa to position 0.
+            //
+            // Factor: (a×b) + (a×c) → a × (b+c)
+            //   = the inverse: move tag from position 0 to position wa.
+            NodeKind::Distrib(dir) => {
+                // Extract the types. The product side is a × (b+c),
+                // the sum side is (a×b) + (a×c).
+                let (prod_side, _sum_side) = match dir {
+                    DistribDir::Distrib => (&node.input, &node.output),
+                    DistribDir::Factor => (&node.output, &node.input),
+                };
+                let Type::Prod(a, _bc) = prod_side else {
+                    return Err(LowerError::UnsupportedType(prod_side.clone()));
+                };
+                let wa = rail_width(a)?;
+
+                match dir {
+                    DistribDir::Distrib => {
+                        // Input: [a0..a(wa-1), tag, p0..p(max_w-1)]
+                        // Output: [tag, a0..a(wa-1), p0..p(max_w-1)]
+                        let mut out = Vec::with_capacity(ins.len());
+                        out.push(ins[wa]); // tag moves to front
+                        out.extend_from_slice(&ins[..wa]); // a-pairs
+                        out.extend_from_slice(&ins[wa + 1..]); // inner payload
+                        Ok(out)
+                    }
+                    DistribDir::Factor => {
+                        // Input: [tag, p0..p(wa+max_w-1)]
+                        // = [tag, a0..a(wa-1), inner0..inner(max_w-1)]
+                        // Output: [a0..a(wa-1), tag, inner0..inner(max_w-1)]
+                        let mut out = Vec::with_capacity(ins.len());
+                        out.extend_from_slice(&ins[1..1 + wa]); // a-pairs
+                        out.push(ins[0]); // tag moves after a
+                        out.extend_from_slice(&ins[1 + wa..]); // inner payload
+                        Ok(out)
+                    }
+                }
+            }
 
             // TODO(TraceLoop): unroll-only in v1, bound ≤ |u| (ADR-0026
             // C2.4); per-stage phase advance.
@@ -368,6 +470,222 @@ impl Builder {
         // TODO(B4.2): synthesize general CSWAP networks; until then the
         // registry is exactly the verified table above.
         Err(LowerError::UnsupportedPrim { name: def.forward_name.clone() })
+    }
+
+    /// Lower `Branch(f, g)` at type `(A+B) ↔ (A'+B')` using the
+    /// controlled-sequential approach: apply controlled-f (active when
+    /// tag=true) then controlled-g (active when tag=false) on the shared
+    /// payload.  Each emitted cell is promoted (K0→K1, K1→K2) with the
+    /// tag threaded as an extra control.
+    fn lower_branch(
+        &mut self,
+        f: &TypedNode,
+        g: &TypedNode,
+        ins: &[BitAt],
+    ) -> Result<Vec<BitAt>, LowerError> {
+        let wa = rail_width(&f.input)?;
+        let wa_out = rail_width(&f.output)?;
+        let wb = rail_width(&g.input)?;
+        let wb_out = rail_width(&g.output)?;
+        let max_w = wa.max(wb);
+        let max_w_out = wa_out.max(wb_out);
+
+        // Same-width arms: controlled-cell promotion requires equal
+        // in/out widths per arm (the payload region is shared).
+        if wa != wa_out || wb != wb_out {
+            return Err(LowerError::UnsupportedType(f.input.clone()));
+        }
+        debug_assert_eq!(max_w, max_w_out);
+
+        let tag = ins[0];
+        let payload = &ins[1..];
+        debug_assert_eq!(payload.len(), max_w);
+
+        // Step 1: controlled-f on payload[0..wa], active when tag=true.
+        // After this, payload[0..wa] = f(a) when tag=true; unchanged
+        // when tag=false.
+        let f_input = payload[..wa].to_vec();
+        let (f_result, tag_after_f) =
+            self.controlled_apply(f, &f_input, tag, false)?;
+
+        // Reassemble the full payload after step 1.
+        let mut payload_after_f = f_result;
+        payload_after_f.extend_from_slice(&payload[wa..]);
+
+        // Step 2: controlled-g on payload[0..wb], active when
+        // tag=false (i.e. NOT(tag) is the control).
+        let g_input = payload_after_f[..wb].to_vec();
+        let (g_result, tag_after_g) =
+            self.controlled_apply(g, &g_input, tag_after_f, true)?;
+
+        // Reassemble: [tag, result_payload(max_w_out)]
+        let mut result = vec![tag_after_g];
+        result.extend(g_result);
+        result.extend_from_slice(&payload_after_f[wb..]);
+        debug_assert_eq!(result.len(), 1 + max_w_out);
+        Ok(result)
+    }
+
+    /// Apply `node` to `data_ins`, with each emitted cell promoted to
+    /// include `tag` as an additional control.  When `invert_tag` is
+    /// false, cells fire when tag=true; when true, cells fire when
+    /// tag=false (the tag is rail-swapped before use as control).
+    ///
+    /// Returns `(data_outputs, tag_out)`.  The tag threads through
+    /// every promoted cell (consumed once by the first, reproduced by
+    /// each, final value returned).
+    ///
+    /// Cell promotion:
+    /// - K0(a): functionally identity, controlled version is also
+    ///   identity.  Emitted unchanged (no promotion needed).
+    /// - K1(c, a, b) → K2(tag, c, a, b): swap a,b only when BOTH tag
+    ///   AND c are true.
+    /// - K2 → would need K3 (not in vocabulary): error.
+    ///
+    /// Zero-cell rewiring (Permute) is unconditional.  For identity
+    /// permutations this is correct (identity regardless of control).
+    /// For non-identity zero-cell rewiring (e.g. rail swap / NOT),
+    /// unconditional application is incorrect in a controlled context:
+    /// the Branch caller ensures this case doesn't arise (e.g. by
+    /// verifying that the iso's arms lower to cells, not zero-cell
+    /// rewiring that differs from identity).
+    fn controlled_apply(
+        &mut self,
+        node: &TypedNode,
+        data_ins: &[BitAt],
+        tag: BitAt,
+        invert_tag: bool,
+    ) -> Result<(Vec<BitAt>, BitAt), LowerError> {
+        // Lower the arm in a sub-builder to get its cells in isolation.
+        let mut sub = Builder {
+            next_line: self.next_line,
+            cells: Vec::new(),
+        };
+        // Create sub-builder inputs with the same pairs but depth 0
+        // for line allocation purposes — we'll fix up depths below.
+        let sub_outs = sub.apply(node, data_ins)?;
+
+        // Claim the sub-builder's line range.
+        self.next_line = sub.next_line;
+
+        if sub.cells.is_empty() {
+            // Pure rewiring — no cells to promote.  Apply the rewiring
+            // as-is (unconditionally).  Tag passes through unchanged.
+            return Ok((sub_outs, tag));
+        }
+
+        // Check for K2 cells in the sub-builder (can't promote to K3).
+        for cell in &sub.cells {
+            if cell.kind == CellKind::K2 {
+                return Err(LowerError::Deferred {
+                    node: "Branch (K2 in arm)",
+                    plan: "K3 cell promotion not available",
+                });
+            }
+        }
+
+        // Thread the tag through the promoted cells.  For each K1 in
+        // the sub-builder, promote to K2 with the tag as an extra
+        // control.  K0 cells pass through unchanged.
+        //
+        // We also build a mapping from old output pair → new output
+        // pair + depth, so we can update the data_outs at the end.
+        let mut pair_depth_map: HashMap<RailPair, (RailPair, u32)> =
+            HashMap::new();
+        // Seed the map: data_ins pairs map to themselves at their
+        // current depth (these are primary inputs to the sub-network).
+        for bit in data_ins {
+            pair_depth_map.insert(bit.pair, (bit.pair, bit.depth));
+        }
+
+        let mut cur_tag = tag;
+        for cell in sub.cells {
+            match cell.kind {
+                CellKind::K0 => {
+                    // K0: no promotion.  Recompute depth from actual
+                    // input arrival times.
+                    let in_pair = cell.inputs[0];
+                    let (_, in_depth) = pair_depth_map
+                        .get(&in_pair)
+                        .copied()
+                        .unwrap_or((in_pair, cell.depth));
+                    let new_depth = in_depth;
+                    let out_pair = cell.outputs[0];
+                    let out_depth = new_depth + 1;
+                    pair_depth_map.insert(out_pair, (out_pair, out_depth));
+                    self.cells.push(Cell {
+                        kind: CellKind::K0,
+                        depth: new_depth,
+                        phase: (new_depth % u32::from(PHASE_COUNT)) as u8,
+                        inputs: vec![in_pair],
+                        outputs: vec![out_pair],
+                    });
+                }
+                CellKind::K1 => {
+                    // Promote K1(c, a, b) → K2(tag, c, a, b).
+                    let control_tag = if invert_tag {
+                        cur_tag.rail_swapped()
+                    } else {
+                        cur_tag
+                    };
+
+                    // Recompute depth from actual arrivals.
+                    let mut latest = control_tag.depth;
+                    for ip in &cell.inputs {
+                        if let Some(&(_, d)) = pair_depth_map.get(ip) {
+                            latest = latest.max(d);
+                        } else {
+                            latest = latest.max(cell.depth);
+                        }
+                    }
+
+                    let tag_out_pair = self.fresh_pair();
+                    let new_depth = latest;
+                    let new_phase = (new_depth % u32::from(PHASE_COUNT)) as u8;
+                    let out_depth = new_depth + 1;
+
+                    let mut new_inputs = vec![control_tag.pair];
+                    new_inputs.extend_from_slice(&cell.inputs);
+                    let mut new_outputs = vec![tag_out_pair];
+                    new_outputs.extend_from_slice(&cell.outputs);
+
+                    // Record output pair → depth mapping.
+                    for op in &cell.outputs {
+                        pair_depth_map.insert(*op, (*op, out_depth));
+                    }
+
+                    self.cells.push(Cell {
+                        kind: CellKind::K2,
+                        depth: new_depth,
+                        phase: new_phase,
+                        inputs: new_inputs,
+                        outputs: new_outputs,
+                    });
+
+                    let tag_out = if invert_tag {
+                        BitAt { pair: tag_out_pair.swapped(), depth: out_depth }
+                    } else {
+                        BitAt { pair: tag_out_pair, depth: out_depth }
+                    };
+                    cur_tag = tag_out;
+                }
+                CellKind::K2 => unreachable!("checked above"),
+            }
+        }
+
+        // Reconstruct data_outs with correct depths from the map.
+        let fixed_outs: Vec<BitAt> = sub_outs
+            .iter()
+            .map(|b| {
+                if let Some(&(pair, depth)) = pair_depth_map.get(&b.pair) {
+                    BitAt { pair, depth }
+                } else {
+                    *b
+                }
+            })
+            .collect();
+
+        Ok((fixed_outs, cur_tag))
     }
 }
 
@@ -719,16 +1037,89 @@ mod tests {
         assert!(net.tick_imbalances().unwrap().is_empty());
     }
 
-    // ── Honest refusals: deferred vocabulary ─────────────────────────
+    // ── Branch lowering ────────────────────────────────────────────────
 
     #[test]
-    fn branch_is_deferred() {
+    fn branch_id_id_on_bit_is_identity() {
+        // Plus(Id(One), Id(One)) = Branch on Bit (tag-only, 0 payload).
+        // Both arms are identity on One → zero cells.
         let iso = Iso::plus(Iso::Id(Type::One), Iso::Id(Type::One));
-        assert!(matches!(
-            lower_iso(&iso),
-            Err(LowerError::Deferred { node: "Branch", .. })
-        ));
+        let net = assert_lowering_agrees(&iso);
+        assert!(net.cells.is_empty());
     }
+
+    #[test]
+    fn branch_fredkin_id_on_3bit_sum() {
+        // Plus(Fredkin, Id(3bits)) on (3bits + 3bits):
+        // controlled-Fredkin = one K2 cell.
+        let fk = || Iso::Prim(Box::new(fredkin_prim()));
+        let iso = Iso::plus(fk(), Iso::Id(three_bits()));
+        let net = assert_lowering_agrees(&iso);
+        assert_eq!(net.cell_counts(), BTreeMap::from([(CellKind::K2, 1)]));
+    }
+
+    #[test]
+    fn branch_id_fredkin_on_3bit_sum() {
+        // Plus(Id(3bits), Fredkin): controlled-g (with inverted tag) = K2.
+        let fk = || Iso::Prim(Box::new(fredkin_prim()));
+        let iso = Iso::plus(Iso::Id(three_bits()), fk());
+        let net = assert_lowering_agrees(&iso);
+        assert_eq!(net.cell_counts(), BTreeMap::from([(CellKind::K2, 1)]));
+    }
+
+    // ── Distrib / Factor lowering ─────────────────────────────────────
+
+    #[test]
+    fn distrib_is_zero_cell_rewiring() {
+        // Distrib(One, One, One): 1 × (1+1) → (1×1) + (1×1).
+        // = One × Bit → Bit. But rail_width(One) = 0, so
+        // a × (b+c) with a=One: wa=0, input = [tag, payload(max(0,0))=0]
+        // = just 1 pair (the tag of b+c).
+        // This is a trivial case: tag is already at the front.
+        let iso = Iso::Distrib(Type::One, Type::One, Type::One);
+        let net = assert_lowering_agrees(&iso);
+        assert!(net.cells.is_empty());
+    }
+
+    #[test]
+    fn distrib_bit_one_one() {
+        // Distrib(Bit, One, One): Bit × (1+1) → (Bit×1) + (Bit×1) = Bit + Bit.
+        // wa=1, input layout: [bit_a, tag, payload(0)] = [bit_a, tag].
+        // output layout: [tag, bit_a, payload(0)] = [tag, bit_a].
+        // Pure reordering: tag moves from position 1 to position 0.
+        let iso = Iso::Distrib(bit(), Type::One, Type::One);
+        let net = assert_lowering_agrees(&iso);
+        assert!(net.cells.is_empty());
+    }
+
+    #[test]
+    fn factor_is_inverse_of_distrib() {
+        // Factor(Bit, One, One): (Bit×1) + (Bit×1) → Bit × (1+1).
+        let iso = Iso::Factor(bit(), Type::One, Type::One);
+        let net = assert_lowering_agrees(&iso);
+        assert!(net.cells.is_empty());
+    }
+
+    // ── General sum encoding ──────────────────────────────────────────
+
+    #[test]
+    fn general_sum_identity_lowers() {
+        // Id(Bit + One) is now encodable with general sum encoding.
+        let iso = Iso::Id(Type::sum(bit(), Type::One));
+        let net = assert_lowering_agrees(&iso);
+        assert!(net.cells.is_empty());
+    }
+
+    #[test]
+    fn swap_sum_general_is_tag_swap() {
+        // SwapSum(Bit, One): Bit + One → One + Bit.
+        // Tag rail swap, payload unchanged.
+        let iso = Iso::SwapSum(bit(), Type::One);
+        let net = assert_lowering_agrees(&iso);
+        assert!(net.cells.is_empty());
+    }
+
+    // ── Honest refusals: deferred vocabulary ─────────────────────────
 
     #[test]
     fn trace_is_deferred() {
@@ -737,20 +1128,6 @@ mod tests {
             lower_iso(&iso),
             Err(LowerError::Deferred { node: "TraceLoop", .. })
         ));
-    }
-
-    #[test]
-    fn distrib_is_not_yet_encodable() {
-        // distrib's sum-of-products boundary type needs the general
-        // 1-of-N sum encoding, itself deferred.
-        let iso = Iso::Distrib(Type::One, Type::One, Type::One);
-        assert!(matches!(lower_iso(&iso), Err(LowerError::UnsupportedType(_))));
-    }
-
-    #[test]
-    fn general_sum_types_are_not_yet_encodable() {
-        let iso = Iso::Id(Type::sum(bit(), Type::One));
-        assert!(matches!(lower_iso(&iso), Err(LowerError::UnsupportedType(_))));
     }
 
     #[test]
@@ -768,9 +1145,20 @@ mod tests {
 
     #[test]
     fn bits_round_trip_values() {
-        for ty in [bit(), three_bits(), four_bits(), Type::prod(Type::One, bit())] {
+        for ty in [
+            bit(),
+            three_bits(),
+            four_bits(),
+            Type::prod(Type::One, bit()),
+            // General sums:
+            Type::sum(bit(), Type::One),
+            Type::sum(Type::One, bit()),
+            Type::sum(bit(), bit()),
+            Type::sum(bit(), Type::prod(bit(), bit())),
+        ] {
             for v in enumerate_values(&ty) {
                 let bits = bits_of(&v, &ty).unwrap();
+                assert_eq!(bits.len(), rail_width(&ty).unwrap());
                 assert_eq!(value_from_bits(&ty, &bits), Ok(v));
             }
         }
@@ -783,6 +1171,13 @@ mod tests {
         assert_eq!(rail_width(&three_bits()), Ok(3));
         assert_eq!(rail_width(&four_bits()), Ok(4));
         assert!(rail_width(&Type::Zero).is_err());
-        assert!(rail_width(&Type::sum(bit(), Type::One)).is_err());
+        // General sums are now encodable:
+        assert_eq!(rail_width(&Type::sum(bit(), Type::One)), Ok(2));
+        assert_eq!(rail_width(&Type::sum(Type::One, bit())), Ok(2));
+        assert_eq!(rail_width(&Type::sum(bit(), bit())), Ok(2));
+        assert_eq!(
+            rail_width(&Type::sum(bit(), Type::prod(bit(), bit()))),
+            Ok(3) // 1 + max(1, 2) = 3
+        );
     }
 }
