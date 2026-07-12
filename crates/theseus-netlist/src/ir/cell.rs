@@ -561,12 +561,14 @@ mod tests {
                     CellKind::K0 => vec![t.a],
                     CellKind::K1 => vec![t.c1, t.a, t.b],
                     CellKind::K2 => vec![t.c1, t.c2, t.a, t.b],
+                    CellKind::K3 => unreachable!("loop covers k<=2"),
                 };
                 let o = cswap_out(k, t);
                 let want: Vec<bool> = match kind {
                     CellKind::K0 => vec![o.a],
                     CellKind::K1 => vec![o.c1, o.a, o.b],
                     CellKind::K2 => vec![o.c1, o.c2, o.a, o.b],
+                    CellKind::K3 => unreachable!("loop covers k<=2"),
                 };
                 assert_eq!(kind.eval(&bits), want, "kind {kind:?}, token {t:?}");
             }

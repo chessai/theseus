@@ -5,14 +5,10 @@
 //! pipeline (elaborate → lower → balance → simulate) matches the core
 //! evaluator over the whole 32-value domain.
 
-use theseus_core::{enumerate_values, type_of, Iso, Type};
+use theseus_core::{enumerate_values, type_of, Iso};
 use theseus_netlist::{
     balance, bits_of, lower_iso, rail_width, simulate, CellKind, PhasedCellNetlist, RailPair,
 };
-
-fn bit() -> Type {
-    Type::sum(Type::One, Type::One)
-}
 
 /// Untimed functional evaluation of the cell netlist with ancilla support.
 fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
@@ -74,7 +70,7 @@ fn full_adder_source() -> String {
     let mut src = String::from("type Bit = O | I\n\niso fa5 : (Bit, Bit, Bit, Bit, Bit) <-> (Bit, Bit, Bit, Bit, Bit)\n");
 
     for v in 0u32..32 {
-        let a = (v >> 0) & 1 == 1;
+        let a = v & 1 == 1;
         let b = (v >> 1) & 1 == 1;
         let cin = (v >> 2) & 1 == 1;
         let s = (v >> 3) & 1 == 1;
@@ -95,8 +91,7 @@ fn full_adder_source() -> String {
             bit_str(a), bit_str(b), bit_str(cin), bit_str(s_out), bit_str(c_out)
         );
 
-        let sep = if v == 0 { "| " } else { "| " };
-        src.push_str(&format!("{sep}{lhs} <-> {rhs}\n"));
+        src.push_str(&format!("| {lhs} <-> {rhs}\n"));
     }
     src
 }
