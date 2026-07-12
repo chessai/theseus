@@ -11,46 +11,17 @@
 //! * fib = unrolled Bennett-style chain r3 = r1+r2, r4 = r2+r3, r5 = r3+r4,
 //!   every term written to a FRESH register.
 
-use std::collections::BTreeMap;
-
 use theseus_core::prim::Value;
 use theseus_core::type_of;
 use theseus_netlist::{balance, bits_of, rail_width, simulate, lower::lower_iso_with_ancillas};
 use theseus_spice::annotate::compiled_energy;
-use theseus_spice::chardb::{CellChar, CharDb, CharPoint};
-use theseus_spice::energy::EnergyFit;
+use theseus_spice::chardb;
 
 // ── Shared generator (same construction the oracle test verifies) ──────
 
 #[path = "../tests/fib_gen/mod.rs"]
 #[allow(dead_code)]
 mod gen;
-
-// ── Fixture char DB with K0–K3 ──────────────────────────────────────────
-
-fn fixture_db() -> CharDb {
-    let cell = |key: &str, e: f64| {
-        (
-            key.to_string(),
-            CellChar {
-                key: key.to_string(),
-                points: vec![
-                    CharPoint { t_ramp: 1e-8, energy: e },
-                    CharPoint { t_ramp: 1e-5, energy: e },
-                ],
-                fit: EnergyFit { k_adia: 0.0, k_leak: 0.0, k_res: e, r_squared: 1.0 },
-            },
-        )
-    };
-    CharDb {
-        cells: BTreeMap::from([
-            cell("cswap-k0", 2.0e-15),
-            cell("cswap-k1", 7.0e-15),
-            cell("cswap-k2", 1.1e-14),
-            cell("cswap-k3", 1.6e-14),
-        ]),
-    }
-}
 
 fn elaborate(src: &str, iso_name: &str) -> theseus_core::Iso {
     let program = theseus_syntax::parse(src).expect("parse");
@@ -66,8 +37,8 @@ fn elaborate(src: &str, iso_name: &str) -> theseus_core::Iso {
 
 fn main() {
     let t_ramp = 1e-7;
-    let db = fixture_db();
-    println!("char DB: FIXTURE constants (K0-K3; representative, not measured)\n");
+    let db = chardb::rung0_measured();
+    println!("char DB: real rung-0 ngspice characterization (measured once, loaded from data/rung0-chardb.ron)\n");
 
     let prog = gen::build_fib5_minwidth("fib5");
     let iso = elaborate(&prog.source, &prog.top_name);

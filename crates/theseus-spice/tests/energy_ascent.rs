@@ -2,10 +2,10 @@
 //! measured energy number (M3b slice 1b).
 //!
 //! Pure-logic tests exercise `compiled_energy` against fixture char DBs
-//! (exact expected sums, no ngspice). The gated test builds a *real*
-//! rung-0 char DB via ngspice cell sweeps, lowers a Fredkin, runs the
-//! timed phased-sim, and reports a real energy number with the per-kind
-//! breakdown.
+//! (exact expected sums, no ngspice). The measured-DB test loads the
+//! real rung-0 ngspice characterization from `data/rung0-chardb.ron`,
+//! lowers a Fredkin, runs the timed phased-sim, and reports a real
+//! energy number with the per-kind breakdown.
 
 use std::collections::BTreeMap;
 
@@ -145,31 +145,25 @@ fn fixture_energy_tracks_the_fitted_model_not_the_raw_points() {
     assert!((e1 / e2 - 2.0).abs() < 1e-9, "1/t scaling: {e1} vs {e2}");
 }
 
-// ── (b) The energy ascent, gated on ngspice: real cells, real joules ───
+// ── (b) The energy ascent with the real measured char DB ──────────────
 
 #[test]
 fn energy_ascent_fredkin_end_to_end() {
-    if !theseus_spice::bench::ngspice_available() {
-        eprintln!("[skip] ngspice unavailable");
-        return;
-    }
+    // Load the real rung-0 ngspice characterization (no live ngspice needed).
+    let db = chardb::rung0_measured();
 
-    // 1. Characterize the real rung-0 cells (ngspice sweeps).
-    let periods = [1e-8, 1e-7, 1e-6, 1e-5];
-    let db = chardb::build_char_db(theseus_spice::adiabatic::DeviceRung::Rung0Level1, &periods);
-
-    // 2. Compile: Core Π Fredkin → phased cell netlist (slice 1a).
+    // 1. Compile: Core Π Fredkin → phased cell netlist (slice 1a).
     let iso = fredkin_iso();
     let net = lower_iso(&iso).expect("fredkin lowers");
     assert_eq!(net.cell_counts(), BTreeMap::from([(CellKind::K1, 1)]));
 
-    // 3. Phased-sim the compiled netlist (timed, INV-TOKEN asserted
+    // 2. Phased-sim the compiled netlist (timed, INV-TOKEN asserted
     //    per tick): control=1 swaps a and b.
     let sim = simulate(&net, &[true, true, false]).expect("phased sim runs");
     assert_eq!(sim.outputs, vec![true, false, true]);
     assert!(sim.inv_token_checks > 0);
 
-    // 4. Annotate: the measured energy number.
+    // 3. Annotate: the measured energy number.
     let t_ramp = 1e-7;
     let report = compiled_energy(&net, &db, t_ramp).expect("in-range annotation");
     assert!(report.total_j.is_finite() && report.total_j > 0.0);

@@ -4,13 +4,10 @@
 //!
 //!     cargo run -p theseus-spice --example full_adder_energy
 
-use std::collections::BTreeMap;
-
 use theseus_core::{enumerate_values, type_of};
 use theseus_netlist::{balance, bits_of, lower_iso, rail_width, simulate, CellKind};
 use theseus_spice::annotate::compiled_energy;
-use theseus_spice::chardb::{CellChar, CharDb, CharPoint};
-use theseus_spice::energy::EnergyFit;
+use theseus_spice::chardb;
 
 // ── Full adder source generation ────────────────────────────────────
 
@@ -44,32 +41,6 @@ fn full_adder_source() -> String {
     src
 }
 
-// ── Fixture char DB with K3 ─────────────────────────────────────────
-
-fn fixture_db() -> CharDb {
-    let cell = |key: &str, e: f64| {
-        (
-            key.to_string(),
-            CellChar {
-                key: key.to_string(),
-                points: vec![
-                    CharPoint { t_ramp: 1e-8, energy: e },
-                    CharPoint { t_ramp: 1e-5, energy: e },
-                ],
-                fit: EnergyFit { k_adia: 0.0, k_leak: 0.0, k_res: e, r_squared: 1.0 },
-            },
-        )
-    };
-    CharDb {
-        cells: BTreeMap::from([
-            cell("cswap-k0", 2.0e-15),
-            cell("cswap-k1", 7.0e-15),
-            cell("cswap-k2", 1.1e-14),
-            cell("cswap-k3", 1.6e-14),
-        ]),
-    }
-}
-
 // ── Elaborate helper ────────────────────────────────────────────────
 
 fn elaborate(src: &str, iso_name: &str) -> theseus_core::Iso {
@@ -100,9 +71,9 @@ fn extend_with_ancilla(
 
 fn main() {
     let t_ramp = 1e-7;
-    let db = fixture_db();
+    let db = chardb::rung0_measured();
 
-    println!("char DB: FIXTURE constants (K0–K3; numbers are representative, not measured)\n");
+    println!("char DB: real rung-0 ngspice characterization (measured once, loaded from data/rung0-chardb.ron)\n");
 
     // ── Compile pipeline ────────────────────────────────────────────
     let src = full_adder_source();

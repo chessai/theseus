@@ -3,23 +3,16 @@
 //!
 //!     cargo run -p theseus-spice --example energy_ascent
 //!
-//! With ngspice on PATH this characterizes the real rung-0 cells (a few
-//! seconds of sweeps); without it, a clearly-labeled fixture DB with
-//! representative constants is used so the pipeline still demonstrates
-//! end to end.
-
-use std::collections::BTreeMap;
+//! Uses the real rung-0 ngspice characterization (measured once, loaded
+//! from `data/rung0-chardb.ron`).
 
 use theseus_core::{Iso, Type};
 use theseus_netlist::{
     lower, lower_iso, prim_from_bits, simulate, CellKind, NodeKind, PhasedCellNetlist,
     TypedNode,
 };
-use theseus_spice::adiabatic::DeviceRung;
 use theseus_spice::annotate::compiled_energy;
-use theseus_spice::bench::ngspice_available;
-use theseus_spice::chardb::{build_char_db, CellChar, CharDb, CharPoint};
-use theseus_spice::energy::EnergyFit;
+use theseus_spice::chardb::{self, CharDb};
 
 fn bit() -> Type {
     Type::sum(Type::One, Type::One)
@@ -35,29 +28,6 @@ fn fredkin_iso() -> Iso {
     })
     .expect("fredkin is encodable");
     Iso::Prim(Box::new(def))
-}
-
-fn fixture_db() -> CharDb {
-    let cell = |key: &str, e: f64| {
-        (
-            key.to_string(),
-            CellChar {
-                key: key.to_string(),
-                points: vec![
-                    CharPoint { t_ramp: 1e-8, energy: e },
-                    CharPoint { t_ramp: 1e-5, energy: e },
-                ],
-                fit: EnergyFit { k_adia: 0.0, k_leak: 0.0, k_res: e, r_squared: 1.0 },
-            },
-        )
-    };
-    CharDb {
-        cells: BTreeMap::from([
-            cell("cswap-k0", 2.0e-15),
-            cell("cswap-k1", 7.0e-15),
-            cell("cswap-k2", 1.1e-14),
-        ]),
-    }
 }
 
 fn show(name: &str, net: &PhasedCellNetlist, inputs: &[bool], db: &CharDb, t_ramp: f64) {
@@ -87,13 +57,8 @@ fn show(name: &str, net: &PhasedCellNetlist, inputs: &[bool], db: &CharDb, t_ram
 
 fn main() {
     let t_ramp = 1e-7;
-    let db = if ngspice_available() {
-        println!("char DB: real rung-0 cell sweeps via ngspice (building...)\n");
-        build_char_db(DeviceRung::Rung0Level1, &[1e-8, 1e-7, 1e-6, 1e-5])
-    } else {
-        println!("char DB: FIXTURE constants (ngspice unavailable; numbers are representative, not measured)\n");
-        fixture_db()
-    };
+    let db = chardb::rung0_measured();
+    println!("char DB: real rung-0 ngspice characterization (measured once, loaded from data/rung0-chardb.ron)\n");
 
     // 1. A Fredkin gate: one K1 cell.
     let fredkin = lower_iso(&fredkin_iso()).expect("fredkin lowers");

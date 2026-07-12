@@ -1,13 +1,11 @@
 //! Acceptance tests for the M3b energy artifact: compile a 5-wire
-//! full adder and price it in joules from a fixture char DB.
-
-use std::collections::BTreeMap;
+//! full adder and price it in joules from the real rung-0 ngspice
+//! characterization (measured once, loaded from `data/rung0-chardb.ron`).
 
 use theseus_core::{enumerate_values, type_of, Iso};
 use theseus_netlist::{balance, bits_of, lower_iso, rail_width, simulate, CellKind, PhasedCellNetlist};
 use theseus_spice::annotate::compiled_energy;
-use theseus_spice::chardb::{CellChar, CharDb, CharPoint};
-use theseus_spice::energy::EnergyFit;
+use theseus_spice::chardb;
 
 // ── Full adder source generation ────────────────────────────────────
 
@@ -39,32 +37,6 @@ fn full_adder_source() -> String {
         ));
     }
     src
-}
-
-// ── Fixture char DB with K3 ─────────────────────────────────────────
-
-fn fixture_db() -> CharDb {
-    let cell = |key: &str, e: f64| {
-        (
-            key.to_string(),
-            CellChar {
-                key: key.to_string(),
-                points: vec![
-                    CharPoint { t_ramp: 1e-8, energy: e },
-                    CharPoint { t_ramp: 1e-5, energy: e },
-                ],
-                fit: EnergyFit { k_adia: 0.0, k_leak: 0.0, k_res: e, r_squared: 1.0 },
-            },
-        )
-    };
-    CharDb {
-        cells: BTreeMap::from([
-            cell("cswap-k0", 2.0e-15),
-            cell("cswap-k1", 7.0e-15),
-            cell("cswap-k2", 1.1e-14),
-            cell("cswap-k3", 1.6e-14),
-        ]),
-    }
 }
 
 // ── Elaborate helper ────────────────────────────────────────────────
@@ -107,7 +79,7 @@ fn compile_fa5() -> (Iso, PhasedCellNetlist) {
 #[test]
 fn energy_report_has_k0_and_k3() {
     let (_iso, balanced) = compile_fa5();
-    let db = fixture_db();
+    let db = chardb::rung0_measured();
     let t_ramp = 1e-7;
 
     let report = compiled_energy(&balanced, &db, t_ramp).expect("energy annotation succeeds");
@@ -171,7 +143,7 @@ fn differential_oracle_all_32_inputs() {
 
 #[test]
 fn energy_is_deterministic() {
-    let db = fixture_db();
+    let db = chardb::rung0_measured();
     let t_ramp = 1e-7;
 
     let (_iso1, balanced1) = compile_fa5();
