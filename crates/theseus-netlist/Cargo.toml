@@ -6,5 +6,16 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+theseus-core = { path = "../theseus-core" }
+
+[dev-dependencies]
+# Differential oracle: the untimed cell-netlist evaluation in tests is
+# checked against the core interpreter (ADR-0008/0018 oracle chain).
+theseus-eval = { path = "../theseus-eval" }
+# Cross-check: CellKind::eval / char-DB keys against the characterized
+# k-CSWAP truth functions (pure functions only; no ngspice needed).
+theseus-spice = { path = "../theseus-spice" }
+
 [lints]
 workspace = true
