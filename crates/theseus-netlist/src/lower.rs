@@ -620,14 +620,14 @@ impl Builder {
             for i in 0..n {
                 let out_pair = sub_outs[i].pair;
                 let mut found = false;
-                for j in 0..n {
-                    if out_pair == data_ins[j].pair {
+                for (j, din) in data_ins.iter().enumerate() {
+                    if out_pair == din.pair {
                         source[i] = j;
                         flipped[i] = false;
                         found = true;
                         break;
                     }
-                    if out_pair == data_ins[j].pair.swapped() {
+                    if out_pair == din.pair.swapped() {
                         source[i] = j;
                         flipped[i] = true;
                         found = true;
