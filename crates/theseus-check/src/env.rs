@@ -88,12 +88,24 @@ pub struct IsoCollision {
     pub span: Span,
 }
 
+/// The default bounded-unroll depth `D` for recursive (μ-) types
+/// (v0.2 software dialect, increment 1 — ADR-0035, design/mu-types.md).
+///
+/// A recursive nominal type is lowered by unrolling its fixpoint `D` times
+/// and cutting off with `Zero` (the empty type), so the lowered type's
+/// inhabitants are exactly the values of the recursive type with fewer than
+/// `D` unfoldings — e.g. `Nat` at `D = 4` lowers to `1+(1+(1+(1+0)))`, the
+/// numerals `0..=3`. `4` keeps exhaustive coverage enumeration cheap even for
+/// branching recursion (a binary tree at `D = 4` has 26 inhabitants) while
+/// still exercising multiple levels of nesting.
+pub const DEFAULT_UNROLL_DEPTH: usize = 4;
+
 /// The resolution environment: indexed lookup tables plus type lowering.
 ///
 /// Downstream stages consume this by reference; they must not need to rebuild
 /// it. All maps are ordered ([`BTreeMap`]) so any iteration is deterministic
 /// (ADR-0020).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Env {
     /// type name → its declared constructors.
     types: BTreeMap<String, TypeInfo>,
@@ -106,6 +118,21 @@ pub struct Env {
     /// Iso name collisions detected during resolution. The first iso wins;
     /// later isos with the same name are recorded here and NOT inserted.
     iso_collisions: Vec<IsoCollision>,
+    /// Bounded-unroll depth `D` for recursive types (ADR-0035).
+    unroll_depth: usize,
+}
+
+impl Default for Env {
+    fn default() -> Self {
+        Env {
+            types: BTreeMap::new(),
+            ctors: BTreeMap::new(),
+            isos: BTreeMap::new(),
+            prims: BTreeMap::new(),
+            iso_collisions: Vec::new(),
+            unroll_depth: DEFAULT_UNROLL_DEPTH,
+        }
+    }
 }
 
 impl Env {
@@ -182,6 +209,19 @@ impl Env {
         self.isos.keys()
     }
 
+    /// The bounded-unroll depth `D` used when lowering recursive types.
+    pub fn unroll_depth(&self) -> usize {
+        self.unroll_depth
+    }
+
+    /// Override the bounded-unroll depth `D` for recursive types.
+    ///
+    /// Callers (tests, future CLI flag) may tune the truncation; `D = 0`
+    /// lowers every recursive type to `Zero` (no inhabitants).
+    pub fn set_unroll_depth(&mut self, depth: usize) {
+        self.unroll_depth = depth;
+    }
+
     /// Lower a surface type into its core [`CoreType`] encoding.
     ///
     /// * `Empty` ⇒ `Zero`, `Unit` ⇒ `One`.
@@ -195,24 +235,45 @@ impl Env {
     ///   `s0 + (s1 + (... + s(n-1)))`. So `Bit = O | I` ⇒ `1 + 1` and
     ///   `MaybeBit = Nothing | Just Bit` ⇒ `1 + (1 + 1)`. A type with no
     ///   constructors ⇒ `Zero`; a single-ctor type ⇒ just that summand.
+    ///
+    /// **Recursive (μ-) types** are lowered by **bounded unrolling**
+    /// (ADR-0035): along any one path of the lowering, each named type may be
+    /// entered at most `D = self.unroll_depth` times; a deeper re-entry lowers
+    /// to `Zero`. The Core Π type algebra stays finite and unchanged, and the
+    /// truncated type's inhabitants are exactly the recursive values with
+    /// fewer than `D` unfoldings, encoded independently of `D` (a numeral `n`
+    /// is `inr`ⁿ`(inl unit)` at every depth that admits it). The budget is
+    /// per-path (restored on exit), so sibling occurrences of a type are
+    /// unaffected and non-recursive programs lower exactly as before — a type
+    /// can only re-enter itself along a path if it is recursive.
     pub fn lower(&self, ty: &SurfType) -> CoreType {
+        let mut fuel: BTreeMap<String, usize> = BTreeMap::new();
+        self.lower_with(ty, &mut fuel)
+    }
+
+    /// Lowering worker: `fuel` tracks, per type name, the remaining re-entry
+    /// budget along the current path (see [`Env::lower`]).
+    fn lower_with(&self, ty: &SurfType, fuel: &mut BTreeMap<String, usize>) -> CoreType {
         match ty {
             SurfType::Empty(_) => CoreType::Zero,
             SurfType::Unit(_) => CoreType::One,
             SurfType::Var(_) => CoreType::Zero,
-            SurfType::Paren(inner, _) => self.lower(inner),
-            SurfType::Prod(a, b, _) => {
-                CoreType::Prod(Box::new(self.lower(a)), Box::new(self.lower(b)))
-            }
-            SurfType::Sum(a, b, _) => {
-                CoreType::Sum(Box::new(self.lower(a)), Box::new(self.lower(b)))
-            }
-            SurfType::Name(n) => self.lower_named(&n.text),
+            SurfType::Paren(inner, _) => self.lower_with(inner, fuel),
+            SurfType::Prod(a, b, _) => CoreType::Prod(
+                Box::new(self.lower_with(a, fuel)),
+                Box::new(self.lower_with(b, fuel)),
+            ),
+            SurfType::Sum(a, b, _) => CoreType::Sum(
+                Box::new(self.lower_with(a, fuel)),
+                Box::new(self.lower_with(b, fuel)),
+            ),
+            SurfType::Name(n) => self.lower_named(&n.text, fuel),
         }
     }
 
-    /// Lower a named ADT into its right-nested sum-of-products.
-    fn lower_named(&self, name: &str) -> CoreType {
+    /// Lower a named ADT into its right-nested sum-of-products, spending one
+    /// unit of the name's per-path unroll budget (μ-cutoff ⇒ `Zero`).
+    fn lower_named(&self, name: &str, fuel: &mut BTreeMap<String, usize>) -> CoreType {
         // Builtin U<n> types are not user-declared; intercept before ADT lookup.
         if let Some(ct) = lower_un(name) {
             return ct;
@@ -221,6 +282,15 @@ impl Env {
             // Unknown type: total fallback. Names reports the real error.
             return CoreType::Zero;
         };
+        let remaining = fuel
+            .entry(name.to_string())
+            .or_insert(self.unroll_depth);
+        if *remaining == 0 {
+            // μ-cutoff: a value would need ≥ D unfoldings of `name` — outside
+            // the truncated domain (empty, not junk: see ADR-0035).
+            return CoreType::Zero;
+        }
+        *remaining -= 1;
         let summands: Vec<CoreType> = info
             .ctors
             .iter()
@@ -228,10 +298,13 @@ impl Env {
                 self.ctors
                     .get(c)
                     .and_then(|ci| ci.payload.as_ref())
-                    .map(|p| self.lower(p))
+                    .map(|p| self.lower_with(p, fuel))
                     .unwrap_or(CoreType::One)
             })
             .collect();
+        // Restore the budget: it is per-path, not global (sibling occurrences
+        // of `name` each get the full depth).
+        *fuel.get_mut(name).expect("fuel entry inserted above") += 1;
         right_nested_sum(&summands)
     }
 }
@@ -471,6 +544,99 @@ mod tests {
         });
         let core = env.lower(&ty);
         assert_eq!(enumerate_values(&core).len(), 256);
+    }
+
+    // ── μ-types: bounded-unroll lowering (ADR-0035) ─────────────────────
+
+    fn named(text: &str) -> SurfType {
+        SurfType::Name(ast::UpperName {
+            text: text.into(),
+            span: ast::Span { start: 0, end: 0 },
+        })
+    }
+
+    #[test]
+    fn recursive_nat_lowers_to_bounded_unroll_zero_cutoff() {
+        let program = theseus_syntax::parse("type Nat = Zero | Succ Nat\n").unwrap();
+        let env = resolve(&program);
+        let core = env.lower(&named("Nat"));
+        // D = 4: Nat ⇒ 1 + (1 + (1 + (1 + 0))) — numerals 0..=3.
+        let expected = CoreType::sum(
+            CoreType::One,
+            CoreType::sum(
+                CoreType::One,
+                CoreType::sum(
+                    CoreType::One,
+                    CoreType::sum(CoreType::One, CoreType::Zero),
+                ),
+            ),
+        );
+        assert_eq!(core, expected);
+        assert_eq!(enumerate_values(&core).len(), DEFAULT_UNROLL_DEPTH);
+    }
+
+    #[test]
+    fn recursive_depth_is_configurable() {
+        let program = theseus_syntax::parse("type Nat = Zero | Succ Nat\n").unwrap();
+        let mut env = resolve(&program);
+        for d in [0usize, 1, 2, 6] {
+            env.set_unroll_depth(d);
+            let core = env.lower(&named("Nat"));
+            assert_eq!(
+                enumerate_values(&core).len(),
+                d,
+                "Nat at depth {d} must have exactly {d} inhabitants"
+            );
+        }
+    }
+
+    #[test]
+    fn recursive_value_encoding_is_depth_independent() {
+        // The numeral n encodes as inrⁿ(inl unit) at EVERY depth that admits
+        // it — the truncated domains nest as prefixes. This is what lets
+        // coverage/elaboration thread payload types without depth bookkeeping.
+        let program = theseus_syntax::parse("type Nat = Zero | Succ Nat\n").unwrap();
+        let mut env = resolve(&program);
+        env.set_unroll_depth(3);
+        let shallow = enumerate_values(&env.lower(&named("Nat")));
+        env.set_unroll_depth(5);
+        let deep = enumerate_values(&env.lower(&named("Nat")));
+        assert_eq!(shallow.as_slice(), &deep[..shallow.len()]);
+    }
+
+    #[test]
+    fn mutually_recursive_types_terminate() {
+        // A ↔ B: each name has its own per-path budget of D, so the unroll
+        // alternates until both are spent: 2·D unit summands, then the cutoff.
+        let src = "type A = Za | Sa B\ntype B = Zb | Sb A\n";
+        let program = theseus_syntax::parse(src).unwrap();
+        let env = resolve(&program);
+        let core = env.lower(&named("A"));
+        assert_eq!(enumerate_values(&core).len(), 2 * DEFAULT_UNROLL_DEPTH);
+    }
+
+    #[test]
+    fn branching_recursion_terminates_with_per_path_budget() {
+        // Binary tree: t(d) = 1 + t(d-1)², t(0) = 0 ⇒ t(4) = 26. The budget
+        // must be restored between the two subtree occurrences (per-path,
+        // not global) for this count to come out right.
+        let src = "type Tree = Leaf | Node (Tree * Tree)\n";
+        let program = theseus_syntax::parse(src).unwrap();
+        let env = resolve(&program);
+        let core = env.lower(&named("Tree"));
+        assert_eq!(enumerate_values(&core).len(), 26);
+    }
+
+    #[test]
+    fn nonrecursive_lowering_unaffected_by_depth() {
+        // Non-recursive types never re-enter themselves along a path, so even
+        // depth 1 leaves them untouched.
+        let src = "type Bit = O | I\ntype MaybeBit = Nothing | Just Bit\n";
+        let program = theseus_syntax::parse(src).unwrap();
+        let mut env = resolve(&program);
+        env.set_unroll_depth(1);
+        assert_eq!(enumerate_values(&env.lower(&named("MaybeBit"))).len(), 3);
+        assert_eq!(enumerate_values(&env.lower(&named("Bit"))).len(), 2);
     }
 
     #[test]

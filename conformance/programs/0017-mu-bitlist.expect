@@ -1,0 +1,9 @@
+# iso: flipHead
+# Head bit flips, tail unchanged — graded forward AND backward by the harness.
+Nil |-> Nil
+Cons (O, Nil) |-> Cons (I, Nil)
+Cons (I, Nil) |-> Cons (O, Nil)
+Cons (O, Cons (I, Nil)) |-> Cons (I, Cons (I, Nil))
+Cons (I, Cons (O, Nil)) |-> Cons (O, Cons (O, Nil))
+Cons (O, Cons (O, Cons (I, Nil))) |-> Cons (I, Cons (O, Cons (I, Nil)))
+Cons (I, Cons (O, Cons (I, Nil))) |-> Cons (O, Cons (O, Cons (I, Nil)))

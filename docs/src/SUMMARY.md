@@ -40,12 +40,14 @@
   - [0032 Idealization ladder](adr/0032-idealization-ladder.md)
   - [0033 Ring machine: recirculating execution](adr/0033-ring-machine.md)
   - [0034 Reversible branching: offset-BR / come-from](adr/0034-reversible-branching.md)
+  - [0035 μ-types: bounded unrolling at lowering](adr/0035-mu-bounded-unroll.md)
 
 # Design Document
 
 - [Overview and pipeline](design/overview.md)
 - [Core Π](design/core-pi.md)
 - [Elaboration (surface → core)](design/elaboration.md)
+- [μ-types: bounded unrolling (v0.2 inc. 1)](design/mu-types.md)
 - [Typed netlist IR](design/netlist-ir.md)
 - [Encodings and canonicity](design/encodings.md)
 - [Scheduling and balancing](design/scheduling.md)

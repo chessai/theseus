@@ -1067,6 +1067,97 @@ mod tests {
         }
     }
 
+    // ── μ-types (ADR-0035): whole-pipeline round-trip over the full
+    //    truncated domain, differential-oracle-checked vs theseus_eval ──
+
+    /// parse → check (all four stages) → elaborate → return (env, iso).
+    /// Asserts the staged static semantics is CLEAN (in particular, coverage
+    /// terminated and found the truncated recursive domain exhaustive).
+    fn full_pipeline(file: &str, iso: &str) -> (crate::env::Env, Iso) {
+        let path = testkit::repo_root().join("conformance/programs").join(file);
+        let prog = testkit::load_program(&path);
+        let diags = crate::check(&prog);
+        assert!(
+            diags.is_empty(),
+            "{file} must pass names/typing/linearity/coverage, got: {diags:?}"
+        );
+        let env = crate::env::resolve(&prog);
+        let map = elaborate_program(&prog, &env);
+        let iso = map
+            .get(iso)
+            .unwrap_or_else(|| panic!("no iso {iso} in {file}"))
+            .as_ref()
+            .unwrap_or_else(|e| panic!("iso {iso} in {file} did not elaborate: {e:?}"))
+            .clone();
+        (env, iso)
+    }
+
+    /// Differential oracle over the WHOLE bounded domain of `surf_ty`:
+    /// for every x, eval(sym(f), eval(f, x)) == x, and f is a bijection
+    /// (outputs are a permutation of the domain).
+    fn assert_roundtrip_whole_domain(env: &crate::env::Env, f: &Iso, surf_ty: &SurfType) {
+        let domain = enumerate_values(&env.lower(surf_ty));
+        assert!(!domain.is_empty(), "vacuous domain");
+        let sym_f = Iso::sym(f.clone());
+        let mut outputs = Vec::new();
+        for x in &domain {
+            let y = run(f, x.clone());
+            assert_eq!(
+                run(&sym_f, y.clone()),
+                x.clone(),
+                "backward(forward({x:?})) != {x:?}"
+            );
+            outputs.push(y);
+        }
+        let mut sorted_out = outputs.clone();
+        sorted_out.sort();
+        let mut sorted_dom = domain.clone();
+        sorted_dom.sort();
+        assert_eq!(sorted_out, sorted_dom, "forward image must be the whole domain");
+    }
+
+    fn nat_ty() -> SurfType {
+        SurfType::Name(theseus_syntax::ast::UpperName {
+            text: "Nat".into(),
+            span: theseus_syntax::ast::Span { start: 0, end: 0 },
+        })
+    }
+
+    fn bitlist_ty() -> SurfType {
+        SurfType::Name(theseus_syntax::ast::UpperName {
+            text: "BitList".into(),
+            span: theseus_syntax::ast::Span { start: 0, end: 0 },
+        })
+    }
+
+    #[test]
+    fn mu_nat_identity_whole_domain_roundtrip_0016() {
+        let (env, f) = full_pipeline("0016-mu-nat.thse", "idNat");
+        // idNat elaborates to Id over the truncated Nat (4 numerals at D = 4).
+        assert!(matches!(&f, Iso::Id(_)), "expected Id, got {f:?}");
+        assert_roundtrip_whole_domain(&env, &f, &nat_ty());
+        assert_eq!(enumerate_values(&env.lower(&nat_ty())).len(), 4);
+    }
+
+    #[test]
+    fn mu_bitlist_fliphead_whole_domain_roundtrip_0017() {
+        let (env, f) = full_pipeline("0017-mu-bitlist.thse", "flipHead");
+        assert_roundtrip_whole_domain(&env, &f, &bitlist_ty());
+        // 15 inhabitants at D = 4: L(d) = 1 + 2·L(d-1), L(0) = 0.
+        let domain = enumerate_values(&env.lower(&bitlist_ty()));
+        assert_eq!(domain.len(), 15);
+        // Nontrivial: every non-Nil list moves (its head flips); Nil is fixed.
+        let nil = Value::left(Value::Unit);
+        for x in &domain {
+            let y = run(&f, x.clone());
+            if *x == nil {
+                assert_eq!(y, nil);
+            } else {
+                assert_ne!(y, *x, "non-Nil value must move: {x:?}");
+            }
+        }
+    }
+
     // ── FIX 1 repro: ill-typed Prim body rejected by admit() guard ───
 
     #[test]

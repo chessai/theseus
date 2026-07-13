@@ -1,0 +1,6 @@
+# iso: idNat
+# Nat at unroll depth D = 4: the whole truncated domain, forward and backward.
+Zero |-> Zero
+Succ Zero |-> Succ Zero
+Succ (Succ Zero) |-> Succ (Succ Zero)
+Succ (Succ (Succ Zero)) |-> Succ (Succ (Succ Zero))

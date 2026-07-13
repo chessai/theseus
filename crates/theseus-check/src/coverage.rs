@@ -468,6 +468,47 @@ mod tests {
         testkit::assert_diags(&reported, &expected);
     }
 
+    // ── μ-types (ADR-0035): coverage over recursive types ───────────────
+
+    #[test]
+    fn mu_recursive_coverage_terminates_and_is_clean() {
+        // The whole point of bounded unrolling: coverage enumerates a FINITE
+        // truncated domain instead of diverging on the μ-type's fixpoint.
+        let src = "type Nat = Zero | Succ Nat\n\
+                   iso idNat : Nat <-> Nat\n\
+                   | Zero <-> Zero\n\
+                   | Succ n <-> Succ n\n";
+        let program = theseus_syntax::parse(src).unwrap();
+        let env = crate::env::resolve(&program);
+        let reported = check(&program, &env);
+        assert!(reported.is_empty(), "unexpected coverage error: {reported:?}");
+    }
+
+    #[test]
+    fn mu_depth_escaping_iso_rejected_t0301() {
+        // A successor-style iso is NOT a bijection on the truncated domain:
+        // Zero is never produced on the right, and the deepest numeral's
+        // image would exceed depth D. The documented diagnostic for a
+        // depth-escaping iso is the ordinary coverage error (T0301) with the
+        // uncovered witness — here Zero (= inl unit) on the right side.
+        let src = "type Nat = Zero | Succ Nat\n\
+                   iso succ : Nat <-> Nat\n\
+                   | Zero <-> Succ Zero\n\
+                   | Succ n <-> Succ (Succ n)\n";
+        let program = theseus_syntax::parse(src).unwrap();
+        let env = crate::env::resolve(&program);
+        let reported = check(&program, &env);
+        let expected = vec![ExpectedDiag {
+            code: Code::T0301,
+            side: Some(Side::Right),
+            witness: Some(Value::left(Value::Unit)),
+            clauses: None,
+            variable: None,
+            name: None,
+        }];
+        testkit::assert_diags(&reported, &expected);
+    }
+
     #[test]
     fn label_coverage_spin_0011() {
         let root = testkit::repo_root();

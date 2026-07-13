@@ -238,6 +238,9 @@ fn conformance_programs() {
     // the test fails rather than silently losing coverage.
     const MUST_GRADE: &[&str] = &[
         "0011-label-loop",
+        // μ-types (ADR-0035): recursive types must keep grading end-to-end.
+        "0016-mu-nat",
+        "0017-mu-bitlist",
     ];
     let graded_stems: Vec<&str> = fixtures
         .iter()
