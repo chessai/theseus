@@ -85,7 +85,7 @@ pub const AUX_PRED_FIELD: usize = 13;
 // ══════════════════════════════════════════════════════════════════════
 
 /// NOT on a single Bit = SwapSum(1,1) — zero cells, pure rail swap.
-fn not_iso() -> Iso {
+pub(crate) fn not_iso() -> Iso {
     Iso::SwapSum(Type::One, Type::One)
 }
 
@@ -127,7 +127,7 @@ fn flatten(ty: &Type) -> Iso {
 /// quadratic to lower and deep enough to overflow the stack; a balanced
 /// seq tree keeps both O(n log n) and shallow. Seq is associative, so
 /// the meaning is unchanged.
-fn seq_balanced(mut isos: Vec<Iso>) -> Iso {
+pub(crate) fn seq_balanced(mut isos: Vec<Iso>) -> Iso {
     assert!(!isos.is_empty());
     if isos.len() == 1 {
         return isos.pop().expect("len 1");
@@ -166,7 +166,7 @@ fn swap_adj(n: usize, k: usize) -> Iso {
 }
 
 /// Apply a 1-wire iso at leaf `k` of `flat(n)`.
-fn at_wire(n: usize, k: usize, iso1: Iso) -> Iso {
+pub(crate) fn at_wire(n: usize, k: usize, iso1: Iso) -> Iso {
     assert!(k < n);
     if k > 0 {
         Iso::times(Iso::Id(bit()), at_wire(n - 1, k - 1, iso1))
@@ -205,7 +205,7 @@ fn head_k(n: usize, k: usize, prim: Iso) -> Iso {
 
 /// Apply a k-wire prim at the given leaves of `flat(n)` (bubble-route
 /// the leaves to the head, apply, route back — all routing zero cells).
-fn gate_at(n: usize, wires: &[usize], prim: Iso) -> Iso {
+pub(crate) fn gate_at(n: usize, wires: &[usize], prim: Iso) -> Iso {
     let k = wires.len();
     assert!((1..=5).contains(&k));
     let mut arr: Vec<usize> = (0..n).collect();
@@ -243,7 +243,7 @@ fn gated_fredkin_prim() -> Iso {
 }
 
 /// CNOT `(c, t)`: t ^= c.
-fn cnot_prim() -> Iso {
+pub(crate) fn cnot_prim() -> Iso {
     let t2 = flat(2);
     Iso::Prim(Box::new(
         prim_from_bits("dec_cnot", t2.clone(), t2, |b| vec![b[0], b[1] ^ b[0]]).expect("cnot"),
@@ -251,7 +251,7 @@ fn cnot_prim() -> Iso {
 }
 
 /// Toffoli `(c1, c2, t)`: t ^= c1∧c2.
-fn toffoli_prim() -> Iso {
+pub(crate) fn toffoli_prim() -> Iso {
     let t3 = flat(3);
     Iso::Prim(Box::new(
         prim_from_bits("dec_tof", t3.clone(), t3, |b| vec![b[0], b[1], b[2] ^ (b[0] & b[1])])
@@ -286,7 +286,7 @@ fn fields_ty(k: usize) -> Type {
 
 /// Lift a list of flat-wire gates over the given State fields: within
 /// the core, field-list slot `j`, bit `i` is wire `8*j + i`.
-fn on_fields(field_idxs: &[usize], gates: Vec<Iso>) -> Iso {
+pub(crate) fn on_fields(field_idxs: &[usize], gates: Vec<Iso>) -> Iso {
     let k = field_idxs.len();
     let n = k * W;
     let fl = flatten(&fields_ty(k));
