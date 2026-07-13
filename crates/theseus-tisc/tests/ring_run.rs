@@ -8,9 +8,11 @@
 use std::sync::OnceLock;
 
 use theseus_core::Iso;
-use theseus_tisc::ring_run::{step_ring, StepRing};
+use theseus_tisc::ring_run::{
+    closed_step_ring, step_ring, ClosedStepRing, StepRing,
+};
 use theseus_tisc::step::step;
-use theseus_tisc::types::StateVals;
+use theseus_tisc::types::{state_ty, StateVals};
 
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -60,6 +62,11 @@ fn ctx() -> &'static Ctx {
         let iso = step(&rom);
         Ctx { ring, iso }
     })
+}
+
+fn closed_ctx() -> &'static ClosedStepRing {
+    static CTX: OnceLock<ClosedStepRing> = OnceLock::new();
+    CTX.get_or_init(|| closed_step_ring(&small_rom()))
 }
 
 // ── Sample states (IR = 0, s0 = s1 = 0, BR = 0) ──────────────────
@@ -178,5 +185,118 @@ fn ancilla_restoration_report() {
              (Bennett-style uncompute) is the follow-up."
         );
         // Do NOT fail — the run==eval^R oracle (test 1) already passes.
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 4. CLOSED ring (Bennett path): differential oracle with TRUE
+//    recirculation — State + forward ancillas fed back, only the fixed
+//    2·w boundary re-supplied (ADR-0033 ring closure).
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn closed_ring_matches_eval_oracle() {
+    let closed = closed_ctx();
+    let iso = &ctx().iso;
+    const MAX_R: u32 = 5;
+
+    // The closed run injects NOTHING data-dependent after the start
+    // state (forward ancillas are fed back verbatim), so agreement
+    // with eval^R certifies the ancillas come back clean every
+    // revolution — a dirty line would corrupt revolution r+1.
+    for &pc in &[0u8, 1, 2, 4] {
+        let start = sample_state(pc);
+        let mut oracle = start.clone();
+
+        for r in 0..=MAX_R {
+            let ring_result = closed.run(&start, r);
+            assert_eq!(
+                ring_result, oracle,
+                "closed_ring.run(s, {r}) != eval^{r} at pc={pc}"
+            );
+            oracle = eval_state(
+                &format!("closed_oracle/pc={pc}/r={r}"),
+                iso,
+                &oracle,
+            );
+        }
+    }
+}
+
+#[test]
+fn closed_ring_forward_ancillas_clean_and_boundary_fixed() {
+    let closed = closed_ctx();
+    let plain = &ctx().ring;
+    let iso = &ctx().iso;
+
+    let w = closed.data_width();
+    assert_eq!(closed.boundary_size(), 2 * w, "boundary is exactly 2·w");
+    assert_eq!(
+        closed.ancilla_count(),
+        closed.forward_ancilla_count() + closed.boundary_size(),
+        "ancillas = forward (fed back) + boundary (re-supplied)"
+    );
+
+    eprintln!("state width w (rail pairs): {w}");
+    eprintln!(
+        "closed ring: forward ancillas (fed back): {}",
+        closed.forward_ancilla_count()
+    );
+    eprintln!(
+        "closed ring: boundary re-supplied per revolution: {} slots",
+        closed.boundary_size()
+    );
+    eprintln!(
+        "plain ring: ancillas re-supplied per revolution: {} lines",
+        plain.ancilla_count()
+    );
+
+    // The physical win: the per-revolution external interface shrank
+    // from ALL ancillas (plain path) to the fixed 2·w boundary.
+    assert!(
+        closed.boundary_size() < plain.ancilla_count(),
+        "boundary ({}) must be smaller than the plain path's re-supply \
+         set ({})",
+        closed.boundary_size(),
+        plain.ancilla_count()
+    );
+
+    for &pc in &[0u8, 1, 2, 4] {
+        let start = sample_state(pc);
+
+        // Every forward ancilla restored to init after one revolution.
+        let mismatches = closed.forward_mismatches(&start);
+        assert!(
+            mismatches.is_empty(),
+            "forward ancillas dirty at pc={pc}: {} of {} (first: {:?})",
+            mismatches.len(),
+            closed.forward_ancilla_count(),
+            &mismatches[..mismatches.len().min(10)]
+        );
+
+        // The boundary residue is EXACTLY (y_j, x_j) interleaved — the
+        // output word and the regenerated input word. Its POSITIONS
+        // and re-supplied inits (1, 0) are data-independent; only the
+        // exiting values carry data, as any nonzero Bennett residue
+        // must.
+        let residue = closed.boundary_residue(&start);
+        assert_eq!(residue.len(), 2 * w);
+        let ty = state_ty();
+        let x_bits =
+            theseus_netlist::bits_of(&start.encode(), &ty).expect("bits_of");
+        let next = eval_state(&format!("residue/pc={pc}"), iso, &start);
+        let y_bits =
+            theseus_netlist::bits_of(&next.encode(), &ty).expect("bits_of");
+        for j in 0..w {
+            assert_eq!(
+                residue[2 * j], y_bits[j],
+                "boundary spare slot {j} != y_{j} at pc={pc}"
+            );
+            assert_eq!(
+                residue[2 * j + 1],
+                x_bits[j],
+                "boundary input slot {j} != x_{j} at pc={pc}"
+            );
+        }
     }
 }

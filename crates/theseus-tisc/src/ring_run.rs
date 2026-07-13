@@ -15,9 +15,32 @@
 //! If the lowering is not yet ancilla-clean, the re-supply-fresh-init
 //! driver still faithfully models `step^R`; cleaning the ancillas
 //! (Bennett-style uncompute) is a follow-up.
+//!
+//! # Closed ring (Bennett path)
+//!
+//! [`closed_step_ring`] lowers the step via
+//! [`lower_iso_bennett`] (compute–copy–uncompute, ADR-0033): the
+//! wrap restores EVERY forward ancilla to its init, data-independently,
+//! and concentrates the irreducible parity residue into a fixed
+//! boundary of `2·w` slots (per data bit `j`: one slot carrying `y_j`
+//! against init `1`, one carrying the regenerated `x_j` against init
+//! `0`). [`ClosedStepRing::run`] therefore recirculates by feeding back
+//! the State **and all forward-ancilla outputs** as the next
+//! revolution's inputs, re-supplying only the fixed `(1, 0)` boundary
+//! pairs — a *physically closing* ring whose per-revolution external
+//! interface is a constant-size, data-independent set of ports
+//! ([`ClosedStepRing::boundary_size`], `2·w = 320` for the TISC-1
+//! State), instead of the plain path's ~1138 scattered dirty ancilla
+//! lines. The residue exiting on the boundary each revolution is
+//! exactly the (input word, output word) Bennett residue
+//! ([`ClosedStepRing::boundary_residue`]). By the parity law in
+//! [`theseus_netlist::bennett`], zero boundary is impossible for
+//! `step` in this cell vocabulary.
 
 use theseus_netlist::lower::lower_iso_with_ancillas;
-use theseus_netlist::{balance_compact, bits_of, value_from_bits, CompactBalanced};
+use theseus_netlist::{
+    balance_compact, bits_of, lower_iso_bennett, value_from_bits, CompactBalanced,
+};
 
 use crate::step::step;
 use crate::types::{state_ty, StateVals};
@@ -137,5 +160,156 @@ impl StepRing {
     /// Number of ancilla lines.
     pub fn ancilla_count(&self) -> usize {
         self.ancilla_init.len()
+    }
+}
+
+// ── Closed ring (Bennett-wrapped step) ─────────────────────────────
+
+/// A compact-balanced Bennett-wrapped TISC-1 step: forward ancillas
+/// are restored every revolution (fed back), and only the fixed
+/// `2·w`-slot boundary is re-supplied — the physically closing ring.
+pub struct ClosedStepRing {
+    compact: CompactBalanced,
+    /// Full ancilla init vector: forward inits ++ `[1, 0]` per data bit.
+    ancilla_init: Vec<bool>,
+    /// State width in rail pairs (`w`).
+    n_data: usize,
+    /// Forward ancilla lines (fed back each revolution).
+    n_forward: usize,
+}
+
+/// Build a closed ring from a ROM image: `step(rom)` lowered via the
+/// Bennett path ([`lower_iso_bennett`]), then compact-balanced.
+///
+/// The wrapped netlist's ancilla sections are, positionally:
+/// `[0, n_forward)` the forward ancillas (restored to init after every
+/// revolution, data-independently) and `[n_forward, n_forward + 2·w)`
+/// the boundary pairs with fixed inits `(1, 0)` per data bit.
+pub fn closed_step_ring(rom: &[u16]) -> ClosedStepRing {
+    let iso = step(rom);
+    let (net, ancilla_init) =
+        lower_iso_bennett(&iso).expect("step lowers via bennett");
+    assert_eq!(
+        net.inputs.len(),
+        net.outputs.len(),
+        "wrapped step netlist must have equal input/output port counts"
+    );
+    let n_data = net.inputs.len() - ancilla_init.len();
+    assert!(
+        ancilla_init.len() >= 2 * n_data,
+        "bennett wrap must append 2·w boundary slots"
+    );
+    let n_forward = ancilla_init.len() - 2 * n_data;
+    // The boundary inits are the fixed, data-independent (1, 0) pairs.
+    for j in 0..n_data {
+        assert!(
+            ancilla_init[n_forward + 2 * j] && !ancilla_init[n_forward + 2 * j + 1],
+            "boundary pair {j} init must be (1, 0)"
+        );
+    }
+    let compact = balance_compact(&net).expect("balance_compact");
+    ClosedStepRing {
+        compact,
+        ancilla_init,
+        n_data,
+        n_forward,
+    }
+}
+
+impl ClosedStepRing {
+    /// Recirculate the step `revolutions` times starting from `start`,
+    /// with the ring CLOSED: each revolution feeds back the State bits
+    /// **and every forward-ancilla output** as the next revolution's
+    /// inputs; only the fixed `2·w` boundary slots are re-supplied
+    /// with their constant `(1, 0)` inits. Nothing data-dependent is
+    /// injected after the start state — the differential oracle
+    /// `run(s, R) == eval(step)^R` therefore certifies that the
+    /// forward ancillas really do come back clean every revolution.
+    pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
+        let ty = state_ty();
+        let mut data_bits =
+            bits_of(&start.encode(), &ty).expect("bits_of");
+        assert_eq!(data_bits.len(), self.n_data);
+        let mut forward_bits =
+            self.ancilla_init[..self.n_forward].to_vec();
+        let boundary_init = &self.ancilla_init[self.n_forward..];
+
+        for _ in 0..revolutions {
+            let mut input = data_bits.clone();
+            input.extend_from_slice(&forward_bits);
+            input.extend_from_slice(boundary_init);
+            let sim =
+                self.compact.simulate(&input).expect("simulate");
+            data_bits = sim.outputs[..self.n_data].to_vec();
+            // Feed the forward ancillas back — TRUE recirculation.
+            forward_bits = sim.outputs
+                [self.n_data..self.n_data + self.n_forward]
+                .to_vec();
+            // Boundary outputs (the Bennett residue) exit the ring;
+            // fresh (1, 0) pairs are re-supplied next revolution.
+        }
+
+        let val =
+            value_from_bits(&ty, &data_bits).expect("value_from_bits");
+        StateVals::decode(&val)
+    }
+
+    /// Indices (into the forward-ancilla section) of forward ancilla
+    /// lines whose output differs from their init after one revolution
+    /// from `start`. Empty ⇔ the ring genuinely closes at `start`
+    /// (the Bennett wrap guarantees empty for EVERY state).
+    pub fn forward_mismatches(&self, start: &StateVals) -> Vec<usize> {
+        let sim_out = self.revolve_once(start);
+        sim_out[self.n_data..self.n_data + self.n_forward]
+            .iter()
+            .zip(&self.ancilla_init[..self.n_forward])
+            .enumerate()
+            .filter(|(_, (got, expected))| got != expected)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The boundary outputs after one revolution from `start`: `2·w`
+    /// bits, interleaved `(y_0, x_0, y_1, x_1, …)` — the output word
+    /// and the regenerated input word, the honest Bennett residue.
+    pub fn boundary_residue(&self, start: &StateVals) -> Vec<bool> {
+        let sim_out = self.revolve_once(start);
+        sim_out[self.n_data + self.n_forward..].to_vec()
+    }
+
+    fn revolve_once(&self, start: &StateVals) -> Vec<bool> {
+        let ty = state_ty();
+        let data_bits =
+            bits_of(&start.encode(), &ty).expect("bits_of");
+        let mut input = data_bits;
+        input.extend_from_slice(&self.ancilla_init);
+        self.compact.simulate(&input).expect("simulate").outputs
+    }
+
+    /// State width in rail pairs (`w`).
+    pub fn data_width(&self) -> usize {
+        self.n_data
+    }
+
+    /// Forward ancilla lines — fed back, never re-supplied.
+    pub fn forward_ancilla_count(&self) -> usize {
+        self.n_forward
+    }
+
+    /// Size of the fixed boundary re-supplied each revolution:
+    /// `2·w` slots with constant inits `(1, 0)` per data bit —
+    /// data-independent ports, the ring's only external interface.
+    pub fn boundary_size(&self) -> usize {
+        2 * self.n_data
+    }
+
+    /// Total ancilla lines (forward + boundary).
+    pub fn ancilla_count(&self) -> usize {
+        self.ancilla_init.len()
+    }
+
+    /// The compact-balanced body.
+    pub fn compact(&self) -> &CompactBalanced {
+        &self.compact
     }
 }
