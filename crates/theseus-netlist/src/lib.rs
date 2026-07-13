@@ -31,6 +31,7 @@
 //! `theseus-spice::annotate` (ADR-0028).
 
 pub mod balance;
+pub mod bennett;
 pub mod canonicalize;
 pub mod ir;
 pub mod lower;
@@ -56,6 +57,7 @@ pub mod sim_bits {
 }
 
 pub use balance::{balance, balance_compact, BalanceError, CompactBalanced, CompactSimError};
+pub use bennett::{bennett_wrap, lower_iso_bennett, BennettError, BennettWrapError};
 pub use canonicalize::canonicalize;
 pub use ir::cell::{Cell, CellKind, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT};
 pub use ir::typed::{Monoid, NodeKind, TypedNode};

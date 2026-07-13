@@ -294,6 +294,15 @@ pub(crate) struct Builder {
     /// Each entry is (pair, depth).  These are appended to the netlist's
     /// primary outputs by `lower()`.
     ancilla_outputs: Vec<(RailPair, u32)>,
+    /// Which lowering mechanism allocated / discharged each ancilla —
+    /// parallel to `ancilla_inputs` / `ancilla_outputs`. Diagnostic
+    /// only (per-construct dirty-ancilla attribution, ADR-0033 ring
+    /// closure work); never affects the emitted cells.
+    ancilla_input_origins: Vec<&'static str>,
+    ancilla_output_origins: Vec<&'static str>,
+    /// Ambient origin label for the construct currently lowering (see
+    /// [`Builder::set_origin`]).
+    anc_origin: &'static str,
 }
 
 impl Builder {
@@ -303,12 +312,19 @@ impl Builder {
         pair
     }
 
+    /// Set the ambient ancilla-origin label; returns the previous one
+    /// (restore it when the construct is done).
+    fn set_origin(&mut self, origin: &'static str) -> &'static str {
+        std::mem::replace(&mut self.anc_origin, origin)
+    }
+
     /// Allocate an ancilla pair with a known initial value.  The pair
     /// is recorded so that `lower()` can add it to the netlist's primary
     /// inputs.
     pub(crate) fn alloc_ancilla(&mut self, value: bool) -> BitAt {
         let pair = self.fresh_pair();
         self.ancilla_inputs.push((pair, value));
+        self.ancilla_input_origins.push(self.anc_origin);
         BitAt { pair, depth: 0 }
     }
 
@@ -316,6 +332,7 @@ impl Builder {
     /// construction.  `lower()` adds it to the netlist's primary outputs.
     pub(crate) fn mark_garbage(&mut self, bit: BitAt) {
         self.ancilla_outputs.push((bit.pair, bit.depth));
+        self.ancilla_output_origins.push(self.anc_origin);
     }
 
     /// Place one cell. It fires when its latest input arrives (C2.2
@@ -577,6 +594,17 @@ impl Builder {
     ///    [`Builder::controlled_apply`] can still promote the network by
     ///    one extra control inside `Branch`/`TraceLoop`.
     fn synthesize_prim(&mut self, def: &PrimDef, ins: &[BitAt]) -> Result<Vec<BitAt>, LowerError> {
+        let prev_origin = self.set_origin("prim_synth");
+        let out = self.synthesize_prim_inner(def, ins);
+        self.anc_origin = prev_origin;
+        out
+    }
+
+    fn synthesize_prim_inner(
+        &mut self,
+        def: &PrimDef,
+        ins: &[BitAt],
+    ) -> Result<Vec<BitAt>, LowerError> {
         let w_in = rail_width(&def.input_ty)?;
         let w_out = rail_width(&def.output_ty)?;
         let w = w_in.max(w_out);
@@ -689,6 +717,7 @@ impl Builder {
         }
 
         // AND-reduce to ≤ 2 control signals.
+        let prev_origin = self.set_origin("prim_synth_chain");
         while sigs.len() > 2 {
             let (b_bit, b_src) = sigs.pop().expect("len > 2");
             let (a_bit, a_src) = sigs.pop().expect("len > 2");
@@ -700,6 +729,7 @@ impl Builder {
             sigs.push((outs[2], None)); // a ∧ b
             self.mark_garbage(outs[3]); // ¬(a ∧ b)
         }
+        self.anc_origin = prev_origin;
 
         // Splitter.
         let one = self.alloc_ancilla(true);
@@ -735,6 +765,18 @@ impl Builder {
     /// payload.  Each emitted cell is promoted (K0→K1, K1→K2) with the
     /// tag threaded as an extra control.
     fn lower_branch(
+        &mut self,
+        f: &TypedNode,
+        g: &TypedNode,
+        ins: &[BitAt],
+    ) -> Result<Vec<BitAt>, LowerError> {
+        let prev_origin = self.set_origin("branch");
+        let out = self.lower_branch_inner(f, g, ins);
+        self.anc_origin = prev_origin;
+        out
+    }
+
+    fn lower_branch_inner(
         &mut self,
         f: &TypedNode,
         g: &TypedNode,
@@ -819,6 +861,9 @@ impl Builder {
             cells: Vec::new(),
             ancilla_inputs: Vec::new(),
             ancilla_outputs: Vec::new(),
+            ancilla_input_origins: Vec::new(),
+            ancilla_output_origins: Vec::new(),
+            anc_origin: self.anc_origin,
         };
         // Create sub-builder inputs with the same pairs but depth 0
         // for line allocation purposes — we'll fix up depths below.
@@ -830,6 +875,8 @@ impl Builder {
         // Transfer any ancilla tracking from the sub-builder.
         self.ancilla_inputs.extend_from_slice(&sub.ancilla_inputs);
         self.ancilla_outputs.extend_from_slice(&sub.ancilla_outputs);
+        self.ancilla_input_origins.extend_from_slice(&sub.ancilla_input_origins);
+        self.ancilla_output_origins.extend_from_slice(&sub.ancilla_output_origins);
 
         if sub.cells.is_empty() {
             // Zero-cell arm.  If it's pure identity, return as-is.
@@ -926,6 +973,7 @@ impl Builder {
             //
             // A K0 buffer on the tag keeps the selector's inputs
             // tick-aligned with the splitter outputs (depth d → d+1).
+            let prev_origin = self.set_origin("cond_not");
             for i in 0..n {
                 if !flipped[i] {
                     continue;
@@ -958,6 +1006,7 @@ impl Builder {
                 current[i] = sel[1]; // conditional NOT result
                 self.mark_garbage(sel[2]); // garbage
             }
+            self.anc_origin = prev_origin;
 
             return Ok((current, cur_tag));
         }
@@ -1123,6 +1172,18 @@ impl Builder {
     /// 4. Project: the final state is guaranteed Right; extract the output
     ///    payload and mark tag + padding as garbage.
     fn lower_trace(
+        &mut self,
+        carrier: &Type,
+        body: &TypedNode,
+        ins: &[BitAt],
+    ) -> Result<Vec<BitAt>, LowerError> {
+        let prev_origin = self.set_origin("trace");
+        let out = self.lower_trace_inner(carrier, body, ins);
+        self.anc_origin = prev_origin;
+        out
+    }
+
+    fn lower_trace_inner(
         &mut self,
         carrier: &Type,
         body: &TypedNode,
@@ -1317,17 +1378,38 @@ fn prim_matches(
 /// Lower a typed net to the phased cell netlist. The result always
 /// satisfies [`PhasedCellNetlist::validate`] (asserted in debug builds).
 pub fn lower(net: &TypedNode) -> Result<PhasedCellNetlist, LowerError> {
-    lower_inner(net).map(|(netlist, _)| netlist)
+    lower_inner(net).map(|(netlist, _, _)| netlist)
 }
 
 /// Like [`lower`], but also returns the initial values for ancilla
 /// inputs (in netlist input order, after the data inputs). Needed by
 /// tests that simulate the netlist with correct ancilla seeding.
 pub fn lower_with_ancillas(net: &TypedNode) -> Result<(PhasedCellNetlist, Vec<bool>), LowerError> {
+    lower_inner(net).map(|(netlist, inits, _)| (netlist, inits))
+}
+
+/// Which lowering mechanism allocated / discharged each ancilla —
+/// diagnostic attribution for the ring-closure (ancilla restoration)
+/// work. `inputs[i]` labels the i-th ancilla *input* (parallel to the
+/// init vector); `outputs[j]` labels the j-th ancilla *output* (the
+/// j-th netlist output after the data outputs).
+#[derive(Clone, Debug, Default)]
+pub struct AncillaOrigins {
+    pub inputs: Vec<&'static str>,
+    pub outputs: Vec<&'static str>,
+}
+
+/// Like [`lower_with_ancillas`], but also reports which construct each
+/// ancilla belongs to (diagnostic only; the netlist is identical).
+pub fn lower_with_ancillas_traced(
+    net: &TypedNode,
+) -> Result<(PhasedCellNetlist, Vec<bool>, AncillaOrigins), LowerError> {
     lower_inner(net)
 }
 
-fn lower_inner(net: &TypedNode) -> Result<(PhasedCellNetlist, Vec<bool>), LowerError> {
+fn lower_inner(
+    net: &TypedNode,
+) -> Result<(PhasedCellNetlist, Vec<bool>, AncillaOrigins), LowerError> {
     net.validate()?;
     let w_in = rail_width(&net.input)?;
     let w_out = rail_width(&net.output)?;
@@ -1337,6 +1419,9 @@ fn lower_inner(net: &TypedNode) -> Result<(PhasedCellNetlist, Vec<bool>), LowerE
         cells: Vec::new(),
         ancilla_inputs: Vec::new(),
         ancilla_outputs: Vec::new(),
+        ancilla_input_origins: Vec::new(),
+        ancilla_output_origins: Vec::new(),
+        anc_origin: "untagged",
     };
     let ins: Vec<BitAt> = (0..w_in)
         .map(|_| BitAt { pair: b.fresh_pair(), depth: 0 })
@@ -1368,7 +1453,11 @@ fn lower_inner(net: &TypedNode) -> Result<(PhasedCellNetlist, Vec<bool>), LowerE
         num_lines: b.next_line,
     };
     debug_assert_eq!(netlist.validate(), Ok(()));
-    Ok((netlist, ancilla_values))
+    let origins = AncillaOrigins {
+        inputs: b.ancilla_input_origins,
+        outputs: b.ancilla_output_origins,
+    };
+    Ok((netlist, ancilla_values, origins))
 }
 
 /// Lower a Core Π iso end to end: canonicalize (ADR-0014) then lower
@@ -1382,6 +1471,15 @@ pub fn lower_iso(iso: &Iso) -> Result<PhasedCellNetlist, LowerError> {
 pub fn lower_iso_with_ancillas(iso: &Iso) -> Result<(PhasedCellNetlist, Vec<bool>), LowerError> {
     let net = canonicalize(iso)?;
     lower_with_ancillas(&net)
+}
+
+/// Like [`lower_iso_with_ancillas`], plus per-ancilla construct
+/// attribution (diagnostic).
+pub fn lower_iso_with_ancillas_traced(
+    iso: &Iso,
+) -> Result<(PhasedCellNetlist, Vec<bool>, AncillaOrigins), LowerError> {
+    let net = canonicalize(iso)?;
+    lower_with_ancillas_traced(&net)
 }
 
 #[cfg(test)]
