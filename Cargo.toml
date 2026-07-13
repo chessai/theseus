@@ -42,3 +42,17 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 todo = "allow"        # skeleton phase only; flips to "deny" at v0.1 freeze
+
+# The TISC-1 decoder tests (theseus-tisc/tests/decoder.rs) walk
+# multi-million-node iso terms through canonicalize/lower/eval/simulate;
+# at opt-level 0 that is impractically slow. Optimize just the
+# interpreter/lowering crates in dev builds — test code itself stays
+# unoptimized for fast iteration.
+[profile.dev.package.theseus-core]
+opt-level = 2
+
+[profile.dev.package.theseus-eval]
+opt-level = 2
+
+[profile.dev.package.theseus-netlist]
+opt-level = 2

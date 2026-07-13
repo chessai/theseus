@@ -71,8 +71,20 @@ fn route_to_head(indices: &[usize]) -> Iso {
     if swaps.is_empty() {
         Iso::Id(fields(n))
     } else {
-        swaps.into_iter().reduce(Iso::seq).unwrap()
+        seq_balanced(swaps)
     }
+}
+
+/// Balanced sequential composition (associativity-preserving). Keeps
+/// downstream `canonicalize`/`eval` recursion shallow and avoids the
+/// quadratic type re-derivation cost of left-leaning seq chains.
+fn seq_balanced(mut isos: Vec<Iso>) -> Iso {
+    assert!(!isos.is_empty());
+    if isos.len() == 1 {
+        return isos.pop().expect("len 1");
+    }
+    let right = isos.split_off(isos.len() / 2);
+    Iso::seq(seq_balanced(isos), seq_balanced(right))
 }
 
 /// `fields(k+r) <-> fields(k) x fields(r)`: split the first k fields
