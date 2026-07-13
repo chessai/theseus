@@ -93,6 +93,21 @@ Slice 2.
 | e-graphs; guards; sized types; salsa; `@tag`; post-flatten rebalance (FPGA) | unchanged from v1 roadmap |
 | OpenLane/layout in silicon shell | rung 4 |
 
+## M4-v1 demonstration artifacts & follow-ups
+
+Landed for M4-v1: the TISC-1 datapath, decoder, and `step` cycle compile to
+adiabatic cells; the CPU runs **Fibonacci** and a **Feistel round** forward and
+backward (via the interpreter — unroll-only, C2.4); and per-clause energy is
+computed **analytically** from the real rung0 char DB (the balancer's K0 buffers
+are *counted* from `line_arrivals`, not materialized, so a single `step`'s
+~1.6 M-buffer balanced netlist never has to fit in RAM). Open items:
+
+| Item | Notes / wakes when |
+|---|---|
+| **CPU "money plot"** (energy-per-cycle vs. clock ramp) | *Wanted.* Sweep the `step`/program energy across `t_ramp` (1e-8…1e-5) via the char-DB `E(T)=k_adia/T+k_leak·T+k_res` fits (energy model already merged, `theseus-tisc::energy`), plot log-log: the adiabatic **slope −1** for the CPU crossing **below** a flat CMOS reference — the "it gets arbitrarily low as you slow the clock, unlike irreversible logic" demonstration, at the *machine* level (mirrors the M3a cell money plot). Non-blocking; a headline artifact. |
+| **SWAPBR loop / data-dependent branching** | v2-flavored. SWAPBR currently degenerates to PC-advance: a mid-step PC change breaks the fetch/unfetch symmetry that keeps IR provably zero (P4). Needs the reversible come-from / paired-branch machinery (Pendulum lineage). v1 uses straight-line unrolled ROMs (consistent with unroll-only). |
+| **Balancer buffer-materialization memory** | The systolic K0 buffers dominate both cell count and energy; balancing one `step` is ~1.6 M cells / tens of GB. A compact/streaming buffer representation (or not materializing pass-through buffers) would let `step^T` be balanced/simulated at T>1, not just eval'd + analytically priced. |
+
 ## Publication map (appendix; motivational, non-normative)
 
 1. **The language + bidirectional coverage checking** (ADR-0004/0017;
