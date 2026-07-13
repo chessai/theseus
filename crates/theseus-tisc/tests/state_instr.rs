@@ -242,7 +242,7 @@ fn xor_state_iso() {
     for s in &samples() {
         check_case("XOR(0,1)", &iso, &low, s);
         check_semantics("XOR(0,1)", &iso, s, |st| {
-            st.regs[rd] = st.regs[rd] ^ st.regs[rs];
+            st.regs[rd] ^= st.regs[rs];
         });
     }
 
