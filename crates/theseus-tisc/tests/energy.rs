@@ -29,6 +29,7 @@ fn char_db() -> &'static CharDb {
 }
 
 /// Small ROM used for step-level tests.
+#[allow(clippy::identity_op)]
 fn test_rom() -> Vec<u16> {
     vec![
         // addr 0: ADDI r0, #1  (I-format: opc=3, rd=0, imm=1)
