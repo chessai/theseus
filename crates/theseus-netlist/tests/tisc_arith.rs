@@ -64,7 +64,7 @@
 
 use theseus_core::{adjoint, type_of, Iso, Type, Value};
 use theseus_netlist::{
-    balance, bits_of, lower_iso, prim_from_bits, rail_width, simulate, value_from_bits, CellKind,
+    balance, bits_of, prim_from_bits, rail_width, simulate, value_from_bits, CellKind,
     PhasedCellNetlist, RailPair,
 };
 
@@ -427,12 +427,13 @@ fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
     net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
 }
 
-fn extend_with_ancilla(data_bits: &[bool], net: &PhasedCellNetlist) -> Vec<bool> {
+/// Append the lowering's real ancilla init values to the data bits
+/// (the R1-based synthesis needs its chain scratch pairs seeded 0 and
+/// its constant controls seeded 1 — positional, from
+/// `lower_iso_with_ancillas`).
+fn extend_with_ancilla(data_bits: &[bool], ancillas: &[bool]) -> Vec<bool> {
     let mut bits = data_bits.to_vec();
-    let n_ancilla = net.inputs.len() - data_bits.len();
-    for i in 0..n_ancilla {
-        bits.push(i % 2 == 0);
-    }
+    bits.extend_from_slice(ancillas);
     bits
 }
 
@@ -441,23 +442,26 @@ fn extend_with_ancilla(data_bits: &[bool], net: &PhasedCellNetlist) -> Vec<bool>
 struct Lowered {
     net: PhasedCellNetlist,
     balanced: PhasedCellNetlist,
+    ancillas: Vec<bool>,
     in_ty: Type,
     out_ty: Type,
     n_data_out: usize,
 }
 
-/// Lower + validate + balance; assert every cell kind is <= K3 and
-/// print the cell counts.
+/// Lower + validate + balance; assert every cell kind is in the
+/// admitted vocabulary (K0–K3 CSWAPs + the R1 rail-role swap,
+/// ADR-0040) and print the cell counts.
 fn prepare(name: &str, iso: &Iso) -> Lowered {
     let (in_ty, out_ty) = type_of(iso).expect("iso types");
-    let net = lower_iso(iso).unwrap_or_else(|e| panic!("{name}: lowering failed: {e}"));
+    let (net, ancillas) = theseus_netlist::lower::lower_iso_with_ancillas(iso)
+        .unwrap_or_else(|e| panic!("{name}: lowering failed: {e}"));
     assert_eq!(net.validate(), Ok(()), "{name}: lowered netlist validates");
 
     let counts = net.cell_counts();
     let max_kind = counts.keys().max().copied().unwrap_or(CellKind::K0);
     assert!(
-        max_kind <= CellKind::K3,
-        "{name}: max cell kind {max_kind:?} exceeds K3"
+        counts.keys().all(|&k| k <= CellKind::K3 || k == CellKind::R1),
+        "{name}: cell kind outside the K0-K3 + R1 vocabulary: {counts:?}"
     );
     eprintln!(
         "{name}: cell counts {counts:?}, max kind {max_kind:?}, ancilla inputs {}",
@@ -476,6 +480,7 @@ fn prepare(name: &str, iso: &Iso) -> Lowered {
     Lowered {
         net,
         balanced,
+        ancillas,
         in_ty,
         out_ty,
         n_data_out,
@@ -502,14 +507,14 @@ fn check_case(name: &str, iso: &Iso, low: &Lowered, operands: &[u8], expected: &
     let expected_bits = bits_of(&ev, &low.out_ty).unwrap();
     let data_bits = bits_of(&v, &low.in_ty).unwrap();
 
-    let untimed = eval_cells(&low.net, &extend_with_ancilla(&data_bits, &low.net));
+    let untimed = eval_cells(&low.net, &extend_with_ancilla(&data_bits, &low.ancillas));
     assert_eq!(
         &untimed[..low.n_data_out],
         &expected_bits[..],
         "{name}: untimed netlist disagrees with core eval on {operands:?}"
     );
 
-    let sim = simulate(&low.balanced, &extend_with_ancilla(&data_bits, &low.balanced))
+    let sim = simulate(&low.balanced, &extend_with_ancilla(&data_bits, &low.ancillas))
         .unwrap_or_else(|e| panic!("{name}: timed sim failed on {operands:?}: {e:?}"));
     assert_eq!(
         &sim.outputs[..low.n_data_out],

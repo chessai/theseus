@@ -1,13 +1,20 @@
-//! Acceptance test for K3 (3-control CSWAP) cell + K2→K3 promotion.
+//! Acceptance test for the 5-wire reversible full adder through the
+//! full compile pipeline (elaborate → lower → balance → simulate),
+//! differential against the core evaluator over the whole 32-value
+//! domain.
 //!
-//! The 5-wire reversible full adder has control-nesting depth 3, so its
-//! lowering requires K3 cells. This test verifies the full compile
-//! pipeline (elaborate → lower → balance → simulate) matches the core
-//! evaluator over the whole 32-value domain.
+//! History: this was the K3 acceptance test — the adder's
+//! control-nesting depth 3 forced K3 cells under the old
+//! splitter/selector multi-controlled-NOT synthesis. Since the R1
+//! rewrite (ADR-0040 phase C) the synthesis AND-reduces controls down
+//! a K1 chain and fires one R1, so the adder no longer needs K3 at
+//! all — and its lowering is ancilla-clean (asserted below). K2/K3
+//! promotion is still exercised by the Branch/iter tests.
 
 use theseus_core::{enumerate_values, type_of, Iso};
+use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_netlist::{
-    balance, bits_of, lower_iso, rail_width, simulate, CellKind, PhasedCellNetlist, RailPair,
+    balance, bits_of, rail_width, simulate, CellKind, PhasedCellNetlist, RailPair,
 };
 
 /// Untimed functional evaluation of the cell netlist with ancilla support.
@@ -38,12 +45,11 @@ fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
     net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
 }
 
-fn extend_with_ancilla(data_bits: &[bool], net: &PhasedCellNetlist) -> Vec<bool> {
+/// Append the lowering's real ancilla init values to the data bits
+/// (positional, from `lower_iso_with_ancillas`).
+fn extend_with_ancilla(data_bits: &[bool], ancillas: &[bool]) -> Vec<bool> {
     let mut bits = data_bits.to_vec();
-    let n_ancilla = net.inputs.len() - data_bits.len();
-    for i in 0..n_ancilla {
-        bits.push(i % 2 == 0);
-    }
+    bits.extend_from_slice(ancillas);
     bits
 }
 
@@ -99,12 +105,12 @@ fn full_adder_source() -> String {
 // ── Acceptance test: 5-wire full adder ──────────────────────────────
 
 #[test]
-fn full_adder_5wire_lowers_with_k3() {
+fn full_adder_5wire_lowers_garbage_free_without_k3() {
     let src = full_adder_source();
     let iso = elaborate(&src, "fa5");
 
     // Lower must succeed (no Deferred).
-    let net = lower_iso(&iso).expect("fa5 lowering succeeds (K3 available)");
+    let (net, ancillas) = lower_iso_with_ancillas(&iso).expect("fa5 lowering succeeds");
     assert_eq!(net.validate(), Ok(()), "lowered netlist validates");
 
     // Balance must succeed.
@@ -115,15 +121,23 @@ fn full_adder_5wire_lowers_with_k3() {
         "balanced netlist has no tick imbalances"
     );
 
-    // Assert at least one K3 cell exists.
+    // The R1-based synthesis voids the old K3 requirement: R1 cells
+    // are present, K3 is not needed anywhere.
     let counts = balanced.cell_counts();
     assert!(
-        counts.get(&CellKind::K3).copied().unwrap_or(0) > 0,
-        "netlist must contain at least one K3 cell; counts: {counts:?}"
+        counts.get(&CellKind::R1).copied().unwrap_or(0) > 0,
+        "R1 synthesis emits R1 cells; counts: {counts:?}"
+    );
+    assert_eq!(
+        counts.get(&CellKind::K3).copied().unwrap_or(0),
+        0,
+        "the adder no longer needs K3; counts: {counts:?}"
     );
     eprintln!("fa5 cell counts: {counts:?}");
 
-    // Differential oracle over all 32 inputs.
+    // Differential oracle over all 32 inputs — and ancilla cleanliness:
+    // every ancilla output equals its init on every input (the parity
+    // obstruction voided in practice, ADR-0040 D3).
     let (in_ty, out_ty) = type_of(&iso).expect("iso types");
     let n_data_out = rail_width(&out_ty).unwrap();
 
@@ -131,7 +145,7 @@ fn full_adder_5wire_lowers_with_k3() {
         let data_bits = bits_of(&v, &in_ty).unwrap();
 
         // Untimed eval on unbalanced net.
-        let full_input = extend_with_ancilla(&data_bits, &net);
+        let full_input = extend_with_ancilla(&data_bits, &ancillas);
         let got_full = eval_cells(&net, &full_input);
         let got = &got_full[..n_data_out];
 
@@ -144,8 +158,16 @@ fn full_adder_5wire_lowers_with_k3() {
             "untimed netlist disagrees with core eval on {v:?}"
         );
 
+        // Ancilla residue: zero — every ancilla restored to its init.
+        let dirty = got_full[n_data_out..]
+            .iter()
+            .zip(&ancillas)
+            .filter(|(got, want)| got != want)
+            .count();
+        assert_eq!(dirty, 0, "fa5 ancilla residue on {v:?}");
+
         // Timed sim on balanced net.
-        let balanced_input = extend_with_ancilla(&data_bits, &balanced);
+        let balanced_input = extend_with_ancilla(&data_bits, &ancillas);
         let sim_result = simulate(&balanced, &balanced_input)
             .unwrap_or_else(|e| panic!("timed sim failed on {v:?}: {e:?}"));
         let sim_data = &sim_result.outputs[..n_data_out];
@@ -156,28 +178,29 @@ fn full_adder_5wire_lowers_with_k3() {
     }
 }
 
-// ── Regression: 4-wire Toffoli-depth program still lowers with max K2 ──
+// ── Regression: 4-wire Toffoli-depth program stays within K2 + R1 ──
 
 #[test]
-fn toffoli_depth_still_lowers_max_k2() {
+fn toffoli_depth_still_lowers_within_k2_and_r1() {
     // The Toffoli (3-bit controlled-controlled-NOT) from the conformance
-    // suite lowers with K2 as the maximum cell kind (no K3 needed).
+    // suite: since ADR-0040 phase C its conditional-NOTs are R1 cells
+    // (promoted at most once), so nothing beyond K2 is ever needed.
     let src = include_str!("../../../conformance/programs/0006-toffoli.thse");
     let iso = elaborate(src, "tof");
 
-    let net = lower_iso(&iso).expect("toffoli lowering succeeds");
+    let (net, ancillas) = lower_iso_with_ancillas(&iso).expect("toffoli lowering succeeds");
     assert_eq!(net.validate(), Ok(()), "toffoli netlist validates");
 
     let counts = net.cell_counts();
-    // Must have K2 but NOT K3.
+    // The conditional-NOT structure shows up as R1 cells; no K3.
     assert!(
-        counts.get(&CellKind::K2).copied().unwrap_or(0) > 0,
-        "toffoli must use K2 cells"
+        counts.get(&CellKind::R1).copied().unwrap_or(0) > 0,
+        "toffoli must use R1 cells; counts: {counts:?}"
     );
     assert_eq!(
         counts.get(&CellKind::K3).copied().unwrap_or(0),
         0,
-        "toffoli must NOT use K3 cells"
+        "toffoli must NOT use K3 cells; counts: {counts:?}"
     );
 
     // Differential oracle over all inputs.
@@ -185,7 +208,7 @@ fn toffoli_depth_still_lowers_max_k2() {
     let n_data_out = rail_width(&out_ty).unwrap();
     for v in enumerate_values(&in_ty) {
         let data_bits = bits_of(&v, &in_ty).unwrap();
-        let full_input = extend_with_ancilla(&data_bits, &net);
+        let full_input = extend_with_ancilla(&data_bits, &ancillas);
         let got_full = eval_cells(&net, &full_input);
         let got = &got_full[..n_data_out];
         let mut fuel = 10_000u64;

@@ -1,11 +1,11 @@
 //! Bennett clean-up wrap for lowered netlists (ADR-0033 ring closure).
 //!
-//! # Why lowering leaves dirty ancillas — and what is fixable
+//! # The K-only parity law — and its ADR-0040 escape hatch
 //!
-//! Every cell in the vocabulary (K0 buffer, K1/K2/K3 conditional
-//! swaps) **permutes the values on its rail pairs** — a controlled
-//! swap only routes tokens. Free NOTs (rail-role swaps) are *fixed*
-//! per edge. Consequently, for any lowered netlist, the parity of all
+//! Every **K-cell** (K0 buffer, K1/K2/K3 conditional swaps) *permutes
+//! the values on its rail pairs* — a controlled swap only routes
+//! tokens. Free NOTs (rail-role swaps) are *fixed* per edge.
+//! Consequently, for any K-only lowered netlist, the parity of all
 //! output pair-values equals the parity of all input pair-values plus
 //! a circuit-constant (the number of rail-swapped edges, mod 2):
 //!
@@ -13,14 +13,28 @@
 //! parity(data_out) ⊕ parity(anc_out) = parity(data_in) ⊕ parity(anc_in) ⊕ c
 //! ```
 //!
-//! So a lowering of `f` can restore **all** ancillas to their inits
-//! only if `parity(bits(f(x))) ⊕ parity(bits(x))` is constant over the
-//! domain. A single conditional-NOT (`t ↦ t ⊕ AND(controls)`) already
-//! violates this — its parity deviation *is* the AND — which is why
-//! [`crate::lower`]'s splitter/selector construction must leave two
-//! data-dependent garbage pairs per multi-controlled NOT, and why no
-//! per-gate fix can do better (per-instance, two dirty pairs is the
-//! floor; see `tests/ancilla_clean.rs`).
+//! So a K-only lowering of `f` can restore **all** ancillas to their
+//! inits only if `parity(bits(f(x))) ⊕ parity(bits(x))` is constant
+//! over the domain. A single conditional-NOT (`t ↦ t ⊕ AND(controls)`)
+//! already violates this — its parity deviation *is* the AND — which
+//! is why the old splitter/selector construction had to leave two
+//! data-dependent garbage pairs per multi-controlled NOT.
+//!
+//! **Since ADR-0040 phase C this floor is gone in practice**: the `R1`
+//! controlled rail-role-swap cell flips its target's value in place
+//! (NOT a value-permutation — the law's premise fails for it), and
+//! [`crate::lower`] now emits every (multi-)controlled NOT
+//! ancilla-clean — one `R1` for CNOT (zero ancillas), a K1 AND-chain +
+//! `R1` + replayed chain for `k ≥ 2` (every scratch restored to init
+//! on every input). `tests/ancilla_clean.rs` verifies the zero residue
+//! over whole domains; `parity_obstruction_is_real` (same file) keeps
+//! the K-only theorem itself machine-checked.
+//!
+//! What still emits K-only garbage: the TraceLoop tag duplication and
+//! the iter/fold control chains (genuine fan-outs, not conditional
+//! NOTs — copying a live bit needs a K1 splitter whose complement
+//! output stays dirty). The wrap below remains the tool that bounds
+//! *that* residue.
 //!
 //! # What this module does about it
 //!
@@ -48,14 +62,12 @@
 //!   its init `1` iff `y_j = 1`) and the regenerated input bit (equal
 //!   to its init `0` iff `x_j = 0`).
 //!
-//! I.e. the *unbounded* per-construct garbage (2 pairs per synthesized
-//! multi-controlled NOT, per Branch conditional-NOT, per TraceLoop tag
-//! duplication, …) collapses to exactly `2·w` boundary pairs whose
-//! residue is the input word and the output word — the honest Bennett
-//! residue. By the parity law above, a nonzero residue is unavoidable
-//! for any `f` that does not preserve encoded-bit parity up to a fixed
-//! mask; the wrap concentrates it at the boundary instead of smearing
-//! it across every construct.
+//! I.e. the *unbounded* per-construct K-only garbage (per TraceLoop
+//! tag duplication, per iter/fold control chain, …) collapses to
+//! exactly `2·w` boundary pairs whose residue is the input word and
+//! the output word — the honest Bennett residue. (For the synthesized
+//! multi-controlled NOTs themselves the wrap is no longer needed at
+//! all: the R1 lowering is already ancilla-clean per instance.)
 //!
 //! Cost: cell count ≈ 2× forward + one K1 per data bit; depth ≈ 2×.
 //! The wrap preserves the differential oracle (data outputs unchanged)
@@ -63,6 +75,11 @@
 //! by `balance`/`balance_compact` as usual.
 //!
 //! # Measured on the TISC-1 step (M4-v2, 3-instruction ROM)
+//!
+//! *(Historical numbers — measured under the pre-ADR-0040
+//! splitter/selector synthesis. With the R1 rewrite the `prim_synth` /
+//! `prim_synth_chain` dirt below drops to zero by construction; the
+//! remaining dirt is the trace/branch tag machinery.)*
 //!
 //! Plain `lower_iso_with_ancillas(step)`: 4654 cells, 160 data pairs,
 //! 1138 ancillas — **945 dirty** at the ring test's pc = 0 start state

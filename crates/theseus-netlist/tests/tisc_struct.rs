@@ -10,7 +10,7 @@
 
 use theseus_core::{type_of, Iso, Type, Value};
 use theseus_netlist::{
-    bits_of, lower_iso, prim_from_bits, rail_width, CellKind, PhasedCellNetlist, RailPair,
+    bits_of, prim_from_bits, rail_width, CellKind, PhasedCellNetlist, RailPair,
 };
 
 // ── Type helpers ─────────────────────────────────────────────────────
@@ -110,12 +110,11 @@ fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
     net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
 }
 
-fn extend_with_ancilla(data_bits: &[bool], net: &PhasedCellNetlist) -> Vec<bool> {
+/// Append the lowering's real ancilla init values to the data bits
+/// (positional, from `lower_iso_with_ancillas`).
+fn extend_with_ancilla(data_bits: &[bool], ancillas: &[bool]) -> Vec<bool> {
     let mut bits = data_bits.to_vec();
-    let n_ancilla = net.inputs.len() - data_bits.len();
-    for i in 0..n_ancilla {
-        bits.push(i % 2 == 0);
-    }
+    bits.extend_from_slice(ancillas);
     bits
 }
 
@@ -299,30 +298,32 @@ fn xor_rd_rs_iso() -> Iso {
 
 // ── Common verification ──────────────────────────────────────────────
 
-fn verify_lowering(name: &str, iso: &Iso) -> PhasedCellNetlist {
-    let net = lower_iso(iso).unwrap_or_else(|e| panic!("{name}: lower_iso failed: {e:?}"));
+fn verify_lowering(name: &str, iso: &Iso) -> (PhasedCellNetlist, Vec<bool>) {
+    let (net, ancillas) = theseus_netlist::lower::lower_iso_with_ancillas(iso)
+        .unwrap_or_else(|e| panic!("{name}: lower_iso failed: {e:?}"));
     assert_eq!(net.validate(), Ok(()), "{name}: netlist validation failed");
     let counts = net.cell_counts();
     for &kind in counts.keys() {
         assert!(
-            kind <= CellKind::K3,
-            "{name}: cell kind {kind:?} exceeds K3"
+            kind <= CellKind::K3 || kind == CellKind::R1,
+            "{name}: cell kind {kind:?} outside the K0-K3 + R1 vocabulary"
         );
     }
     eprintln!("{name}: cell counts = {counts:?}");
-    net
+    (net, ancillas)
 }
 
 fn assert_faithful(
     name: &str,
     iso: &Iso,
-    net: &PhasedCellNetlist,
+    lowered: &(PhasedCellNetlist, Vec<bool>),
     input: &Value,
     in_ty: &Type,
     out_ty: &Type,
 ) -> Value {
+    let (net, ancillas) = lowered;
     let data_bits = bits_of(input, in_ty).unwrap();
-    let full_input = extend_with_ancilla(&data_bits, net);
+    let full_input = extend_with_ancilla(&data_bits, ancillas);
     let got_full = eval_cells(net, &full_input);
     let n_data_out = rail_width(out_ty).unwrap();
     let got_bits = &got_full[..n_data_out];

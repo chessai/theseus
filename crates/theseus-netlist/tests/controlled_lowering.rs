@@ -6,16 +6,16 @@
 //! domain for elaborated controlled-NOT, Toffoli, and swapMaybe.
 
 use theseus_core::{enumerate_values, type_of, Iso, Type};
-use theseus_netlist::{bits_of, lower_iso, rail_width, PhasedCellNetlist, RailPair};
+use theseus_netlist::lower::lower_iso_with_ancillas;
+use theseus_netlist::{bits_of, rail_width, PhasedCellNetlist, RailPair};
 
 fn bit() -> Type {
     Type::sum(Type::One, Type::One)
 }
 
 /// Untimed functional evaluation of the cell netlist, with support for
-/// ancilla inputs.  Ancilla inputs (beyond `n_data` pairs) are
-/// initialised to the alternating pattern (true, false, true, false, …)
-/// matching the allocation order in the conditional-NOT construction.
+/// ancilla inputs (seeded with their real init values from
+/// `lower_iso_with_ancillas`).
 fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
     let mut line: Vec<Option<bool>> = vec![None; net.num_lines as usize];
     fn set_pair(line: &mut [Option<bool>], p: RailPair, v: bool) {
@@ -43,13 +43,10 @@ fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
     net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
 }
 
-/// Provide data bits plus ancilla values for any extra inputs.
-fn extend_with_ancilla(data_bits: &[bool], net: &PhasedCellNetlist) -> Vec<bool> {
+/// Provide data bits plus the lowering's real ancilla init values.
+fn extend_with_ancilla(data_bits: &[bool], ancillas: &[bool]) -> Vec<bool> {
     let mut bits = data_bits.to_vec();
-    let n_ancilla = net.inputs.len() - data_bits.len();
-    for i in 0..n_ancilla {
-        bits.push(i % 2 == 0); // alternating: true, false, true, false, …
-    }
+    bits.extend_from_slice(ancillas);
     bits
 }
 
@@ -58,12 +55,12 @@ fn extend_with_ancilla(data_bits: &[bool], net: &PhasedCellNetlist) -> Vec<bool>
 /// ancilla inputs/outputs transparently.
 fn assert_lowering_agrees(iso: &Iso) -> PhasedCellNetlist {
     let (in_ty, out_ty) = type_of(iso).expect("iso types");
-    let net = lower_iso(iso).expect("lowering succeeds");
+    let (net, ancillas) = lower_iso_with_ancillas(iso).expect("lowering succeeds");
     assert_eq!(net.validate(), Ok(()), "lowered netlist validates");
     let n_data_out = rail_width(&out_ty).unwrap();
     for v in enumerate_values(&in_ty) {
         let data_bits = bits_of(&v, &in_ty).unwrap();
-        let full_input = extend_with_ancilla(&data_bits, &net);
+        let full_input = extend_with_ancilla(&data_bits, &ancillas);
         let got_full = eval_cells(&net, &full_input);
         let got = &got_full[..n_data_out];
         let mut fuel = 10_000u64;

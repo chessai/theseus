@@ -19,16 +19,21 @@
 //! (ADR-0031: "each per-instance checkable — exhaustive small").
 //! Phase = depth mod P throughout (ADR-0026 C2.3).
 //!
-//! # General prim synthesis (B4.2)
+//! # General prim synthesis (B4.2, garbage-free via R1 — ADR-0040 phase C)
 //!
 //! A prim that matches no fast-path template is *synthesized*: its finite
 //! truth table is flattened to a permutation of `{0,1}^w`, decomposed into
 //! multi-controlled NOTs by transformation-based synthesis ([`mmd_gates`]),
-//! and each NOT is emitted as a splitter/selector CSWAP pair (never above
-//! `K2`, so [`Builder::controlled_apply`] can still promote every cell by
-//! one extra control). The gate list is verified against the truth table
-//! over the whole valid domain before any cell is placed — the same
-//! per-instance discipline as the fast-path templates.
+//! and each NOT is emitted **ancilla-clean** with the `R1` rail-role-swap
+//! cell: a 1-controlled NOT is a single `R1`; `k ≥ 2` controls are
+//! AND-reduced down a `K1` chain, one `R1` fires on the chain head, and
+//! the self-inverse chain is replayed to restore every control and every
+//! scratch pair to its init ([`Builder::emit_mcnot`]). No cell above `K1`
+//! is emitted, so [`Builder::controlled_apply`] can still promote every
+//! cell by one extra control (`R1` promotes via the K1–R1–K1 sandwich).
+//! The gate list is verified against the truth table over the whole valid
+//! domain before any cell is placed — the same per-instance discipline as
+//! the fast-path templates.
 //!
 //! # Deferred (honest list, with owners)
 //!
@@ -568,9 +573,10 @@ impl Builder {
         if w_in == 5 && w_out == 5 && prim_matches(def, |bits| CellKind::K3.eval(bits))? {
             return Ok(self.emit(CellKind::K3, ins));
         }
-        // (Garbage-free CNOT/Toffoli via R1 — the emit_mcnot rewrite — is
-        // ADR-0040 phase C; R1 exists as a CellKind here but synthesis does
-        // not yet emit it.)
+        // CNOT `(c, t)`: one R1, zero ancillas (ADR-0040 phase C).
+        if w_in == 2 && w_out == 2 && prim_matches(def, |bits| CellKind::R1.eval(bits))? {
+            return Ok(self.emit(CellKind::R1, ins));
+        }
 
         // General CSWAP-network synthesis (B4.2): any other admitted
         // prim, via transformation-based multi-controlled-NOT synthesis.
@@ -592,10 +598,11 @@ impl Builder {
     /// 4. **Verify** the gate list reproduces the truth table on every
     ///    valid input (per-instance, exhaustive — the same discipline as
     ///    the fast-path templates).
-    /// 5. Emit each gate as CSWAP cells via [`Builder::emit_mcnot`];
-    ///    every emitted cell is `K1` or `K2` (never `K3`), so
+    /// 5. Emit each gate ancilla-clean via [`Builder::emit_mcnot`]
+    ///    (ADR-0040 phase C); every emitted cell is `K1` or `R1`, so
     ///    [`Builder::controlled_apply`] can still promote the network by
-    ///    one extra control inside `Branch`/`TraceLoop`.
+    ///    one extra control inside `Branch`/`TraceLoop` (`K1 → K2`,
+    ///    `R1 →` the K1–R1–K1 sandwich).
     fn synthesize_prim(&mut self, def: &PrimDef, ins: &[BitAt]) -> Result<Vec<BitAt>, LowerError> {
         let prev_origin = self.set_origin("prim_synth");
         let out = self.synthesize_prim_inner(def, ins);
@@ -684,81 +691,72 @@ impl Builder {
         Ok(current)
     }
 
-    /// Emit one multi-controlled NOT as CSWAP cells, in place on
-    /// `current`.
+    /// Emit one multi-controlled NOT, in place on `current` —
+    /// **garbage-free** via the `R1` rail-role-swap cell (ADR-0040
+    /// phase C). This replaces the old splitter/selector CSWAP
+    /// construction, whose 2 dirty pairs per instance were the parity
+    /// obstruction's per-gate floor; with `R1` in the vocabulary the
+    /// obstruction is void and every case below restores every ancilla
+    /// to its init on every input.
     ///
-    /// A k-controlled NOT on target `t` is a k-controlled swap of `t`
-    /// with `NOT(t)`:
-    ///
-    /// - **Splitter** `K1(t, 1, 0) → (t, ¬t, t)`: fans the target out
-    ///   into the (t, ¬t) pair the selector needs (third output is
-    ///   garbage).
-    /// - **Selector** `K{k}(c1..ck, t, ¬t)`: the swap fires iff all
-    ///   controls are high, so the first data port carries
-    ///   `t ⊕ (c1 ∧ … ∧ ck)` — exactly the Toffoli-k output. The other
-    ///   data port is garbage; the controls pass through and stay live.
-    ///
-    /// Controls beyond two are AND-reduced first: `K2(a, b, 0, 1)`
-    /// swaps iff `a ∧ b`, so its first data port carries `a ∧ b` (one
-    /// cell per reduction step, standard borrowed-ancilla flattening —
-    /// no cell beyond `K2` is ever needed, for any number of controls).
-    ///
-    /// A 0-controlled NOT could be a free rail swap, but that would
-    /// fire even when a surrounding `Branch`/`TraceLoop` tag is
-    /// inactive (promotion cannot gate wiring); instead it uses a
-    /// constant-TRUE ancilla as the selector control, which promotes
-    /// correctly.
+    /// - `k = 1`: a single `R1(c, t)` — CNOT in one cell, zero
+    ///   ancillas; the control passes through live.
+    /// - `k ≥ 2` (ADR-0040 D3, iterated): AND-reduce the controls down
+    ///   a `K1` chain (`K1(a, b, 0)`'s third port carries `a ∧ b`),
+    ///   fire one `R1(chain_head, t)` — which reads its control
+    ///   without modifying it — then replay the self-inverse chain in
+    ///   reverse, restoring every control to its live value and every
+    ///   scratch pair to `0`. Ancilla-clean per instance, for any `k`.
+    /// - `k = 0`: `R1(one, t)` with a constant-TRUE ancilla control;
+    ///   the ancilla passes through unchanged (output = init: clean).
+    ///   A free rail swap would be wrong under `Branch`/`TraceLoop`
+    ///   promotion (promotion cannot gate wiring), while the promoted
+    ///   `R1` keeps the tag gating.
     fn emit_mcnot(&mut self, current: &mut [BitAt], gate: &McNot) {
-        // Control signals: `Some(i)` = live data bit `current[i]`
-        // (pass-through updates it), `None` = ancilla or intermediate
-        // AND (pass-through is garbage).
-        let mut sigs: Vec<(BitAt, Option<usize>)> =
-            gate.controls.iter().map(|&c| (current[c], Some(c))).collect();
-        if sigs.is_empty() {
-            let anc = self.alloc_ancilla(true);
-            sigs.push((anc, None));
-        }
+        match gate.controls.as_slice() {
+            [] => {
+                let one = self.alloc_ancilla(true);
+                let outs = self.emit(CellKind::R1, &[one, current[gate.target]]);
+                // Constant-TRUE control passes through: output == init.
+                self.mark_garbage(outs[0]);
+                current[gate.target] = outs[1];
+            }
+            [c] => {
+                let outs = self.emit(CellKind::R1, &[current[*c], current[gate.target]]);
+                current[*c] = outs[0];
+                current[gate.target] = outs[1];
+            }
+            [first, rest @ ..] => {
+                let prev_origin = self.set_origin("prim_synth_chain");
+                // Compute: AND-reduce the controls down a K1 chain.
+                // Each step's pass-throughs are saved for the replay.
+                let mut head = current[*first];
+                let mut steps: Vec<(BitAt, BitAt)> = Vec::with_capacity(rest.len());
+                for &ci in rest {
+                    let zero = self.alloc_ancilla(false);
+                    let outs = self.emit(CellKind::K1, &[head, current[ci], zero]);
+                    steps.push((outs[0], outs[1]));
+                    head = outs[2]; // AND of the controls so far
+                }
 
-        // AND-reduce to ≤ 2 control signals.
-        let prev_origin = self.set_origin("prim_synth_chain");
-        while sigs.len() > 2 {
-            let (b_bit, b_src) = sigs.pop().expect("len > 2");
-            let (a_bit, a_src) = sigs.pop().expect("len > 2");
-            let zero = self.alloc_ancilla(false);
-            let one = self.alloc_ancilla(true);
-            let outs = self.emit(CellKind::K2, &[a_bit, b_bit, zero, one]);
-            self.restore_ctrl(current, a_src, outs[0]);
-            self.restore_ctrl(current, b_src, outs[1]);
-            sigs.push((outs[2], None)); // a ∧ b
-            self.mark_garbage(outs[3]); // ¬(a ∧ b)
-        }
-        self.anc_origin = prev_origin;
+                // Fire: R1 flips the target iff the chain head is 1,
+                // passing the head through unmodified.
+                let fired = self.emit(CellKind::R1, &[head, current[gate.target]]);
+                current[gate.target] = fired[1];
 
-        // Splitter.
-        let one = self.alloc_ancilla(true);
-        let zero = self.alloc_ancilla(false);
-        let split = self.emit(CellKind::K1, &[current[gate.target], one, zero]);
-        self.mark_garbage(split[2]); // redundant target copy
-
-        // Selector.
-        let kind = if sigs.len() == 1 { CellKind::K1 } else { CellKind::K2 };
-        let mut cell_ins: Vec<BitAt> = sigs.iter().map(|&(b, _)| b).collect();
-        cell_ins.push(split[0]); // t
-        cell_ins.push(split[1]); // ¬t
-        let outs = self.emit(kind, &cell_ins);
-        for (j, &(_, src)) in sigs.iter().enumerate() {
-            self.restore_ctrl(current, src, outs[j]);
-        }
-        current[gate.target] = outs[sigs.len()]; // t ⊕ AND(controls)
-        self.mark_garbage(outs[sigs.len() + 1]); // complement
-    }
-
-    /// Route a cell's control pass-through: live data bits stay live,
-    /// ancillas/intermediates become garbage.
-    fn restore_ctrl(&mut self, current: &mut [BitAt], src: Option<usize>, out: BitAt) {
-        match src {
-            Some(i) => current[i] = out,
-            None => self.mark_garbage(out),
+                // Uncompute: replay the self-inverse chain in reverse.
+                // Each replayed K1 regenerates (partial-AND, control,
+                // 0) — the control returns live, the scratch clean.
+                let mut back = fired[0];
+                for (i, &(pass_and, pass_ctrl)) in steps.iter().enumerate().rev() {
+                    let outs = self.emit(CellKind::K1, &[pass_and, pass_ctrl, back]);
+                    back = outs[0];
+                    current[rest[i]] = outs[1];
+                    self.mark_garbage(outs[2]); // restored to 0: clean
+                }
+                current[*first] = back;
+                self.anc_origin = prev_origin;
+            }
         }
     }
 
@@ -844,13 +842,19 @@ impl Builder {
     ///   AND c are true.
     /// - K2 → would need K3 (not in vocabulary): error.
     ///
+    /// - R1(c, t) → the K1–R1–K1 sandwich (ADR-0040 D3): `K1(tag, c, 0)`
+    ///   computes `tag ∧ c` on a scratch pair, `R1(scratch, t)` fires,
+    ///   and replaying the self-inverse K1 restores `(tag, c, 0)` —
+    ///   ancilla-clean controlled-R1 without needing R2 in the
+    ///   vocabulary.
+    ///
     /// Zero-cell rewiring (Permute) is unconditional.  For identity
     /// permutations this is correct (identity regardless of control).
     /// For non-identity zero-cell rewiring (e.g. rail swap / NOT),
     /// unconditional application would be incorrect.  Instead, we
-    /// synthesise conditional K1 cells: position permutations use K1
-    /// directly (conditional swap), and rail swaps (NOT) use an
-    /// ancilla-based splitter/selector K1 pair (see Phase 2 below).
+    /// synthesise conditional cells: position permutations use K1
+    /// directly (conditional swap), and rail swaps (NOT) are one R1
+    /// each with the tag as control (see Phase 2 below).
     pub(crate) fn controlled_apply(
         &mut self,
         node: &TypedNode,
@@ -960,74 +964,41 @@ impl Builder {
                 }
             }
 
-            // Phase 2: conditional rail swaps (NOT) using ancilla-
-            // based K1 construction.
-            //
-            // For each flipped bit we synthesise two K1 cells:
-            //
-            //   Splitter: K1(bit, TRUE_anc, FALSE_anc)
-            //     → (bit_copy, NOT(bit), bit_dup)   [always, by K1 truth table]
-            //
-            //   Selector: K1(control, bit_copy, NOT(bit))
-            //     → control active:  (ctrl, NOT(bit), bit_copy)
-            //       control inactive: (ctrl, bit_copy, NOT(bit))
-            //
-            // The selector's output[1] is the conditional NOT.
-            //
-            // A K0 buffer on the tag keeps the selector's inputs
-            // tick-aligned with the splitter outputs (depth d → d+1).
-            let prev_origin = self.set_origin("cond_not");
-            for i in 0..n {
-                if !flipped[i] {
+            // Phase 2: conditional rail swaps (NOT) — one R1 per
+            // flipped bit (ADR-0040 phase C): `R1(tag, bit)` flips the
+            // bit iff the tag is 1 and passes the tag through live.
+            // Zero ancillas, zero garbage — contrast the old
+            // splitter/selector K1 pair (2 ancillas + 2 garbage pairs
+            // per conditional NOT, the parity obstruction's floor).
+            for (i, &flip) in flipped.iter().enumerate() {
+                if !flip {
                     continue;
                 }
-                let true_anc = self.alloc_ancilla(true);
-                let false_anc = self.alloc_ancilla(false);
-
-                // Splitter.
-                let split = self.emit(CellKind::K1, &[current[i], true_anc, false_anc]);
-                let bit_copy = split[0]; // = bit value on fresh pair
-                let not_bit = split[1]; // = NOT(bit) on fresh pair
-                self.mark_garbage(split[2]); // redundant bit copy
-
-                // Buffer the tag so it arrives at the same tick as the
-                // splitter outputs (both at depth = original + 1).
-                let control_raw = if invert_tag {
+                let control = if invert_tag {
                     cur_tag.rail_swapped()
                 } else {
                     cur_tag
                 };
-                let control_buf = self.emit(CellKind::K0, &[control_raw])[0];
-
-                // Selector.
-                let sel = self.emit(CellKind::K1, &[control_buf, bit_copy, not_bit]);
+                let outs = self.emit(CellKind::R1, &[control, current[i]]);
                 cur_tag = if invert_tag {
-                    sel[0].rail_swapped()
+                    outs[0].rail_swapped()
                 } else {
-                    sel[0]
+                    outs[0]
                 };
-                current[i] = sel[1]; // conditional NOT result
-                self.mark_garbage(sel[2]); // garbage
+                current[i] = outs[1];
             }
-            self.anc_origin = prev_origin;
 
             return Ok((current, cur_tag));
         }
 
-        // Check for K3 or R1 cells in the sub-builder (can't promote
-        // K3 to K4, and R1 promotion requires R2 which is not yet in
-        // the vocabulary).
+        // Check for K3 cells in the sub-builder (can't promote K3 to
+        // K4 — not in the vocabulary). R1 is fine: it promotes via the
+        // K1–R1–K1 sandwich below.
         for cell in &sub.cells {
             if cell.kind == CellKind::K3 {
                 return Err(LowerError::Deferred {
                     node: "Branch (K3 in arm)",
                     plan: "K4 not in vocabulary",
-                });
-            }
-            if cell.kind == CellKind::R1 {
-                return Err(LowerError::Deferred {
-                    node: "Branch (R1 in arm)",
-                    plan: "R2 not in vocabulary",
                 });
             }
         }
@@ -1136,7 +1107,85 @@ impl Builder {
                     };
                     cur_tag = tag_out;
                 }
-                CellKind::K3 | CellKind::R1 => unreachable!("checked above"),
+                CellKind::R1 => {
+                    // Promote R1(c, t) — "flip t iff c" — to "flip t
+                    // iff tag ∧ c" WITHOUT R2, via the ADR-0040 D3
+                    // sandwich: K1(tag, c, anc=0) computes tag ∧ c on
+                    // a scratch pair; R1(scratch, t) fires without
+                    // modifying its control; replaying the
+                    // self-inverse K1 restores (tag, c, 0). The
+                    // scratch exits equal to its init on every input —
+                    // promotion stays ancilla-clean.
+                    let control_tag = if invert_tag {
+                        cur_tag.rail_swapped()
+                    } else {
+                        cur_tag
+                    };
+                    let anc = self.alloc_ancilla(false);
+
+                    let arrival = |map: &HashMap<RailPair, (RailPair, u32)>,
+                                   p: RailPair,
+                                   fallback: u32| {
+                        map.get(&p)
+                            .or_else(|| map.get(&p.swapped()))
+                            .map(|&(_, d)| d)
+                            .unwrap_or(fallback)
+                    };
+                    let c_in = cell.inputs[0];
+                    let t_in = cell.inputs[1];
+                    let c_depth = arrival(&pair_depth_map, c_in, cell.depth);
+                    let t_depth = arrival(&pair_depth_map, t_in, cell.depth);
+
+                    // Compute: K1(tag, c, 0) → (tag, tag ? 0 : c, tag ∧ c).
+                    let d1 = control_tag.depth.max(c_depth); // anc arrives at 0
+                    let tag_mid = self.fresh_pair();
+                    let c_mid = self.fresh_pair();
+                    let and_pair = self.fresh_pair();
+                    self.cells.push(Cell {
+                        kind: CellKind::K1,
+                        depth: d1,
+                        phase: (d1 % u32::from(PHASE_COUNT)) as u8,
+                        inputs: vec![control_tag.pair, c_in, anc.pair],
+                        outputs: vec![tag_mid, c_mid, and_pair],
+                    });
+
+                    // Fire: R1(tag ∧ c, t); the AND passes through.
+                    let d2 = (d1 + 1).max(t_depth);
+                    let and_back = self.fresh_pair();
+                    let t_out = cell.outputs[1];
+                    self.cells.push(Cell {
+                        kind: CellKind::R1,
+                        depth: d2,
+                        phase: (d2 % u32::from(PHASE_COUNT)) as u8,
+                        inputs: vec![and_pair, t_in],
+                        outputs: vec![and_back, t_out],
+                    });
+                    pair_depth_map.insert(t_out, (t_out, d2 + 1));
+
+                    // Uncompute: replay K1 on its own pass-throughs →
+                    // (tag, c, 0) regenerated.
+                    let d3 = d2 + 1;
+                    let tag_out_pair = self.fresh_pair();
+                    let c_out = cell.outputs[0];
+                    let anc_out = self.fresh_pair();
+                    self.cells.push(Cell {
+                        kind: CellKind::K1,
+                        depth: d3,
+                        phase: (d3 % u32::from(PHASE_COUNT)) as u8,
+                        inputs: vec![tag_mid, c_mid, and_back],
+                        outputs: vec![tag_out_pair, c_out, anc_out],
+                    });
+                    pair_depth_map.insert(c_out, (c_out, d3 + 1));
+                    // Scratch exits = init (0) on every input: clean.
+                    self.mark_garbage(BitAt { pair: anc_out, depth: d3 + 1 });
+
+                    cur_tag = if invert_tag {
+                        BitAt { pair: tag_out_pair.swapped(), depth: d3 + 1 }
+                    } else {
+                        BitAt { pair: tag_out_pair, depth: d3 + 1 }
+                    };
+                }
+                CellKind::K3 => unreachable!("checked above"),
             }
         }
 
@@ -1892,15 +1941,31 @@ mod tests {
 
     #[test]
     fn cnot_prim_synthesizes() {
-        // CNOT matches no fixed template; general synthesis lowers it
+        // CNOT is one R1 cell, zero ancillas (ADR-0040 phase C): the
+        // fast-path template matches, no garbage pairs are allocated,
         // and the differential oracle verifies it over the whole domain.
         let iso = Iso::Prim(Box::new(cnot_prim()));
         let net = assert_lowering_agrees(&iso);
-        assert!(!net.cells.is_empty());
-        assert!(
-            net.cells.iter().all(|c| c.kind <= CellKind::K2),
-            "synthesized networks stay promotable (≤ K2)"
-        );
+        assert_eq!(net.cell_counts(), BTreeMap::from([(CellKind::R1, 1)]));
+        assert_eq!(net.inputs.len(), 2, "no ancilla inputs");
+        assert_eq!(net.outputs.len(), 2, "no garbage outputs");
+    }
+
+    #[test]
+    fn toffoli_prim_synthesizes_to_k1_r1_k1_sandwich() {
+        // Toffoli (c1, c2, t) ↦ (c1, c2, t ⊕ (c1 ∧ c2)): the ADR-0040
+        // D3 sandwich — K1 computes c1 ∧ c2 onto a 0-scratch, R1 flips
+        // t, the replayed K1 restores the scratch. One ancilla in, one
+        // ancilla out, clean on every input (tests/ancilla_clean.rs
+        // verifies the zero residue).
+        let toffoli = prim_from_fn("toffoli", three_bits(), three_bits(), |b| {
+            vec![b[0], b[1], b[2] ^ (b[0] && b[1])]
+        });
+        let net = assert_lowering_agrees(&Iso::Prim(Box::new(toffoli)));
+        let kinds: Vec<CellKind> = net.cells.iter().map(|c| c.kind).collect();
+        assert_eq!(kinds, vec![CellKind::K1, CellKind::R1, CellKind::K1]);
+        assert_eq!(net.inputs.len(), 4, "3 data + 1 scratch ancilla");
+        assert_eq!(net.outputs.len(), 4, "3 data + the restored scratch");
     }
 
     #[test]
@@ -1917,8 +1982,10 @@ mod tests {
         });
         let net = assert_lowering_agrees(&Iso::Prim(Box::new(adder)));
         assert!(
-            net.cells.iter().all(|c| c.kind <= CellKind::K3),
-            "no cell beyond K3 (higher control counts are decomposed)"
+            net.cells
+                .iter()
+                .all(|c| matches!(c.kind, CellKind::K1 | CellKind::R1)),
+            "R1-based synthesis emits only K1 chain cells and R1 NOTs"
         );
     }
 

@@ -4,6 +4,38 @@
 `RoleSwapKind` shipped; fabric integration — char DB, B5 admission,
 lowering rewrite — is a follow-up slice with its own gates)
 
+> **Update — phase C (lowering rewrite) implemented.** `emit_mcnot` now
+> emits every (multi-)controlled NOT ancilla-clean with `CellKind::R1`:
+> CNOT = one `R1` (zero ancillas); Toffoli = `K1(c₁, c₂, 0) → R1 →
+> replayed K1`; `k ≥ 3` = a `K1` AND-chain → one `R1` on the chain
+> head → the chain replayed (every control returned live, every
+> scratch pair restored to 0 on every input — no R2/R3 needed for any
+> `k`). The zero-cell conditional-NOT in `Branch`/loop gating is one
+> `R1(tag, bit)` (was: splitter/selector, 2 ancillas + 2 garbage), and
+> `controlled_apply` promotes an `R1` under an extra control via the
+> same D3 sandwich (`K1(tag, c, 0) → R1 → K1`), so `Branch`/loop
+> promotion also stays ancilla-clean — again without R2. Verified by
+> the differential oracle plus zero-residue checks over whole domains
+> in `crates/theseus-netlist/tests/ancilla_clean.rs`
+> (`r1_cnot_lowering_is_garbage_free_zero_ancillas`,
+> `r1_toffoli_lowering_is_ancilla_clean`,
+> `r1_cccnot_lowering_is_ancilla_clean`, and the 5-wire full adder in
+> `tests/full_adder_lowering.rs`, which no longer needs K3 at all).
+> The K-only parity theorem (`parity_obstruction_is_real`) stays true
+> and stays checked; the Bennett wrap remains available for constructs
+> that still emit K-only garbage (trace tag duplication, iter/fold
+> control chains — genuine fan-outs, not conditional NOTs).
+>
+> **Measured on the TISC-1 step ring** (theseus-tisc
+> `ring_run.rs::ancilla_restoration_report`, unmodified): the plain
+> (unwrapped) lowering now reports **`ancillas restored: true`** —
+> TRUE recirculation valid at the sampled start state — with 468
+> ancilla lines total, down from 1138 (945 dirty at pc = 0) under the
+> old splitter/selector synthesis. The `prim_synth` dirt predicted to
+> vanish in "Consequences for the ring" below is measured gone.
+> Remaining follow-up: make the plain path the ring default and demote
+> the wrap (decision item 3's last step).
+
 ## Context — the obstruction this cell exists to void
 
 The K0–K3 vocabulary has a proven parity obstruction (bennett.rs module

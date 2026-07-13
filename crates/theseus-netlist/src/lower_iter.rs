@@ -49,15 +49,16 @@
 //! (control-off) promoted cells untouched.
 //!
 //! Every emitted cell is a chain `K2` or a body cell promoted by one
-//! control (K0→K0, K1→K2, K2→K3, zero-cell rewiring→K1), so the result
-//! stays within the ≤ K3 vocabulary whenever the body itself lowers to
-//! ≤ K2 cells — the same promotion budget as `Branch`.
+//! control (K0→K0, K1→K2, K2→K3, zero-cell rewiring→K1 or R1, R1→the
+//! K1–R1–K1 sandwich, ADR-0040), so the result stays within the
+//! K0–K3 + R1 vocabulary whenever the body itself lowers to ≤ K2/R1
+//! cells — the same promotion budget as `Branch`.
 //!
 //! # Verification
 //!
 //! Differential oracle (`tests/iter_lowering.rs`): for every value of
 //! the finite input domain, lower → simulate == `theseus_eval::eval`,
-//! plus `validate()`, `balance()`, and the ≤ K3 cap.
+//! plus `validate()`, `balance()`, and the vocabulary cap.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

@@ -53,14 +53,18 @@ fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
 
 /// Differential oracle: for every input value, the lowered netlist's
 /// untimed evaluation must agree with `theseus_eval::eval`; the net
-/// must validate, balance, and stay ≤ K3.
+/// must validate, balance, and stay within the admitted vocabulary
+/// (K0–K3 CSWAPs + the R1 rail-role swap, ADR-0040).
 fn assert_lowering_agrees(iso: &Iso) -> PhasedCellNetlist {
     let (in_ty, out_ty) = type_of(iso).expect("iso types");
     let (netlist, ancilla_values) = lower_iso_with_ancillas(iso).expect("lowering succeeds");
     assert_eq!(netlist.validate(), Ok(()), "lowered netlist validates");
     assert!(
-        netlist.cells.iter().all(|c| c.kind <= CellKind::K3),
-        "no cell beyond K3 (max promotion budget)"
+        netlist
+            .cells
+            .iter()
+            .all(|c| c.kind <= CellKind::K3 || c.kind == CellKind::R1),
+        "no cell outside the K0-K3 + R1 vocabulary (max promotion budget)"
     );
     // These nets are tiny: the tick-exact balancer must handle them.
     let balanced = theseus_netlist::balance(&netlist).expect("netlist balances");
@@ -324,6 +328,9 @@ fn report_cell_counts() {
             max_kind,
             net.depth()
         );
-        assert!(net.cells.iter().all(|c| c.kind <= CellKind::K3));
+        assert!(net
+            .cells
+            .iter()
+            .all(|c| c.kind <= CellKind::K3 || c.kind == CellKind::R1));
     }
 }
