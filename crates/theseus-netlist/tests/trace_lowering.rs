@@ -128,7 +128,6 @@ fn trace_bit_carrier_swap_body() {
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore = "requires B4.2 general CSWAP-network synthesis: trace body is a 4-bit Prim (tag-mixing bijection on Sum(carrier, Bit)) that matches no cell template"]
 fn conformance_label_loop_spin() {
     // The "spin" iso from the conformance suite: a 2-bit counter walk
     // with carrier = (Bit, (Bit, Bit)).  It uses a trace/label-loop
@@ -153,10 +152,35 @@ fn trace_validate_and_inv_token_trivial() {
 }
 
 #[test]
-#[ignore = "requires B4.2 general CSWAP-network synthesis: trace body is a 4-bit Prim"]
 fn trace_validate_and_inv_token_label_loop() {
     let src = include_str!("../../../conformance/programs/0011-label-loop.thse");
     let iso = elaborate(src, "spin");
     let net = lower_iso(&iso).unwrap();
     assert_eq!(net.validate(), Ok(()));
+}
+
+#[test]
+fn spin_balances_and_sims_with_inv_token() {
+    // End-to-end for the synthesized trace body: lower spin (whose body
+    // is a 4-bit prim handled by B4.2 general synthesis), balance, and
+    // run the TIMED phased sim — which asserts dynamic INV-TOKEN for
+    // every rail pair on every tick — against core eval on both inputs.
+    let src = include_str!("../../../conformance/programs/0011-label-loop.thse");
+    let iso = elaborate(src, "spin");
+    let (net, ancilla_values) = lower_iso_with_ancillas(&iso).expect("lowers");
+    let balanced = theseus_netlist::balance(&net).expect("balances");
+    let (in_ty, out_ty) = type_of(&iso).unwrap();
+    let n_data_out = rail_width(&out_ty).unwrap();
+    for v in enumerate_values(&in_ty) {
+        let mut bits = bits_of(&v, &in_ty).unwrap();
+        bits.extend_from_slice(&ancilla_values);
+        let res = theseus_netlist::simulate(&balanced, &bits).expect("timed sim");
+        let mut fuel = 100_000u64;
+        let expected = theseus_eval::eval(&iso, v.clone(), &mut fuel).unwrap();
+        assert_eq!(
+            &res.outputs[..n_data_out],
+            &bits_of(&expected, &out_ty).unwrap()[..],
+            "timed sim disagrees with core eval on {v:?}"
+        );
+    }
 }

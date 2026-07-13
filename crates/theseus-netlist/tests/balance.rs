@@ -357,3 +357,40 @@ fn chain_of_fredkins_semantics_preserved() {
     assert_eq!(balanced.cell_counts(), original.cell_counts());
     assert_balanced_agrees_with_core(&iso, &balanced);
 }
+
+// ── B4.2 general synthesis through the timed sim ────────────────────
+
+#[test]
+fn synthesized_monolithic_adder_balances_and_sims() {
+    // The monolithic preserved-input 2-bit adder lowers via general
+    // CSWAP synthesis (it matches no fixed template); after balancing,
+    // the TIMED phased sim — which asserts dynamic INV-TOKEN for every
+    // rail pair on every tick — agrees with core eval on all 16 inputs.
+    let four = Type::prod(Type::prod(bit(), bit()), Type::prod(bit(), bit()));
+    let adder = prim_from_bits("add2", four.clone(), four.clone(), |bits| {
+        let a = (u8::from(bits[0]) << 1) | u8::from(bits[1]);
+        let b = (u8::from(bits[2]) << 1) | u8::from(bits[3]);
+        let s = (a + b) & 0b11;
+        vec![bits[0], bits[1], s & 0b10 != 0, s & 0b01 != 0]
+    })
+    .unwrap();
+    let iso = Iso::Prim(Box::new(adder));
+    let (net, ancilla) =
+        theseus_netlist::lower::lower_iso_with_ancillas(&iso).expect("synthesis lowers");
+    let balanced = balance(&net).expect("balances");
+    assert!(balanced.tick_imbalances().unwrap().is_empty());
+    let n_data_out = theseus_netlist::rail_width(&four).unwrap();
+    for v in enumerate_values(&four) {
+        let mut bits = bits_of(&v, &four).unwrap();
+        bits.extend_from_slice(&ancilla);
+        let res = simulate(&balanced, &bits).expect("timed sim on balanced synthesized net");
+        assert!(res.inv_token_checks > 0);
+        let mut fuel = 10_000u64;
+        let expected = theseus_eval::eval(&iso, v.clone(), &mut fuel).unwrap();
+        assert_eq!(
+            &res.outputs[..n_data_out],
+            &bits_of(&expected, &four).unwrap()[..],
+            "timed sim disagrees with core eval on {v:?}"
+        );
+    }
+}

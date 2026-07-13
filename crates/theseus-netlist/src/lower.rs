@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | `Permute(×, σ)` | rail-pair rewiring | 0 |
 //! | `Permute(+, σ)` | tag-line + payload rewiring (general sums) | 0 |
-//! | `Prim` | verified template from the registry (identity / NOT / Fredkin / 2-CSWAP) | 0 or 1 |
+//! | `Prim` | fast-path template (identity / NOT / K1 / K2 / K3) or general CSWAP synthesis (B4.2) | varies |
 //! | `Reg(n)` | `n` K0 buffer stages per bit (C2.1) | `n·width` |
 //! | `Seq` / `Par` | composition / wiring | 0 |
 //! | `Branch(f,g)` | CSWAP demux/merge with K1 Fredkin routing (ADR-0031) | varies |
@@ -18,10 +18,19 @@
 //! (ADR-0031: "each per-instance checkable — exhaustive small").
 //! Phase = depth mod P throughout (ADR-0026 C2.3).
 //!
+//! # General prim synthesis (B4.2)
+//!
+//! A prim that matches no fast-path template is *synthesized*: its finite
+//! truth table is flattened to a permutation of `{0,1}^w`, decomposed into
+//! multi-controlled NOTs by transformation-based synthesis ([`mmd_gates`]),
+//! and each NOT is emitted as a splitter/selector CSWAP pair (never above
+//! `K2`, so [`Builder::controlled_apply`] can still promote every cell by
+//! one extra control). The gate list is verified against the truth table
+//! over the whole valid domain before any cell is placed — the same
+//! per-instance discipline as the fast-path templates.
+//!
 //! # Deferred (honest list, with owners)
 //!
-//! - TODO(B4.2): general CSWAP-network synthesis for prims beyond the
-//!   built-in template table.
 //! - Tick-exact balancing (C2.2) is *recorded, not repaired*:
 //!   [`PhasedCellNetlist::tick_imbalances`] and `output_depths` skew are
 //!   the balancer's worklist.
@@ -47,8 +56,9 @@ pub enum LowerError {
     /// No dual-rail encoding for this type (`0`-typed nets are
     /// statically dead — `Absurd` pruning is a later pass).
     UnsupportedType(Type),
-    /// The prim matched no verified cell template (general CSWAP-network
-    /// synthesis, B4.2, deferred).
+    /// The prim could not be synthesized: its flattened width exceeds
+    /// the B4.2 synthesis cap ([`MAX_SYNTH_WIDTH`]) or its truth table
+    /// is not total (an inadmissible def — refused, never guessed at).
     UnsupportedPrim { name: String },
 }
 
@@ -64,7 +74,11 @@ impl fmt::Display for LowerError {
                 write!(f, "no dual-rail encoding for {ty}")
             }
             LowerError::UnsupportedPrim { name } => {
-                write!(f, "prim {name:?} matched no verified cell template (B4.2 deferred)")
+                write!(
+                    f,
+                    "prim {name:?} not synthesizable: wider than the B4.2 \
+                     synthesis cap ({MAX_SYNTH_WIDTH} rail pairs) or non-total"
+                )
             }
         }
     }
@@ -463,11 +477,13 @@ impl Builder {
         }
     }
 
-    /// The template registry, minimal B4.2 form: a fixed table of
-    /// candidate CSWAP networks, each **verified against the prim's
+    /// Prim lowering (B4.2): fast-path templates first — a fixed table
+    /// of candidate CSWAP networks, each **verified against the prim's
     /// finite forward semantics** (exhaustive over the domain) before it
-    /// is used. A prim that matches no template is rejected — never
-    /// guessed at.
+    /// is used — then general CSWAP-network synthesis
+    /// ([`Builder::synthesize_prim`]) for everything else. A prim is
+    /// never guessed at: the synthesized gate list is verified over the
+    /// whole valid domain before any cell is placed.
     fn lower_prim(&mut self, def: &PrimDef, ins: &[BitAt]) -> Result<Vec<BitAt>, LowerError> {
         let w_in = rail_width(&def.input_ty)?;
         let w_out = rail_width(&def.output_ty)?;
@@ -494,9 +510,181 @@ impl Builder {
             return Ok(self.emit(CellKind::K3, ins));
         }
 
-        // TODO(B4.2): synthesize general CSWAP networks; until then the
-        // registry is exactly the verified table above.
-        Err(LowerError::UnsupportedPrim { name: def.forward_name.clone() })
+        // General CSWAP-network synthesis (B4.2): any other admitted
+        // prim, via transformation-based multi-controlled-NOT synthesis.
+        self.synthesize_prim(def, ins)
+    }
+
+    /// General CSWAP-network synthesis (B4.2) for an arbitrary admitted
+    /// prim.
+    ///
+    /// 1. Flatten the prim's finite truth table to bit patterns of width
+    ///    `w = max(w_in, w_out)`; the narrower side is zero-padded
+    ///    (extra input pairs come from zero ancillas; extra output pairs
+    ///    leave as garbage).
+    /// 2. Extend the resulting partial injection to a full permutation
+    ///    of `{0,1}^w` (identity on free patterns where possible).
+    /// 3. Decompose the permutation into multi-controlled NOTs by
+    ///    transformation-based synthesis ([`mmd_gates`]) — always
+    ///    terminates for a permutation.
+    /// 4. **Verify** the gate list reproduces the truth table on every
+    ///    valid input (per-instance, exhaustive — the same discipline as
+    ///    the fast-path templates).
+    /// 5. Emit each gate as CSWAP cells via [`Builder::emit_mcnot`];
+    ///    every emitted cell is `K1` or `K2` (never `K3`), so
+    ///    [`Builder::controlled_apply`] can still promote the network by
+    ///    one extra control inside `Branch`/`TraceLoop`.
+    fn synthesize_prim(&mut self, def: &PrimDef, ins: &[BitAt]) -> Result<Vec<BitAt>, LowerError> {
+        let w_in = rail_width(&def.input_ty)?;
+        let w_out = rail_width(&def.output_ty)?;
+        let w = w_in.max(w_out);
+        if w > MAX_SYNTH_WIDTH {
+            return Err(LowerError::UnsupportedPrim { name: def.forward_name.clone() });
+        }
+        if w == 0 {
+            // 1-value ↔ 1-value: nothing to route.
+            return Ok(vec![]);
+        }
+        let size = 1usize << w;
+
+        // ── 1. Flattened truth table as padded bit patterns ──────────
+        let pattern = |bits: &[bool]| -> u32 {
+            bits.iter().enumerate().fold(0u32, |acc, (j, &b)| acc | (u32::from(b) << j))
+        };
+        let mut table: Vec<Option<u32>> = vec![None; size];
+        let mut used_out = vec![false; size];
+        let mut valid: Vec<(u32, u32)> = Vec::new();
+        for v in enumerate_values(&def.input_ty) {
+            let Some(out) = def.forward.get(&v) else {
+                // Not total ⇒ inadmissible: refuse rather than guess.
+                return Err(LowerError::UnsupportedPrim { name: def.forward_name.clone() });
+            };
+            let x = pattern(&bits_of(&v, &def.input_ty)?);
+            let y = pattern(&bits_of(out, &def.output_ty)?);
+            table[x as usize] = Some(y);
+            used_out[y as usize] = true;
+            valid.push((x, y));
+        }
+
+        // ── 2. Extend the partial injection to a full permutation ────
+        // (invalid encodings may map anywhere: they can never occur on
+        // the inputs). Fixed points first to keep the gate count down.
+        for (x, (slot, used)) in table.iter_mut().zip(used_out.iter_mut()).enumerate() {
+            if slot.is_none() && !*used {
+                *slot = Some(x as u32);
+                *used = true;
+            }
+        }
+        let mut free_outs = (0..size).filter(|&y| !used_out[y]);
+        let perm: Vec<u32> = table
+            .iter()
+            .map(|slot| {
+                slot.unwrap_or_else(|| free_outs.next().expect("injection counts match") as u32)
+            })
+            .collect();
+
+        // ── 3. Decompose into multi-controlled NOTs ──────────────────
+        let gates = mmd_gates(&perm, w);
+
+        // ── 4. Per-instance verification over the whole valid domain ─
+        for &(x, y) in &valid {
+            let got = gates.iter().fold(x, |acc, g| g.apply(acc));
+            assert_eq!(
+                got, y,
+                "B4.2 synthesis bug: gate list disagrees with prim {:?}'s truth table",
+                def.forward_name
+            );
+        }
+
+        // ── 5. Emit cells ────────────────────────────────────────────
+        let mut current: Vec<BitAt> = ins.to_vec();
+        for _ in w_in..w {
+            current.push(self.alloc_ancilla(false)); // input padding
+        }
+        for g in &gates {
+            self.emit_mcnot(&mut current, g);
+        }
+        for &b in &current[w_out..] {
+            self.mark_garbage(b); // output padding
+        }
+        current.truncate(w_out);
+        Ok(current)
+    }
+
+    /// Emit one multi-controlled NOT as CSWAP cells, in place on
+    /// `current`.
+    ///
+    /// A k-controlled NOT on target `t` is a k-controlled swap of `t`
+    /// with `NOT(t)`:
+    ///
+    /// - **Splitter** `K1(t, 1, 0) → (t, ¬t, t)`: fans the target out
+    ///   into the (t, ¬t) pair the selector needs (third output is
+    ///   garbage).
+    /// - **Selector** `K{k}(c1..ck, t, ¬t)`: the swap fires iff all
+    ///   controls are high, so the first data port carries
+    ///   `t ⊕ (c1 ∧ … ∧ ck)` — exactly the Toffoli-k output. The other
+    ///   data port is garbage; the controls pass through and stay live.
+    ///
+    /// Controls beyond two are AND-reduced first: `K2(a, b, 0, 1)`
+    /// swaps iff `a ∧ b`, so its first data port carries `a ∧ b` (one
+    /// cell per reduction step, standard borrowed-ancilla flattening —
+    /// no cell beyond `K2` is ever needed, for any number of controls).
+    ///
+    /// A 0-controlled NOT could be a free rail swap, but that would
+    /// fire even when a surrounding `Branch`/`TraceLoop` tag is
+    /// inactive (promotion cannot gate wiring); instead it uses a
+    /// constant-TRUE ancilla as the selector control, which promotes
+    /// correctly.
+    fn emit_mcnot(&mut self, current: &mut [BitAt], gate: &McNot) {
+        // Control signals: `Some(i)` = live data bit `current[i]`
+        // (pass-through updates it), `None` = ancilla or intermediate
+        // AND (pass-through is garbage).
+        let mut sigs: Vec<(BitAt, Option<usize>)> =
+            gate.controls.iter().map(|&c| (current[c], Some(c))).collect();
+        if sigs.is_empty() {
+            let anc = self.alloc_ancilla(true);
+            sigs.push((anc, None));
+        }
+
+        // AND-reduce to ≤ 2 control signals.
+        while sigs.len() > 2 {
+            let (b_bit, b_src) = sigs.pop().expect("len > 2");
+            let (a_bit, a_src) = sigs.pop().expect("len > 2");
+            let zero = self.alloc_ancilla(false);
+            let one = self.alloc_ancilla(true);
+            let outs = self.emit(CellKind::K2, &[a_bit, b_bit, zero, one]);
+            self.restore_ctrl(current, a_src, outs[0]);
+            self.restore_ctrl(current, b_src, outs[1]);
+            sigs.push((outs[2], None)); // a ∧ b
+            self.mark_garbage(outs[3]); // ¬(a ∧ b)
+        }
+
+        // Splitter.
+        let one = self.alloc_ancilla(true);
+        let zero = self.alloc_ancilla(false);
+        let split = self.emit(CellKind::K1, &[current[gate.target], one, zero]);
+        self.mark_garbage(split[2]); // redundant target copy
+
+        // Selector.
+        let kind = if sigs.len() == 1 { CellKind::K1 } else { CellKind::K2 };
+        let mut cell_ins: Vec<BitAt> = sigs.iter().map(|&(b, _)| b).collect();
+        cell_ins.push(split[0]); // t
+        cell_ins.push(split[1]); // ¬t
+        let outs = self.emit(kind, &cell_ins);
+        for (j, &(_, src)) in sigs.iter().enumerate() {
+            self.restore_ctrl(current, src, outs[j]);
+        }
+        current[gate.target] = outs[sigs.len()]; // t ⊕ AND(controls)
+        self.mark_garbage(outs[sigs.len() + 1]); // complement
+    }
+
+    /// Route a cell's control pass-through: live data bits stay live,
+    /// ancillas/intermediates become garbage.
+    fn restore_ctrl(&mut self, current: &mut [BitAt], src: Option<usize>, out: BitAt) {
+        match src {
+            Some(i) => current[i] = out,
+            None => self.mark_garbage(out),
+        }
     }
 
     /// Lower `Branch(f, g)` at type `(A+B) ↔ (A'+B')` using the
@@ -984,6 +1172,89 @@ impl Builder {
     }
 }
 
+/// Width cap (in rail pairs) for general prim synthesis: the algorithm
+/// enumerates all `2^w` bit patterns, so it is exhaustive-small by
+/// design (ADR-0031). Wider prims are refused, not approximated.
+pub const MAX_SYNTH_WIDTH: usize = 12;
+
+/// One multi-controlled NOT on flattened bit patterns: flip `target`
+/// iff every bit listed in `controls` is 1 (all controls positive;
+/// `target` is never a control).
+struct McNot {
+    controls: Vec<usize>,
+    target: usize,
+}
+
+impl McNot {
+    fn apply(&self, x: u32) -> u32 {
+        if self.controls.iter().all(|&c| (x >> c) & 1 == 1) {
+            x ^ (1 << self.target)
+        } else {
+            x
+        }
+    }
+}
+
+/// Transformation-based reversible synthesis (Miller–Maslov–Dueck):
+/// decompose the permutation `perm` of `{0,1}^w` into multi-controlled
+/// NOTs, returned in **circuit order** (apply left to right).
+///
+/// Walk the truth table in increasing input order, appending
+/// output-side gates that map the current output `v = t[i]` onto `i`.
+/// Rows `0..i` already map to themselves, so all values `< i` are
+/// taken and `v > i` whenever `v ≠ i`. Phase 1 sets each bit of `i`
+/// missing from `v`, with controls = all 1-bits of the working value;
+/// phase 2 clears each extra bit, with controls = the other 1-bits
+/// (which include all of `i`'s bits, since the working value ⊇ `i` by
+/// then). In both phases a settled row `k < i` would have to be a
+/// bit-superset of a value `> k` to fire — impossible — so earlier
+/// rows are never disturbed and the loop terminates for every
+/// permutation. Controls never exceed `w - 1`.
+///
+/// The collected gates satisfy `G_m ∘ … ∘ G_1 ∘ perm = id`; each gate
+/// is self-inverse, so `perm = G_1 ∘ G_2 ∘ … ∘ G_m` (composition
+/// applies innermost first) — i.e. the *circuit* runs the list in
+/// reverse generation order, which is the order returned.
+fn mmd_gates(perm: &[u32], w: usize) -> Vec<McNot> {
+    fn apply_all(t: &mut [u32], g: &McNot) {
+        for v in t.iter_mut() {
+            *v = g.apply(*v);
+        }
+    }
+    let ones = |v: u32| -> Vec<usize> { (0..w).filter(|&j| (v >> j) & 1 == 1).collect() };
+
+    let mut t = perm.to_vec();
+    let mut gates: Vec<McNot> = Vec::new();
+    for i in 0..t.len() as u32 {
+        let mut v = t[i as usize];
+        if v == i {
+            continue;
+        }
+        debug_assert!(v > i, "rows below i are settled, so t[i] > i when ≠");
+        // Phase 1: set every bit of i missing from v.
+        for j in 0..w {
+            if (i >> j) & 1 == 1 && (v >> j) & 1 == 0 {
+                let g = McNot { controls: ones(v), target: j };
+                apply_all(&mut t, &g);
+                gates.push(g);
+                v |= 1 << j;
+            }
+        }
+        // Phase 2: clear every bit of v not in i.
+        for j in 0..w {
+            if (v >> j) & 1 == 1 && (i >> j) & 1 == 0 {
+                let g = McNot { controls: ones(v & !(1 << j)), target: j };
+                apply_all(&mut t, &g);
+                gates.push(g);
+                v &= !(1 << j);
+            }
+        }
+        debug_assert_eq!(t[i as usize], i);
+    }
+    gates.reverse();
+    gates
+}
+
 /// Does `def.forward` compute exactly `f` on flattened bits, over the
 /// whole (finite) domain?
 fn prim_matches(
@@ -1466,13 +1737,105 @@ mod tests {
         assert_lowering_agrees(&iso);
     }
 
+    // ── General prim synthesis (B4.2) ────────────────────────────────
+
     #[test]
-    fn unknown_prim_is_rejected_not_guessed() {
-        // CNOT is bijective and admitted, but matches no verified
-        // template in this slice (B4.2 synthesis deferred): refuse.
+    fn cnot_prim_synthesizes() {
+        // CNOT matches no fixed template; general synthesis lowers it
+        // and the differential oracle verifies it over the whole domain.
         let iso = Iso::Prim(Box::new(cnot_prim()));
-        match lower_iso(&iso) {
-            Err(LowerError::UnsupportedPrim { name }) => assert_eq!(name, "cnot"),
+        let net = assert_lowering_agrees(&iso);
+        assert!(!net.cells.is_empty());
+        assert!(
+            net.cells.iter().all(|c| c.kind <= CellKind::K2),
+            "synthesized networks stay promotable (≤ K2)"
+        );
+    }
+
+    #[test]
+    fn monolithic_two_bit_adder_synthesizes() {
+        // Preserved-input 2-bit adder as a SINGLE monolithic prim (not
+        // hand-composed): (a, b) ↦ (a, a+b mod 4). Bijective for each
+        // fixed a; previously UnsupportedPrim, now synthesized. Bit
+        // layout (bits_of on ((Bit,Bit),(Bit,Bit))): [a1, a0, b1, b0].
+        let adder = prim_from_fn("add2", four_bits(), four_bits(), |bits| {
+            let a = (u8::from(bits[0]) << 1) | u8::from(bits[1]);
+            let b = (u8::from(bits[2]) << 1) | u8::from(bits[3]);
+            let s = (a + b) & 0b11;
+            vec![bits[0], bits[1], s & 0b10 != 0, s & 0b01 != 0]
+        });
+        let net = assert_lowering_agrees(&Iso::Prim(Box::new(adder)));
+        assert!(
+            net.cells.iter().all(|c| c.kind <= CellKind::K3),
+            "no cell beyond K3 (higher control counts are decomposed)"
+        );
+    }
+
+    #[test]
+    fn monolithic_three_bit_increment_synthesizes() {
+        // x ↦ x+1 mod 8 as a single monolithic prim: a full-period
+        // cycle exercising long MMD gate chains.
+        let inc = prim_from_fn("inc3", three_bits(), three_bits(), |b| {
+            let x = (u8::from(b[0]) << 2) | (u8::from(b[1]) << 1) | u8::from(b[2]);
+            let y = (x + 1) & 0b111;
+            vec![y & 0b100 != 0, y & 0b010 != 0, y & 0b001 != 0]
+        });
+        assert_lowering_agrees(&Iso::Prim(Box::new(inc)));
+    }
+
+    #[test]
+    fn unequal_width_prim_synthesizes_with_padding() {
+        // Bit×Bit (width 2) ↔ 1+(1+Bit) (width 3, 4 values): the input
+        // side is zero-padded with an ancilla; the bijection between
+        // value sets synthesizes and oracle-matches.
+        let out_ty = Type::sum(Type::One, Type::sum(Type::One, bit()));
+        let widen = prim_from_fn(
+            "widen",
+            Type::prod(bit(), bit()),
+            out_ty,
+            |b| match (b[0], b[1]) {
+                (true, true) => vec![true, false, false],
+                (true, false) => vec![false, true, false],
+                (false, true) => vec![false, false, true],
+                (false, false) => vec![false, false, false],
+            },
+        );
+        assert_lowering_agrees(&Iso::Prim(Box::new(widen)));
+    }
+
+    #[test]
+    fn too_wide_prim_is_refused_not_guessed() {
+        // The synthesis cap is honest: an over-wide prim reports
+        // UnsupportedPrim instead of attempting a 2^w enumeration.
+        // (Constructed structurally — no truth-table enumeration needed
+        // to hit the width check, which fires before the table walk...
+        // but enumerate_values does run, so keep the domain tiny by
+        // using a wide type with only Unit payloads.)
+        let mut wide = Type::One;
+        for _ in 0..(MAX_SYNTH_WIDTH + 1) {
+            wide = Type::sum(Type::One, wide); // width grows by 1, values by 1
+        }
+        assert_eq!(rail_width(&wide), Ok(MAX_SYNTH_WIDTH + 1));
+        // A non-identity bijection on `wide` (rotate the value list) so
+        // no fast-path template matches.
+        let vals = enumerate_values(&wide);
+        let mut forward = BTreeMap::new();
+        let mut backward = BTreeMap::new();
+        for (i, v) in vals.iter().enumerate() {
+            let w = vals[(i + 1) % vals.len()].clone();
+            forward.insert(v.clone(), w.clone());
+            backward.insert(w, v.clone());
+        }
+        let def = PrimDef {
+            forward_name: "too_wide".into(),
+            backward_name: "too_wide_inv".into(),
+            input_ty: wide.clone(),
+            output_ty: wide,
+            forward,
+            backward,
+        };
+        match lower_iso(&Iso::Prim(Box::new(def))) {
+            Err(LowerError::UnsupportedPrim { name }) => assert_eq!(name, "too_wide"),
             other => panic!("expected UnsupportedPrim, got {other:?}"),
         }
     }
