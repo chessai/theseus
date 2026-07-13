@@ -54,7 +54,7 @@ pub mod sim_bits {
     //! is this slice's executor.
 }
 
-pub use balance::{balance, BalanceError};
+pub use balance::{balance, balance_compact, BalanceError, CompactBalanced, CompactSimError};
 pub use canonicalize::canonicalize;
 pub use ir::cell::{Cell, CellKind, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT};
 pub use ir::typed::{Monoid, NodeKind, TypedNode};

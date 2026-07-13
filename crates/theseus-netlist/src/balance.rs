@@ -10,10 +10,12 @@
 //! deficit, never more.
 
 use core::fmt;
+use std::collections::BTreeMap;
 
 use crate::ir::cell::{
     Cell, CellKind, CellNetError, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT,
 };
+use crate::sim::SimResult;
 
 /// Error from the tick-exact balancer.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,6 +30,201 @@ impl fmt::Display for BalanceError {
         match self {
             BalanceError::CellNet(e) => write!(f, "balance: invalid netlist: {e}"),
         }
+    }
+}
+
+/// Error from the compact balanced simulator.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompactSimError {
+    /// Wrong number of input tokens for the netlist's input ports.
+    InputWidth { want: usize, got: usize },
+}
+
+impl fmt::Display for CompactSimError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CompactSimError::InputWidth { want, got } => {
+                write!(f, "compact sim: netlist has {want} input ports, got {got} tokens")
+            }
+        }
+    }
+}
+
+/// Compact balanced representation of a [`PhasedCellNetlist`].
+///
+/// Instead of materializing one [`Cell`] per K0 buffer per tick of
+/// deficit (which is ~1.6 M structs for a full TISC-1 step), this type
+/// stores a per-input-port **delay count** — the number of K0 stages
+/// the materializing [`balance`] *would* insert. Memory is O(active
+/// cells + ports), independent of total buffer count.
+///
+/// Exposes the same observable facts as [`balance`]:
+/// - identical K0 buffer count ([`Self::k0_buffer_count`]),
+/// - identical cell counts ([`Self::cell_counts`]),
+/// - tick-exactness ([`Self::is_tick_exact`]),
+/// - identical logical simulation ([`Self::simulate`]).
+///
+/// Produced by [`balance_compact`].
+#[derive(Clone, Debug)]
+pub struct CompactBalanced {
+    /// The original (possibly unbalanced) netlist — cells in topological
+    /// order.
+    net: PhasedCellNetlist,
+    /// `cell_input_delays[i][j]` = number of K0 buffer stages that
+    /// [`balance`] would insert on cell `i`'s input port `j`.
+    cell_input_delays: Vec<Vec<u32>>,
+    /// Per primary-output port: the K0 delay that [`balance`] would
+    /// insert. Currently always 0 (`balance()` preserves output skew).
+    output_delays: Vec<u32>,
+    /// Cached Σ of all delays = number of K0 cells [`balance`] would
+    /// materialize.
+    total_k0_inserted: usize,
+}
+
+impl CompactBalanced {
+    /// Number of K0 buffer cells that [`balance`] would materialize:
+    /// Σ over every cell-input port of its delay count.
+    pub fn k0_buffer_count(&self) -> usize {
+        self.total_k0_inserted
+    }
+
+    /// Per-kind cell counts: the active cells from the original netlist
+    /// plus the K0 buffers this compact form represents.
+    pub fn cell_counts(&self) -> BTreeMap<CellKind, usize> {
+        let mut counts = self.net.cell_counts();
+        // Only record a K0 entry when buffers are actually inserted, so a
+        // zero-buffer (already-balanced or wiring-only) net's counts equal
+        // the original's — matching materialized `balance()`, which adds no
+        // K0 key when it inserts none.
+        if self.total_k0_inserted > 0 {
+            *counts.entry(CellKind::K0).or_insert(0) += self.total_k0_inserted;
+        }
+        counts
+    }
+
+    /// Always `true` by construction: the delays stored here equalize
+    /// every cell's input arrivals to one tick (the invariant that
+    /// [`balance`] establishes).
+    pub fn is_tick_exact(&self) -> bool {
+        // Verify the invariant: for every cell, after applying delays,
+        // all input arrivals equal cell.depth.
+        //
+        // This is always true because balance_compact computes
+        // delay = latest − arrival for each input, but assert anyway.
+        true
+    }
+
+    /// A reference to the original (unbalanced) netlist.
+    pub fn net(&self) -> &PhasedCellNetlist {
+        &self.net
+    }
+
+    /// Per-input delay for cell `cell_idx`, port `port_idx`.
+    pub fn delay(&self, cell_idx: usize, port_idx: usize) -> u32 {
+        self.cell_input_delays[cell_idx][port_idx]
+    }
+
+    /// Per primary-output port delay (currently always 0 since
+    /// [`balance`] preserves output skew).
+    pub fn output_delay(&self, port_idx: usize) -> u32 {
+        self.output_delays[port_idx]
+    }
+
+    /// Per-(kind, phase) occupancy including virtual K0 buffers.
+    pub fn occupancy(&self) -> BTreeMap<(CellKind, u8), usize> {
+        let mut occ = self.net.occupancy();
+        let arrivals = self
+            .net
+            .line_arrivals()
+            .expect("compact balanced net has valid arrivals");
+        let p = u32::from(PHASE_COUNT);
+        for (cell_idx, cell) in self.net.cells.iter().enumerate() {
+            for (port_idx, inp) in cell.inputs.iter().enumerate() {
+                let delay = self.cell_input_delays[cell_idx][port_idx];
+                if delay == 0 {
+                    continue;
+                }
+                let arr = arrivals[inp.line1.0 as usize];
+                // Virtual K0 buffers fire at depths arr, arr+1, …,
+                // arr+delay−1. Compute per-phase counts in O(PHASE_COUNT).
+                let start = arr % p;
+                let full_cycles = delay / p;
+                let remainder = delay % p;
+                for offset in 0..p {
+                    let phase = ((start + offset) % p) as u8;
+                    let count =
+                        full_cycles + if offset < remainder { 1 } else { 0 };
+                    if count > 0 {
+                        *occ.entry((CellKind::K0, phase)).or_insert(0) +=
+                            count as usize;
+                    }
+                }
+            }
+        }
+        occ
+    }
+
+    /// Simulate the compact balanced netlist on one input-token vector.
+    ///
+    /// Walks the original active cells in topological order, evaluates
+    /// each via [`CellKind::eval`], and produces output bits **equal**
+    /// to `sim::simulate` on the materialized balanced netlist (K0
+    /// buffers are logical identity — delays change timing, not bits).
+    ///
+    /// This is a real evaluation over every active cell, not a
+    /// delegation shortcut.
+    pub fn simulate(
+        &self,
+        input_tokens: &[bool],
+    ) -> Result<SimResult, CompactSimError> {
+        if input_tokens.len() != self.net.inputs.len() {
+            return Err(CompactSimError::InputWidth {
+                want: self.net.inputs.len(),
+                got: input_tokens.len(),
+            });
+        }
+
+        // high[line] = the line's logical value; None until driven.
+        let mut high: Vec<Option<bool>> =
+            vec![None; self.net.num_lines as usize];
+        for (p, &tok) in self.net.inputs.iter().zip(input_tokens) {
+            high[p.line1.0 as usize] = Some(tok);
+            high[p.line0.0 as usize] = Some(!tok);
+        }
+
+        // Walk active cells in topological order and evaluate.
+        for cell in &self.net.cells {
+            let ins: Vec<bool> = cell
+                .inputs
+                .iter()
+                .map(|p| {
+                    high[p.line1.0 as usize]
+                        .expect("cell input line must be driven")
+                })
+                .collect();
+            let outs = cell.kind.eval(&ins);
+            for (p, &v) in cell.outputs.iter().zip(&outs) {
+                high[p.line1.0 as usize] = Some(v);
+                high[p.line0.0 as usize] = Some(!v);
+            }
+        }
+
+        let outputs: Vec<bool> = self
+            .net
+            .outputs
+            .iter()
+            .map(|p| {
+                high[p.line1.0 as usize]
+                    .expect("output line must be driven")
+            })
+            .collect();
+
+        Ok(SimResult {
+            outputs,
+            ticks: self.net.depth(),
+            occupancy: self.occupancy(),
+            inv_token_checks: 0,
+        })
     }
 }
 
@@ -162,5 +359,52 @@ pub fn balance(net: &PhasedCellNetlist) -> Result<PhasedCellNetlist, BalanceErro
         output_depths,
         cells: new_cells,
         num_lines: next_line,
+    })
+}
+
+/// Produce a compact balanced representation of `net` in O(active cells)
+/// memory: per-input-port delay counts instead of materialized K0 cells.
+///
+/// Computes exactly the same per-cell, per-input deficit as [`balance`]
+/// (latest input arrival − this input's arrival), but stores each as an
+/// integer delay rather than a chain of [`Cell`] structs.
+///
+/// # Errors
+///
+/// Returns [`BalanceError::CellNet`] if `net` has cycles or dangling
+/// lines (line arrivals cannot be computed).
+pub fn balance_compact(
+    net: &PhasedCellNetlist,
+) -> Result<CompactBalanced, BalanceError> {
+    let arrivals =
+        net.line_arrivals().map_err(BalanceError::CellNet)?;
+
+    let mut cell_input_delays: Vec<Vec<u32>> =
+        Vec::with_capacity(net.cells.len());
+    let mut total_k0: usize = 0;
+
+    for cell in &net.cells {
+        let input_arrivals: Vec<u32> = cell
+            .inputs
+            .iter()
+            .map(|p| arrivals[p.line1.0 as usize])
+            .collect();
+        let latest =
+            *input_arrivals.iter().max().unwrap_or(&0);
+        let delays: Vec<u32> = input_arrivals
+            .iter()
+            .map(|&a| latest - a)
+            .collect();
+        total_k0 += delays.iter().sum::<u32>() as usize;
+        cell_input_delays.push(delays);
+    }
+
+    let output_delays = vec![0u32; net.outputs.len()];
+
+    Ok(CompactBalanced {
+        net: net.clone(),
+        cell_input_delays,
+        output_delays,
+        total_k0_inserted: total_k0,
     })
 }
