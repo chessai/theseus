@@ -18,6 +18,8 @@ use crate::iso::Iso;
 /// - `(f × g)† = f† × g†`
 /// - `(trace f)† = trace (f†)`
 /// - `(iter n f)† = iter n (f†)`      (counter-in-data, ADR-0036)
+/// - `(fold l f)† = unfold l (f†)`    (mutually adjoint pair, ADR-0037)
+/// - `(unfold l f)† = fold l (f†)`
 /// - `(prim p)† = prim p̄`              (swap forward/backward)
 /// - structural isos flip to their partner (see table)
 pub fn adjoint(iso: &Iso) -> Iso {
@@ -91,6 +93,14 @@ pub fn adjoint(iso: &Iso) -> Iso {
         // (iter n f)† = iter n (f†): the count k is preserved in the
         // data, so the inverse un-applies the body exactly k times.
         Iso::Iter(n, f) => Iso::iter(n.clone(), adjoint(f)),
+
+        // ── Fold/Unfold ──────────────────────────────────────────
+        // (fold l f)† = unfold l (f†): the spine is preserved in the
+        // data, so the inverse un-threads the accumulator tail-to-head
+        // with the inverted body. (unfold l f)† = fold l (f†) dually —
+        // a mutually adjoint pair; adjoint∘adjoint is still identity.
+        Iso::Fold(l, f) => Iso::unfold(l.clone(), adjoint(f)),
+        Iso::Unfold(l, f) => Iso::fold(l.clone(), adjoint(f)),
 
         // ── Prim ─────────────────────────────────────────────────
         // (prim p)† = prim p̄
@@ -167,6 +177,15 @@ mod tests {
             Iso::trace(a.clone(), Iso::Id(Type::sum(a.clone(), b.clone()))),
             // Iter
             Iso::iter(Type::numeral_ty(3), Iso::SwapSum(a.clone(), a.clone())),
+            // Fold / Unfold (bodies with nontrivial adjoints)
+            Iso::fold(
+                Type::list_spine_ty(b.clone(), 3),
+                Iso::times(Iso::Id(b.clone()), Iso::UnitiProd(a.clone())),
+            ),
+            Iso::unfold(
+                Type::list_spine_ty(b.clone(), 3),
+                Iso::times(Iso::Id(b.clone()), Iso::UnitiProd(a.clone())),
+            ),
             // Prim
             Iso::Prim(Box::new(make_test_prim())),
         ];
@@ -245,6 +264,25 @@ mod tests {
         let lhs = adjoint(&Iso::iter(n.clone(), body.clone()));
         let rhs = Iso::iter(n, adjoint(&body));
         assert_eq!(lhs, rhs);
+    }
+
+    /// `(fold l f)† = unfold l (f†)` and `(unfold l f)† = fold l (f†)` —
+    /// the mutually adjoint pair; the spine type is preserved, the body
+    /// is inverted, and the direction flips.
+    #[test]
+    fn fold_unfold_adjoint_pair() {
+        let l = Type::list_spine_ty(bool_ty(), 4);
+        // Body with a nontrivial adjoint: Bool × a ↔ Bool × (1 × a).
+        let body = Iso::times(Iso::Id(bool_ty()), Iso::UnitiProd(one()));
+
+        assert_eq!(
+            adjoint(&Iso::fold(l.clone(), body.clone())),
+            Iso::unfold(l.clone(), adjoint(&body)),
+        );
+        assert_eq!(
+            adjoint(&Iso::unfold(l.clone(), body.clone())),
+            Iso::fold(l, adjoint(&body)),
+        );
     }
 
     /// Each structural adjoint partner pair.

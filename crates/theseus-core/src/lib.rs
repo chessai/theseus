@@ -22,4 +22,4 @@ pub use adjoint::adjoint;
 pub use iso::Iso;
 pub use prim::{admit, enumerate_values, PrimDef, Value};
 pub use ty::Type;
-pub use typing::{is_numeral_ty, type_of, TypeError};
+pub use typing::{is_numeral_ty, list_spine_elem_ty, type_of, TypeError};

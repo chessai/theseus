@@ -91,3 +91,17 @@ carried in the data as a unary numeral (`inrᵏ(inl ())`, the encoding
 this document's `Nat` unrolling already produces). See ADR-0036 for the
 denotation, typing, and totality argument. Surface syntax, `fold`/
 `unfold`, and the netlist counter-loop lowering remain follow-ups.
+
+**Update (increment 3):** `fold`/`unfold` have landed as a mutually
+adjoint pair of core primitives through the interpreter —
+`Iso::Fold(l, f), Iso::Unfold(l, f) : l × c ↔ l × c` where `l` is a
+list-spine type `1 + (b × (1 + (b × (… + 0))))` (the shape this
+document's bounded unrolling produces for `List b`) and
+`f : b × c ↔ b × c`. `fold` threads the accumulator head-to-tail
+through every node (a reversible `mapAccumL`), `unfold` is the
+tail-to-head dual, and `(fold l f)† = unfold l (f†)` — the spine is
+preserved in the data, so both directions are total by structural
+induction on the finite spine (bound = unroll depth − 1). See ADR-0037
+for the denotation, typing, adjoint, and totality argument. Surface
+syntax (with the depth-annotation grammar) and the netlist
+structural-loop lowering remain follow-ups.

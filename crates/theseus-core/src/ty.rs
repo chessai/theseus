@@ -42,6 +42,21 @@ impl Type {
         }
         ty
     }
+
+    /// The list-spine type of unroll depth `depth` over element type
+    /// `elem`: `list_spine_ty(b, d) = 1 + (b × list_spine_ty(b, d−1))`,
+    /// `list_spine_ty(b, 0) = 0`. This is exactly the shape bounded
+    /// μ-unrolling (ADR-0035) produces for `List b = Nil | Cons b List`;
+    /// its values are the lists of length `0 ..= d−1`, encoded
+    /// `nil = inl ()`, `cons h t = inr ⟨h, t⟩`. This is the admissible
+    /// spine type for `fold`/`unfold` (ADR-0037).
+    pub fn list_spine_ty(elem: Type, depth: usize) -> Self {
+        let mut ty = Type::Zero;
+        for _ in 0..depth {
+            ty = Type::sum(Type::One, Type::prod(elem.clone(), ty));
+        }
+        ty
+    }
 }
 
 impl fmt::Display for Type {

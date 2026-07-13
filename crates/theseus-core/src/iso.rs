@@ -79,6 +79,28 @@ pub enum Iso {
     /// is read off the type, no certificate needed.
     Iter(Type, Box<Iso>),
 
+    // ── Fold/Unfold (structural recursion, ADR-0009/ADR-0037) ───
+
+    /// `fold l f : l × c ↔ l × c`  (when `f : b × c ↔ b × c` and `l` is
+    /// a list-spine type `1 + (b × (1 + (b × (… + 0))))` — the shape
+    /// ADR-0035 bounded unrolling produces for `List b`).
+    ///
+    /// Denotation (reversible mapAccumL, head-to-tail):
+    /// `⟦fold l f⟧ ⟨[x₁ … xₖ], c₀⟩ = ⟨[y₁ … yₖ], cₖ⟩` where
+    /// `⟨yᵢ, cᵢ⟩ = ⟦f⟧ ⟨xᵢ, cᵢ₋₁⟩`. The spine (and hence the length
+    /// `k`) is preserved in the DATA, so the term is symmetric by
+    /// construction: `(fold l f)† = unfold l (f†)` un-threads the
+    /// accumulator tail-to-head. Totality is structural (ADR-0007):
+    /// the finite spine type bounds `k` by its unroll depth − 1, so
+    /// the body runs at most that many times in either direction.
+    Fold(Type, Box<Iso>),
+
+    /// `unfold l f : l × c ↔ l × c` — the tail-to-head dual of
+    /// [`Iso::Fold`] (same spine/body typing):
+    /// `⟦unfold l f⟧ ⟨[x₁ … xₖ], dₖ⟩ = ⟨[y₁ … yₖ], d₀⟩` where
+    /// `⟨yᵢ, dᵢ₋₁⟩ = ⟦f⟧ ⟨xᵢ, dᵢ⟩`. Adjoint: `(unfold l f)† = fold l (f†)`.
+    Unfold(Type, Box<Iso>),
+
     // ── Prim ─────────────────────────────────────────────────────
 
     /// `prim p : A ↔ B`  (registry-resolved, ADR-0013).
@@ -108,5 +130,13 @@ impl Iso {
 
     pub fn iter(n: Type, f: Iso) -> Self {
         Iso::Iter(n, Box::new(f))
+    }
+
+    pub fn fold(l: Type, f: Iso) -> Self {
+        Iso::Fold(l, Box::new(f))
+    }
+
+    pub fn unfold(l: Type, f: Iso) -> Self {
+        Iso::Unfold(l, Box::new(f))
     }
 }

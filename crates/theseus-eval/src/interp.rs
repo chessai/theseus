@@ -204,6 +204,68 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
             other => Err(domain_err("Iter", &other)),
         },
 
+        // fold l f : l × c ↔ l × c — reversible mapAccumL, head-to-tail:
+        // ⟨[x₁…xₖ], c₀⟩ ↦ ⟨[y₁…yₖ], cₖ⟩ with ⟨yᵢ, cᵢ⟩ = f⟨xᵢ, cᵢ₋₁⟩.
+        // The spine is read off the DATA, so the loop is a structural
+        // induction on the finite list value: it cannot diverge
+        // (ADR-0007). One fuel unit per element, exactly like `iter`.
+        Iso::Fold(_l, body) => match value {
+            Value::Pair(xs, c) => {
+                let elems = spine_elems(&xs).ok_or_else(|| domain_err("Fold/spine", &xs))?;
+                let mut acc = *c;
+                let mut out = Vec::with_capacity(elems.len());
+                for h in elems {
+                    if *fuel == 0 {
+                        return Err(EvalError::OutOfFuel { steps_taken: 0 });
+                    }
+                    *fuel -= 1;
+                    match eval_inner(body, Value::pair(h, acc), fuel)? {
+                        Value::Pair(y, c2) => {
+                            out.push(*y);
+                            acc = *c2;
+                        }
+                        other => {
+                            return Err(EvalError::DomainError(format!(
+                                "Fold: body returned non-pair value: {other:?}"
+                            )))
+                        }
+                    }
+                }
+                Ok(Value::pair(rebuild_spine(out), acc))
+            }
+            other => Err(domain_err("Fold", &other)),
+        },
+
+        // unfold l f : l × c ↔ l × c — the tail-to-head dual:
+        // ⟨[x₁…xₖ], dₖ⟩ ↦ ⟨[y₁…yₖ], d₀⟩ with ⟨yᵢ, dᵢ₋₁⟩ = f⟨xᵢ, dᵢ⟩.
+        Iso::Unfold(_l, body) => match value {
+            Value::Pair(xs, c) => {
+                let elems = spine_elems(&xs).ok_or_else(|| domain_err("Unfold/spine", &xs))?;
+                let mut acc = *c;
+                let mut out = Vec::with_capacity(elems.len());
+                for h in elems.into_iter().rev() {
+                    if *fuel == 0 {
+                        return Err(EvalError::OutOfFuel { steps_taken: 0 });
+                    }
+                    *fuel -= 1;
+                    match eval_inner(body, Value::pair(h, acc), fuel)? {
+                        Value::Pair(y, c2) => {
+                            out.push(*y);
+                            acc = *c2;
+                        }
+                        other => {
+                            return Err(EvalError::DomainError(format!(
+                                "Unfold: body returned non-pair value: {other:?}"
+                            )))
+                        }
+                    }
+                }
+                out.reverse();
+                Ok(Value::pair(rebuild_spine(out), acc))
+            }
+            other => Err(domain_err("Unfold", &other)),
+        },
+
         Iso::Prim(def) => def
             .forward
             .get(&value)
@@ -236,6 +298,37 @@ fn numeral_value(v: &Value) -> Option<u64> {
             _ => return None,
         }
     }
+}
+
+/// Read the elements off a list-spine value:
+/// `nil = inl ()`, `cons h t = inr ⟨h, t⟩` (encoding per ADR-0035/0037).
+/// Returns `None` for values that are not list spines.
+fn spine_elems(v: &Value) -> Option<Vec<Value>> {
+    let mut elems = Vec::new();
+    let mut cur = v;
+    loop {
+        match cur {
+            Value::Left(u) if u.as_ref() == &Value::Unit => return Some(elems),
+            Value::Right(cons) => match cons.as_ref() {
+                Value::Pair(h, t) => {
+                    elems.push(h.as_ref().clone());
+                    cur = t;
+                }
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+}
+
+/// Rebuild a list-spine value from its elements (inverse of
+/// [`spine_elems`] up to the rewritten element payloads).
+fn rebuild_spine(elems: Vec<Value>) -> Value {
+    let mut v = Value::left(Value::Unit);
+    for h in elems.into_iter().rev() {
+        v = Value::right(Value::pair(h, v));
+    }
+    v
 }
 
 /// Compute `|ty|` (number of inhabitants) structurally, saturating at
@@ -292,6 +385,35 @@ pub fn static_bound(iso: &Iso) -> u64 {
             // (|n| = 0 ⇒ the domain n × a is empty ⇒ bound 0.)
             let max_count = cardinality_u64(n).saturating_sub(1);
             max_count.saturating_mul(1u64.saturating_add(static_bound(body)))
+        }
+
+        Iso::Fold(l, body) | Iso::Unfold(l, body) => {
+            // A spine of unroll depth d holds lists of length ≤ d − 1,
+            // so the body runs at most d − 1 times in either direction:
+            // (layers(l) − 1) * (1 + B(f)). (layers = 0 ⇒ l = 0 ⇒ the
+            // domain l × c is empty ⇒ bound 0.)
+            let max_len = spine_layer_count(l).saturating_sub(1);
+            max_len.saturating_mul(1u64.saturating_add(static_bound(body)))
+        }
+    }
+}
+
+/// Count the `1 + (b × …)` layers of a list-spine type. A spine with
+/// `d` layers holds lists of length `0 ..= d − 1`. Stops (conservatively)
+/// at the first non-spine node, so it is total on all types.
+fn spine_layer_count(ty: &Type) -> u64 {
+    let mut n = 0u64;
+    let mut cur = ty;
+    loop {
+        match cur {
+            Type::Sum(l, r) if l.as_ref() == &Type::One => match r.as_ref() {
+                Type::Prod(_, rest) => {
+                    n = n.saturating_add(1);
+                    cur = rest;
+                }
+                _ => return n,
+            },
+            _ => return n,
         }
     }
 }
@@ -743,6 +865,165 @@ mod tests {
         }
     }
 
+    // ─── Fold / Unfold tests ───────────────────────────────────────
+
+    /// Build a list-spine value from elements: `nil = inl ()`,
+    /// `cons h t = inr ⟨h, t⟩`.
+    fn spine(elems: &[Value]) -> Value {
+        let mut v = Value::left(Value::Unit);
+        for h in elems.iter().rev() {
+            v = Value::right(Value::pair(h.clone(), v));
+        }
+        v
+    }
+
+    fn bit_o() -> Value {
+        Value::left(Value::Unit)
+    }
+    fn bit_i() -> Value {
+        Value::right(Value::Unit)
+    }
+
+    /// `cx : Bit × Bit ↔ Bit × Bit` as a Prim (CNOT: ⟨x, a⟩ ↦ ⟨x, a⊕x⟩,
+    /// self-inverse). Folding it computes the parity of the list into
+    /// the accumulator while preserving the list — a reversible "sum".
+    fn cx_body() -> Iso {
+        use std::collections::BTreeMap;
+        use theseus_core::PrimDef;
+
+        let mut fwd = BTreeMap::new();
+        for x in [bit_o(), bit_i()] {
+            for a in [bit_o(), bit_i()] {
+                let a2 = if x == bit_i() {
+                    if a == bit_o() { bit_i() } else { bit_o() }
+                } else {
+                    a.clone()
+                };
+                fwd.insert(Value::pair(x.clone(), a), Value::pair(x.clone(), a2));
+            }
+        }
+        let ty = Type::prod(bit_ty(), bit_ty());
+        Iso::Prim(Box::new(PrimDef {
+            forward_name: "cx".into(),
+            backward_name: "cx".into(),
+            input_ty: ty.clone(),
+            output_ty: ty,
+            forward: fwd.clone(),
+            backward: fwd,
+        }))
+    }
+
+    fn bit_list_ty(depth: usize) -> Type {
+        Type::list_spine_ty(bit_ty(), depth)
+    }
+
+    #[test]
+    fn fold_empty_list_is_identity_and_free() {
+        let iso = Iso::fold(bit_list_ty(4), cx_body());
+        let mut fuel = 0; // zero elements must need zero fuel
+        let v = Value::pair(spine(&[]), bit_i());
+        let result = eval(&iso, v.clone(), &mut fuel).unwrap();
+        assert_eq!(result, v);
+        assert_eq!(fuel, 0);
+    }
+
+    #[test]
+    fn fold_threads_accumulator_per_element() {
+        // fold cx: acc becomes parity of the list; elements preserved.
+        let iso = Iso::fold(bit_list_ty(4), cx_body());
+        let xs = [bit_i(), bit_o(), bit_i()];
+        let mut fuel = 100;
+        let result = eval(&iso, Value::pair(spine(&xs), bit_o()), &mut fuel).unwrap();
+        // parity(1, 0, 1) = 0
+        assert_eq!(result, Value::pair(spine(&xs), bit_o()));
+        // Exactly one fuel unit per element.
+        assert_eq!(fuel, 97);
+
+        let ys = [bit_i(), bit_i(), bit_i()];
+        let mut fuel = 100;
+        let result = eval(&iso, Value::pair(spine(&ys), bit_o()), &mut fuel).unwrap();
+        assert_eq!(result, Value::pair(spine(&ys), bit_i()));
+    }
+
+    #[test]
+    fn fold_and_unfold_traverse_in_opposite_orders() {
+        // Body = swapˣ: fold gives ⟨[c, x₁], x₂⟩ (head-to-tail shift),
+        // unfold gives ⟨[x₂, c], x₁⟩ (tail-to-head shift).
+        let l = bit_list_ty(3);
+        let body = Iso::SwapProd(bit_ty(), bit_ty());
+        let v = Value::pair(spine(&[bit_o(), bit_i()]), bit_i());
+
+        let mut fuel = 100;
+        let folded = eval(&Iso::fold(l.clone(), body.clone()), v.clone(), &mut fuel).unwrap();
+        assert_eq!(folded, Value::pair(spine(&[bit_i(), bit_o()]), bit_i()));
+
+        let mut fuel = 100;
+        let unfolded = eval(&Iso::unfold(l, body), v, &mut fuel).unwrap();
+        assert_eq!(unfolded, Value::pair(spine(&[bit_i(), bit_i()]), bit_o()));
+    }
+
+    #[test]
+    fn fold_out_of_fuel() {
+        let iso = Iso::fold(bit_list_ty(4), cx_body());
+        let v = Value::pair(spine(&[bit_i(), bit_i(), bit_i()]), bit_o());
+        let mut fuel = 2;
+        assert_eq!(
+            eval(&iso, v, &mut fuel),
+            Err(EvalError::OutOfFuel { steps_taken: 2 }),
+        );
+    }
+
+    #[test]
+    fn fold_rejects_non_spine_value() {
+        let iso = Iso::fold(bit_list_ty(2), cx_body());
+        // Spine slot holds a bare pair — not nil/cons shaped.
+        let v = Value::pair(Value::pair(Value::Unit, Value::Unit), bit_o());
+        let mut fuel = 100;
+        assert!(matches!(
+            eval(&iso, v, &mut fuel),
+            Err(EvalError::DomainError(_)),
+        ));
+    }
+
+    #[test]
+    fn fold_rejects_non_pair_input() {
+        let iso = Iso::fold(bit_list_ty(2), cx_body());
+        let mut fuel = 100;
+        assert!(matches!(
+            eval(&iso, Value::Unit, &mut fuel),
+            Err(EvalError::DomainError(_)),
+        ));
+        let iso = Iso::unfold(bit_list_ty(2), cx_body());
+        let mut fuel = 100;
+        assert!(matches!(
+            eval(&iso, Value::Unit, &mut fuel),
+            Err(EvalError::DomainError(_)),
+        ));
+    }
+
+    #[test]
+    fn sym_fold_undoes_fold() {
+        // swapˣ body is order-sensitive; sym(fold) must un-thread
+        // tail-to-head with the inverted body.
+        let body = Iso::SwapProd(bit_ty(), bit_ty());
+        let iso = Iso::fold(bit_list_ty(4), body);
+        for xs in [
+            vec![],
+            vec![bit_i()],
+            vec![bit_o(), bit_i()],
+            vec![bit_i(), bit_i(), bit_o()],
+        ] {
+            for c in [bit_o(), bit_i()] {
+                let v = Value::pair(spine(&xs), c);
+                let mut fuel = 100;
+                let fwd = eval(&iso, v.clone(), &mut fuel).unwrap();
+                let mut fuel = 100;
+                let back = eval(&Iso::sym(iso.clone()), fwd, &mut fuel).unwrap();
+                assert_eq!(back, v, "sym(fold)(fold(v)) != v at xs={xs:?}");
+            }
+        }
+    }
+
     // ─── static_bound tests ────────────────────────────────────────
 
     #[test]
@@ -784,6 +1065,56 @@ mod tests {
                 let mut fuel = bound;
                 eval(&iso, Value::pair(numeral(k), b), &mut fuel)
                     .expect("static_bound fuel must suffice");
+            }
+        }
+    }
+
+    #[test]
+    fn static_bound_fold_structural_body() {
+        // B(fold(L₄(Bit), swapˣ)) = (4−1)*(1+0) = 3, same for unfold.
+        let body = Iso::SwapProd(bit_ty(), bit_ty());
+        assert_eq!(static_bound(&Iso::fold(bit_list_ty(4), body.clone())), 3);
+        assert_eq!(static_bound(&Iso::unfold(bit_list_ty(4), body)), 3);
+    }
+
+    #[test]
+    fn static_bound_fold_trace_body() {
+        // body = Trace(Bit, structural): B = (|Bit|+1)*(1+0) = 3
+        // B(fold(L₃, body)) = (3−1)*(1+3) = 8
+        let body = Iso::trace(bit_ty(), Iso::SwapSum(bit_ty(), Type::One));
+        assert_eq!(static_bound(&Iso::fold(bit_list_ty(3), body)), 8);
+    }
+
+    #[test]
+    fn static_bound_fold_degenerate_spines() {
+        // L₀ = 0 (empty domain) and L₁ = {nil} (zero elements): bound 0.
+        assert_eq!(static_bound(&Iso::fold(bit_list_ty(0), cx_body())), 0);
+        assert_eq!(static_bound(&Iso::fold(bit_list_ty(1), cx_body())), 0);
+        assert_eq!(static_bound(&Iso::unfold(bit_list_ty(1), cx_body())), 0);
+    }
+
+    #[test]
+    fn static_bound_sym_fold() {
+        let iso = Iso::fold(bit_list_ty(4), cx_body());
+        assert_eq!(static_bound(&Iso::sym(iso.clone())), static_bound(&iso));
+    }
+
+    #[test]
+    fn fold_fuel_never_exceeds_static_bound() {
+        // Sweep the whole domain L₄(Bit) × Bit; consumed fuel ≤ B(iso).
+        use crate::enumerate::enumerate;
+        let l = bit_list_ty(4);
+        for iso in [
+            Iso::fold(l.clone(), cx_body()),
+            Iso::unfold(l.clone(), cx_body()),
+        ] {
+            let bound = static_bound(&iso);
+            for xs in enumerate(&l) {
+                for c in [bit_o(), bit_i()] {
+                    let mut fuel = bound;
+                    eval(&iso, Value::pair(xs.clone(), c), &mut fuel)
+                        .expect("static_bound fuel must suffice");
+                }
             }
         }
     }

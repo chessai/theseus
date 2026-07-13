@@ -409,6 +409,253 @@ mod tests {
         assert_round_trip(&iso);
     }
 
+    // ─── Fold/Unfold: differential oracle over the full swept domain ─
+
+    fn bit_list_ty(depth: usize) -> Type {
+        Type::list_spine_ty(bool_ty(), depth)
+    }
+
+    /// Build a list-spine value: `nil = inl ()`, `cons h t = inr ⟨h, t⟩`.
+    fn spine(elems: &[Value]) -> Value {
+        let mut v = Value::left(Value::Unit);
+        for h in elems.iter().rev() {
+            v = Value::right(Value::pair(h.clone(), v));
+        }
+        v
+    }
+
+    /// Decompose a list-spine value into its elements (test-local dual
+    /// of `spine`).
+    fn spine_elems(v: &Value) -> Vec<Value> {
+        let mut elems = Vec::new();
+        let mut cur = v;
+        loop {
+            match cur {
+                Value::Left(u) if u.as_ref() == &Value::Unit => return elems,
+                Value::Right(cons) => match cons.as_ref() {
+                    Value::Pair(h, t) => {
+                        elems.push(h.as_ref().clone());
+                        cur = t;
+                    }
+                    other => panic!("not a spine value: {other:?}"),
+                },
+                other => panic!("not a spine value: {other:?}"),
+            }
+        }
+    }
+
+    /// `cx : Bit × Bit ↔ Bit × Bit` (CNOT, self-inverse): ⟨x, a⟩ ↦
+    /// ⟨x, a⊕x⟩. Folding it is the reversible "sum": parity of the list
+    /// accumulates while the list itself is preserved.
+    fn cx() -> Iso {
+        let o = Value::left(Value::Unit);
+        let i = Value::right(Value::Unit);
+        let mut fwd = BTreeMap::new();
+        for x in [o.clone(), i.clone()] {
+            for a in [o.clone(), i.clone()] {
+                let a2 = if x == i {
+                    if a == o { i.clone() } else { o.clone() }
+                } else {
+                    a.clone()
+                };
+                fwd.insert(Value::pair(x.clone(), a), Value::pair(x.clone(), a2));
+            }
+        }
+        let ty = Type::prod(bool_ty(), bool_ty());
+        Iso::Prim(Box::new(PrimDef {
+            forward_name: "cx".into(),
+            backward_name: "cx".into(),
+            input_ty: ty.clone(),
+            output_ty: ty,
+            forward: fwd.clone(),
+            backward: fwd,
+        }))
+    }
+
+    /// A NON-self-inverse body: `cx ; swapˣ : Bit × Bit ↔ Bit × Bit`,
+    /// ⟨x, a⟩ ↦ ⟨a⊕x, x⟩ — order- and direction-sensitive, so it
+    /// distinguishes head-to-tail from tail-to-head threading.
+    fn cx_swap() -> Iso {
+        Iso::seq(cx(), Iso::SwapProd(bool_ty(), bool_ty()))
+    }
+
+    /// Round-trip oracle for `fold`: sweeps the ENTIRE domain
+    /// `L₄(Bit) × Bit` (via `enumerate`) forward-then-backward and
+    /// backward-then-forward: `eval(sym f, eval(f, v)) == v`.
+    #[test]
+    fn round_trip_fold_parity_cx() {
+        assert_round_trip(&Iso::fold(bit_list_ty(4), cx()));
+    }
+
+    /// Same oracle for `unfold`.
+    #[test]
+    fn round_trip_unfold_parity_cx() {
+        assert_round_trip(&Iso::unfold(bit_list_ty(4), cx()));
+    }
+
+    /// Round-trip with the non-self-inverse, order-sensitive body —
+    /// the strongest exerciser of the fold/unfold adjoint pairing.
+    #[test]
+    fn round_trip_fold_nonselfinverse_body() {
+        assert_round_trip(&Iso::fold(bit_list_ty(4), cx_swap()));
+        assert_round_trip(&Iso::unfold(bit_list_ty(4), cx_swap()));
+    }
+
+    /// `fold(f) ; unfold(f†) = id` over the WHOLE domain (and hence
+    /// `sym(fold f) = unfold f†` pointwise on the forward image).
+    #[test]
+    fn fold_then_unfold_of_adjoint_is_identity() {
+        let l = bit_list_ty(4);
+        let f = cx_swap();
+        let iso = Iso::seq(
+            Iso::fold(l.clone(), f.clone()),
+            Iso::unfold(l.clone(), theseus_core::adjoint(&f)),
+        );
+        for v in enumerate(&Type::prod(l.clone(), bool_ty())) {
+            assert_eq!(run(&iso, v.clone()).unwrap(), v, "fold;unfold† != id at {v:?}");
+        }
+    }
+
+    /// `unfold(f) ; fold(f†) = id` over the WHOLE domain.
+    #[test]
+    fn unfold_then_fold_of_adjoint_is_identity() {
+        let l = bit_list_ty(4);
+        let f = cx_swap();
+        let iso = Iso::seq(
+            Iso::unfold(l.clone(), f.clone()),
+            Iso::fold(l.clone(), theseus_core::adjoint(&f)),
+        );
+        for v in enumerate(&Type::prod(l.clone(), bool_ty())) {
+            assert_eq!(run(&iso, v.clone()).unwrap(), v, "unfold;fold† != id at {v:?}");
+        }
+    }
+
+    /// Semantic adjoint-pair law: `eval(sym(fold l f), v) ==
+    /// eval(unfold l (f†), v)` pointwise over the whole domain (and the
+    /// symmetric law for unfold).
+    #[test]
+    fn sym_fold_equals_unfold_of_adjoint_body() {
+        let l = bit_list_ty(4);
+        let f = cx_swap();
+        let dom = Type::prod(l.clone(), bool_ty());
+        let sym_fold = Iso::sym(Iso::fold(l.clone(), f.clone()));
+        let unfold_adj = Iso::unfold(l.clone(), theseus_core::adjoint(&f));
+        let sym_unfold = Iso::sym(Iso::unfold(l.clone(), f.clone()));
+        let fold_adj = Iso::fold(l.clone(), theseus_core::adjoint(&f));
+        for v in enumerate(&dom) {
+            assert_eq!(
+                run(&sym_fold, v.clone()).unwrap(),
+                run(&unfold_adj, v.clone()).unwrap(),
+                "sym(fold) != unfold(f†) at {v:?}",
+            );
+            assert_eq!(
+                run(&sym_unfold, v.clone()).unwrap(),
+                run(&fold_adj, v.clone()).unwrap(),
+                "sym(unfold) != fold(f†) at {v:?}",
+            );
+        }
+    }
+
+    /// Structure-driven law: `fold l f` equals the manual head-to-tail
+    /// accumulation (reversible mapAccumL), swept over every list in
+    /// `L₄(Bit)` and every accumulator in `Bit`.
+    #[test]
+    fn fold_equals_manual_left_accumulation() {
+        let l = bit_list_ty(4);
+        let f = cx_swap();
+        let iso = Iso::fold(l.clone(), f.clone());
+        for xs in enumerate(&l) {
+            for c in enumerate(&bool_ty()) {
+                let mut acc = c.clone();
+                let mut out = Vec::new();
+                for h in spine_elems(&xs) {
+                    match run(&f, Value::pair(h, acc)).unwrap() {
+                        Value::Pair(y, a2) => {
+                            out.push(*y);
+                            acc = *a2;
+                        }
+                        other => panic!("body returned non-pair: {other:?}"),
+                    }
+                }
+                let got = run(&iso, Value::pair(xs.clone(), c.clone())).unwrap();
+                assert_eq!(
+                    got,
+                    Value::pair(spine(&out), acc),
+                    "fold != manual mapAccumL at xs={xs:?}, c={c:?}",
+                );
+            }
+        }
+    }
+
+    /// Dual law: `unfold l f` equals the manual tail-to-head
+    /// accumulation over the whole domain.
+    #[test]
+    fn unfold_equals_manual_right_accumulation() {
+        let l = bit_list_ty(4);
+        let f = cx_swap();
+        let iso = Iso::unfold(l.clone(), f.clone());
+        for xs in enumerate(&l) {
+            for c in enumerate(&bool_ty()) {
+                let mut acc = c.clone();
+                let mut out = Vec::new();
+                for h in spine_elems(&xs).into_iter().rev() {
+                    match run(&f, Value::pair(h, acc)).unwrap() {
+                        Value::Pair(y, a2) => {
+                            out.push(*y);
+                            acc = *a2;
+                        }
+                        other => panic!("body returned non-pair: {other:?}"),
+                    }
+                }
+                out.reverse();
+                let got = run(&iso, Value::pair(xs.clone(), c.clone())).unwrap();
+                assert_eq!(
+                    got,
+                    Value::pair(spine(&out), acc),
+                    "unfold != manual reverse mapAccum at xs={xs:?}, c={c:?}",
+                );
+            }
+        }
+    }
+
+    /// Length-style structural consumption: fold `id × rot3` counts the
+    /// list length (mod 3) into a `Three` accumulator, preserving the
+    /// list — swept over the whole domain and round-tripped.
+    #[test]
+    fn fold_length_mod3_into_accumulator() {
+        let l = bit_list_ty(4);
+        let body = Iso::times(Iso::Id(bool_ty()), rot3());
+        let iso = Iso::fold(l.clone(), body);
+        for xs in enumerate(&l) {
+            let len = spine_elems(&xs).len();
+            for c in enumerate(&three_ty()) {
+                // Expected: rot3 applied `len` times to c.
+                let mut expected = c.clone();
+                for _ in 0..len {
+                    expected = run(&rot3(), expected).unwrap();
+                }
+                let got = run(&iso, Value::pair(xs.clone(), c.clone())).unwrap();
+                assert_eq!(got, Value::pair(xs.clone(), expected), "length-fold at {xs:?}");
+            }
+        }
+        assert_round_trip(&iso);
+    }
+
+    /// `fold` composes with the rest of the calculus: round-trip a
+    /// sequence that plumbs the pair through swapˣ on both sides.
+    #[test]
+    fn round_trip_fold_inside_composition() {
+        let l = bit_list_ty(3);
+        let iso = Iso::seq(
+            Iso::seq(
+                Iso::SwapProd(bool_ty(), l.clone()),
+                Iso::fold(l.clone(), cx_swap()),
+            ),
+            Iso::SwapProd(l, bool_ty()),
+        );
+        assert_round_trip(&iso);
+    }
+
     // ─── Enumerator integration: count and completeness ─────────────
 
     #[test]

@@ -24,6 +24,18 @@ pub enum TypeError {
     IterCounterNotNumeral(Type),
     /// In `iter(n, f)`, the body is not an endo-iso (`f : a ↔ a`).
     IterBodyNotEndo { input: Type, output: Type },
+    /// In `fold(l, f)` / `unfold(l, f)`, the spine type `l` is not a
+    /// list-spine type `1 + (b × (1 + (b × (… + 0))))`.
+    FoldSpineNotList(Type),
+    /// In `fold(l, f)` / `unfold(l, f)`, the body is not an endo-iso
+    /// (`f : b × c ↔ b × c`).
+    FoldBodyNotEndo { input: Type, output: Type },
+    /// In `fold(l, f)` / `unfold(l, f)`, the body's (endo) type is not
+    /// a product `b × c`.
+    FoldBodyNotElemProd(Type),
+    /// In `fold(l, f)` / `unfold(l, f)`, the body's element component
+    /// doesn't match the spine's element type.
+    FoldBodyElemMismatch { expected: Type, got: Type },
 }
 
 /// Is `ty` a unary numeral type `1 + (1 + (… + 0))`? (`0` itself is the
@@ -40,6 +52,65 @@ pub fn is_numeral_ty(ty: &Type) -> bool {
             _ => return false,
         }
     }
+}
+
+/// Is `ty` a list-spine type `1 + (b × (1 + (b × (… + 0))))` with a
+/// UNIFORM element type `b`? (`0` itself is the degenerate, uninhabited
+/// spine.) These are exactly the types bounded μ-unrolling (ADR-0035)
+/// produces for `List b = Nil | Cons b List`, and the only admissible
+/// `fold`/`unfold` spines (ADR-0037).
+///
+/// Returns:
+/// - `None` — not a list-spine type;
+/// - `Some(None)` — the degenerate spine `0` (no layers, so the element
+///   type is unconstrained);
+/// - `Some(Some(b))` — a spine with ≥ 1 layer and element type `b`.
+pub fn list_spine_elem_ty(ty: &Type) -> Option<Option<&Type>> {
+    let mut elem: Option<&Type> = None;
+    let mut cur = ty;
+    loop {
+        match cur {
+            Type::Zero => return Some(elem),
+            Type::Sum(l, r) if l.as_ref() == &Type::One => match r.as_ref() {
+                Type::Prod(b, rest) => {
+                    match elem {
+                        Some(e) if e != b.as_ref() => return None,
+                        _ => elem = Some(b.as_ref()),
+                    }
+                    cur = rest;
+                }
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+}
+
+/// Shared typing rule for `fold`/`unfold` (ADR-0037):
+/// `l` list-spine over `b`, `f : b × c ↔ b × c`  ⊢  `fold l f : l × c ↔ l × c`
+/// (and identically for `unfold`).
+fn fold_type_of(l: &Type, f: &Iso) -> Result<(Type, Type), TypeError> {
+    let Some(elem) = list_spine_elem_ty(l) else {
+        return Err(TypeError::FoldSpineNotList(l.clone()));
+    };
+    let (a, b) = type_of(f)?;
+    if a != b {
+        return Err(TypeError::FoldBodyNotEndo { input: a, output: b });
+    }
+    let (body_elem, acc) = match &a {
+        Type::Prod(x, c) => (x.as_ref(), c.as_ref().clone()),
+        _ => return Err(TypeError::FoldBodyNotElemProd(a.clone())),
+    };
+    if let Some(e) = elem {
+        if e != body_elem {
+            return Err(TypeError::FoldBodyElemMismatch {
+                expected: e.clone(),
+                got: body_elem.clone(),
+            });
+        }
+    }
+    let side = Type::prod(l.clone(), acc);
+    Ok((side.clone(), side))
 }
 
 /// Compute the type `a ↔ b` of a well-typed iso term, or return a
@@ -178,6 +249,11 @@ pub fn type_of(iso: &Iso) -> Result<(Type, Type), TypeError> {
             let side = Type::prod(n.clone(), a);
             Ok((side.clone(), side))
         }
+
+        // ── Fold/Unfold ──────────────────────────────────────────
+        // l list-spine over b, f : b × c ↔ b × c
+        //   ⊢  fold l f : l × c ↔ l × c   (and unfold likewise)
+        Iso::Fold(l, f) | Iso::Unfold(l, f) => fold_type_of(l, f),
 
         // ── Prim ─────────────────────────────────────────────────
         Iso::Prim(def) => Ok((def.input_ty.clone(), def.output_ty.clone())),
@@ -365,6 +441,125 @@ mod tests {
         let it = Iso::iter(n.clone(), body);
         let (input, output) = type_of(&Iso::sym(it)).unwrap();
         let expected = Type::prod(n, bool_ty());
+        assert_eq!(input, expected);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn list_spine_ty_shape() {
+        assert_eq!(Type::list_spine_ty(bool_ty(), 0), Type::Zero);
+        assert_eq!(
+            Type::list_spine_ty(bool_ty(), 1),
+            Type::sum(Type::One, Type::prod(bool_ty(), Type::Zero)),
+        );
+        assert_eq!(
+            Type::list_spine_ty(bool_ty(), 2),
+            Type::sum(
+                Type::One,
+                Type::prod(
+                    bool_ty(),
+                    Type::sum(Type::One, Type::prod(bool_ty(), Type::Zero)),
+                ),
+            ),
+        );
+    }
+
+    #[test]
+    fn list_spine_elem_ty_accepts_uniform_spines_only() {
+        // Degenerate spine: valid, no element constraint.
+        assert_eq!(list_spine_elem_ty(&Type::Zero), Some(None));
+        let b = bool_ty();
+        for d in 1..5 {
+            let l = Type::list_spine_ty(bool_ty(), d);
+            assert_eq!(list_spine_elem_ty(&l), Some(Some(&b)), "depth {d}");
+        }
+        // Numeral types are NOT list spines (no element payload).
+        assert_eq!(list_spine_elem_ty(&Type::numeral_ty(3)), None);
+        // Bool is not a spine.
+        assert_eq!(list_spine_elem_ty(&bool_ty()), None);
+        assert_eq!(list_spine_elem_ty(&Type::One), None);
+        // Non-uniform element types along the spine: rejected.
+        let mixed = Type::sum(
+            Type::One,
+            Type::prod(bool_ty(), Type::sum(Type::One, Type::prod(Type::One, Type::Zero))),
+        );
+        assert_eq!(list_spine_elem_ty(&mixed), None);
+    }
+
+    #[test]
+    fn list_spine_elem_ty_reports_elem() {
+        let l = Type::list_spine_ty(bool_ty(), 3);
+        let b = bool_ty();
+        assert_eq!(list_spine_elem_ty(&l), Some(Some(&b)));
+    }
+
+    #[test]
+    fn type_fold_and_unfold() {
+        // fold l cx : l × Bool ↔ l × Bool for a body Bool × Bool ↔ Bool × Bool
+        let l = Type::list_spine_ty(bool_ty(), 3);
+        let body = Iso::SwapProd(bool_ty(), bool_ty());
+        let expected = Type::prod(l.clone(), bool_ty());
+        for iso in [Iso::fold(l.clone(), body.clone()), Iso::unfold(l, body)] {
+            let (input, output) = type_of(&iso).unwrap();
+            assert_eq!(input, expected);
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn type_fold_degenerate_zero_spine() {
+        // l = 0: vacuous domain, any b × c endo body is admissible.
+        let body = Iso::SwapProd(bool_ty(), bool_ty());
+        let (input, output) = type_of(&Iso::fold(Type::Zero, body)).unwrap();
+        let expected = Type::prod(Type::Zero, bool_ty());
+        assert_eq!(input, expected);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn reject_fold_spine_not_list() {
+        // A numeral type carries no element payload: not a fold spine.
+        let body = Iso::SwapProd(bool_ty(), bool_ty());
+        let err = type_of(&Iso::fold(Type::numeral_ty(3), body.clone())).unwrap_err();
+        assert!(matches!(err, TypeError::FoldSpineNotList(_)));
+        let err = type_of(&Iso::unfold(bool_ty(), body)).unwrap_err();
+        assert!(matches!(err, TypeError::FoldSpineNotList(_)));
+    }
+
+    #[test]
+    fn reject_fold_body_not_endo() {
+        // swap⁺(1, Bool) : 1 + Bool ↔ Bool + 1 — not an endo-iso.
+        let l = Type::list_spine_ty(bool_ty(), 2);
+        let body = Iso::SwapSum(one(), bool_ty());
+        let err = type_of(&Iso::fold(l, body)).unwrap_err();
+        assert!(matches!(err, TypeError::FoldBodyNotEndo { .. }));
+    }
+
+    #[test]
+    fn reject_fold_body_not_elem_prod() {
+        // id(Bool) is endo but its type is not a product b × c.
+        let l = Type::list_spine_ty(bool_ty(), 2);
+        let body = Iso::Id(bool_ty());
+        let err = type_of(&Iso::fold(l, body)).unwrap_err();
+        assert!(matches!(err, TypeError::FoldBodyNotElemProd(_)));
+    }
+
+    #[test]
+    fn reject_fold_body_elem_mismatch() {
+        // Spine over Bool, but the body consumes 1 × c.
+        let l = Type::list_spine_ty(bool_ty(), 2);
+        let body = Iso::Id(Type::prod(one(), bool_ty()));
+        let err = type_of(&Iso::fold(l, body)).unwrap_err();
+        assert!(matches!(err, TypeError::FoldBodyElemMismatch { .. }));
+    }
+
+    #[test]
+    fn type_sym_fold() {
+        // sym (fold l f) has the same (endo) type as fold l f.
+        let l = Type::list_spine_ty(bool_ty(), 3);
+        let body = Iso::SwapProd(bool_ty(), bool_ty());
+        let (input, output) = type_of(&Iso::sym(Iso::fold(l.clone(), body))).unwrap();
+        let expected = Type::prod(l, bool_ty());
         assert_eq!(input, expected);
         assert_eq!(output, expected);
     }

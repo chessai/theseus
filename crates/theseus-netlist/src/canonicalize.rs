@@ -306,6 +306,16 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
             "Iso::Iter is not supported by the netlist backend yet \
              (v0.2 software dialect only; see ADR-0036 / ADR-0013)"
         ),
+
+        // `fold`/`unfold` are likewise v0.2 *software-dialect* primitives
+        // (ADR-0037): they evaluate in theseus-eval but have no netlist
+        // lowering yet. Lowering them (bounded structural loop node,
+        // ADR-0013) is a separate, later increment.
+        Iso::Fold(_, _) | Iso::Unfold(_, _) => unimplemented!(
+            "Iso::Fold/Iso::Unfold are not supported by the netlist \
+             backend yet (v0.2 software dialect only; see ADR-0037 / \
+             ADR-0013)"
+        ),
     }
 }
 
