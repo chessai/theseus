@@ -38,6 +38,8 @@
   - [0030 TISC-1 principles](adr/0030-tisc.md)
   - [0031 Dual-rail lowering lemmas](adr/0031-dual-rail-lowering.md)
   - [0032 Idealization ladder](adr/0032-idealization-ladder.md)
+  - [0033 Ring machine: recirculating execution](adr/0033-ring-machine.md)
+  - [0034 Reversible branching: offset-BR / come-from](adr/0034-reversible-branching.md)
 
 # Design Document
 
