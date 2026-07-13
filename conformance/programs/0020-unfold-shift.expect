@@ -1,0 +1,14 @@
+# iso: shl
+# Left shift through the accumulator: the head pops into the accumulator and
+# the old accumulator is appended. Graded forward AND backward (the adjoint
+# = fold swp shifts right, pushing the accumulator back onto the head).
+# Bound: static_bound(unfold l f) = (layers(l) - 1) * (1 + B(f)) = 3 * 1 = 3.
+# fuel-bound: 3
+(Nil, O) |-> (Nil, O)
+(Nil, I) |-> (Nil, I)
+(Cons (I, Nil), O) |-> (Cons (O, Nil), I)
+(Cons (O, Nil), I) |-> (Cons (I, Nil), O)
+(Cons (I, Cons (O, Nil)), I) |-> (Cons (O, Cons (I, Nil)), I)
+(Cons (O, Cons (I, Nil)), O) |-> (Cons (I, Cons (O, Nil)), O)
+(Cons (I, Cons (O, Cons (O, Nil))), I) |-> (Cons (O, Cons (O, Cons (I, Nil))), I)
+(Cons (I, Cons (I, Cons (O, Nil))), O) |-> (Cons (I, Cons (O, Cons (O, Nil))), I)

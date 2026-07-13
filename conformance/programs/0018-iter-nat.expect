@@ -1,0 +1,13 @@
+# iso: spinN
+# The WHOLE truncated domain (4 numerals x 2 bits), graded forward AND
+# backward by the harness. Bit flips iff the count is odd.
+# Bound: static_bound(iter n f) = (|n| - 1) * (1 + B(f)) = 3 * 1 = 3.
+# fuel-bound: 3
+(Zero, O) |-> (Zero, O)
+(Zero, I) |-> (Zero, I)
+(Succ Zero, O) |-> (Succ Zero, I)
+(Succ Zero, I) |-> (Succ Zero, O)
+(Succ (Succ Zero), O) |-> (Succ (Succ Zero), O)
+(Succ (Succ Zero), I) |-> (Succ (Succ Zero), I)
+(Succ (Succ (Succ Zero)), O) |-> (Succ (Succ (Succ Zero)), I)
+(Succ (Succ (Succ Zero)), I) |-> (Succ (Succ (Succ Zero)), O)

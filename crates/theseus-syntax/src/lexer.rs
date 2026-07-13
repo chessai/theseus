@@ -31,6 +31,18 @@ pub enum Tok {
     #[token("id")]
     Id,
 
+    // --- v0.2 combinator keywords (ADR-0038) ---
+    #[token("iter")]
+    Iter,
+    #[token("fold")]
+    Fold,
+    #[token("unfold")]
+    Unfold,
+    /// Reserved word (grammar.md): lexed as a keyword so it can never be an
+    /// identifier, but no production consumes it — using it is a parse error.
+    #[token("for")]
+    For,
+
     // --- punctuation / operators ---
     /// The iso arrow `<->` (a single token by fiat).
     #[token("<->")]

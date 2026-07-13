@@ -274,6 +274,30 @@ fn print_expr(e: &Expr, min: u8, out: &mut String) {
             print_tuple_elems(e, out);
             out.push(')');
         }
+        Expr::Combinator(kind, ty, body, _) => {
+            // The whole form is an expression atom (ADR-0038): it never
+            // needs surrounding parentheses, but its arguments are atoms.
+            out.push_str(kind.keyword());
+            out.push(' ');
+            print_type(ty, TYPE_ATOM, out);
+            out.push(' ');
+            print_expr_atom(body, out);
+        }
+    }
+}
+
+/// Print an expression in `atomExpr` position (a combinator body argument):
+/// non-atomic shapes are parenthesized so re-parsing keeps them as the single
+/// body argument (grammar.md / ADR-0038).
+fn print_expr_atom(e: &Expr, out: &mut String) {
+    match e {
+        Expr::Paren(inner, _) => print_expr_atom(inner, out),
+        Expr::Adjoint(..) | Expr::Bin(..) => {
+            out.push('(');
+            print_expr(e, 0, out);
+            out.push(')');
+        }
+        _ => print_expr(e, 0, out),
     }
 }
 
@@ -432,6 +456,12 @@ fn normalize_expr(e: &Expr) -> Expr {
         Expr::Tuple(l, r, _) => Expr::Tuple(
             Box::new(normalize_expr(l)),
             Box::new(normalize_expr(r)),
+            ZERO,
+        ),
+        Expr::Combinator(kind, ty, body, _) => Expr::Combinator(
+            *kind,
+            Box::new(normalize_type(ty)),
+            Box::new(normalize_expr(body)),
             ZERO,
         ),
     }

@@ -23,7 +23,9 @@ use std::collections::BTreeMap;
 use theseus_core::iso::Iso;
 use theseus_core::prim::{enumerate_values, Value};
 use theseus_core::ty::Type as CoreType;
-use theseus_syntax::ast::{BinOp, Clause, Decl, Expr, IsoBody, IsoDecl, Pattern, Program, Type as SurfType};
+use theseus_syntax::ast::{
+    BinOp, Clause, CombKind, Decl, Expr, IsoBody, IsoDecl, Pattern, Program, Type as SurfType,
+};
 
 use crate::diagnostics::Diagnostic;
 use crate::env::{self, Env, Inj};
@@ -103,6 +105,26 @@ fn elab_expr(e: &Expr, env: &Env, isos: &BTreeMap<String, &IsoDecl>) -> ElabResu
                 BinOp::Prod => Iso::times(lf, rf),
                 BinOp::Sum => Iso::plus(lf, rf),
             })
+        }
+        // v0.2 combinator forms (ADR-0038): `iter T f`, `fold T f`,
+        // `unfold T f`. The TYPE argument lowers via the env (a recursive
+        // nominal type gets its ADR-0035 bounded unrolling — a numeral or
+        // list-spine core type); the body elaborates as an ordinary iso
+        // expression. The result is gated on the CORE typing judgment
+        // (ADR-0036/0037: counter-is-numeral, spine-is-list, body-is-endo,
+        // element match), so an ill-formed combinator never reaches eval.
+        Expr::Combinator(kind, ty, body, _) => {
+            let core_ty = env.lower(ty);
+            let body_iso = elab_expr(body, env, isos)?;
+            let iso = match kind {
+                CombKind::Iter => Iso::iter(core_ty, body_iso),
+                CombKind::Fold => Iso::fold(core_ty, body_iso),
+                CombKind::Unfold => Iso::unfold(core_ty, body_iso),
+            };
+            if theseus_core::type_of(&iso).is_err() {
+                return unsupported();
+            }
+            Ok(iso)
         }
         // `id` needs the type at its position (inference) — deferred; `Ctor`,
         // `Tuple`, `Unit` do not appear as slice-1 combinator bodies.
@@ -1156,6 +1178,121 @@ mod tests {
                 assert_ne!(y, *x, "non-Nil value must move: {x:?}");
             }
         }
+    }
+
+    // ── v0.2 surface combinators (ADR-0038): whole-pipeline, whole-domain
+    //    differential-oracle round-trips over the truncated μ-domains ─────
+
+    fn bit_ty() -> SurfType {
+        SurfType::Name(theseus_syntax::ast::UpperName {
+            text: "Bit".into(),
+            span: theseus_syntax::ast::Span { start: 0, end: 0 },
+        })
+    }
+
+    fn prod_ty(a: SurfType, b: SurfType) -> SurfType {
+        SurfType::Prod(
+            Box::new(a),
+            Box::new(b),
+            theseus_syntax::ast::Span { start: 0, end: 0 },
+        )
+    }
+
+    #[test]
+    fn surface_iter_whole_domain_roundtrip_0018() {
+        let (env, f) = full_pipeline("0018-iter-nat.thse", "spinN");
+        assert!(matches!(&f, Iso::Iter(..)), "expected Iter, got {f:?}");
+        let dom_ty = prod_ty(nat_ty(), bit_ty());
+        assert_eq!(enumerate_values(&env.lower(&dom_ty)).len(), 8);
+        assert_roundtrip_whole_domain(&env, &f, &dom_ty);
+        // Semantic pin: ⟦iter n f⟧⟨k, x⟩ = ⟨k, fᵏ(x)⟩ — the k-fold body
+        // application, checked against the Iter node's own body.
+        let Iso::Iter(_, body) = &f else { unreachable!() };
+        for k in 0..4usize {
+            for x in [o(), i()] {
+                let mut counter = Value::left(Value::Unit);
+                for _ in 0..k {
+                    counter = Value::right(counter);
+                }
+                let mut expected = x.clone();
+                for _ in 0..k {
+                    expected = run(body, expected);
+                }
+                assert_eq!(
+                    run(&f, Value::pair(counter.clone(), x.clone())),
+                    Value::pair(counter, expected),
+                    "iter must equal {k}-fold body application on {x:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn surface_fold_whole_domain_roundtrip_0019() {
+        let (env, f) = full_pipeline("0019-fold-parity.thse", "parity");
+        assert!(matches!(&f, Iso::Fold(..)), "expected Fold, got {f:?}");
+        let dom_ty = prod_ty(bitlist_ty(), bit_ty());
+        // 15 lists x 2 accumulator bits.
+        assert_eq!(enumerate_values(&env.lower(&dom_ty)).len(), 30);
+        assert_roundtrip_whole_domain(&env, &f, &dom_ty);
+    }
+
+    #[test]
+    fn surface_unfold_whole_domain_roundtrip_0020() {
+        let (env, f) = full_pipeline("0020-unfold-shift.thse", "shl");
+        assert!(matches!(&f, Iso::Unfold(..)), "expected Unfold, got {f:?}");
+        let dom_ty = prod_ty(bitlist_ty(), bit_ty());
+        assert_roundtrip_whole_domain(&env, &f, &dom_ty);
+        // Order sensitivity: [I, O] with acc O shifts LEFT to [O, O] / acc I —
+        // distinct from fold-with-swap (which would shift right to [O, I]).
+        let cons = |h: Value, t: Value| Value::right(Value::pair(h, t));
+        let nil = Value::left(Value::Unit);
+        let xs = cons(i(), cons(o(), nil.clone()));
+        assert_eq!(
+            run(&f, Value::pair(xs, o())),
+            Value::pair(cons(o(), cons(o(), nil)), i())
+        );
+    }
+
+    #[test]
+    fn surface_combinator_illtyped_arguments_rejected() {
+        // The core typing gate (ADR-0036/0037) must refuse combinators whose
+        // TYPE argument does not lower to the right shape.
+        // Bit lowers to 1+1 — not a numeral type (no 0 terminator).
+        let src_iter = "type Bit = O | I\n\
+                        iso notb : Bit <-> Bit\n| O <-> I\n| I <-> O\n\
+                        iso bad : Bit * Bit <-> Bit * Bit = iter Bit notb\n";
+        let prog = theseus_syntax::parse(src_iter).expect("parses");
+        let env = crate::env::resolve(&prog);
+        let map = elaborate_program(&prog, &env);
+        assert!(
+            map.get("bad").expect("bad in map").is_err(),
+            "iter over a non-numeral type must not elaborate"
+        );
+
+        // Nat lowers to a numeral type — not a list spine.
+        let src_fold = "type Bit = O | I\ntype Nat = Zero | Succ Nat\n\
+                        iso swp : Bit * Bit <-> Bit * Bit\n| (a, b) <-> (b, a)\n\
+                        iso bad2 : Nat * Bit <-> Nat * Bit = fold Nat swp\n";
+        let prog = theseus_syntax::parse(src_fold).expect("parses");
+        let env = crate::env::resolve(&prog);
+        let map = elaborate_program(&prog, &env);
+        assert!(
+            map.get("bad2").expect("bad2 in map").is_err(),
+            "fold over a non-spine type must not elaborate"
+        );
+
+        // A fold body that is not product-shaped (b × c) at all.
+        let src_elem = "type Bit = O | I\ntype BitList = Nil | Cons (Bit * BitList)\n\
+                        iso notb : Bit <-> Bit\n| O <-> I\n| I <-> O\n\
+                        iso bad3 : BitList * Bit <-> BitList * Bit = fold BitList notb\n";
+        let prog = theseus_syntax::parse(src_elem).expect("parses");
+        let env = crate::env::resolve(&prog);
+        let map = elaborate_program(&prog, &env);
+        assert!(
+            map.get("bad3").expect("bad3 in map").is_err(),
+            "fold with a non-product-shaped body must not elaborate"
+        );
     }
 
     // ── FIX 1 repro: ill-typed Prim body rejected by admit() guard ───

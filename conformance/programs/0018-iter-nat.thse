@@ -1,0 +1,14 @@
+-- Conformance 0018 (dialect: software, v0.2 surface combinators — ADR-0038)
+-- Surface `iter` (ADR-0036): ⟦iter n f⟧⟨k, x⟩ = ⟨k, fᵏ(x)⟩ with the count k
+-- read off the Nat numeral carried in the DATA. At the default unroll depth
+-- D = 4 (ADR-0035) Nat lowers to the numeral type 1+(1+(1+(1+0))), i.e. the
+-- counts 0..=3, so `iter Nat notb` flips the bit k mod 2 times and the
+-- adjoint un-flips it exactly k times.
+type Nat = Zero | Succ Nat
+type Bit = O | I
+
+iso notb : Bit <-> Bit
+| O <-> I
+| I <-> O
+
+iso spinN : Nat * Bit <-> Nat * Bit = iter Nat notb

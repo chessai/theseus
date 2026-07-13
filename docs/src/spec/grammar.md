@@ -1,9 +1,9 @@
 # Lexical structure and grammar
 
-*v0.1 draft. Normative for the parser (ADR-0017). The executable complement
-is the conformance suite: every `conformance/**/*.thse` MUST parse under this
-grammar except `diagnostics/0007-parse.thse`, which MUST be rejected with
-`T0001`.*
+*v0.1 draft, extended by the v0.2 combinator forms (ADR-0038). Normative for
+the parser (ADR-0017). The executable complement is the conformance suite:
+every `conformance/**/*.thse` MUST parse under this grammar except
+`diagnostics/0007-parse.thse`, which MUST be rejected with `T0001`.*
 
 ## Lexical structure
 
@@ -31,8 +31,10 @@ constructor; a name in a `ty` is a type).
 
 ### Reserved words
 
-`type`, `iso`, `prim`, `where`; and reserved for v0.2: `fold`, `unfold`,
-`for`. Reserved words are not `lowerName`s and cannot be used as identifiers.
+`type`, `iso`, `prim`, `where`, `id`; the v0.2 combinator keywords (ADR-0038):
+`iter`, `fold`, `unfold`; and `for` (reserved, no production — using it is a
+`T0001` parse error). Reserved words are not `lowerName`s and cannot be used
+as identifiers.
 
 ### Punctuation and operators
 
@@ -78,8 +80,13 @@ expr     ::= "~" expr
            | expr ";" expr
            | expr "*" expr
            | expr "+" expr
+           | comb                               -- v0.2 combinator form (ADR-0038)
            | "(" expr ")"
            | lowerName                          -- reference to an iso
+
+comb     ::= ("iter" | "fold" | "unfold") atomTy atomExpr   -- ADR-0038
+atomExpr ::= lowerName | "(" expr ")" | comb
+atomTy   ::= UpperName | lowerName | "0" | "1" | "(" ty ")"
 ```
 
 Notes on the productions:
@@ -93,6 +100,15 @@ Notes on the productions:
   collide because type and pattern positions are grammatically distinct.
 - **`String`** appears only as a `primdecl` registry key; it is not an
   `expr` atom.
+- **The v0.2 combinator form `comb`** (ADR-0038) is keyword-prefixed
+  application at *atom* level: `iter Nat notb`, `fold BitList cnot`,
+  `unfold BitList swp`. Its first argument is a type atom naming the
+  counter/spine type (typically a recursive nominal type, whose ADR-0035
+  bounded lowering supplies the finite numeral/list-spine core type); its
+  second is an expression atom (the body iso). Because the whole form is an
+  atom, `iter Nat f ; g` ≡ `(iter Nat f) ; g` and `~iter Nat f` is the
+  adjoint of the whole iteration; a compound *body* must be parenthesized —
+  `iter Nat (f ; g)`, `iter Nat (~f)` (`iter Nat ~f` is a `T0001` error).
 - **`where`** attaches to a single `isodecl`. Its nested `isodecl`s are in
   scope in the parent's `isobody` (clauses or `expr`) and shadow outer
   bindings of the same name; they may reference one another and outer names
@@ -145,5 +161,6 @@ named nullary/unary ADTs and `type … = C | C Bit` declarations (P0001–03, 10
 tuple types and patterns including 3-place and nested (P0004–06, 15);
 `= expr` bodies over `~ ; * +` (P0007–10); label patterns `$go …` (P0011);
 `prim … = "…"` with a string key (P0012, D0009); `where` (P0013); `Nat`
-literals against `U1` (P0014). The sole rejection is `diagnostics/0007-parse.
-thse`'s malformed `<-` → `T0001`.
+literals against `U1` (P0014); recursive `type` declarations (P0016–17);
+the v0.2 combinator forms `iter`/`fold`/`unfold` (P0018–20, ADR-0038). The
+sole rejection is `diagnostics/0007-parse.thse`'s malformed `<-` → `T0001`.

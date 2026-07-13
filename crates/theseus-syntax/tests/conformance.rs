@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 
-use theseus_syntax::ast::{BinOp, Decl, Expr, IsoBody, LowerName, Span, UpperName};
+use theseus_syntax::ast::{BinOp, CombKind, Decl, Expr, IsoBody, LowerName, Span, Type, UpperName};
 use theseus_syntax::{normalize_program, parse, pretty_program};
 
 /// Absolute path to the repo root (two levels up from this crate's manifest).
@@ -146,6 +146,33 @@ fn strip(e: &Expr) -> Expr {
         Expr::Adjoint(inner, _) => Expr::Adjoint(Box::new(strip(inner)), ZERO),
         Expr::Bin(op, l, r, _) => Expr::Bin(*op, Box::new(strip(l)), Box::new(strip(r)), ZERO),
         Expr::Tuple(l, r, _) => Expr::Tuple(Box::new(strip(l)), Box::new(strip(r)), ZERO),
+        Expr::Combinator(kind, ty, body, _) => Expr::Combinator(
+            *kind,
+            Box::new(strip_type(ty)),
+            Box::new(strip(body)),
+            ZERO,
+        ),
+    }
+}
+
+/// Span-free, paren-free normalization of a type (combinator type args).
+fn strip_type(t: &Type) -> Type {
+    match t {
+        Type::Name(n) => Type::Name(UpperName {
+            text: n.text.clone(),
+            span: ZERO,
+        }),
+        Type::Var(n) => Type::Var(LowerName {
+            text: n.text.clone(),
+            span: ZERO,
+        }),
+        Type::Empty(_) => Type::Empty(ZERO),
+        Type::Unit(_) => Type::Unit(ZERO),
+        Type::Paren(inner, _) => strip_type(inner),
+        Type::Prod(l, r, _) => {
+            Type::Prod(Box::new(strip_type(l)), Box::new(strip_type(r)), ZERO)
+        }
+        Type::Sum(l, r, _) => Type::Sum(Box::new(strip_type(l)), Box::new(strip_type(r)), ZERO),
     }
 }
 
@@ -231,6 +258,87 @@ fn ac2_dagger_lexes_as_tilde() {
     let printed = pretty_program(&prog);
     assert!(printed.contains('~'), "canonical form uses ~");
     assert!(!printed.contains('\u{2020}'), "canonical form never emits †");
+}
+
+// -------- ADR-0038: v0.2 combinator forms --------
+
+fn comb(kind: CombKind, ty_name: &str, body: Expr) -> Expr {
+    Expr::Combinator(
+        kind,
+        Box::new(Type::Name(UpperName {
+            text: ty_name.to_string(),
+            span: ZERO,
+        })),
+        Box::new(body),
+        ZERO,
+    )
+}
+
+#[test]
+fn adr0038_combinator_is_an_expression_atom() {
+    // `iter Nat f ; g` = `(iter Nat f) ; g` — the form binds tighter than
+    // every infix operator.
+    assert_eq!(
+        body_shape("iter Nat f ; g"),
+        bin(BinOp::Seq, comb(CombKind::Iter, "Nat", var("f")), var("g")),
+        "iter Nat f ; g must parse as (iter Nat f) ; g"
+    );
+}
+
+#[test]
+fn adr0038_adjoint_applies_to_the_whole_combinator() {
+    // `~iter Nat f` = adjoint of the whole iteration.
+    assert_eq!(
+        body_shape("~iter Nat f"),
+        adj(comb(CombKind::Iter, "Nat", var("f"))),
+        "~iter Nat f must parse as ~(iter Nat f)"
+    );
+}
+
+#[test]
+fn adr0038_compound_body_requires_parens() {
+    // A parenthesized compound body stays a single argument.
+    assert_eq!(
+        body_shape("fold BitList (f ; g)"),
+        comb(
+            CombKind::Fold,
+            "BitList",
+            bin(BinOp::Seq, var("f"), var("g"))
+        ),
+    );
+    // An unparenthesized `~` body is a parse error (body is an atom).
+    assert!(
+        parse("iso f : A <-> A = iter Nat ~g").is_err(),
+        "iter Nat ~g must not parse (body must be an atom)"
+    );
+}
+
+#[test]
+fn adr0038_all_three_keywords_parse_and_roundtrip() {
+    for (kw, kind) in [
+        ("iter", CombKind::Iter),
+        ("fold", CombKind::Fold),
+        ("unfold", CombKind::Unfold),
+    ] {
+        let src = format!("iso f : A <-> A = {kw} T g");
+        assert_eq!(body_shape(&format!("{kw} T g")), comb(kind, "T", var("g")));
+        let prog = parse(&src).unwrap();
+        let printed = pretty_program(&prog);
+        let reparsed = parse(&printed)
+            .unwrap_or_else(|e| panic!("re-parse of pretty `{printed}` failed: {e}"));
+        assert_eq!(normalize_program(&prog), normalize_program(&reparsed));
+    }
+}
+
+#[test]
+fn adr0038_combinator_keywords_are_reserved() {
+    // `iter`/`fold`/`unfold`/`for` can no longer be identifiers.
+    for kw in ["iter", "fold", "unfold", "for"] {
+        assert!(
+            parse(&format!("iso {kw} : A <-> A = id")).is_err(),
+            "`{kw}` must be reserved (not a lowerName)"
+        );
+    }
 }
 
 #[test]

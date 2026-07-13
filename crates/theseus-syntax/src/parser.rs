@@ -5,8 +5,8 @@
 //! left-associative. Tuples `(a, b, c)` nest to the right.
 
 use crate::ast::{
-    BinOp, Clause, Ctor, Decl, Expr, IsoBody, IsoDecl, LowerName, Pattern, PrimDecl, Program, Span,
-    Type, TypeDecl, UpperName,
+    BinOp, Clause, CombKind, Ctor, Decl, Expr, IsoBody, IsoDecl, LowerName, Pattern, PrimDecl,
+    Program, Span, Type, TypeDecl, UpperName,
 };
 use crate::lexer::{lex, LexError, Spanned, Tok};
 
@@ -522,8 +522,36 @@ impl Parser {
                 Ok(Expr::Id(s))
             }
             Some(Tok::LParen) => self.expr_paren_or_tuple(),
+            Some(Tok::Iter | Tok::Fold | Tok::Unfold) => self.combinator(),
+            Some(Tok::For) => Err(ParseError::new(
+                "`for` is a reserved word (grammar.md) with no production",
+                self.peek_span(),
+            )),
             _ => Err(ParseError::new("expected an expression", self.peek_span())),
         }
+    }
+
+    /// `comb ::= ("iter" | "fold" | "unfold") atomTy atomExpr` (ADR-0038).
+    ///
+    /// Both arguments are atoms: the counter/spine type is a `type_atom`
+    /// (typically the μ-type's name) and the body is an `expr_atom`, so a
+    /// compound body must be parenthesized (`iter Nat (f ; g)`). The whole
+    /// form is itself an expression atom: it composes with the infix
+    /// operators and prefix `~` without parentheses (`~iter Nat f` is the
+    /// adjoint of the whole iteration).
+    fn combinator(&mut self) -> Result<Expr, ParseError> {
+        let kw_span = self.peek_span();
+        let kind = match self.peek() {
+            Some(Tok::Iter) => CombKind::Iter,
+            Some(Tok::Fold) => CombKind::Fold,
+            Some(Tok::Unfold) => CombKind::Unfold,
+            _ => unreachable!("combinator() called off a combinator keyword"),
+        };
+        self.bump();
+        let ty = self.type_atom()?;
+        let body = self.expr_atom()?;
+        let span = kw_span.merge(body.span());
+        Ok(Expr::Combinator(kind, Box::new(ty), Box::new(body), span))
     }
 
     /// Parse `()`, `( e )`, or an n-tuple `( e1 , e2 , ... )`. Tuples nest to

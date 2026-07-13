@@ -1,0 +1,15 @@
+-- Conformance 0019 (dialect: software, v0.2 surface combinators — ADR-0038)
+-- Surface `fold` (ADR-0037): reversible mapAccumL. The body is cnot with
+-- the list ELEMENT as control, so threading the accumulator head-to-tail
+-- computes parity: acc_out = acc_in xor (number of I elements), while the
+-- spine is preserved unchanged. At D = 4 (ADR-0035) BitList lowers to the
+-- 4-layer spine holding lists of length <= 3 (15 inhabitants).
+type Bit = O | I
+type BitList = Nil | Cons (Bit * BitList)
+
+iso cnot : Bit * Bit <-> Bit * Bit
+| (O, t) <-> (O, t)
+| (I, O) <-> (I, I)
+| (I, I) <-> (I, O)
+
+iso parity : BitList * Bit <-> BitList * Bit = fold BitList cnot

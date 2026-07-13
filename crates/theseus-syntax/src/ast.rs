@@ -255,6 +255,30 @@ impl BinOp {
     }
 }
 
+/// The v0.2 keyword combinators (ADR-0038): each takes a counter/spine
+/// TYPE argument and a body iso expression, and denotes the corresponding
+/// core primitive (`Iso::Iter` / `Iso::Fold` / `Iso::Unfold`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CombKind {
+    /// `iter n f : n * a <-> n * a` — bounded iteration (ADR-0036).
+    Iter,
+    /// `fold l f : l * c <-> l * c` — reversible mapAccumL (ADR-0037).
+    Fold,
+    /// `unfold l f : l * c <-> l * c` — the tail-to-head dual of `fold`.
+    Unfold,
+}
+
+impl CombKind {
+    #[must_use]
+    pub fn keyword(self) -> &'static str {
+        match self {
+            CombKind::Iter => "iter",
+            CombKind::Fold => "fold",
+            CombKind::Unfold => "unfold",
+        }
+    }
+}
+
 /// A surface expression (an iso combinator term).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Expr {
@@ -277,6 +301,12 @@ pub enum Expr {
     Unit(Span),
     /// A parenthesized expression; the span covers the parentheses.
     Paren(Box<Expr>, Span),
+    /// A v0.2 combinator form `iter T e` / `fold T e` / `unfold T e`
+    /// (ADR-0038): a keyword applied to a counter/spine type atom and a body
+    /// expression atom. The whole form is an expression atom, so it composes
+    /// with `;` `*` `+` and `~` without parentheses; a compound BODY needs
+    /// them (`iter Nat (f ; g)`).
+    Combinator(CombKind, Box<Type>, Box<Expr>, Span),
 }
 
 impl Expr {
@@ -290,7 +320,8 @@ impl Expr {
             | Expr::Bin(_, _, _, s)
             | Expr::Tuple(_, _, s)
             | Expr::Unit(s)
-            | Expr::Paren(_, s) => *s,
+            | Expr::Paren(_, s)
+            | Expr::Combinator(_, _, _, s) => *s,
         }
     }
 }

@@ -43,6 +43,7 @@
   - [0035 μ-types: bounded unrolling at lowering](adr/0035-mu-bounded-unroll.md)
   - [0036 iter: bounded-iteration core primitive](adr/0036-iter-primitive.md)
   - [0037 fold/unfold: structural-recursion core primitives](adr/0037-fold-unfold.md)
+  - [0038 v0.2 surface syntax: iter/fold/unfold forms](adr/0038-v0.2-surface-syntax.md)
 
 # Design Document
 

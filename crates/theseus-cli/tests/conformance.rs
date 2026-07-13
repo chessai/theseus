@@ -241,6 +241,11 @@ fn conformance_programs() {
         // μ-types (ADR-0035): recursive types must keep grading end-to-end.
         "0016-mu-nat",
         "0017-mu-bitlist",
+        // v0.2 surface combinators (ADR-0038): iter/fold/unfold must keep
+        // grading end-to-end (parse → check → elaborate → eval, fwd+bwd).
+        "0018-iter-nat",
+        "0019-fold-parity",
+        "0020-unfold-shift",
     ];
     let graded_stems: Vec<&str> = fixtures
         .iter()

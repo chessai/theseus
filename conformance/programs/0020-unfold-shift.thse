@@ -1,0 +1,13 @@
+-- Conformance 0020 (dialect: software, v0.2 surface combinators — ADR-0038)
+-- Surface `unfold` (ADR-0037): the tail-to-head dual of fold, with an
+-- ORDER-SENSITIVE body (swap), so it is observably distinct from `fold` with
+-- the same body: ⟨yᵢ, dᵢ₋₁⟩ = ⟨dᵢ, xᵢ⟩ walks the spine tail-to-head, giving
+-- ⟨[x₁ … xₖ], acc⟩ |-> ⟨[x₂ … xₖ, acc], x₁⟩ — a left shift through the
+-- accumulator (fold with the same body would shift the other way).
+type Bit = O | I
+type BitList = Nil | Cons (Bit * BitList)
+
+iso swp : Bit * Bit <-> Bit * Bit
+| (a, b) <-> (b, a)
+
+iso shl : BitList * Bit <-> BitList * Bit = unfold BitList swp

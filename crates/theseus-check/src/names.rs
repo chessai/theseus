@@ -78,6 +78,12 @@ fn check_expr(e: &Expr, env: &Env, local: &[&str], diags: &mut Vec<Diagnostic>) 
             check_expr(l, env, local, diags);
             check_expr(r, env, local, diags);
         }
+        Expr::Combinator(_, ty, body, _) => {
+            // The counter/spine TYPE argument is an ordinary type reference
+            // (ADR-0038); the body is an ordinary iso expression.
+            check_type_refs(ty, env, None, diags);
+            check_expr(body, env, local, diags);
+        }
         Expr::Id(_) | Expr::Unit(_) => {}
     }
 }
