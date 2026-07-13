@@ -11,7 +11,7 @@
 //! correctness of the dual-rail lowering — back-to-back Permutes each
 //! lower to zero cells — so it waits for the QoR pass.
 
-use theseus_core::{adjoint, type_of, Iso, Type, TypeError};
+use theseus_core::{adjoint, Iso, Type, TypeError};
 
 use crate::ir::typed::{flatten_layer, identity_sigma, DistribDir, Monoid, NodeKind, TypedNode};
 
@@ -27,75 +27,277 @@ fn block_swap_sigma(la: usize, lb: usize) -> Vec<usize> {
 /// The produced node always satisfies [`TypedNode::validate`], and its
 /// boundary types are exactly `type_of(iso)` — checked by tests over the
 /// combinator vocabulary.
+///
+/// Complexity: O(n) in the iso size. Boundary types are derived
+/// bottom-up from leaf constructors — `type_of` is never called
+/// recursively at interior nodes, avoiding the O(n²) re-derivation
+/// that the naive per-node `type_of` approach produces on deep chains.
 pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
     // `sym` is a syntactic involution: push it to the leaves first.
     if let Iso::Sym(f) = iso {
         return canonicalize(&adjoint(f));
     }
 
-    let (input, output) = type_of(iso)?;
-
-    let kind = match iso {
+    match iso {
         Iso::Sym(_) => unreachable!("handled above"),
 
-        // Identity: the empty plumbing permutation over the ×-layer (a
-        // non-product type is a single-leaf layer).
-        Iso::Id(_) => NodeKind::Permute {
-            monoid: Monoid::Prod,
-            sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
-        },
-
-        Iso::Seq(f, g) => NodeKind::Seq(vec![canonicalize(f)?, canonicalize(g)?]),
-        Iso::Times(f, g) => {
-            NodeKind::Par(Box::new(canonicalize(f)?), Box::new(canonicalize(g)?))
+        // ── Identity ────────────────────────────────────────────────
+        // type_of(Id(a)) is (a, a) — O(1), no subtree walk.
+        Iso::Id(a) => {
+            let input = a.clone();
+            let output = a.clone();
+            Ok(TypedNode {
+                input: input.clone(),
+                output: output.clone(),
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Prod,
+                    sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
+                },
+            })
         }
+
+        // ── Seq: recurse into children, derive boundary types from
+        // their TypedNodes — no type_of on the whole subtree. ────────
+        Iso::Seq(f, g) => {
+            let fn_ = canonicalize(f)?;
+            let gn = canonicalize(g)?;
+            // Type check: f's output must match g's input (same check
+            // as type_of, but using already-computed child types).
+            if fn_.output != gn.input {
+                return Err(TypeError::SeqMismatch {
+                    left_output: fn_.output.clone(),
+                    right_input: gn.input.clone(),
+                });
+            }
+            let input = fn_.input.clone();
+            let output = gn.output.clone();
+            Ok(TypedNode {
+                input,
+                output,
+                kind: NodeKind::Seq(vec![fn_, gn]),
+            })
+        }
+
+        // ── Times (×): boundary = Prod of children's boundaries ────
+        Iso::Times(f, g) => {
+            let fn_ = canonicalize(f)?;
+            let gn = canonicalize(g)?;
+            let input = Type::prod(fn_.input.clone(), gn.input.clone());
+            let output = Type::prod(fn_.output.clone(), gn.output.clone());
+            Ok(TypedNode {
+                input,
+                output,
+                kind: NodeKind::Par(Box::new(fn_), Box::new(gn)),
+            })
+        }
+
+        // ── Plus (+): boundary = Sum of children's boundaries ───────
         Iso::Plus(f, g) => {
-            NodeKind::Branch(Box::new(canonicalize(f)?), Box::new(canonicalize(g)?))
+            let fn_ = canonicalize(f)?;
+            let gn = canonicalize(g)?;
+            let input = Type::sum(fn_.input.clone(), gn.input.clone());
+            let output = Type::sum(fn_.output.clone(), gn.output.clone());
+            Ok(TypedNode {
+                input,
+                output,
+                kind: NodeKind::Branch(Box::new(fn_), Box::new(gn)),
+            })
         }
 
         // ── Product-monoid plumbing → Permute(×, σ) ──────────────────
-        Iso::SwapProd(a, b) => NodeKind::Permute {
-            monoid: Monoid::Prod,
-            sigma: block_swap_sigma(
-                flatten_layer(Monoid::Prod, a).len(),
-                flatten_layer(Monoid::Prod, b).len(),
-            ),
-        },
-        // Assoc and unit isos are invisible after flattening: same leaf
-        // sequence on both sides, σ = id.
-        Iso::AssocLProd(..) | Iso::AssocRProd(..) | Iso::UniteProd(_) | Iso::UnitiProd(_) => {
-            NodeKind::Permute {
-                monoid: Monoid::Prod,
-                sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
-            }
+        Iso::SwapProd(a, b) => {
+            let input = Type::prod(a.clone(), b.clone());
+            let output = Type::prod(b.clone(), a.clone());
+            Ok(TypedNode {
+                input,
+                output,
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Prod,
+                    sigma: block_swap_sigma(
+                        flatten_layer(Monoid::Prod, a).len(),
+                        flatten_layer(Monoid::Prod, b).len(),
+                    ),
+                },
+            })
+        }
+        Iso::AssocLProd(a, b, c) => {
+            let input = Type::prod(a.clone(), Type::prod(b.clone(), c.clone()));
+            let output = Type::prod(Type::prod(a.clone(), b.clone()), c.clone());
+            Ok(TypedNode {
+                input: input.clone(),
+                output,
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Prod,
+                    sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
+                },
+            })
+        }
+        Iso::AssocRProd(a, b, c) => {
+            let input = Type::prod(Type::prod(a.clone(), b.clone()), c.clone());
+            let output = Type::prod(a.clone(), Type::prod(b.clone(), c.clone()));
+            Ok(TypedNode {
+                input: input.clone(),
+                output,
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Prod,
+                    sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
+                },
+            })
+        }
+        Iso::UniteProd(a) => {
+            let input = Type::prod(Type::One, a.clone());
+            let output = a.clone();
+            Ok(TypedNode {
+                input: input.clone(),
+                output,
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Prod,
+                    sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
+                },
+            })
+        }
+        Iso::UnitiProd(a) => {
+            let input = a.clone();
+            let output = Type::prod(Type::One, a.clone());
+            Ok(TypedNode {
+                input: input.clone(),
+                output,
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Prod,
+                    sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
+                },
+            })
         }
 
         // ── Sum-monoid plumbing → Permute(+, σ) ──────────────────────
-        Iso::SwapSum(a, b) => NodeKind::Permute {
-            monoid: Monoid::Sum,
-            sigma: block_swap_sigma(
-                flatten_layer(Monoid::Sum, a).len(),
-                flatten_layer(Monoid::Sum, b).len(),
-            ),
-        },
-        Iso::AssocLSum(..) | Iso::AssocRSum(..) | Iso::UniteSum(_) | Iso::UnitiSum(_) => {
-            NodeKind::Permute {
-                monoid: Monoid::Sum,
-                sigma: identity_sigma(flatten_layer(Monoid::Sum, &input).len()),
-            }
+        Iso::SwapSum(a, b) => {
+            let input = Type::sum(a.clone(), b.clone());
+            let output = Type::sum(b.clone(), a.clone());
+            Ok(TypedNode {
+                input,
+                output,
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Sum,
+                    sigma: block_swap_sigma(
+                        flatten_layer(Monoid::Sum, a).len(),
+                        flatten_layer(Monoid::Sum, b).len(),
+                    ),
+                },
+            })
+        }
+        Iso::AssocLSum(a, b, c) => {
+            let input = Type::sum(a.clone(), Type::sum(b.clone(), c.clone()));
+            let output = Type::sum(Type::sum(a.clone(), b.clone()), c.clone());
+            Ok(TypedNode {
+                input: input.clone(),
+                output,
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Sum,
+                    sigma: identity_sigma(flatten_layer(Monoid::Sum, &input).len()),
+                },
+            })
+        }
+        Iso::AssocRSum(a, b, c) => {
+            let input = Type::sum(Type::sum(a.clone(), b.clone()), c.clone());
+            let output = Type::sum(a.clone(), Type::sum(b.clone(), c.clone()));
+            Ok(TypedNode {
+                input: input.clone(),
+                output,
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Sum,
+                    sigma: identity_sigma(flatten_layer(Monoid::Sum, &input).len()),
+                },
+            })
+        }
+        Iso::UniteSum(a) => {
+            let input = Type::sum(Type::Zero, a.clone());
+            let output = a.clone();
+            Ok(TypedNode {
+                input: input.clone(),
+                output,
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Sum,
+                    sigma: identity_sigma(flatten_layer(Monoid::Sum, &input).len()),
+                },
+            })
+        }
+        Iso::UnitiSum(a) => {
+            let input = a.clone();
+            let output = Type::sum(Type::Zero, a.clone());
+            Ok(TypedNode {
+                input: input.clone(),
+                output,
+                kind: NodeKind::Permute {
+                    monoid: Monoid::Sum,
+                    sigma: identity_sigma(flatten_layer(Monoid::Sum, &input).len()),
+                },
+            })
         }
 
         // ── Distinct nodes ───────────────────────────────────────────
-        Iso::Distrib(..) => NodeKind::Distrib(DistribDir::Distrib),
-        Iso::Factor(..) => NodeKind::Distrib(DistribDir::Factor),
-        Iso::Trace(u, f) => NodeKind::TraceLoop {
-            carrier: u.clone(),
-            body: Box::new(canonicalize(f)?),
-        },
-        Iso::Prim(def) => NodeKind::Prim(def.clone()),
-    };
-
-    Ok(TypedNode { input, output, kind })
+        Iso::Distrib(a, b, c) => {
+            let input = Type::prod(a.clone(), Type::sum(b.clone(), c.clone()));
+            let output = Type::sum(
+                Type::prod(a.clone(), b.clone()),
+                Type::prod(a.clone(), c.clone()),
+            );
+            Ok(TypedNode {
+                input,
+                output,
+                kind: NodeKind::Distrib(DistribDir::Distrib),
+            })
+        }
+        Iso::Factor(a, b, c) => {
+            let input = Type::sum(
+                Type::prod(a.clone(), b.clone()),
+                Type::prod(a.clone(), c.clone()),
+            );
+            let output = Type::prod(a.clone(), Type::sum(b.clone(), c.clone()));
+            Ok(TypedNode {
+                input,
+                output,
+                kind: NodeKind::Distrib(DistribDir::Factor),
+            })
+        }
+        Iso::Trace(u, f) => {
+            let body = canonicalize(f)?;
+            // Derive trace boundary types from body's types — same
+            // validation as type_of but using already-computed types.
+            let a = match &body.input {
+                Type::Sum(u1, a) if u1.as_ref() == u => a.as_ref().clone(),
+                Type::Sum(u1, _) => {
+                    return Err(TypeError::TraceInputCarrier {
+                        expected: u.clone(),
+                        got: u1.as_ref().clone(),
+                    });
+                }
+                _ => return Err(TypeError::TraceInputNotSum(body.input.clone())),
+            };
+            let b = match &body.output {
+                Type::Sum(u2, b) if u2.as_ref() == u => b.as_ref().clone(),
+                Type::Sum(u2, _) => {
+                    return Err(TypeError::TraceOutputCarrier {
+                        expected: u.clone(),
+                        got: u2.as_ref().clone(),
+                    });
+                }
+                _ => return Err(TypeError::TraceOutputNotSum(body.output.clone())),
+            };
+            Ok(TypedNode {
+                input: a,
+                output: b,
+                kind: NodeKind::TraceLoop {
+                    carrier: u.clone(),
+                    body: Box::new(body),
+                },
+            })
+        }
+        Iso::Prim(def) => Ok(TypedNode {
+            input: def.input_ty.clone(),
+            output: def.output_ty.clone(),
+            kind: NodeKind::Prim(def.clone()),
+        }),
+    }
 }
 
 /// Convenience: the type vocabulary's bit, `1 + 1`.
@@ -106,7 +308,7 @@ pub fn bit_type() -> Type {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use theseus_core::Iso;
+    use theseus_core::{type_of, Iso};
 
     fn bit() -> Type {
         bit_type()
