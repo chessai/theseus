@@ -123,8 +123,8 @@ fn assembler_encode_roundtrip() {
     assert_eq!(encode(Instr::Exch { rd: 1, rs: 2 }), 0x9940);
     // ADDI r3, 0x5A: 0 | 000 | 011 | 0101_1010 | 0 = 0x06B4.
     assert_eq!(encode(Instr::Addi { rd: 3, imm: 0x5A }), 0x06B4);
-    // SWAPBR: 1 | 1000 | 000 | 000 | 000 | 00 = 0xC000.
-    assert_eq!(encode(Instr::Swapbr), 0xC000);
+    // SWAPBR r0: 1 | 1000 | 000 | 000 | 000 | 00 = 0xC000.
+    assert_eq!(encode(Instr::Swapbr { rd: 0 }), 0xC000);
 
     // Round-trip across the whole instruction set.
     let samples = [
@@ -136,7 +136,7 @@ fn assembler_encode_roundtrip() {
         Instr::Rotr { rd: 0, rs: 7 },
         Instr::Cswap { rd: 1, rs: 2, rt: 3 },
         Instr::Xchg { rd: 4, sx: 5 },
-        Instr::Swapbr,
+        Instr::Swapbr { rd: 0 },
         Instr::Addi { rd: 0, imm: 0xFF },
         Instr::Subi { rd: 1, imm: 0x01 },
         Instr::Xori { rd: 2, imm: 0xA5 },

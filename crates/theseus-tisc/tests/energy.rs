@@ -76,7 +76,7 @@ fn analytic_matches_balance_xori() {
 
 #[test]
 fn analytic_matches_balance_swapbr() {
-    let iso = theseus_tisc::instr::swapbr();
+    let iso = theseus_tisc::instr::swapbr(0);
     lower_and_check_buffer_count(&iso, "SWAPBR");
 }
 

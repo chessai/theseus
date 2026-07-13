@@ -73,7 +73,7 @@ use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_balanced, seq_list,
 };
 use crate::types::{
-    flat, reg_field, scratch_field, word8, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD, PC_FIELD, W,
+    flat, reg_field, scratch_field, word8, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD, W,
 };
 
 // ── Aux-field conventions ──────────────────────────────────────────
@@ -506,15 +506,21 @@ fn xchg_instr() -> Iso {
     predicated(&r_pred(0b0111), body)
 }
 
-/// SWAPBR: gated swap of PC and BR (no register fields).
+/// SWAPBR rd: gated swap of BR ↔ r[rd] (ADR-0034 D1, Pendulum
+/// semantics). EXCH-shaped: route r[rd] to the r0 slot via the R_RD
+/// crossbar, perform a predicated swap of r0-slot and BR, route back.
+/// No instruction writes PC; the branch offset in BR is consumed by
+/// the end-of-step `pc_add_br ; pc_inc`.
 fn swapbr_instr() -> Iso {
+    let sel = select_reg(R_RD);
     let core = on_fields(
-        &[PC_FIELD, BR_FIELD, AUX_PRED_FIELD],
+        &[reg_field(0), BR_FIELD, AUX_PRED_FIELD],
         (0..W)
             .map(|i| gate_at(3 * W, &[2 * W, i, W + i], fredkin_prim()))
             .collect(),
     );
-    predicated(&r_pred(0b1000), core)
+    let body = Iso::seq(sel.clone(), Iso::seq(core, Iso::sym(sel)));
+    predicated(&r_pred(0b1000), body)
 }
 
 /// ADDI core on [r0-slot, s0, IR_lo, IR_hi, s1]: CNOT-mask the imm8

@@ -77,16 +77,20 @@ This is the Option-A scratch access path (ADR-0029): an exchange, not
 a copy. The source routes it through a named iso, preserving the
 Option-B seam.
 
-### Control flow
+### Control flow (ADR-0034)
 
 | Mnemonic | Semantics (forward) | Adjoint | Self-inverse? |
 |----------|--------------------|---------|----|
-| `SWAPBR` | `PC ↔ BR` | `SWAPBR` | yes |
+| `SWAPBR rd` | `BR ↔ r[rd]` | `SWAPBR rd` | yes |
 
-Per P3 (Pendulum SWAPBR lineage): branching swaps BR with PC; the
-come-from address is preserved in BR; paired branches mirror clause
-coverage. Conditional branching is achieved by preceding SWAPBR with
-a CSWAP that conditionally exchanges BR with a target-address register.
+Per ADR-0034 (Pendulum/PISA lineage, Frank/Vieri): SWAPBR swaps BR
+with a general register, **not** with PC. BR is a PC *offset*
+consumed by the uniform end-of-step update `PC += BR + 1 (mod 256)`.
+BR = 0 is fall-through (`PC += 0 + 1 = PC + 1`). No instruction
+writes PC during execute; the execute phase's write set is restricted
+to `{r0..r7, s0..s7, BR}`. Conditional branching is achieved by
+preceding SWAPBR with a CSWAP that conditionally exchanges BR with a
+target-offset register.
 
 ### Workload coverage
 
@@ -160,7 +164,7 @@ R-format (16 slots):
 | 0101 | ROTR rd, rs |
 | 0110 | CSWAP rd, rs, rt |
 | 0111 | XCHG rd, rt (scratch exchange; rs ignored) |
-| 1000 | SWAPBR (rd, rs, rt ignored) |
+| 1000 | SWAPBR rd (rs, rt reserved zero; ADR-0034) |
 | 1001–1111 | reserved (compile error per P1) |
 
 I-format (8 slots):
@@ -180,10 +184,10 @@ enforces totality regardless.**
 
 ---
 
-## 4. The step iso
+## 4. The step iso (ADR-0034)
 
-`step : State <-> State` is a single iso composed of four phases
-(ADR-0029, ADR-0030 P4):
+`step : State <-> State` is a single iso composed of five phases
+(ADR-0029, ADR-0030 P4, ADR-0034):
 
 1. **Fetch.** CNOT the ROM word at address PC onto the zeroed IR.
    Copy-onto-known-zero is reversible (ordinary clauses). The ROM is a
@@ -191,26 +195,34 @@ enforces totality regardless.**
    i.e. an addressed exchange with a known-zero register — exactly the
    ADR-0027 cell pattern. The ROM threads through State linearly.
 
-2. **Decode.** Branch tree on the opcode bits of IR (P1). Each leaf is
-   one instruction iso. The coverage checker ensures every opcode maps
-   to exactly one leaf (left-exhaustive) and no two leaves overlap
-   (right-exhaustive / non-overlap). Undefined opcodes are compile
-   errors.
+2. **Decode + Execute.** Branch tree on the opcode bits of IR (P1).
+   Each leaf is one instruction iso. The coverage checker ensures
+   every opcode maps to exactly one leaf (left-exhaustive) and no two
+   leaves overlap (right-exhaustive / non-overlap). Undefined opcodes
+   are compile errors. The execute phase mutates a subset of
+   `{r0..r7, s0..s7, BR}` via the merge/exchange rules of P2
+   (ADR-0034 D1: **no instruction writes PC**). IR bits act purely as
+   *controls* (the one legal fanout, ADR-0027); data in IR is never
+   consumed.
 
-3. **Execute.** Dispatch to the selected instruction iso, which
-   mutates a subset of `{r0..r7, s0..s7, BR}` via the merge/exchange
-   rules of P2. IR bits act purely as *controls* (the one legal
-   fanout, ADR-0027); data in IR is never consumed.
+3. **Unfetch.** CNOT IR against the same ROM word to re-zero IR (P4:
+   IR provably zero between steps). Because PC is constant across
+   fetch → execute → unfetch (D1: nothing writes it), the unfetch
+   XORs the same ROM word the fetch did, unconditionally (ADR-0034 D3).
 
-4. **Unfetch.** CNOT IR against the same ROM word to re-zero IR (P4:
-   IR provably zero between steps). Advance PC reversibly (PC += 1 mod
-   256, itself a reversible merge).
+4. **PC += BR.** Add the branch register (offset) into PC via the
+   Takahashi–Kunihiro zero-ancilla in-place ripple adder (≤ K2). BR
+   is preserved. BR = 0 is fall-through.
 
-The entire fetch–decode–execute–unfetch sequence is one iso. Running T
-steps = unrolling `step` T times (C2.4, unroll-only in v1). For M4-v1,
-T ≈ 16–64. The adjoint `~step` runs the four phases in reverse order,
-each replaced by its adjoint: un-advance PC, re-fetch to restore IR,
-un-execute (adjoint instruction), un-fetch to re-zero IR.
+5. **PC += 1.** Ripple increment (the existing pc_inc).
+
+Together phases 4–5 implement the uniform end-of-step PC update
+`PC += BR + 1 (mod 256)` (ADR-0034 D2). The entire
+fetch–execute–unfetch–advance sequence is one iso. Running T steps =
+unrolling `step` T times (C2.4, unroll-only in v1). The adjoint
+`~step` runs the five phases in reverse order, each replaced by its
+adjoint. `step` is a total bijection on the full State space
+(ADR-0034 D4).
 
 ---
 
@@ -255,7 +267,8 @@ the 10-bit reconciliation from §1.
 | **XORI datapath** | ~50 | k1 | 8 controlled NOTs + buffers |
 | **ROTLI/ROTRI datapath** | ~200 | k1 | Same as ROTL/ROTR |
 | **XCHG datapath** | ~80 | k1 | Fredkin tree on 3 scratch-addr bits × 8 data bits |
-| **SWAPBR datapath** | ~30 | k0 | 8 rail-pair swaps |
+| **SWAPBR datapath** | ~80 | k0, k1 | 8 rail-pair swaps + rd crossbar (ADR-0034: BR↔r[rd]) |
+| **PC += BR (offset add)** | ~46 | k1, k2 | TK zero-ancilla adder (same family as ADD) |
 | **Instruction datapaths total** | **~3120** | mixed | Sum of all leaves in decode Branch tree |
 | **Balancing buffers** | ~1800 | k0 | ~40% overhead (C2.2: mandatory minimal-buffer balancing) |
 | **PC increment** | ~150 | k1, k2 | 8-bit reversible increment ≈ 1 full adder |

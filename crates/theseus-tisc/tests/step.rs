@@ -1,8 +1,8 @@
 //! Differential-oracle tests for the TISC-1 `step` iso
-//! (`step(rom) : State <-> State`, tisc-1-spec §4).
+//! (`step(rom) : State <-> State`, tisc-1-spec §4, ADR-0034).
 //!
 //! A Rust reference emulator `ref_step` (fetch rom[pc] → apply the
-//! instruction's semantics → pc = pc + 1 mod 256) is the oracle. For
+//! instruction's semantics → PC += BR + 1 mod 256) is the oracle. For
 //! small straight-line test ROMs and sampled States we check:
 //!
 //!   1. lowering succeeds (unbalanced), netlist valid, max cell kind ≤ K3
@@ -20,9 +20,11 @@
 //! s1 = 0 on entry; ROM words avoid register aliasing and the
 //! decoder-reserved scratch (s0/s1) in XCHG.
 //!
-//! SWAPBR: per the documented step-level limitation (see step.rs module
-//! docs — the spec semantics are non-injective on the full State space)
-//! a SWAPBR step is PC-advance-only; a dedicated test pins that down.
+//! SWAPBR: per ADR-0034, SWAPBR rd swaps BR ↔ r[rd], and the end-of-step
+//! PC update is `PC += BR + 1`. Branching is functional; a dedicated
+//! test verifies a taken branch, and the counterexample from the former
+//! obstruction (v1 non-injectivity) is shown to produce distinct
+//! post-states under v2 semantics.
 
 use std::sync::OnceLock;
 
@@ -31,7 +33,7 @@ use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_netlist::{
     balance, bits_of, lower_iso, rail_width, simulate, CellKind,
 };
-use theseus_tisc::step::{fetch, pc_inc, step};
+use theseus_tisc::step::{fetch, pc_add_br, pc_inc, step};
 use theseus_tisc::types::StateVals;
 
 const EVAL_FUEL: u64 = 8_000_000_000;
@@ -51,8 +53,8 @@ fn i_ins(opc: u16, rd: u16, imm: u8) -> u16 {
 // ── Reference emulator ─────────────────────────────────────────────
 
 /// Apply the semantics of one instruction word to the register state.
-/// SWAPBR is a no-op at step level (documented limitation). Reserved
-/// opcodes and word 0 are no-ops given s0 = 0 (asserted in ref_step).
+/// SWAPBR rd swaps BR ↔ r[rd] (ADR-0034 D1). Reserved opcodes and
+/// word 0 are no-ops given s0 = 0 (asserted in ref_step).
 fn ref_instr(word: u16, s: &mut StateVals) {
     if word & 0x8000 != 0 {
         let opcode = (word >> 11) & 0xF;
@@ -72,8 +74,8 @@ fn ref_instr(word: u16, s: &mut StateVals) {
                 }
             }
             0b0111 => std::mem::swap(&mut s.regs[rd], &mut s.scratch[rt]),
-            0b1000 => {} // SWAPBR: step-level no-op (see step.rs docs)
-            _ => {}      // reserved
+            0b1000 => std::mem::swap(&mut s.regs[rd], &mut s.br),
+            _ => {} // reserved
         }
     } else {
         let opc = (word >> 12) & 7;
@@ -91,7 +93,7 @@ fn ref_instr(word: u16, s: &mut StateVals) {
 }
 
 /// One reference machine cycle: fetch rom[pc] (0 out of range), apply
-/// it, advance PC. IR stays 0 across the step.
+/// it, PC += BR + 1 (ADR-0034 D2). IR stays 0 across the step.
 fn ref_step(rom: &[u16], s: &StateVals) -> StateVals {
     assert_eq!(s.ir, 0, "P4: IR must be 0 between steps");
     assert_eq!(s.scratch[0], 0, "s0 convention (ADDI / IR=0 degeneracy)");
@@ -99,7 +101,8 @@ fn ref_step(rom: &[u16], s: &StateVals) -> StateVals {
     let mut out = s.clone();
     let word = rom.get(s.pc as usize).copied().unwrap_or(0);
     ref_instr(word, &mut out);
-    out.pc = s.pc.wrapping_add(1);
+    // ADR-0034 D2: PC += BR + 1 (using post-execute BR value)
+    out.pc = s.pc.wrapping_add(out.br).wrapping_add(1);
     out
 }
 
@@ -131,13 +134,13 @@ fn rom2() -> Vec<u16> {
     ]
 }
 
-// ── Sample states (ir = 0, s0 = s1 = 0) ────────────────────────────
+// ── Sample states (ir = 0, s0 = s1 = 0, BR = 0 for straight-line) ─
 
 fn st(regs: [u8; 8], pc: u8) -> StateVals {
     StateVals {
         regs,
         pc,
-        br: 0x99,
+        br: 0,
         ir: 0,
         scratch: [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
     }
@@ -161,7 +164,7 @@ fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 1. Phase isolation: fetch and pc_inc
+// 1. Phase isolation: fetch, pc_add_br, and pc_inc
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -194,6 +197,44 @@ fn fetch_isolated() {
 }
 
 #[test]
+fn pc_add_br_isolated() {
+    let iso = pc_add_br();
+
+    let net = lower_iso(&iso).expect("pc_add_br lowers");
+    assert_eq!(net.validate(), Ok(()));
+    let counts = net.cell_counts();
+    let max_kind = counts.keys().max().copied().unwrap_or(CellKind::K0);
+    let total: usize = counts.values().sum();
+    eprintln!("pc_add_br: {total} cells, max kind {max_kind:?}, counts {counts:?}");
+    assert!(max_kind <= CellKind::K2, "pc_add_br: max kind {max_kind:?} > K2");
+
+    // Sample: PC += BR for various (pc, br) pairs.
+    for (pc, br) in [(0u8, 0u8), (10, 5), (0xFF, 1), (0x80, 0x80), (0, 0xFF), (42, 200)] {
+        let mut s = st(regs_a(), pc);
+        s.br = br;
+        let got = eval_state("pc_add_br", &iso, &s);
+        let mut expected = s.clone();
+        expected.pc = pc.wrapping_add(br);
+        assert_eq!(got, expected, "pc_add_br: pc={pc}, br={br}");
+
+        // Adjoint = subtract.
+        let back = eval_state("pc_sub_br", &Iso::sym(iso.clone()), &got);
+        assert_eq!(back, s, "pc_add_br adjoint: pc={pc}, br={br}");
+    }
+}
+
+#[test]
+fn pc_add_br_exhaustive_br0_is_identity() {
+    // With BR = 0, pc_add_br must be the identity (fall-through).
+    let iso = pc_add_br();
+    for pc in 0..=255u8 {
+        let s = st(regs_b(), pc);
+        let got = eval_state("pc_add_br/br0", &iso, &s);
+        assert_eq!(got, s, "pc_add_br with BR=0 must be identity (pc={pc})");
+    }
+}
+
+#[test]
 fn pc_inc_isolated() {
     let iso = pc_inc();
 
@@ -220,15 +261,8 @@ fn pc_inc_isolated() {
 
 #[test]
 fn pc_inc_exhaustive_all_256() {
-    // pc_inc's correctness rests on a carry-chain uncompute argument
-    // ("MSB-down so each uncompute reads not-yet-flipped PC bits"); the
-    // sampled test above only hits 10 PCs. This exhausts all 256 values,
-    // pinning PC+1 mod 256 AND that the s1 carry scratch is restored to
-    // zero for every carry pattern (the whole state must be preserved
-    // except PC). Cheap: pc_inc is a tiny iso.
     let iso = pc_inc();
     for pc in 0..=255u8 {
-        // Non-trivial scratch/regs so "everything else preserved" bites.
         let s = st(regs_b(), pc);
         let got = eval_state("pc_inc/all", &iso, &s);
         let mut expected = s.clone();
@@ -280,7 +314,6 @@ fn ctx() -> &'static Ctx {
         let total: usize = counts.values().sum();
         eprintln!("== PER-STEP COST (rom1, 8 words) ==");
         eprintln!("step: {total} cells, max kind {max_kind:?}, counts {counts:?}");
-        // Component-sum estimate: decode_execute ~4192 + fetch ~296 + unfetch ~296 + pc_inc ~38
         assert!(max_kind <= CellKind::K3, "step: max kind {max_kind:?} > K3");
 
         let n_data = rail_width(&in_ty).unwrap();
@@ -311,8 +344,6 @@ fn check_semantics(name: &str, s: &StateVals) {
 
 #[test]
 fn step_lowering_within_budget() {
-    // Building ctx() performs the unbalanced lowering, K3 assertion,
-    // and prints the per-step cell counts (the unroll-planning number).
     let _ = ctx();
 }
 
@@ -334,7 +365,6 @@ fn step_semantics() {
 #[test]
 #[ignore = "memory: full-step balanced netlist (~1.5M K0 buffers) exceeds host RAM; step is verified via core-eval + isolated-component lowering. Track: balancer buffer-materialization memory."]
 fn step_faithfulness_balanced_simulate() {
-    // Faithfulness: balance-then-simulate == bits of core eval.
     let rom = rom1();
     let iso = step(&rom);
     let (in_ty, out_ty) = type_of(&iso).expect("step types");
@@ -428,34 +458,106 @@ fn forward_then_backward_run() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 5. SWAPBR: documented step-level degeneracy + bijectivity
+// 5. SWAPBR: functional branching + v1 counterexample regression
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn swapbr_step_is_pc_advance_only() {
-    // See step.rs module docs: the spec's SWAPBR step semantics are
-    // non-injective on the full State space, so step() keeps SWAPBR a
-    // net no-op (execute swaps PC<->BR, the SWAPBR-keyed unswap undoes
-    // it before the unfetch). This test pins that behavior down — and
-    // verifies IR still re-zeroes and the step stays reversible.
-    let rom = vec![r_ins(8, 0, 0, 0), r_ins(0, 1, 2, 0)]; // SWAPBR; ADD r1, r2
+fn swapbr_step_swaps_br_and_rd() {
+    // ADR-0034 D1: SWAPBR rd swaps BR ↔ r[rd]. The end-of-step PC
+    // update is PC += BR + 1 (D2), using the post-execute BR.
+    let rom = vec![
+        r_ins(8, 2, 0, 0), // 0: SWAPBR r2
+        r_ins(0, 1, 3, 0), // 1: ADD r1, r3
+    ];
     let iso = step(&rom);
     let back = Iso::sym(iso.clone());
 
-    for br in [0u8, 1, 5, 0x99] {
-        let mut s = st(regs_a(), 0);
-        s.br = br;
-        let got = eval_state("swapbr", &iso, &s);
-        let mut expected = s.clone();
-        expected.pc = 1; // PC advance only
-        assert_eq!(got, expected, "SWAPBR step must be PC-advance-only (br={br})");
-        assert_eq!(got.ir, 0, "SWAPBR step: IR must re-zero");
+    // r2 = 0x05, BR = 0: after SWAPBR r2, r2 = 0, BR = 0x05.
+    // PC update: PC = 0 + 0x05 + 1 = 6.
+    let s = st(regs_a(), 0);
+    // regs_a() = [0x00, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3]
+    // s.br = 0 from st()
+    let got = eval_state("swapbr/r2", &iso, &s);
+    let expected = ref_step(&rom, &s);
+    assert_eq!(got, expected, "SWAPBR r2 step semantics mismatch");
+    assert_eq!(got.regs[2], 0, "r2 should get old BR value (0)");
+    assert_eq!(got.br, 0xAA, "BR should get old r2 value (0xAA)");
+    assert_eq!(got.pc, 0u8.wrapping_add(0xAA).wrapping_add(1), "PC = 0 + 0xAA + 1");
+    assert_eq!(got.ir, 0, "P4: IR must re-zero after SWAPBR");
+    assert_eq!(got.scratch[1], 0, "s1 must be restored");
 
-        let rec = eval_state("swapbr/back", &back, &got);
-        assert_eq!(rec, s, "SWAPBR step must stay reversible (br={br})");
-    }
+    // Reversibility: adjoint recovers the input.
+    let rec = eval_state("swapbr/back", &back, &got);
+    assert_eq!(rec, s, "SWAPBR step must stay reversible");
 
-    // The non-SWAPBR instruction in the same ROM still works.
-    let s = st(regs_b(), 1);
-    assert_eq!(eval_state("swapbr-rom/add", &iso, &s), ref_step(&rom, &s));
+    // The non-SWAPBR instruction in the same ROM still works (at pc=1).
+    let s2 = st(regs_b(), 1);
+    assert_eq!(eval_state("swapbr-rom/add", &iso, &s2), ref_step(&rom, &s2));
+}
+
+#[test]
+fn v1_counterexample_distinct_post_states() {
+    // ADR-0034 D4: the v1 counterexample pair now maps to DISTINCT
+    // post-states under v2 semantics.
+    //
+    // A = (PC=5, BR=9, regs X) with rom[5] = SWAPBR r0
+    // B = (PC=9, BR=5, regs Y) via fall-through
+    //
+    // Under v2: A yields predecessor PC = PC' - BR' - 1 = 5;
+    //           B yields predecessor PC = PC' - BR' - 1 = 9.
+    // These are distinct, so no collision.
+
+    // Build a ROM: rom[5] = SWAPBR r0, rom[9] = ADD r1, r2.
+    let mut rom = vec![0u16; 10];
+    rom[5] = r_ins(8, 0, 0, 0); // SWAPBR r0
+    rom[9] = r_ins(0, 1, 2, 0); // ADD r1, r2
+
+    let iso = step(&rom);
+
+    // State A: PC=5, BR=9, regs X
+    let x_regs = [0x42u8, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3];
+    let a = StateVals {
+        regs: x_regs,
+        pc: 5,
+        br: 9,
+        ir: 0,
+        scratch: [0; 8],
+    };
+    let a_out = eval_state("counterex/A", &iso, &a);
+
+    // State B: PC=9, BR=5, regs Y (choose Y so that under v1 they
+    // would collide, but under v2 they don't).
+    // Under v2: B executes ADD r1,r2 -> r1 += r2; then PC = 9 + 5 + 1 = 15.
+    let y_regs = x_regs; // same regs for simplicity
+    let b = StateVals {
+        regs: y_regs,
+        pc: 9,
+        br: 5,
+        ir: 0,
+        scratch: [0; 8],
+    };
+    let b_out = eval_state("counterex/B", &iso, &b);
+
+    // A: SWAPBR r0 swaps BR ↔ r0. r0 was 0x42, BR was 9.
+    // After execute: r0=9, BR=0x42. PC = 5 + 0x42 + 1 = 0x48.
+    // B: ADD r1, r2. r1 += r2 = 0xFF + 0xAA = 0xA9 (mod 256).
+    // BR unchanged = 5. PC = 9 + 5 + 1 = 15.
+    assert_ne!(
+        a_out, b_out,
+        "v1 counterexample pair MUST map to distinct post-states under v2 (ADR-0034 D4)"
+    );
+
+    // Verify the predecessor PCs are distinct (the key insight).
+    let pred_a = a_out.pc.wrapping_sub(a_out.br).wrapping_sub(1);
+    let pred_b = b_out.pc.wrapping_sub(b_out.br).wrapping_sub(1);
+    assert_eq!(pred_a, 5, "predecessor PC of A must be 5");
+    assert_eq!(pred_b, 9, "predecessor PC of B must be 9");
+    assert_ne!(pred_a, pred_b, "predecessor PCs must be distinct");
+
+    // Both are individually reversible.
+    let back = Iso::sym(iso.clone());
+    let a_rec = eval_state("counterex/A/back", &back, &a_out);
+    let b_rec = eval_state("counterex/B/back", &back, &b_out);
+    assert_eq!(a_rec, a, "A must round-trip");
+    assert_eq!(b_rec, b, "B must round-trip");
 }

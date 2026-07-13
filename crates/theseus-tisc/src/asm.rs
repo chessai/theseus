@@ -51,9 +51,10 @@ pub enum Instr {
     Cswap { rd: u8, rs: u8, rt: u8 },
     /// `r[rd] ↔ s[sx]`. `sx` must be 2..8 (s0/s1 decoder-reserved).
     Xchg { rd: u8, sx: u8 },
-    /// `PC ↔ BR` (spec §2). NOTE: at the `step` level SWAPBR currently
-    /// degenerates to PC-advance-only (see `step.rs` module docs).
-    Swapbr,
+    /// `BR ↔ r[rd]` (ADR-0034 D1: Pendulum semantics). The branch
+    /// register is a PC offset consumed by the uniform end-of-step
+    /// update `PC += BR + 1`.
+    Swapbr { rd: u8 },
     /// `r[rd] += imm` (mod 256).
     Addi { rd: u8, imm: u8 },
     /// `r[rd] -= imm` (mod 256).
@@ -137,7 +138,13 @@ pub fn encode(instr: Instr) -> u16 {
             );
             r_word(0b0111, rd, 0, sx)
         }
-        Instr::Swapbr => r_word(0b1000, 0, 0, 0),
+        Instr::Swapbr { rd } => {
+            assert!(
+                (rd as usize) < NUM_REGS,
+                "SWAPBR r{rd}: register index out of range"
+            );
+            r_word(0b1000, rd, 0, 0)
+        }
         Instr::Addi { rd, imm } => i_word(0b000, rd, imm),
         Instr::Subi { rd, imm } => i_word(0b001, rd, imm),
         Instr::Xori { rd, imm } => i_word(0b010, rd, imm),
@@ -168,7 +175,7 @@ pub fn decode(word: u16) -> Option<Instr> {
             0b0101 => Some(Instr::Rotr { rd, rs }),
             0b0110 => Some(Instr::Cswap { rd, rs, rt }),
             0b0111 => Some(Instr::Xchg { rd, sx: rt }),
-            0b1000 => Some(Instr::Swapbr),
+            0b1000 => Some(Instr::Swapbr { rd }),
             _ => None, // reserved
         }
     } else {

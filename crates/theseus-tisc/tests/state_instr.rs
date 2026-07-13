@@ -306,13 +306,14 @@ fn exch_state_iso() {
 
 #[test]
 fn swapbr_state_iso() {
-    let iso = instr::swapbr();
-    let low = prepare("SWAPBR", &iso);
+    let rd = 3;
+    let iso = instr::swapbr(rd);
+    let low = prepare("SWAPBR(r3)", &iso);
 
     for s in &samples() {
-        check_case("SWAPBR", &iso, &low, s);
-        check_semantics("SWAPBR", &iso, s, |st| {
-            std::mem::swap(&mut st.pc, &mut st.br);
+        check_case("SWAPBR(r3)", &iso, &low, s);
+        check_semantics("SWAPBR(r3)", &iso, s, |st| {
+            std::mem::swap(&mut st.regs[rd], &mut st.br);
         });
     }
 

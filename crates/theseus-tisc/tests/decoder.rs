@@ -64,7 +64,7 @@ fn reference(s: &StateVals) -> StateVals {
                 }
             }
             0b0111 => std::mem::swap(&mut out.regs[rd], &mut out.scratch[rt]),
-            0b1000 => std::mem::swap(&mut out.pc, &mut out.br),
+            0b1000 => std::mem::swap(&mut out.regs[rd], &mut out.br),
             _ => {} // reserved: identity
         }
     } else {
@@ -144,8 +144,9 @@ fn op_samples(op: Op) -> Vec<StateVals> {
             st(regs_a(), r_ins(7, 3, 0, 0)), // sx = 0: swap with (zero) s0
         ],
         Op::Swapbr => vec![
-            st(regs_a(), r_ins(8, 0, 0, 0)),
-            st(regs_b(), r_ins(8, 7, 6, 5)), // register fields ignored
+            st(regs_a(), r_ins(8, 0, 0, 0)), // SWAPBR r0
+            st(regs_b(), r_ins(8, 3, 0, 0)), // SWAPBR r3
+            st(regs_a(), r_ins(8, 7, 0, 0)), // SWAPBR r7
         ],
         Op::Addi => vec![
             st(regs_a(), i_ins(0, 0, 0xFF)),

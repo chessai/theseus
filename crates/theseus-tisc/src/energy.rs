@@ -245,7 +245,7 @@ pub fn clause_report(
         ("ROTR r0,r1", crate::instr::rotr(0, 1)),
         ("CSWAP r0,r1,r2", crate::instr::cswap(0, 1, 2)),
         ("XCHG r0,s0", crate::instr::xchg(0, 0)),
-        ("SWAPBR", crate::instr::swapbr()),
+        ("SWAPBR r0", crate::instr::swapbr(0)),
         ("ADDI r0,#1", crate::instr::addi(0, 1)),
         ("SUBI r0,#1", crate::instr::subi(0, 1)),
         ("XORI r0,#1", crate::instr::xori(0, 1)),

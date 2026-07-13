@@ -13,7 +13,7 @@ use crate::addressing::{at_fields, at_reg1, at_reg2, at_reg3};
 use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_list, swap_adj,
 };
-use crate::types::{bit, flat, word8, reg_field, scratch_field, PC_FIELD, BR_FIELD, W};
+use crate::types::{bit, flat, word8, reg_field, scratch_field, BR_FIELD, W};
 
 // ══════════════════════════════════════════════════════════════════════
 // Operand-level iso builders (lifted from verified test files)
@@ -361,9 +361,9 @@ pub fn exch(rd: usize, rs: usize) -> Iso {
     at_reg2(swap_words_iso(), reg_field(rd), reg_field(rs))
 }
 
-/// `SWAPBR` : swap PC and BR.
-pub fn swapbr() -> Iso {
-    at_fields(swap_words_iso(), &[PC_FIELD, BR_FIELD])
+/// `SWAPBR rd` : swap BR and r[rd] (ADR-0034 D1, Pendulum semantics).
+pub fn swapbr(rd: usize) -> Iso {
+    at_fields(swap_words_iso(), &[reg_field(rd), BR_FIELD])
 }
 
 /// `XCHG rd, sx` : swap register `rd` with scratch word `sx`.

@@ -2,6 +2,13 @@
 
 **Status:** Accepted (design; implementation is M4-v2, with ADR-0033)
 
+**Implemented per ADR-0034:** D1 (SWAPBR rd = BR↔r[rd]), D2 (uniform
+PC update `PC += BR + 1` via `pc_add_br ; pc_inc`), D3 (IR provably
+zero unconditionally — v1 SWAPBR-keyed unswap deleted), D6 (SWAPBR
+uses rd field, no new opcodes). The step iso is a verified total
+bijection; the v1 counterexample pair maps to distinct post-states.
+See `step.rs`, `decoder.rs`, `asm.rs`, and `tests/branching.rs`.
+
 ## Context — the obstruction, restated
 
 `step.rs` documents (and its counterexample proves) that TISC-1 v1's

@@ -1,8 +1,8 @@
 //! TISC-1 `step`: the full fetch–decode/execute–unfetch–advance machine
-//! cycle, `step(rom) : State <-> State` (tisc-1-spec §4).
+//! cycle, `step(rom) : State <-> State` (tisc-1-spec §4, ADR-0034).
 //!
 //! The ROM is a compile-time-constant slice of 16-bit instruction words;
-//! `step` is one iso composed of four phases:
+//! `step` is one iso composed of five phases:
 //!
 //! 1. **Fetch** — CNOT the ROM word at address PC onto the (zero) IR.
 //!    For each address `p` with `rom[p] != 0`, a predicate `PC == p`
@@ -20,50 +20,46 @@
 //!
 //! 2. **Decode + Execute** — [`decoder::decode_execute`] (already built):
 //!    dispatches on IR's opcode bits and mutates the named registers,
-//!    preserving IR.
+//!    preserving IR. Per ADR-0034 D1, **no instruction writes PC**:
+//!    SWAPBR swaps BR ↔ r[rd] (Pendulum semantics), and the execute
+//!    phase's write set is restricted to `{r0..r7, s0..s7, BR}`.
 //!
 //! 3. **Unfetch** — re-zero IR with the SAME ROM word (P4: IR provably
-//!    zero between steps). If the executed instruction was SWAPBR the
-//!    execute phase swapped PC↔BR, so a second predicated PC↔BR swap
-//!    keyed on IR-is-SWAPBR ([`decoder::instruction`]`(Op::Swapbr)`,
-//!    exact because IR is still intact here) first restores the
-//!    pre-execute PC; then the fetch iso runs again and IR returns to 0
-//!    for *every* instruction, branch or not.
+//!    zero between steps). Because PC is constant across fetch → execute
+//!    → unfetch (D1: nothing writes PC; the PC update runs after the
+//!    unfetch), the unfetch XORs the same ROM word the fetch did, for
+//!    every instruction including SWAPBR, and IR returns to 0
+//!    unconditionally (ADR-0034 D3).
 //!
-//! 4. **Advance PC** — PC += 1 mod 256, a 12-Toffoli / 7-CNOT ripple
-//!    increment whose carry chain lives in s1 (zero between phases).
+//! 4. **PC += BR** — add the branch register (an offset) into PC via
+//!    the Takahashi–Kunihiro zero-ancilla in-place ripple adder (≤ K2).
+//!    BR is preserved (it is the operand of the add). BR = 0 is
+//!    fall-through.
 //!
-//! The adjoint `Iso::sym(step(rom))` is the reverse cycle (un-advance,
-//! re-fetch, un-execute, un-fetch) by construction.
+//! 5. **PC += 1** — the existing 12-Toffoli / 7-CNOT ripple increment.
 //!
-//! ## SWAPBR limitation (documented, reported)
+//! Together phases 4–5 implement the uniform end-of-step PC update
+//! `PC += BR + 1 (mod 256)` (ADR-0034 D2). BR = 0 gives fall-through
+//! `PC += 0 + 1 = PC + 1`, so **every M4-v1 straight-line ROM (which
+//! never sets BR) runs bit-identically**.
 //!
-//! Because the unswap in phase 3 is *not* re-applied after IR is zeroed
-//! (see below), the net effect of a SWAPBR step through `step` is
-//! **PC advance only** — the PC↔BR exchange is performed by the execute
-//! phase and then undone before the unfetch. Branches are therefore not
-//! yet functional at the step level; straight-line programs are exact.
+//! ## Proof sketch: `step` is a total bijection (ADR-0034 D4)
 //!
-//! This is not an implementation shortcut but a genuine obstruction:
-//! the spec semantics (`swap PC↔BR, then PC += 1`) are **not injective
-//! on the full State space**, so no total iso can implement them.
-//! Counterexample: with `rom[5] = SWAPBR` and `rom[9]` any non-branch,
-//! pre-state A = (PC=5, BR=9, regs X) steps to (PC=10, BR=5, regs X)
-//! via the branch, while pre-state B = (PC=9, BR=5, regs Y) steps to
-//! (PC=10, BR=5, regs Y·rom[9]) via fall-through; choosing
-//! Y = X·rom[9]⁻¹ makes two distinct pre-states collide. Reversible
-//! ISAs escape this only via a structural convention (Pendulum's paired
-//! branches / come-from discipline) that makes the colliding states
-//! unreachable, and the step iso would have to key its re-swap on that
-//! convention. Concretely: after the unfetch IR = 0, and any predicate
-//! for "re-do the swap" must read {PC, BR, ROM}; keying on
-//! "rom[PC] ∈ SWAPBR-addresses" with uncompute "rom[BR] ∈
-//! SWAPBR-addresses" is exact only when a non-branch step never runs
-//! with BR pointing at a SWAPBR address — but after any branch, BR
-//! holds the come-from address, which *is* a SWAPBR address, so the
-//! very next instruction violates it. Resolving this needs an
-//! ISA-level decision (tracked for follow-up); `step` here stays a
-//! total bijection with SWAPBR degenerating to a no-op.
+//! Write State = PC × Rest.
+//!
+//! 1. `fetch` writes only IR and s1, keyed on PC ⇒ preserves PC; it is
+//!    an iso by construction (self-inverse XOR mask per PC fiber).
+//! 2. `decode_execute` is a Seq of per-op predicated isos none of which
+//!    has PC in its write set (D1) ⇒ preserves PC; each is an iso.
+//! 3. Hence `E = fetch ; decode_execute ; fetch` is a bijection with
+//!    PC∘E = PC: it decomposes fiberwise, `E = ⊕_p E_p`, each `E_p` a
+//!    bijection of the fiber {PC = p} onto itself.
+//! 4. `A : (PC, BR, rest) ↦ (PC + BR + 1, BR, rest)` is a bijection —
+//!    inverse `(PC, BR, rest) ↦ (PC − BR − 1, BR, rest)`.
+//! 5. `step = A ∘ E` is a composition of bijections. ∎
+//!
+//! The adjoint `Iso::sym(step(rom))` is the reverse cycle by
+//! construction.
 //!
 //! ## Conventions
 //!
@@ -77,7 +73,7 @@ use theseus_core::Iso;
 
 use crate::decoder::{self, cnot_prim, on_fields, toffoli_prim, Op, AUX_PRED_FIELD};
 use crate::plumbing::{at_wire, gate_at, not_iso, seq_balanced};
-use crate::types::{state_ty, IR_HI_FIELD, IR_LO_FIELD, PC_FIELD, W};
+use crate::types::{state_ty, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD, PC_FIELD, W};
 
 // ── Fetch ──────────────────────────────────────────────────────────
 //
@@ -143,6 +139,44 @@ pub fn fetch(rom: &[u16]) -> Iso {
     }
 }
 
+// ── PC += BR (offset add) ─────────────────────────────────────────
+
+/// `PC += BR (mod 256)` via the Takahashi–Kunihiro zero-ancilla
+/// in-place ripple adder (≤ K2 cells). BR is the operand (preserved);
+/// PC is the target (modified). No scratch needed — TK is zero-ancilla.
+///
+/// With BR = 0 this is the identity (fall-through).
+/// `Iso::sym(pc_add_br())` subtracts BR from PC.
+pub fn pc_add_br() -> Iso {
+    let n = 2 * W; // [PC, BR]: PC bit i = wire i, BR bit j = wire 8 + j
+    let a = |i: usize| -> usize { W + i }; // BR (operand, preserved)
+    let b = |i: usize| -> usize { i }; // PC (target, modified: PC += BR)
+    let mut gates: Vec<Iso> = Vec::new();
+    // TK zero-ancilla in-place adder: b += a (mod 2^W), a preserved.
+    for i in 1..W - 1 {
+        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+    }
+    for i in (1..W - 1).rev() {
+        gates.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
+    }
+    for i in 0..W - 1 {
+        gates.push(gate_at(n, &[a(i), b(i), a(i + 1)], toffoli_prim()));
+    }
+    gates.push(gate_at(n, &[a(W - 1), b(W - 1)], cnot_prim()));
+    gates.push(gate_at(n, &[a(W - 2), b(W - 2), a(W - 1)], toffoli_prim()));
+    for i in (1..W - 1).rev() {
+        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+        gates.push(gate_at(n, &[a(i - 1), b(i - 1), a(i)], toffoli_prim()));
+    }
+    for i in 1..W - 1 {
+        gates.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
+    }
+    for i in 0..W - 1 {
+        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+    }
+    on_fields(&[PC_FIELD, BR_FIELD], gates)
+}
+
 // ── PC increment ───────────────────────────────────────────────────
 
 /// PC += 1 mod 256. Ripple increment: bit k flips iff bits 0..k are
@@ -179,24 +213,29 @@ pub fn pc_inc() -> Iso {
 
 /// One TISC-1 machine cycle over a subset of the instruction set
 /// (useful for incremental verification and cost accounting).
-/// If `ops` contains [`Op::Swapbr`], the SWAPBR-keyed unswap is
-/// inserted before the unfetch (see module docs).
+///
+/// The cycle is: fetch ; decode_execute ; unfetch ; pc_add_br ; pc_inc
+/// (ADR-0034 D2). No SWAPBR-keyed unswap is needed: PC is constant
+/// across E = fetch;execute;unfetch (D1: no instruction writes PC),
+/// so the unfetch always XORs the same ROM word the fetch did, and
+/// IR returns to 0 unconditionally (D3).
 pub fn step_ops(rom: &[u16], ops: &[Op]) -> Iso {
     let f = fetch(rom);
-    let mut phases = vec![f.clone(), decoder::decode_execute_ops(ops)];
-    if ops.contains(&Op::Swapbr) {
-        phases.push(decoder::instruction(Op::Swapbr));
-    }
-    phases.push(f); // unfetch: XOR the same ROM word — IR back to 0
-    phases.push(pc_inc());
+    let phases = vec![
+        f.clone(),                        // fetch
+        decoder::decode_execute_ops(ops), // decode + execute
+        f,                                // unfetch
+        pc_add_br(),                      // PC += BR
+        pc_inc(),                         // PC += 1
+    ];
     seq_balanced(phases)
 }
 
 /// `step(rom) : State <-> State` — the full TISC-1 machine cycle:
-/// fetch, decode+execute, unfetch (SWAPBR-safe: IR re-zeroes on every
-/// input), advance PC. Total bijection; straight-line instructions
-/// follow the spec exactly, SWAPBR degenerates to PC-advance-only
-/// (see module docs for why and what unblocking it requires).
+/// fetch, decode+execute, unfetch, PC += BR, PC += 1. Total bijection
+/// on the full State space (ADR-0034 D4); SWAPBR is functional
+/// (swaps BR ↔ r[rd]), branching works via the uniform end-of-step
+/// PC update `PC += BR + 1`.
 pub fn step(rom: &[u16]) -> Iso {
     step_ops(rom, &Op::ALL)
 }
