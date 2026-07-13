@@ -246,6 +246,9 @@ fn conformance_programs() {
         "0018-iter-nat",
         "0019-fold-parity",
         "0020-unfold-shift",
+        // μ-type depth annotation (ADR-0035 follow-up): use-site depth must
+        // grade end-to-end (parse → check → elaborate → eval, fwd+bwd).
+        "0021-mu-depth",
     ];
     let graded_stems: Vec<&str> = fixtures
         .iter()

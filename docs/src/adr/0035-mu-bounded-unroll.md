@@ -43,6 +43,15 @@ increment, and this lowering does not prejudge it: `fold`/`unfold` will
 carry their own typing against the nominal type, while bounded unroll
 remains the finite-elaboration/coverage backstop.
 
+## Follow-up: use-site depth annotation (T2-H)
+The deferred surface annotation has landed. The syntax `T@D` (e.g. `Nat@6`)
+on a type name at use site overrides the per-path unroll budget for that
+occurrence. The annotation is parsed as a postfix `@` + numeric literal at
+the type-atom level, threaded through `lower_with` as a fuel-map override,
+and restored after lowering so sibling occurrences are unaffected. An
+un-annotated type name continues to use `DEFAULT_UNROLL_DEPTH`. Conformance
+program 0021 exercises the annotation end-to-end.
+
 ## Alternatives rejected
 Core `Mu`/`Fold` variants now (fattens core before ADR-0009's primitives
 are designed, and every backend would need cases it cannot lower);

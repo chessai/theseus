@@ -4,6 +4,8 @@
 //! `~` (prefix, tightest) > `*` > `+` > `;` (loosest). All infix operators are
 //! left-associative. Tuples `(a, b, c)` nest to the right.
 
+use std::collections::BTreeMap;
+
 use crate::ast::{
     BinOp, Clause, CombKind, Ctor, Decl, Expr, IsoBody, IsoDecl, LowerName, Pattern, PrimDecl,
     Program, Span, Type, TypeDecl, UpperName,
@@ -50,6 +52,7 @@ pub fn parse(src: &str) -> Result<Program, ParseError> {
         toks: tokens,
         pos: 0,
         src_len: src.len(),
+        depth_overrides: BTreeMap::new(),
     };
     p.program()
 }
@@ -58,6 +61,8 @@ struct Parser {
     toks: Vec<Spanned>,
     pos: usize,
     src_len: usize,
+    /// Depth annotations parsed from `Name@depth` syntax (ADR-0035 follow-up).
+    depth_overrides: BTreeMap<usize, usize>,
 }
 
 impl Parser {
@@ -113,7 +118,8 @@ impl Parser {
             (Some(f), Some(l)) => f.span().merge(l.span()),
             _ => Span::new(0, self.src_len),
         };
-        Ok(Program { decls, span })
+        let depth_overrides = std::mem::take(&mut self.depth_overrides);
+        Ok(Program { decls, span, depth_overrides })
     }
 
     fn decl(&mut self) -> Result<Decl, ParseError> {
@@ -417,7 +423,18 @@ impl Parser {
 
     fn type_atom(&mut self) -> Result<Type, ParseError> {
         match self.peek() {
-            Some(Tok::Upper(_)) => Ok(Type::Name(self.upper_name()?)),
+            Some(Tok::Upper(_)) => {
+                let name = self.upper_name()?;
+                if self.peek() == Some(&Tok::At) {
+                    let at_span = self.peek_span();
+                    self.bump();
+                    let (depth, _depth_span) = self.nat_lit().map_err(|_| {
+                        ParseError::new("expected a depth literal after `@`", at_span)
+                    })?;
+                    self.depth_overrides.insert(name.span.start, depth as usize);
+                }
+                Ok(Type::Name(name))
+            }
             Some(Tok::Lower(_)) => Ok(Type::Var(self.lower_name()?)),
             Some(Tok::Nat(n)) => {
                 let s = self.peek_span();

@@ -120,6 +120,10 @@ pub struct Env {
     iso_collisions: Vec<IsoCollision>,
     /// Bounded-unroll depth `D` for recursive types (ADR-0035).
     unroll_depth: usize,
+    /// Use-site depth annotations parsed from `Name@depth` syntax (ADR-0035
+    /// follow-up). Maps `Span::start` of a type-name occurrence to the
+    /// annotated depth. Populated during [`resolve`].
+    depth_overrides: BTreeMap<usize, usize>,
 }
 
 impl Default for Env {
@@ -131,6 +135,7 @@ impl Default for Env {
             prims: BTreeMap::new(),
             iso_collisions: Vec::new(),
             unroll_depth: DEFAULT_UNROLL_DEPTH,
+            depth_overrides: BTreeMap::new(),
         }
     }
 }
@@ -222,6 +227,13 @@ impl Env {
         self.unroll_depth = depth;
     }
 
+    /// Register a use-site depth override for a type name at a specific
+    /// source position. `span_start` is the `Span::start` of the `Name`
+    /// type occurrence that carries the `@depth` annotation.
+    pub fn set_depth_override(&mut self, span_start: usize, depth: usize) {
+        self.depth_overrides.insert(span_start, depth);
+    }
+
     /// Lower a surface type into its core [`CoreType`] encoding.
     ///
     /// * `Empty` ⇒ `Zero`, `Unit` ⇒ `One`.
@@ -267,7 +279,19 @@ impl Env {
                 Box::new(self.lower_with(a, fuel)),
                 Box::new(self.lower_with(b, fuel)),
             ),
-            SurfType::Name(n) => self.lower_named(&n.text, fuel),
+            SurfType::Name(n) => {
+                if let Some(&depth) = self.depth_overrides.get(&n.span.start) {
+                    let old = fuel.insert(n.text.clone(), depth);
+                    let result = self.lower_named(&n.text, fuel);
+                    match old {
+                        Some(v) => { fuel.insert(n.text.clone(), v); }
+                        None => { fuel.remove(&n.text); }
+                    }
+                    result
+                } else {
+                    self.lower_named(&n.text, fuel)
+                }
+            }
         }
     }
 
@@ -406,7 +430,10 @@ fn lower_un_bits(n: u32) -> CoreType {
 /// Resolution itself does not emit diagnostics, but it records iso-name
 /// collisions (see [`Env::iso_collisions`]) for downstream stages to surface.
 pub fn resolve(program: &Program) -> Env {
-    let mut env = Env::default();
+    let mut env = Env {
+        depth_overrides: program.depth_overrides.clone(),
+        ..Env::default()
+    };
     for decl in &program.decls {
         match decl {
             Decl::Type(td) => {

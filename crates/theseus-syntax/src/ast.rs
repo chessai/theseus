@@ -6,6 +6,7 @@
 //! `core::ops::Range<usize>` for diagnostic rendering (that rendering lives in
 //! `theseus-check`, per the test spec).
 
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 /// A half-open byte span `[start, end)` into a source string.
@@ -70,6 +71,12 @@ pub struct UpperName {
 pub struct Program {
     pub decls: Vec<Decl>,
     pub span: Span,
+    /// Use-site depth annotations for recursive types (ADR-0035 follow-up).
+    /// Maps the byte-offset (`Span::start`) of a `Name` type occurrence to
+    /// the annotated unroll depth. Populated by the parser when it encounters
+    /// `Name@depth` syntax; consumed by `Env::lower` to override the default
+    /// depth for that specific occurrence.
+    pub depth_overrides: BTreeMap<usize, usize>,
 }
 
 /// A top-level declaration.

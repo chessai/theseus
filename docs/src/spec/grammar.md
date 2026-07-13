@@ -38,7 +38,7 @@ as identifiers.
 
 ### Punctuation and operators
 
-`(` `)` `,` `|` `:` `;` `*` `+` `~` `†` `$` `=` and the arrow `<->`.
+`(` `)` `,` `|` `:` `;` `*` `+` `~` `†` `$` `=` `@` and the arrow `<->`.
 
 `<->` is a single indivisible token. A partial arrow such as `<-` (see
 `diagnostics/0007-parse.thse`) is not `<->`; encountering it where `<->` is
@@ -64,6 +64,7 @@ where    ::= "where" isodecl+
 primdecl ::= "prim" lowerName ":" ty "<->" ty "=" String
 
 ty       ::= UpperName                          -- named ADT or stdlib numeric (Bit, U8, …)
+           | UpperName "@" Nat                  -- depth-annotated type (ADR-0035 follow-up)
            | tyvar                              -- type parameter
            | "0" | "1"                          -- core empty / unit types
            | "(" ty ("," ty)* ")"               -- grouping (1 elem) / product (≥2 elems)
@@ -86,7 +87,7 @@ expr     ::= "~" expr
 
 comb     ::= ("iter" | "fold" | "unfold") atomTy atomExpr   -- ADR-0038
 atomExpr ::= lowerName | "(" expr ")" | comb
-atomTy   ::= UpperName | lowerName | "0" | "1" | "(" ty ")"
+atomTy   ::= UpperName | UpperName "@" Nat | lowerName | "0" | "1" | "(" ty ")"
 ```
 
 Notes on the productions:
@@ -109,6 +110,11 @@ Notes on the productions:
   atom, `iter Nat f ; g` ≡ `(iter Nat f) ; g` and `~iter Nat f` is the
   adjoint of the whole iteration; a compound *body* must be parenthesized —
   `iter Nat (f ; g)`, `iter Nat (~f)` (`iter Nat ~f` is a `T0001` error).
+- **`UpperName "@" Nat`** is a depth-annotated type reference (ADR-0035
+  follow-up). `Nat@6` means "use the type `Nat` but unroll its recursive
+  fixpoint to depth 6 instead of the environment default". The `@` token
+  binds tighter than any type operator — `Nat@6 * Bit` ≡ `(Nat@6) * Bit`.
+  An un-annotated type name keeps the environment default depth.
 - **`where`** attaches to a single `isodecl`. Its nested `isodecl`s are in
   scope in the parent's `isobody` (clauses or `expr`) and shadow outer
   bindings of the same name; they may reference one another and outer names
@@ -162,5 +168,6 @@ tuple types and patterns including 3-place and nested (P0004–06, 15);
 `= expr` bodies over `~ ; * +` (P0007–10); label patterns `$go …` (P0011);
 `prim … = "…"` with a string key (P0012, D0009); `where` (P0013); `Nat`
 literals against `U1` (P0014); recursive `type` declarations (P0016–17);
-the v0.2 combinator forms `iter`/`fold`/`unfold` (P0018–20, ADR-0038). The
+the v0.2 combinator forms `iter`/`fold`/`unfold` (P0018–20, ADR-0038);
+depth-annotated type references `Nat@6` (P0021, ADR-0035 follow-up). The
 sole rejection is `diagnostics/0007-parse.thse`'s malformed `<-` → `T0001`.

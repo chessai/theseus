@@ -12,20 +12,27 @@
 //! transparent [`Expr::Paren`] / [`Type::Paren`] wrappers, which carry no
 //! semantic content. Use [`normalize_program`] to erase both before comparing.
 
+use std::collections::BTreeMap;
+
 use crate::ast::{
     Clause, Ctor, Decl, Expr, IsoBody, IsoDecl, LowerName, Pattern, PrimDecl, Program, Span, Type,
     TypeDecl, UpperName,
 };
 
+/// Depth-override map: `span.start → depth`. Passed through printing so that
+/// `Name@depth` annotations round-trip correctly (ADR-0035 follow-up).
+type DepthMap = BTreeMap<usize, usize>;
+
 /// Render a whole program to canonical surface text.
 #[must_use]
 pub fn pretty_program(p: &Program) -> String {
     let mut out = String::new();
+    let dm = &p.depth_overrides;
     for (i, d) in p.decls.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        pretty_decl(d, &mut out);
+        pretty_decl(d, dm, &mut out);
         out.push('\n');
     }
     out
@@ -34,28 +41,30 @@ pub fn pretty_program(p: &Program) -> String {
 /// Render a single expression to canonical surface text.
 #[must_use]
 pub fn pretty_expr(e: &Expr) -> String {
+    let dm = BTreeMap::new();
     let mut out = String::new();
-    print_expr(e, 0, &mut out);
+    print_expr(e, 0, &dm, &mut out);
     out
 }
 
 /// Render a single type to canonical surface text.
 #[must_use]
 pub fn pretty_type(t: &Type) -> String {
+    let dm = BTreeMap::new();
     let mut out = String::new();
-    print_type(t, 0, &mut out);
+    print_type(t, 0, &dm, &mut out);
     out
 }
 
-fn pretty_decl(d: &Decl, out: &mut String) {
+fn pretty_decl(d: &Decl, dm: &DepthMap, out: &mut String) {
     match d {
-        Decl::Type(t) => print_type_decl(t, out),
-        Decl::Iso(i) => print_iso_decl(i, 0, out),
-        Decl::Prim(p) => print_prim_decl(p, out),
+        Decl::Type(t) => print_type_decl(t, dm, out),
+        Decl::Iso(i) => print_iso_decl(i, 0, dm, out),
+        Decl::Prim(p) => print_prim_decl(p, dm, out),
     }
 }
 
-fn print_type_decl(t: &TypeDecl, out: &mut String) {
+fn print_type_decl(t: &TypeDecl, dm: &DepthMap, out: &mut String) {
     out.push_str("type ");
     out.push_str(&t.name.text);
     for p in &t.params {
@@ -67,44 +76,44 @@ fn print_type_decl(t: &TypeDecl, out: &mut String) {
         if i > 0 {
             out.push_str(" | ");
         }
-        print_ctor(c, out);
+        print_ctor(c, dm, out);
     }
 }
 
-fn print_prim_decl(p: &PrimDecl, out: &mut String) {
+fn print_prim_decl(p: &PrimDecl, dm: &DepthMap, out: &mut String) {
     out.push_str("prim ");
     out.push_str(&p.name.text);
     out.push_str(" : ");
-    print_type(&p.lhs, 0, out);
+    print_type(&p.lhs, 0, dm, out);
     out.push_str(" <-> ");
-    print_type(&p.rhs, 0, out);
+    print_type(&p.rhs, 0, dm, out);
     out.push_str(" = \"");
     out.push_str(&p.key);
     out.push('"');
 }
 
-fn print_ctor(c: &Ctor, out: &mut String) {
+fn print_ctor(c: &Ctor, dm: &DepthMap, out: &mut String) {
     out.push_str(&c.name.text);
     if let Some(p) = &c.payload {
         out.push(' ');
         // A constructor payload is a type atom; parenthesize compound types.
-        print_type(p, TYPE_ATOM, out);
+        print_type(p, TYPE_ATOM, dm, out);
     }
 }
 
-fn print_iso_decl(i: &IsoDecl, indent: usize, out: &mut String) {
+fn print_iso_decl(i: &IsoDecl, indent: usize, dm: &DepthMap, out: &mut String) {
     let pad = "  ".repeat(indent);
     out.push_str(&pad);
     out.push_str("iso ");
     out.push_str(&i.name.text);
     out.push_str(" : ");
-    print_type(&i.lhs, 0, out);
+    print_type(&i.lhs, 0, dm, out);
     out.push_str(" <-> ");
-    print_type(&i.rhs, 0, out);
+    print_type(&i.rhs, 0, dm, out);
     match &i.body {
         IsoBody::Expr(e) => {
             out.push_str(" = ");
-            print_expr(e, 0, out);
+            print_expr(e, 0, dm, out);
         }
         IsoBody::Clauses(cs) => {
             for c in cs {
@@ -120,7 +129,7 @@ fn print_iso_decl(i: &IsoDecl, indent: usize, out: &mut String) {
         out.push_str("where");
         for w in &i.wheres {
             out.push('\n');
-            print_iso_decl(w, indent + 1, out);
+            print_iso_decl(w, indent + 1, dm, out);
         }
     }
 }
@@ -196,22 +205,28 @@ const TYPE_SUM: u8 = 1;
 const TYPE_PROD: u8 = 2;
 const TYPE_ATOM: u8 = 3;
 
-fn print_type(t: &Type, min: u8, out: &mut String) {
+fn print_type(t: &Type, min: u8, dm: &DepthMap, out: &mut String) {
     match t {
-        Type::Name(n) => out.push_str(&n.text),
+        Type::Name(n) => {
+            out.push_str(&n.text);
+            if let Some(depth) = dm.get(&n.span.start) {
+                out.push('@');
+                out.push_str(&depth.to_string());
+            }
+        }
         Type::Var(n) => out.push_str(&n.text),
         Type::Empty(_) => out.push('0'),
         Type::Unit(_) => out.push('1'),
-        Type::Paren(inner, _) => print_type(inner, min, out),
+        Type::Paren(inner, _) => print_type(inner, min, dm, out),
         Type::Prod(l, r, _) => {
             let paren = min > TYPE_PROD;
             if paren {
                 out.push('(');
             }
             // Left-assoc: left child at same level, right child one tighter.
-            print_type(l, TYPE_PROD, out);
+            print_type(l, TYPE_PROD, dm, out);
             out.push_str(" * ");
-            print_type(r, TYPE_PROD + 1, out);
+            print_type(r, TYPE_PROD + 1, dm, out);
             if paren {
                 out.push(')');
             }
@@ -221,9 +236,9 @@ fn print_type(t: &Type, min: u8, out: &mut String) {
             if paren {
                 out.push('(');
             }
-            print_type(l, TYPE_SUM, out);
+            print_type(l, TYPE_SUM, dm, out);
             out.push_str(" + ");
-            print_type(r, TYPE_SUM + 1, out);
+            print_type(r, TYPE_SUM + 1, dm, out);
             if paren {
                 out.push(')');
             }
@@ -234,13 +249,13 @@ fn print_type(t: &Type, min: u8, out: &mut String) {
 // Expression precedence: `;` = 1, `+` = 2, `*` = 3, `~` = 4.
 const EXPR_ADJOINT: u8 = 4;
 
-fn print_expr(e: &Expr, min: u8, out: &mut String) {
+fn print_expr(e: &Expr, min: u8, dm: &DepthMap, out: &mut String) {
     match e {
         Expr::Var(n) => out.push_str(&n.text),
         Expr::Ctor(n) => out.push_str(&n.text),
         Expr::Id(_) => out.push_str("id"),
         Expr::Unit(_) => out.push_str("()"),
-        Expr::Paren(inner, _) => print_expr(inner, min, out),
+        Expr::Paren(inner, _) => print_expr(inner, min, dm, out),
         Expr::Adjoint(inner, _) => {
             let paren = min > EXPR_ADJOINT;
             if paren {
@@ -248,7 +263,7 @@ fn print_expr(e: &Expr, min: u8, out: &mut String) {
             }
             out.push('~');
             // The operand binds at least as tight as `~`; prefix chains fine.
-            print_expr(inner, EXPR_ADJOINT, out);
+            print_expr(inner, EXPR_ADJOINT, dm, out);
             if paren {
                 out.push(')');
             }
@@ -260,18 +275,18 @@ fn print_expr(e: &Expr, min: u8, out: &mut String) {
                 out.push('(');
             }
             // Left-assoc: left child at same bp, right child one tighter.
-            print_expr(l, bp, out);
+            print_expr(l, bp, dm, out);
             out.push(' ');
             out.push_str(op.glyph());
             out.push(' ');
-            print_expr(r, bp + 1, out);
+            print_expr(r, bp + 1, dm, out);
             if paren {
                 out.push(')');
             }
         }
         Expr::Tuple(..) => {
             out.push('(');
-            print_tuple_elems(e, out);
+            print_tuple_elems(e, dm, out);
             out.push(')');
         }
         Expr::Combinator(kind, ty, body, _) => {
@@ -279,9 +294,9 @@ fn print_expr(e: &Expr, min: u8, out: &mut String) {
             // needs surrounding parentheses, but its arguments are atoms.
             out.push_str(kind.keyword());
             out.push(' ');
-            print_type(ty, TYPE_ATOM, out);
+            print_type(ty, TYPE_ATOM, dm, out);
             out.push(' ');
-            print_expr_atom(body, out);
+            print_expr_atom(body, dm, out);
         }
     }
 }
@@ -289,39 +304,44 @@ fn print_expr(e: &Expr, min: u8, out: &mut String) {
 /// Print an expression in `atomExpr` position (a combinator body argument):
 /// non-atomic shapes are parenthesized so re-parsing keeps them as the single
 /// body argument (grammar.md / ADR-0038).
-fn print_expr_atom(e: &Expr, out: &mut String) {
+fn print_expr_atom(e: &Expr, dm: &DepthMap, out: &mut String) {
     match e {
-        Expr::Paren(inner, _) => print_expr_atom(inner, out),
+        Expr::Paren(inner, _) => print_expr_atom(inner, dm, out),
         Expr::Adjoint(..) | Expr::Bin(..) => {
             out.push('(');
-            print_expr(e, 0, out);
+            print_expr(e, 0, dm, out);
             out.push(')');
         }
-        _ => print_expr(e, 0, out),
+        _ => print_expr(e, 0, dm, out),
     }
 }
 
 /// Print the comma-separated flattened elements of a right-nested tuple.
-fn print_tuple_elems(e: &Expr, out: &mut String) {
+fn print_tuple_elems(e: &Expr, dm: &DepthMap, out: &mut String) {
     match e {
         Expr::Tuple(l, r, _) => {
-            print_expr(l, 0, out);
+            print_expr(l, 0, dm, out);
             out.push_str(", ");
-            print_tuple_elems(r, out);
+            print_tuple_elems(r, dm, out);
         }
-        other => print_expr(other, 0, out),
+        other => print_expr(other, 0, dm, out),
     }
 }
 
 /// Return a copy of the program with all [`Expr::Paren`] / [`Type::Paren`]
 /// wrappers removed and all spans zeroed. This is the canonical form used to
 /// compare ASTs for the `parse ∘ pretty ≡ id` round-trip property, which holds
-/// only up to spans and transparent parentheses.
+/// only up to spans, transparent parentheses, and depth annotations (which are
+/// carried in the separate `depth_overrides` map, not in the AST nodes).
 #[must_use]
 pub fn normalize_program(p: &Program) -> Program {
     Program {
         decls: p.decls.iter().map(normalize_decl).collect(),
         span: ZERO,
+        // Depth overrides are keyed by span.start, so they cannot survive
+        // normalization (which zeroes all spans). Clear them so that the
+        // round-trip comparison ignores annotation positions.
+        depth_overrides: BTreeMap::new(),
     }
 }
 

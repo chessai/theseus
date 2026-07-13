@@ -1,0 +1,15 @@
+# iso: spinN6
+# Nat@6 at unroll depth D = 6: 6 numerals x 2 bits, graded forward AND backward.
+# fuel-bound: 5
+(Zero, O) |-> (Zero, O)
+(Zero, I) |-> (Zero, I)
+(Succ Zero, O) |-> (Succ Zero, I)
+(Succ Zero, I) |-> (Succ Zero, O)
+(Succ (Succ Zero), O) |-> (Succ (Succ Zero), O)
+(Succ (Succ Zero), I) |-> (Succ (Succ Zero), I)
+(Succ (Succ (Succ Zero)), O) |-> (Succ (Succ (Succ Zero)), I)
+(Succ (Succ (Succ Zero)), I) |-> (Succ (Succ (Succ Zero)), O)
+(Succ (Succ (Succ (Succ Zero))), O) |-> (Succ (Succ (Succ (Succ Zero))), O)
+(Succ (Succ (Succ (Succ Zero))), I) |-> (Succ (Succ (Succ (Succ Zero))), I)
+(Succ (Succ (Succ (Succ (Succ Zero)))), O) |-> (Succ (Succ (Succ (Succ (Succ Zero)))), I)
+(Succ (Succ (Succ (Succ (Succ Zero)))), I) |-> (Succ (Succ (Succ (Succ (Succ Zero)))), O)

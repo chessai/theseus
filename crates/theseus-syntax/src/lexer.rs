@@ -73,6 +73,8 @@ pub enum Tok {
     Plus,
     #[token(";")]
     Semi,
+    #[token("@")]
+    At,
 
     /// A numeric literal (`Nat`). In `ty` position `0` and `1` denote the
     /// empty/unit types; in `atomPat` position any `Nat` is a literal. The
