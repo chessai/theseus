@@ -17,6 +17,7 @@ use crate::iso::Iso;
 /// - `(f + g)† = f† + g†`
 /// - `(f × g)† = f† × g†`
 /// - `(trace f)† = trace (f†)`
+/// - `(iter n f)† = iter n (f†)`      (counter-in-data, ADR-0036)
 /// - `(prim p)† = prim p̄`              (swap forward/backward)
 /// - structural isos flip to their partner (see table)
 pub fn adjoint(iso: &Iso) -> Iso {
@@ -85,6 +86,11 @@ pub fn adjoint(iso: &Iso) -> Iso {
         // ── Trace ────────────────────────────────────────────────
         // (trace f)† = trace (f†)
         Iso::Trace(u, f) => Iso::trace(u.clone(), adjoint(f)),
+
+        // ── Iter ─────────────────────────────────────────────────
+        // (iter n f)† = iter n (f†): the count k is preserved in the
+        // data, so the inverse un-applies the body exactly k times.
+        Iso::Iter(n, f) => Iso::iter(n.clone(), adjoint(f)),
 
         // ── Prim ─────────────────────────────────────────────────
         // (prim p)† = prim p̄
@@ -159,6 +165,8 @@ mod tests {
             Iso::times(Iso::Id(a.clone()), Iso::Id(b.clone())),
             // Trace
             Iso::trace(a.clone(), Iso::Id(Type::sum(a.clone(), b.clone()))),
+            // Iter
+            Iso::iter(Type::numeral_ty(3), Iso::SwapSum(a.clone(), a.clone())),
             // Prim
             Iso::Prim(Box::new(make_test_prim())),
         ];
@@ -223,6 +231,19 @@ mod tests {
 
         let lhs = adjoint(&Iso::trace(u.clone(), body.clone()));
         let rhs = Iso::trace(u, adjoint(&body));
+        assert_eq!(lhs, rhs);
+    }
+
+    /// `(iter n f)† = iter n (f†)` — the counter type is preserved, the
+    /// body is inverted.
+    #[test]
+    fn iter_adjoint() {
+        let n = Type::numeral_ty(4);
+        // Body with a nontrivial adjoint: assocl⁺.
+        let body = Iso::AssocLSum(one(), one(), one());
+
+        let lhs = adjoint(&Iso::iter(n.clone(), body.clone()));
+        let rhs = Iso::iter(n, adjoint(&body));
         assert_eq!(lhs, rhs);
     }
 

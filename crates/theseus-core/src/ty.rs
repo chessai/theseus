@@ -28,6 +28,20 @@ impl Type {
     pub fn prod(a: Type, b: Type) -> Self {
         Type::Prod(Box::new(a), Box::new(b))
     }
+
+    /// The unary numeral type with `count` inhabitants:
+    /// `numeral_ty(k) = 1 + (1 + (… + 0))` with `k` units. Its values
+    /// are exactly the numerals `0 ..= k−1`, numeral `i` being
+    /// `inrⁱ(inl ())` — the same encoding bounded μ-type unrolling
+    /// produces for `Nat` (ADR-0035). This is the admissible counter
+    /// type for `iter` (ADR-0036).
+    pub fn numeral_ty(count: usize) -> Self {
+        let mut ty = Type::Zero;
+        for _ in 0..count {
+            ty = Type::sum(Type::One, ty);
+        }
+        ty
+    }
 }
 
 impl fmt::Display for Type {

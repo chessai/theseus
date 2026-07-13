@@ -296,6 +296,119 @@ mod tests {
         assert_round_trip(&iso);
     }
 
+    // ─── Iter: differential oracle over the full swept domain ───────
+
+    /// The numeral value `inrⁿ(inl ())` (encoding per ADR-0035/0036).
+    fn numeral(n: usize) -> Value {
+        let mut v = Value::left(Value::Unit);
+        for _ in 0..n {
+            v = Value::right(v);
+        }
+        v
+    }
+
+    /// `rot3 : Three ↔ Three`, the successor mod 3 — a successor-like,
+    /// NOT self-inverse body, so `iterᵏ` distinguishes every k mod 3.
+    fn rot3() -> Iso {
+        let t0 = Value::left(Value::Unit);
+        let t1 = Value::right(Value::left(Value::Unit));
+        let t2 = Value::right(Value::right(Value::Unit));
+
+        let mut fwd = BTreeMap::new();
+        fwd.insert(t0.clone(), t1.clone());
+        fwd.insert(t1.clone(), t2.clone());
+        fwd.insert(t2.clone(), t0.clone());
+        let mut bwd = BTreeMap::new();
+        bwd.insert(t1.clone(), t0.clone());
+        bwd.insert(t2.clone(), t1);
+        bwd.insert(t0, t2);
+
+        Iso::Prim(Box::new(PrimDef {
+            forward_name: "rot3".into(),
+            backward_name: "rot3_inv".into(),
+            input_ty: three_ty(),
+            output_ty: three_ty(),
+            forward: fwd,
+            backward: bwd,
+        }))
+    }
+
+    /// Round-trip oracle for `iter`: sweeps the ENTIRE domain
+    /// `N₆ × Three` (via `enumerate`) forward-then-backward and
+    /// backward-then-forward: `eval(sym f, eval(f, v)) == v`.
+    #[test]
+    fn round_trip_iter_rot3() {
+        assert_round_trip(&Iso::iter(Type::numeral_ty(6), rot3()));
+    }
+
+    /// Same oracle with a self-inverse structural body.
+    #[test]
+    fn round_trip_iter_swap_sum() {
+        let body = Iso::SwapSum(Type::One, Type::One); // not : Bool ↔ Bool
+        assert_round_trip(&Iso::iter(Type::numeral_ty(5), body));
+    }
+
+    /// Depth-generic law: `iter n f ⟨k, x⟩ == ⟨k, fᵏ(x)⟩` — the n-fold
+    /// composition oracle, swept over every `k` in `N₆` and every `x`
+    /// in `Three`.
+    #[test]
+    fn iter_equals_nfold_body_composition() {
+        let body = rot3();
+        let iso = Iso::iter(Type::numeral_ty(6), body.clone());
+        for k in 0..6usize {
+            for x in enumerate(&three_ty()) {
+                // n-fold composition computed by k separate body evals.
+                let mut expected = x.clone();
+                for _ in 0..k {
+                    expected = run(&body, expected).unwrap();
+                }
+                let got = run(&iso, Value::pair(numeral(k), x.clone())).unwrap();
+                assert_eq!(
+                    got,
+                    Value::pair(numeral(k), expected),
+                    "iter^{k} != {k}-fold composition at x={x:?}",
+                );
+            }
+        }
+    }
+
+    /// Backward n-fold law: `sym(iter n f) ⟨k, y⟩ == ⟨k, (f†)ᵏ(y)⟩`.
+    #[test]
+    fn sym_iter_equals_nfold_inverse_composition() {
+        let body = rot3();
+        let inv_body = Iso::sym(body.clone());
+        let iso = Iso::sym(Iso::iter(Type::numeral_ty(6), body));
+        for k in 0..6usize {
+            for y in enumerate(&three_ty()) {
+                let mut expected = y.clone();
+                for _ in 0..k {
+                    expected = run(&inv_body, expected).unwrap();
+                }
+                let got = run(&iso, Value::pair(numeral(k), y.clone())).unwrap();
+                assert_eq!(
+                    got,
+                    Value::pair(numeral(k), expected),
+                    "sym(iter)^{k} != {k}-fold inverse composition at y={y:?}",
+                );
+            }
+        }
+    }
+
+    /// `iter` composes with the rest of the calculus: round-trip a
+    /// sequence that plumbs the pair through swapˣ on both sides.
+    #[test]
+    fn round_trip_iter_inside_composition() {
+        let n = Type::numeral_ty(4);
+        let iso = Iso::seq(
+            Iso::seq(
+                Iso::SwapProd(three_ty(), n.clone()),
+                Iso::iter(n.clone(), rot3()),
+            ),
+            Iso::SwapProd(n, three_ty()),
+        );
+        assert_round_trip(&iso);
+    }
+
     // ─── Enumerator integration: count and completeness ─────────────
 
     #[test]

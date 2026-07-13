@@ -297,6 +297,15 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
             output: def.output_ty.clone(),
             kind: NodeKind::Prim(def.clone()),
         }),
+
+        // `iter` is a v0.2 *software-dialect* primitive (ADR-0036): it
+        // evaluates in theseus-eval but has no netlist lowering yet.
+        // Lowering it (bounded-counter loop node, ADR-0013) is a
+        // separate, later increment.
+        Iso::Iter(_, _) => unimplemented!(
+            "Iso::Iter is not supported by the netlist backend yet \
+             (v0.2 software dialect only; see ADR-0036 / ADR-0013)"
+        ),
     }
 }
 
