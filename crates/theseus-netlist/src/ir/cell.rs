@@ -120,6 +120,67 @@ impl CellKind {
     }
 }
 
+/// Controlled rail-role swap (ADR-0040 proof-of-concept): `Rk` exchanges
+/// the two token lines *within* its one target pair iff all `k` control
+/// pairs carry `1` tokens. Value level:
+/// `(c₁, …, c_k, t) → (c₁, …, c_k, t ⊕ (c₁ ∧ … ∧ c_k))` — `R1` *is*
+/// CNOT, `R2` *is* Toffoli, with zero ancillas.
+///
+/// Physically the same act as a k-CSWAP — a controlled exchange of two
+/// conductors' charge, token-conserving and 1-hot-preserving
+/// (INV-TOKEN holds) — but the two swapped conductors are the two rails
+/// of ONE pair, so unlike the K-family it does **not** permute
+/// pair-values: it flips the target's value-vs-encoding relationship.
+/// That voids the parity law (`bennett.rs` module docs) and is what
+/// makes garbage-free conditional-NOT possible; see
+/// `tests/rail_role_swap.rs` for the machine-checked witnesses.
+///
+/// Deliberately a sibling of [`CellKind`], not a variant: promotion to
+/// the fabric awaits its char-DB entry and B5 admission (ADR-0040
+/// follow-up slice), and a variant today would ripple through every
+/// exhaustive `CellKind` match with no characterization behind it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum RoleSwapKind {
+    /// 1-controlled rail-role swap: CNOT in one cell.
+    R1,
+    /// 2-controlled rail-role swap: Toffoli in one cell.
+    R2,
+    /// 3-controlled rail-role swap.
+    R3,
+}
+
+impl RoleSwapKind {
+    /// Number of control pairs.
+    pub fn controls(self) -> usize {
+        match self {
+            RoleSwapKind::R1 => 1,
+            RoleSwapKind::R2 => 2,
+            RoleSwapKind::R3 => 3,
+        }
+    }
+
+    /// Number of logical ports (rail pairs), equal on input and output:
+    /// `k` controls then the one target pair.
+    pub fn arity(self) -> usize {
+        self.controls() + 1
+    }
+
+    /// The cell's truth function on logical bits, port order
+    /// `[c₁, …, c_k, t]`. Controls pass; the target's value flips iff
+    /// all controls are `1` (line level: its two token lines are
+    /// exchanged, which is why this is still pure charge routing).
+    /// Self-inverse.
+    pub fn eval(self, bits: &[bool]) -> Vec<bool> {
+        assert_eq!(bits.len(), self.arity(), "cell port-count mismatch");
+        let k = self.controls();
+        let mut out = bits.to_vec();
+        if bits[..k].iter().all(|&c| c) {
+            out[k] = !out[k];
+        }
+        out
+    }
+}
+
 /// One placed cell: kind + firing tick + phase + dual-rail connections.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cell {

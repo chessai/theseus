@@ -45,6 +45,7 @@
   - [0037 fold/unfold: structural-recursion core primitives](adr/0037-fold-unfold.md)
   - [0038 v0.2 surface syntax: iter/fold/unfold forms](adr/0038-v0.2-surface-syntax.md)
   - [0039 iter/fold/unfold netlist lowering: tag-gated full unroll](adr/0039-iter-fold-unfold-lowering.md)
+  - [0040 Controlled rail-role swap: voiding the parity law](adr/0040-rail-role-swap-cell.md)
 
 # Design Document
 

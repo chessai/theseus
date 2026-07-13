@@ -59,7 +59,7 @@ pub mod sim_bits {
 pub use balance::{balance, balance_compact, BalanceError, CompactBalanced, CompactSimError};
 pub use bennett::{bennett_wrap, lower_iso_bennett, BennettError, BennettWrapError};
 pub use canonicalize::canonicalize;
-pub use ir::cell::{Cell, CellKind, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT};
+pub use ir::cell::{Cell, CellKind, LineId, PhasedCellNetlist, RailPair, RoleSwapKind, PHASE_COUNT};
 pub use ir::typed::{Monoid, NodeKind, TypedNode};
 pub use lower::{
     bits_of, lower, lower_iso, prim_from_bits, rail_width, value_from_bits, LowerError,
