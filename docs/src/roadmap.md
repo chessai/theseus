@@ -1,5 +1,10 @@
 # Roadmap v2: two tracks, layers, parked items
 
+> **Current status (2026-07-13):** M1, M3a, M3b, and **M4-v1** (the TISC-1 CPU)
+> are all done and merged on `chessai/theseus-v2` (`m4-v1-complete`). See
+> [Project status](status.md) for the full picture. Nearest wanted artifact: the
+> **CPU money plot** (below).
+
 Post-pivot (ADR-0022): the project is **two-tracked**, and the tracks
 are independent for months.
 

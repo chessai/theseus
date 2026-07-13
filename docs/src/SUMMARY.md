@@ -1,6 +1,7 @@
 # Summary
 
 [Introduction](introduction.md)
+[Project status](status.md)
 
 # Architecture Decision Records
 
