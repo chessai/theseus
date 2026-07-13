@@ -24,7 +24,7 @@ sections below and ADRs 0033–0039.
 | **M3a** physics money plot | ✅ done | adiabatic slope −1 vs CMOS-flat vs PFAL, on sky130 ngspice; char DB + DUT matrix |
 | **M3b** compiled energy | ✅ done | compiler lowers programs → phased adiabatic cells → oracle-verified → energy. **Full adder** and **Fibonacci** compiled to *measured* joules |
 | **M4-v1** TISC-1 CPU | ✅ **done** | the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** — ADR-0030's milestone, met |
-| **M4-v2** ring machine | ✅ **core done** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving** vs unroll; reversible branching works (ADR-0034). Physical closure quantified (ancilla parity obstruction, ADR-0033). Follow-up: wire Bennett wrap into `run_true`. |
+| **M4-v2** ring machine | ✅ **done + zero-garbage** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving**; reversible branching works (ADR-0034). **Physical closure achieved**: the R1 rail-role-swap cell (ADR-0040, real ngspice, adiabatic slope −1) makes lowering garbage-free — the step is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so `run_true == eval^R` closes with **zero** re-supplied boundary. |
 | **v0.2 dialect** software | ✅ **done** | μ-types + `iter`/`fold`/`unfold`: core + eval + surface syntax + **netlist lowering** + diagnostics; writable `.thse` programs run source→cells (ADRs 0035–0039) |
 | **M2** FPGA / Verilator | ⏸ parked | still stubs; a demo, not a phase |
 
@@ -107,16 +107,22 @@ The v1 CPU *unrolls* `step` T times (area ∝ T). M4-v2 **recirculates** one bal
 - **Demo**: the CPU **computes Fibonacci on the ring** (`1,1,2,3,5,…,89,144`) —
   one ~9.18 M-cell body serves all 20 cycles vs 183.5 M cells unrolled = **20×
   area saving**.
-- **Physical closure — quantified, not hand-waved** (ADR-0033): a *machine-checked
-  parity theorem* shows K0–K3 cells permute rail-pairs, so a CNOT/Toffoli
-  provably cannot leave its ancillas constant — zero ancilla residue is impossible
-  in this vocabulary. A composition-level **Bennett wrap** (`bennett.rs`) restores
-  every forward ancilla to init, concentrating the irreducible residue into a
-  **fixed, data-independent boundary** (166/320 slots on the step, ~2× cells). So
-  true hardware recirculation (`run_true`) isn't literally closed, but the
-  obstruction is now a small re-suppliable fixed port set. Follow-ups: wire the
-  Bennett wrap into `run_true`; or an ADR-0027 controlled rail-role-swap cell
-  (voids the parity law → garbage-free CNOTs).
+- **Physical closure — achieved, zero garbage** (ADR-0033 + ADR-0040). First the
+  obstruction was proved: a *machine-checked parity theorem* shows K0–K3 cells
+  permute rail-pairs, so in that vocabulary a CNOT/Toffoli provably cannot leave
+  its ancillas constant — garbage-free logic is impossible. Two responses landed:
+  (1) a composition-level **Bennett wrap** (`bennett.rs`) that restores forward
+  ancillas and shrinks the residue to a fixed 320-slot boundary (`ClosedStepRing`);
+  and (2) the *root-cause fix* — the **R1 rail-role-swap cell** (ADR-0040): a
+  controlled swap of the two rails *within* one pair, which flips a value without
+  routing a pair, **voiding the parity law**. R1 is a real adiabatic cell (ngspice,
+  slope −1, B5-admitted), a first-class `CellKind`, and the synthesis (`emit_mcnot`)
+  now lowers CNOT→one R1, Toffoli→a clean K1-R1-K1 sandwich, any k-control→
+  AND-chain+R1 — all ancilla-clean **with R1 alone**. Result: the TISC-1 step's
+  plain lowering is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so
+  `StepRing::run_true == eval(step)^R` **physically closes with zero re-supplied
+  boundary** — a genuinely self-contained recirculating CPU. The Bennett wrap
+  demotes to the fallback for residual K-only-dirty fan-outs (trace/iter chains).
 
 ## v0.2: the software dialect — done (source to cells)
 
@@ -200,7 +206,10 @@ depth-tracking bug) that unit tests missed.
 - **The K0–K3 fabric has a parity law** (ADR-0033, machine-checked): every cell
   permutes rail-pair values, so `parity(data_out) ⊕ parity(anc_out)` is fixed up
   to a constant. A conditional-NOT's parity deviation *is* its AND, so isolated
-  CNOT/Toffoli lowerings *cannot* be ancilla-clean — garbage-free reversible logic
-  in this vocabulary is provably impossible without a new (rail-role-swap) cell.
-  Bennett compute-uncompute concentrates the residue into a fixed boundary; it
-  does not eliminate it.
+  CNOT/Toffoli lowerings *cannot* be ancilla-clean in the K0–K3 vocabulary — the
+  theorem (`parity_obstruction_is_real`) stands. The **escape is a vocabulary
+  extension, not a cleverer construction**: the R1 rail-role-swap cell (ADR-0040)
+  voids the law's premise (it flips a pair's value instead of permuting pairs) and
+  makes garbage-free logic real — no physics is added (R1 is a subset of the K1
+  transmission-gate fabric). Lesson: when a limit is an *encoding-level theorem*
+  rather than a physical one, the fix is at the vocabulary level.
