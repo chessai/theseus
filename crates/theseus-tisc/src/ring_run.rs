@@ -7,16 +7,23 @@
 //! re-supplying fresh ancilla-init bits each revolution. The
 //! differential oracle is `eval(step)^R`.
 //!
-//! # Ancilla restoration
+//! # Ancilla restoration — the zero-garbage ring
 //!
 //! True ring-machine recirculation (feeding ancilla outputs back as
-//! inputs) is valid only if the step's lowering restores its ancillas
+//! inputs) is valid when the step's lowering restores its ancillas
 //! after one revolution. [`StepRing::ancillas_restored`] checks this.
-//! If the lowering is not yet ancilla-clean, the re-supply-fresh-init
-//! driver still faithfully models `step^R`; cleaning the ancillas
-//! (Bennett-style uncompute) is a follow-up.
 //!
-//! # Closed ring (Bennett path)
+//! **As of ADR-0040 phase C** (R1-based `emit_mcnot` rewrite), the
+//! plain lowering IS ancilla-clean: `ancillas_restored == true` on all
+//! sampled states, with ~468 ancilla lines (down from 1138 under the
+//! old splitter/selector synthesis). [`StepRing::run_true`] — which
+//! feeds ancilla outputs back instead of re-supplying fresh inits —
+//! equals `eval(step)^R` and equals [`StepRing::run`]. The ring
+//! physically closes with **zero per-revolution boundary**: nothing
+//! is re-supplied, nothing exits. This is the literal zero-garbage
+//! ring.
+//!
+//! # Closed ring (Bennett path — fallback)
 //!
 //! [`closed_step_ring`] lowers the step via
 //! [`lower_iso_bennett`] (compute–copy–uncompute, ADR-0033): the
@@ -30,12 +37,10 @@
 //! pairs — a *physically closing* ring whose per-revolution external
 //! interface is a constant-size, data-independent set of ports
 //! ([`ClosedStepRing::boundary_size`], `2·w = 320` for the TISC-1
-//! State), instead of the plain path's ~1138 scattered dirty ancilla
-//! lines. The residue exiting on the boundary each revolution is
-//! exactly the (input word, output word) Bennett residue
-//! ([`ClosedStepRing::boundary_residue`]). By the parity law in
-//! [`theseus_netlist::bennett`], zero boundary is impossible for
-//! `step` in this cell vocabulary.
+//! State). With the plain path now ancilla-clean, the Bennett
+//! [`ClosedStepRing`] demotes to a **fallback** for circuits whose
+//! lowering is still K-only-dirty (e.g. trace tag duplication, iter/fold
+//! control chains — genuine fan-outs that still emit K-only garbage).
 
 use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_netlist::{

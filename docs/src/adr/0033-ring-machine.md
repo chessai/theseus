@@ -160,6 +160,30 @@ machine:** recirculate one step's hardware instead of copying it.
   (halt-fixpoint + generous R) — the machine everyone imagines, which
   unroll cannot express at any area.
 
+## Update — zero-garbage ring closure (ADR-0040 phase C)
+
+The R1-based `emit_mcnot` rewrite (ADR-0040 phase C) made the TISC-1
+step's plain lowering ancilla-clean: `StepRing::ancillas_restored ==
+true` on all sampled states, with ~468 ancilla lines (down from 1138).
+`StepRing::run_true` — feeding ALL ancilla outputs back as inputs,
+re-supplying NOTHING — equals `eval(step)^R`. The ring now physically
+closes via the plain `StepRing` path with **zero per-revolution
+boundary**: no externally refreshed pairs, no Bennett residue, no
+garbage. This is the literal zero-garbage ring.
+
+The Bennett `ClosedStepRing` (2× cells, 2× depth, `2·w = 320` boundary
+per revolution) demotes to a **fallback** for circuits whose lowering is
+still K-only-dirty (trace tag duplication, iter/fold control chains —
+genuine fan-outs, not conditional NOTs). The `ClosedStepRing` and its
+tests remain valid and are retained.
+
+**Boundary comparison (TISC-1 step):**
+
+| Path | Per-revolution boundary | Ancilla lines | Notes |
+|------|------------------------|---------------|-------|
+| `StepRing::run_true` (plain, R1) | **0** | ~468 (all restored) | Zero-garbage ring |
+| `ClosedStepRing::run` (Bennett) | 320 (`2·w`) | forward + 320 boundary | Fallback for K-dirty circuits |
+
 ## Consequences
 
 - theseus-netlist gains `ring` (RingNetlist, validator, padder,

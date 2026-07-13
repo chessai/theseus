@@ -33,8 +33,15 @@ lowering rewrite — is a follow-up slice with its own gates)
 > ancilla lines total, down from 1138 (945 dirty at pc = 0) under the
 > old splitter/selector synthesis. The `prim_synth` dirt predicted to
 > vanish in "Consequences for the ring" below is measured gone.
-> Remaining follow-up: make the plain path the ring default and demote
-> the wrap (decision item 3's last step).
+> **Follow-up completed (ZG-D).** The plain `StepRing::run_true` path
+> is now verified: hard assertions confirm `ancillas_restored == true`
+> across all sampled states and PCs, `run_true(s, R) == eval(step)^R`
+> for R in 0..=5, and `run_true == run` (feeding back restored ancillas
+> equals re-supplying fresh ones). The per-revolution external boundary
+> is **zero** — nothing re-supplied, nothing exits — vs 320 (`2·w`) for
+> the Bennett `ClosedStepRing`. The ring now physically closes via the
+> plain R1-lowered path; the Bennett wrap demotes to a fallback for
+> K-only-dirty circuits (decision item 3's last step — done).
 
 ## Context — the obstruction this cell exists to void
 
@@ -238,7 +245,10 @@ traffic. That is the payoff this evaluation was asked to price.
    entry + B5 battery → promote to `CellKind::R1` (+R2/R3 as measured
    need dictates, per B4.1's "measured, not doctrine") → `emit_mcnot`
    rewrite → drop the wrap from the ring path → re-run the TISC-1 ring
-   with `ancillas_restored` asserted.
+   with `ancillas_restored` asserted. **Done through ZG-D:** R1
+   promoted (phase B), `emit_mcnot` rewritten (phase C), plain ring
+   verified with `ancillas_restored` hard-asserted and `run_true ==
+   eval^R` confirmed — zero-garbage ring closure achieved.
 
 ## Alternatives rejected
 

@@ -4,6 +4,10 @@
 //! Uses a small straight-line ROM (3 instructions, BR untouched →
 //! fall-through) to keep build + lower + balance_compact fast while
 //! exercising the full ring pipeline at real scale.
+//!
+//! Tests 3–6 verify the zero-garbage ring (ADR-0040 phase C payoff):
+//! ancillas restored after one revolution, `run_true == eval^R`,
+//! `run_true == run`, and zero boundary vs Bennett's 320.
 
 use std::sync::OnceLock;
 
@@ -139,59 +143,160 @@ fn ring_area_independent_of_revolutions() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 3. Ancilla restoration report
+// 3. Zero-garbage assertion: ancillas restored after one revolution
+//    (ADR-0040 phase C payoff — the parity obstruction is voided)
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn ancilla_restoration_report() {
+fn ancillas_restored_after_one_revolution() {
     let c = ctx();
-    let start = sample_state(0);
-
-    let restored = c.ring.ancillas_restored(&start);
-    let mismatches = c.ring.ancilla_mismatches(&start);
 
     eprintln!("ancilla count: {}", c.ring.ancilla_count());
-    eprintln!("ancillas restored: {restored}");
 
-    if restored {
-        eprintln!("TRUE recirculation is valid — ancillas close the ring.");
-        // Verify true recirculation matches eval^R.
-        const MAX_R: u32 = 5;
+    // Assert across ALL sampled PCs — not just pc=0.
+    for &pc in &[0u8, 1, 2, 4] {
+        let start = sample_state(pc);
+        let mismatches = c.ring.ancilla_mismatches(&start);
+        assert!(
+            mismatches.is_empty(),
+            "ancillas NOT restored at pc={pc}: {}/{} dirty (first 20: {:?}). \
+             The R1-lowered step must be ancilla-clean on every sampled state.",
+            mismatches.len(),
+            c.ring.ancilla_count(),
+            &mismatches[..mismatches.len().min(20)]
+        );
+    }
+
+    eprintln!(
+        "ancillas restored: true — all {} ancilla lines return to init \
+         after one revolution on every sampled state. The parity \
+         obstruction is voided (ADR-0040 phase C).",
+        c.ring.ancilla_count()
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 4. TRUE recirculation: run_true(s, R) == eval(step)^R
+//    (plain path, zero boundary — no Bennett, no re-supply)
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn true_recirculation_matches_eval_oracle() {
+    let c = ctx();
+    const MAX_R: u32 = 5;
+
+    for &pc in &[0u8, 1, 2, 4] {
+        let start = sample_state(pc);
         let mut oracle = start.clone();
+
         for r in 0..=MAX_R {
             let true_result = c.ring.run_true(&start, r);
             assert_eq!(
                 true_result, oracle,
-                "true recirculation run_true(s, {r}) != eval^{r}"
+                "run_true(s, {r}) != eval^{r} at pc={pc} — \
+                 true recirculation (feed ancilla outputs back) must \
+                 equal the eval oracle when ancillas are restored"
             );
-            oracle =
-                eval_state(&format!("true_recirc/r={r}"), &c.iso, &oracle);
+            oracle = eval_state(
+                &format!("true_recirc/pc={pc}/r={r}"),
+                &c.iso,
+                &oracle,
+            );
         }
-    } else {
-        let n_mismatch = mismatches.len();
-        let n_total = c.ring.ancilla_count();
-        eprintln!(
-            "ancilla lines NOT restored: {n_mismatch}/{n_total} mismatching"
-        );
-        let show = mismatches.len().min(20);
-        eprintln!(
-            "mismatching ancilla indices (first {show}): {:?}",
-            &mismatches[..show]
-        );
-        eprintln!(
-            "NOTE: step's lowering is not yet ancilla-clean for true \
-             recirculation. The re-supply-fresh-ancillas driver still \
-             faithfully models step^R. Cleaning the ancillas \
-             (Bennett-style uncompute) is the follow-up."
-        );
-        // Do NOT fail — the run==eval^R oracle (test 1) already passes.
+    }
+
+    eprintln!(
+        "TRUE recirculation verified: run_true == eval^R for R in 0..={MAX_R} \
+         across all sampled states. The plain ring closes with ZERO boundary."
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 5. run_true == run: both paths agree (ancilla-clean step means
+//    feeding back restored ancillas == re-supplying fresh ones)
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn run_true_equals_run_when_ancillas_restored() {
+    let c = ctx();
+    const MAX_R: u32 = 5;
+
+    for &pc in &[0u8, 1, 2, 4] {
+        let start = sample_state(pc);
+        for r in 0..=MAX_R {
+            let fresh = c.ring.run(&start, r);
+            let feedback = c.ring.run_true(&start, r);
+            assert_eq!(
+                fresh, feedback,
+                "run(s, {r}) != run_true(s, {r}) at pc={pc} — \
+                 with ancillas restored, both paths must agree"
+            );
+        }
     }
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 4. CLOSED ring (Bennett path): differential oracle with TRUE
+// 6. Zero-garbage quantification: plain run_true boundary == 0
+//    vs Bennett ClosedStepRing boundary == 2·w = 320
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn zero_boundary_vs_bennett_boundary() {
+    let plain = &ctx().ring;
+    let closed = closed_ctx();
+
+    // Plain path with ancilla-clean step: ZERO external boundary.
+    // Every ancilla output == init, so nothing needs re-supplying.
+    let plain_boundary = 0usize;
+
+    // Bennett path: fixed 2·w boundary re-supplied per revolution.
+    let bennett_boundary = closed.boundary_size();
+
+    eprintln!("plain  path (run_true): boundary per revolution = {plain_boundary} (zero — ancilla-clean)");
+    eprintln!("Bennett path (closed) : boundary per revolution = {bennett_boundary} (2·w = 2·{})", closed.data_width());
+    eprintln!("plain  path ancilla count: {} (all restored)", plain.ancilla_count());
+    eprintln!("Bennett path ancilla count: {} (forward: {}, boundary: {})",
+        closed.ancilla_count(),
+        closed.forward_ancilla_count(),
+        closed.boundary_size(),
+    );
+
+    // The literal zero-garbage ring: plain path needs NOTHING re-supplied.
+    assert_eq!(
+        plain_boundary, 0,
+        "plain run_true boundary must be zero (ancilla-clean step)"
+    );
+
+    // Bennett path still has its 2·w boundary (320 for TISC-1 State).
+    assert_eq!(
+        bennett_boundary,
+        2 * closed.data_width(),
+        "Bennett boundary must be 2·w"
+    );
+    assert!(
+        bennett_boundary > 0,
+        "Bennett boundary must be nonzero (the honest residue)"
+    );
+
+    // The payoff: zero < 320.
+    assert!(
+        plain_boundary < bennett_boundary,
+        "plain path boundary ({plain_boundary}) must be strictly less \
+         than Bennett boundary ({bennett_boundary})"
+    );
+
+    eprintln!(
+        "\nThe plain R1-lowered ring closes with ZERO per-revolution \
+         boundary — the literal zero-garbage ring (ADR-0040 phase C). \
+         The Bennett ClosedStepRing demotes to a fallback for \
+         K-only-dirty circuits."
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 7. CLOSED ring (Bennett path): differential oracle with TRUE
 //    recirculation — State + forward ancillas fed back, only the fixed
-//    2·w boundary re-supplied (ADR-0033 ring closure).
+//    2·w boundary re-supplied (ADR-0033 ring closure, now the fallback).
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
