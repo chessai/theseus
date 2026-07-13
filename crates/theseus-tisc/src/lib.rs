@@ -7,5 +7,6 @@
 pub mod types;
 pub mod addressing;
 pub mod decoder;
+pub mod energy;
 pub mod instr;
 pub mod step;
