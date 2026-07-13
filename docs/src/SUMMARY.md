@@ -51,6 +51,7 @@
 - [The adiabatic backend](design/adiabatic-backend.md)
 - [Energy methodology](design/energy-methodology.md)
 - [TISC-1: the theseus CPU](design/tisc.md)
+- [TISC-1 specification and C3 budget](design/tisc-1-spec.md)
 - [Appendix: invariant ledger](design/invariant-ledger.md)
 - [Appendix: risk register](design/risk-register.md)
 - [Test specification: M3a](design/test-spec-m3a.md)
