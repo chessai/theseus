@@ -84,3 +84,10 @@ not with a dedicated message.
 Depth-generic recursion: `iter`, `fold`/`unfold` as core primitives
 shipped as adjoint pairs (ADR-0009), surface `fold`/`unfold`/`for`
 keywords (already reserved), and the depth-annotation surface syntax.
+
+**Update (increment 2):** `iter` has landed as a core primitive through
+the interpreter — `Iso::Iter(n, f) : n × a ↔ n × a` with the count
+carried in the data as a unary numeral (`inrᵏ(inl ())`, the encoding
+this document's `Nat` unrolling already produces). See ADR-0036 for the
+denotation, typing, and totality argument. Surface syntax, `fold`/
+`unfold`, and the netlist counter-loop lowering remain follow-ups.

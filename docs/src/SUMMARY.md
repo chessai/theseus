@@ -41,6 +41,7 @@
   - [0033 Ring machine: recirculating execution](adr/0033-ring-machine.md)
   - [0034 Reversible branching: offset-BR / come-from](adr/0034-reversible-branching.md)
   - [0035 μ-types: bounded unrolling at lowering](adr/0035-mu-bounded-unroll.md)
+  - [0036 iter: bounded-iteration core primitive](adr/0036-iter-primitive.md)
 
 # Design Document
 

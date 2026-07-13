@@ -3,8 +3,9 @@
 //! **Fuel unit = one `trace` body application.** Structural formers
 //! (`id`, `sym`, `;`, `+`, `×`, swap/assoc/unite/uniti/distrib/factor)
 //! and a single `prim` application are inductively total over finite
-//! values and cost ZERO fuel. Only the `trace` loop charges fuel (one
-//! unit per body evaluation). See `docs/src/spec/dynamic-semantics.md`.
+//! values and cost ZERO fuel. Only the `trace` and `iter` loops charge
+//! fuel (one unit per body evaluation).
+//! See `docs/src/spec/dynamic-semantics.md`.
 
 use theseus_core::{adjoint, Iso, Type, Value};
 
@@ -21,11 +22,11 @@ pub enum EvalError {
 
 /// Evaluate iso `f` on `value`, consuming fuel.
 ///
-/// Structural formers and `prim` cost zero fuel. Only `trace` body
-/// applications charge fuel (one unit per iteration).
+/// Structural formers and `prim` cost zero fuel. Only `trace` and
+/// `iter` body applications charge fuel (one unit per iteration).
 ///
 /// # Errors
-/// - [`EvalError::OutOfFuel`] if the fuel budget reaches zero mid-trace.
+/// - [`EvalError::OutOfFuel`] if the fuel budget reaches zero mid-loop.
 /// - [`EvalError::DomainError`] if the value shape doesn't match the iso.
 pub fn eval(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalError> {
     let initial = *fuel;
@@ -181,6 +182,28 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
             }
         }
 
+        // iter n f : n × a ↔ n × a — ⟨k, x⟩ ↦ ⟨k, f^k(x)⟩ where k is
+        // the unary numeral inrᵏ(inl ()). The count is read off the
+        // DATA, so the loop is a structural induction on the numeral:
+        // it cannot diverge (ADR-0007). One fuel unit per body
+        // application, exactly like `trace`.
+        Iso::Iter(_n, body) => match value {
+            Value::Pair(counter, x) => {
+                let count = numeral_value(&counter)
+                    .ok_or_else(|| domain_err("Iter/counter", &counter))?;
+                let mut acc = *x;
+                for _ in 0..count {
+                    if *fuel == 0 {
+                        return Err(EvalError::OutOfFuel { steps_taken: 0 });
+                    }
+                    *fuel -= 1;
+                    acc = eval_inner(body, acc, fuel)?;
+                }
+                Ok(Value::Pair(counter, Box::new(acc)))
+            }
+            other => Err(domain_err("Iter", &other)),
+        },
+
         Iso::Prim(def) => def
             .forward
             .get(&value)
@@ -196,6 +219,23 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
 
 fn domain_err(iso: &str, value: &Value) -> EvalError {
     EvalError::DomainError(format!("{iso}: unexpected value shape: {value:?}"))
+}
+
+/// Read the count off a unary numeral value: `inrᵏ(inl ())` ↦ `k`.
+/// Returns `None` for values that are not numerals.
+fn numeral_value(v: &Value) -> Option<u64> {
+    let mut count = 0u64;
+    let mut cur = v;
+    loop {
+        match cur {
+            Value::Left(u) if u.as_ref() == &Value::Unit => return Some(count),
+            Value::Right(rest) => {
+                count += 1;
+                cur = rest;
+            }
+            _ => return None,
+        }
+    }
 }
 
 /// Compute `|ty|` (number of inhabitants) structurally, saturating at
@@ -244,6 +284,14 @@ pub fn static_bound(iso: &Iso) -> u64 {
             carrier_size
                 .saturating_add(1)
                 .saturating_mul(1u64.saturating_add(static_bound(body)))
+        }
+
+        Iso::Iter(n, body) => {
+            // The largest numeral inhabiting `n` is |n| − 1, so the body
+            // runs at most |n| − 1 times: (|n| − 1) * (1 + B(f)).
+            // (|n| = 0 ⇒ the domain n × a is empty ⇒ bound 0.)
+            let max_count = cardinality_u64(n).saturating_sub(1);
+            max_count.saturating_mul(1u64.saturating_add(static_bound(body)))
         }
     }
 }
@@ -573,7 +621,172 @@ mod tests {
         assert_eq!(fuel, 0, "structural tree should consume zero fuel");
     }
 
+    // ─── Iter tests ────────────────────────────────────────────────
+
+    /// The numeral value `inrⁿ(inl ())`.
+    fn numeral(n: usize) -> Value {
+        let mut v = Value::left(Value::Unit);
+        for _ in 0..n {
+            v = Value::right(v);
+        }
+        v
+    }
+
+    /// `not : Bit ↔ Bit` as a Prim (self-inverse).
+    fn not_body() -> Iso {
+        use std::collections::BTreeMap;
+        use theseus_core::PrimDef;
+
+        let o = Value::left(Value::Unit);
+        let i = Value::right(Value::Unit);
+        let mut fwd = BTreeMap::new();
+        fwd.insert(o.clone(), i.clone());
+        fwd.insert(i, o);
+
+        Iso::Prim(Box::new(PrimDef {
+            forward_name: "not".into(),
+            backward_name: "not".into(),
+            input_ty: bit_ty(),
+            output_ty: bit_ty(),
+            forward: fwd.clone(),
+            backward: fwd,
+        }))
+    }
+
+    #[test]
+    fn iter_zero_count_is_identity_and_free() {
+        let iso = Iso::iter(Type::numeral_ty(4), not_body());
+        let x = Value::left(Value::Unit);
+        let mut fuel = 0; // zero iterations must need zero fuel
+        let result = eval(
+            &iso,
+            Value::pair(numeral(0), x.clone()),
+            &mut fuel,
+        )
+        .unwrap();
+        assert_eq!(result, Value::pair(numeral(0), x));
+        assert_eq!(fuel, 0);
+    }
+
+    #[test]
+    fn iter_applies_body_count_times() {
+        // iter not: ⟨k, b⟩ ↦ ⟨k, notᵏ(b)⟩ — parity of k decides.
+        let iso = Iso::iter(Type::numeral_ty(4), not_body());
+        let o = Value::left(Value::Unit);
+        let i = Value::right(Value::Unit);
+        for k in 0..4usize {
+            let mut fuel = 100;
+            let result = eval(
+                &iso,
+                Value::pair(numeral(k), o.clone()),
+                &mut fuel,
+            )
+            .unwrap();
+            let expected = if k % 2 == 0 { o.clone() } else { i.clone() };
+            assert_eq!(result, Value::pair(numeral(k), expected), "k={k}");
+            // Exactly one fuel unit per body application.
+            assert_eq!(fuel, 100 - k as u64, "fuel after k={k} iterations");
+        }
+    }
+
+    #[test]
+    fn iter_out_of_fuel() {
+        let iso = Iso::iter(Type::numeral_ty(4), not_body());
+        let v = Value::pair(numeral(3), Value::left(Value::Unit));
+        let mut fuel = 2;
+        assert_eq!(
+            eval(&iso, v, &mut fuel),
+            Err(EvalError::OutOfFuel { steps_taken: 2 }),
+        );
+    }
+
+    #[test]
+    fn iter_rejects_non_numeral_counter_value() {
+        let iso = Iso::iter(Type::numeral_ty(2), not_body());
+        // Counter slot holds a Pair — not a numeral.
+        let v = Value::pair(
+            Value::pair(Value::Unit, Value::Unit),
+            Value::left(Value::Unit),
+        );
+        let mut fuel = 100;
+        assert!(matches!(
+            eval(&iso, v, &mut fuel),
+            Err(EvalError::DomainError(_)),
+        ));
+    }
+
+    #[test]
+    fn iter_rejects_non_pair_input() {
+        let iso = Iso::iter(Type::numeral_ty(2), not_body());
+        let mut fuel = 100;
+        assert!(matches!(
+            eval(&iso, Value::Unit, &mut fuel),
+            Err(EvalError::DomainError(_)),
+        ));
+    }
+
+    #[test]
+    fn sym_iter_runs_iteration_backward() {
+        // The trace counter body is NOT self-inverse; sym(iter) must
+        // un-apply it exactly k times.
+        let body = counter_body(); // (Bit + 1) ↔ (Bit + 1) permutation
+        let n_ty = Type::numeral_ty(5);
+        let iso = Iso::iter(n_ty, body);
+        let x0 = Value::right(Value::Unit);
+        for k in 0..5usize {
+            let v = Value::pair(numeral(k), x0.clone());
+            let mut fuel = 100;
+            let fwd = eval(&iso, v.clone(), &mut fuel).unwrap();
+            let mut fuel = 100;
+            let back = eval(&Iso::sym(iso.clone()), fwd, &mut fuel).unwrap();
+            assert_eq!(back, v, "sym(iter)(iter(v)) != v at k={k}");
+        }
+    }
+
     // ─── static_bound tests ────────────────────────────────────────
+
+    #[test]
+    fn static_bound_iter_structural_body() {
+        // B(iter(N₄, structural)) = (4−1)*(1+0) = 3
+        let iso = Iso::iter(Type::numeral_ty(4), not_body());
+        assert_eq!(static_bound(&iso), 3);
+    }
+
+    #[test]
+    fn static_bound_iter_trace_body() {
+        // body = Trace(Bit, structural): B = (|Bit|+1)*(1+0) = 3
+        // B(iter(N₃, body)) = (3−1)*(1+3) = 8
+        let body = Iso::trace(bit_ty(), Iso::SwapSum(bit_ty(), Type::One));
+        let iso = Iso::iter(Type::numeral_ty(3), body);
+        assert_eq!(static_bound(&iso), 8);
+    }
+
+    #[test]
+    fn static_bound_iter_degenerate_counters() {
+        // N₀ = 0 (empty domain) and N₁ = {0} (zero iterations): bound 0.
+        assert_eq!(static_bound(&Iso::iter(Type::numeral_ty(0), not_body())), 0);
+        assert_eq!(static_bound(&Iso::iter(Type::numeral_ty(1), not_body())), 0);
+    }
+
+    #[test]
+    fn static_bound_sym_iter() {
+        let iso = Iso::iter(Type::numeral_ty(4), not_body());
+        assert_eq!(static_bound(&Iso::sym(iso.clone())), static_bound(&iso));
+    }
+
+    #[test]
+    fn iter_fuel_never_exceeds_static_bound() {
+        // Sweep the whole domain N₅ × Bit; consumed fuel ≤ B(iso).
+        let iso = Iso::iter(Type::numeral_ty(5), not_body());
+        let bound = static_bound(&iso);
+        for k in 0..5usize {
+            for b in [Value::left(Value::Unit), Value::right(Value::Unit)] {
+                let mut fuel = bound;
+                eval(&iso, Value::pair(numeral(k), b), &mut fuel)
+                    .expect("static_bound fuel must suffice");
+            }
+        }
+    }
 
     #[test]
     fn static_bound_structural_is_zero() {

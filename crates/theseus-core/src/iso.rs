@@ -63,6 +63,22 @@ pub enum Iso {
     /// The [`Type`] parameter is the trace carrier `u`.
     Trace(Type, Box<Iso>),
 
+    // ── Iter (bounded iteration, ADR-0009/ADR-0036) ─────────────
+
+    /// `iter n f : n × a ↔ n × a`  (when `f : a ↔ a` and `n` is a
+    /// numeral type `1 + (1 + (… + 0))`).
+    ///
+    /// Denotation: `⟦iter n f⟧ ⟨k, x⟩ = ⟨k, ⟦f⟧ᵏ x⟩` where `k` is the
+    /// unary numeral `inrᵏ(inl ())` inhabiting `n`. The iteration count
+    /// `k` is carried in the DATA (first component) and preserved on
+    /// output, so the term is symmetric by construction:
+    /// `(iter n f)† = iter n (f†)`, and the backward run un-applies the
+    /// body exactly `k` times. Totality is structural (ADR-0007): a
+    /// value of the finite numeral type `n` encodes `k ≤ |n| − 1`, so
+    /// evaluation applies the body at most `|n| − 1` times — the bound
+    /// is read off the type, no certificate needed.
+    Iter(Type, Box<Iso>),
+
     // ── Prim ─────────────────────────────────────────────────────
 
     /// `prim p : A ↔ B`  (registry-resolved, ADR-0013).
@@ -88,5 +104,9 @@ impl Iso {
 
     pub fn trace(u: Type, f: Iso) -> Self {
         Iso::Trace(u, Box::new(f))
+    }
+
+    pub fn iter(n: Type, f: Iso) -> Self {
+        Iso::Iter(n, Box::new(f))
     }
 }

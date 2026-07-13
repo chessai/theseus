@@ -19,6 +19,27 @@ pub enum TypeError {
     TraceInputCarrier { expected: Type, got: Type },
     /// In `trace(u, f)`, the carrier in `f`'s codomain ≠ declared `u`.
     TraceOutputCarrier { expected: Type, got: Type },
+    /// In `iter(n, f)`, the counter type `n` is not a unary numeral
+    /// type `1 + (1 + (… + 0))`.
+    IterCounterNotNumeral(Type),
+    /// In `iter(n, f)`, the body is not an endo-iso (`f : a ↔ a`).
+    IterBodyNotEndo { input: Type, output: Type },
+}
+
+/// Is `ty` a unary numeral type `1 + (1 + (… + 0))`? (`0` itself is the
+/// degenerate, uninhabited numeral type.) These are exactly the types
+/// bounded μ-unrolling (ADR-0035) produces for `Nat`, and the only
+/// admissible `iter` counters: their inhabitants have a canonical
+/// reading as counts `k = ` number of `inr` wrappers.
+pub fn is_numeral_ty(ty: &Type) -> bool {
+    let mut cur = ty;
+    loop {
+        match cur {
+            Type::Zero => return true,
+            Type::Sum(l, r) if l.as_ref() == &Type::One => cur = r,
+            _ => return false,
+        }
+    }
 }
 
 /// Compute the type `a ↔ b` of a well-typed iso term, or return a
@@ -142,6 +163,20 @@ pub fn type_of(iso: &Iso) -> Result<(Type, Type), TypeError> {
             };
 
             Ok((a, b))
+        }
+
+        // ── Iter ─────────────────────────────────────────────────
+        // n numeral, f : a ↔ a  ⊢  iter n f : n × a ↔ n × a
+        Iso::Iter(n, f) => {
+            if !is_numeral_ty(n) {
+                return Err(TypeError::IterCounterNotNumeral(n.clone()));
+            }
+            let (a, b) = type_of(f)?;
+            if a != b {
+                return Err(TypeError::IterBodyNotEndo { input: a, output: b });
+            }
+            let side = Type::prod(n.clone(), a);
+            Ok((side.clone(), side))
         }
 
         // ── Prim ─────────────────────────────────────────────────
@@ -269,6 +304,69 @@ mod tests {
         // sym(swap⁺(1, 1+1)) : (1+1)+1 ↔ 1+(1+1)
         assert_eq!(input, Type::sum(b, a.clone()));
         assert_eq!(output, Type::sum(a, bool_ty()));
+    }
+
+    #[test]
+    fn numeral_ty_shape() {
+        assert_eq!(Type::numeral_ty(0), Type::Zero);
+        assert_eq!(Type::numeral_ty(1), Type::sum(Type::One, Type::Zero));
+        assert_eq!(
+            Type::numeral_ty(2),
+            Type::sum(Type::One, Type::sum(Type::One, Type::Zero)),
+        );
+    }
+
+    #[test]
+    fn is_numeral_ty_accepts_numerals_only() {
+        for k in 0..6 {
+            assert!(is_numeral_ty(&Type::numeral_ty(k)), "numeral_ty({k})");
+        }
+        // Bool = 1 + 1 ends in One, not Zero: not a numeral type.
+        assert!(!is_numeral_ty(&bool_ty()));
+        assert!(!is_numeral_ty(&Type::One));
+        assert!(!is_numeral_ty(&Type::prod(Type::One, Type::Zero)));
+        // Left summand must be exactly One.
+        assert!(!is_numeral_ty(&Type::sum(bool_ty(), Type::Zero)));
+    }
+
+    #[test]
+    fn type_iter() {
+        // iter n (swap⁺ 1 1) : n × Bool ↔ n × Bool
+        let n = Type::numeral_ty(4);
+        let body = Iso::SwapSum(Type::One, Type::One); // Bool ↔ Bool
+        let (input, output) = type_of(&Iso::iter(n.clone(), body)).unwrap();
+        let expected = Type::prod(n, bool_ty());
+        assert_eq!(input, expected);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn reject_iter_counter_not_numeral() {
+        // Bool is not a numeral type.
+        let body = Iso::Id(Type::One);
+        let err = type_of(&Iso::iter(bool_ty(), body)).unwrap_err();
+        assert!(matches!(err, TypeError::IterCounterNotNumeral(_)));
+    }
+
+    #[test]
+    fn reject_iter_body_not_endo() {
+        // swap⁺(1, Bool) : 1 + Bool ↔ Bool + 1 — not an endo-iso.
+        let n = Type::numeral_ty(2);
+        let body = Iso::SwapSum(one(), bool_ty());
+        let err = type_of(&Iso::iter(n, body)).unwrap_err();
+        assert!(matches!(err, TypeError::IterBodyNotEndo { .. }));
+    }
+
+    #[test]
+    fn type_sym_iter() {
+        // sym (iter n f) has the same (endo) type as iter n f.
+        let n = Type::numeral_ty(3);
+        let body = Iso::SwapSum(Type::One, Type::One);
+        let it = Iso::iter(n.clone(), body);
+        let (input, output) = type_of(&Iso::sym(it)).unwrap();
+        let expected = Type::prod(n, bool_ty());
+        assert_eq!(input, expected);
+        assert_eq!(output, expected);
     }
 
     #[test]
