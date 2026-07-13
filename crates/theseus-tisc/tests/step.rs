@@ -218,6 +218,25 @@ fn pc_inc_isolated() {
     }
 }
 
+#[test]
+fn pc_inc_exhaustive_all_256() {
+    // pc_inc's correctness rests on a carry-chain uncompute argument
+    // ("MSB-down so each uncompute reads not-yet-flipped PC bits"); the
+    // sampled test above only hits 10 PCs. This exhausts all 256 values,
+    // pinning PC+1 mod 256 AND that the s1 carry scratch is restored to
+    // zero for every carry pattern (the whole state must be preserved
+    // except PC). Cheap: pc_inc is a tiny iso.
+    let iso = pc_inc();
+    for pc in 0..=255u8 {
+        // Non-trivial scratch/regs so "everything else preserved" bites.
+        let s = st(regs_b(), pc);
+        let got = eval_state("pc_inc/all", &iso, &s);
+        let mut expected = s.clone();
+        expected.pc = pc.wrapping_add(1);
+        assert_eq!(got, expected, "pc_inc: pc={pc} (carry scratch must restore)");
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // 2. The full step: lower once (rom1), verify samples
 // ══════════════════════════════════════════════════════════════════════

@@ -75,10 +75,8 @@
 
 use theseus_core::Iso;
 
-use crate::decoder::{
-    self, at_wire, cnot_prim, gate_at, not_iso, on_fields, seq_balanced, toffoli_prim, Op,
-    AUX_PRED_FIELD,
-};
+use crate::decoder::{self, cnot_prim, on_fields, toffoli_prim, Op, AUX_PRED_FIELD};
+use crate::plumbing::{at_wire, gate_at, not_iso, seq_balanced};
 use crate::types::{state_ty, IR_HI_FIELD, IR_LO_FIELD, PC_FIELD, W};
 
 // ── Fetch ──────────────────────────────────────────────────────────

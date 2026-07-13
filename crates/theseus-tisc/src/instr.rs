@@ -8,91 +8,22 @@
 //! the addressing layer to produce State-level isos.
 
 use theseus_core::{Iso, Type};
-use theseus_netlist::{prim_from_bits, CellKind};
+use theseus_netlist::prim_from_bits;
 use crate::addressing::{at_fields, at_reg1, at_reg2, at_reg3};
+use crate::plumbing::{
+    at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_list, swap_adj,
+};
 use crate::types::{bit, flat, word8, reg_field, scratch_field, PC_FIELD, BR_FIELD, W};
 
 // ══════════════════════════════════════════════════════════════════════
 // Operand-level iso builders (lifted from verified test files)
 // ══════════════════════════════════════════════════════════════════════
 
-// ── Structural helpers ─────────────────────────────────────────────
-
-/// NOT on a single Bit = SwapSum(1,1) — zero cells, pure rail swap.
-fn not_iso() -> Iso {
-    Iso::SwapSum(Type::One, Type::One)
-}
-
-/// Number of Bit leaves in a product tree over Bit.
-fn leaf_count(ty: &Type) -> usize {
-    match ty {
-        Type::Prod(a, b) => leaf_count(a) + leaf_count(b),
-        _ => 1,
-    }
-}
-
-/// `flat(a) x flat(b) <-> flat(a+b)`, pure assoc plumbing.
-fn append(a: usize, b: usize) -> Iso {
-    assert!(a >= 1 && b >= 1);
-    if a == 1 {
-        Iso::Id(flat(1 + b))
-    } else {
-        Iso::seq(
-            Iso::AssocRProd(bit(), flat(a - 1), flat(b)),
-            Iso::times(Iso::Id(bit()), append(a - 1, b)),
-        )
-    }
-}
-
-/// `ty <-> flat(leaf_count(ty))`, leaves in depth-first order.
-fn flatten(ty: &Type) -> Iso {
-    match ty {
-        Type::Prod(a, b) => {
-            let (na, nb) = (leaf_count(a), leaf_count(b));
-            Iso::seq(Iso::times(flatten(a), flatten(b)), append(na, nb))
-        }
-        _ => Iso::Id(ty.clone()),
-    }
-}
-
-/// Sequential composition; empty = identity.
-fn seq_all(n: usize, isos: Vec<Iso>) -> Iso {
-    isos.into_iter()
-        .reduce(Iso::seq)
-        .unwrap_or_else(|| Iso::Id(flat(n)))
-}
-
-/// Swap adjacent leaves `k` and `k+1` of `flat(n)`.
-fn swap_adj(n: usize, k: usize) -> Iso {
-    assert!(k + 1 < n);
-    if k > 0 {
-        return Iso::times(Iso::Id(bit()), swap_adj(n - 1, k - 1));
-    }
-    if n == 2 {
-        Iso::SwapProd(bit(), bit())
-    } else {
-        let r = flat(n - 2);
-        Iso::seq(
-            Iso::seq(
-                Iso::AssocLProd(bit(), bit(), r.clone()),
-                Iso::times(Iso::SwapProd(bit(), bit()), Iso::Id(r.clone())),
-            ),
-            Iso::AssocRProd(bit(), bit(), r),
-        )
-    }
-}
-
-/// Apply a 1-wire iso at leaf `k` of `flat(n)`.
-fn at_leaf(n: usize, k: usize, iso1: Iso) -> Iso {
-    assert!(k < n);
-    if k > 0 {
-        Iso::times(Iso::Id(bit()), at_leaf(n - 1, k - 1, iso1))
-    } else if n == 1 {
-        iso1
-    } else {
-        Iso::times(iso1, Iso::Id(flat(n - 1)))
-    }
-}
+// Bit-level plumbing (not_iso, flatten, swap_adj, at_wire, seq_list,
+// gate_at, fredkin_prim, rot_transpositions) lives in `crate::plumbing`
+// and is imported above. Convention-specific prims (the target-first
+// `cnot_prim` for XOR, the control-first `cnot_ar_prim`/`tof_prim` for
+// arithmetic) stay local.
 
 // ── Structural: swap two Word8s ────────────────────────────────────
 
@@ -222,15 +153,6 @@ fn xor_operand() -> Iso {
 
 // ── Fredkin-based controlled isos (CSWAP, ROTL, ROTR) ──────────────
 
-/// The 3-wide Fredkin prim. K1.
-fn fredkin_prim() -> Iso {
-    let t3 = flat(3);
-    Iso::Prim(Box::new(
-        prim_from_bits("fredkin", t3.clone(), t3, |b| CellKind::K1.eval(b))
-            .expect("fredkin prim"),
-    ))
-}
-
 /// Apply Fredkin prim to first three leaves of flat(n).
 fn fredkin_head(n: usize) -> Iso {
     assert!(n >= 3);
@@ -261,7 +183,7 @@ fn fredkin_at(n: usize, c: usize, a: usize, b: usize) -> Iso {
             arr.swap(k, k + 1);
         }
     }
-    let route = seq_all(n, swaps);
+    let route = seq_list(n, swaps);
     Iso::seq(Iso::seq(route.clone(), fredkin_head(n)), Iso::sym(route))
 }
 
@@ -272,22 +194,7 @@ fn cswap_operand() -> Iso {
     let cascade: Vec<Iso> = (0..W).map(|i| fredkin_at(n, 0, W + i, 2 * W + i)).collect();
     let cswap_ty = Type::prod(word8(), Type::prod(word8(), word8()));
     let fl = flatten(&cswap_ty);
-    Iso::seq(Iso::seq(fl.clone(), seq_all(n, cascade)), Iso::sym(fl))
-}
-
-/// Transpositions for fixed left-rotation-by-s of 8 rd wire slots.
-fn rot_transpositions(s: usize) -> Vec<(usize, usize)> {
-    let mut arr: Vec<usize> = (0..W).collect();
-    let mut out = Vec::new();
-    for j in 0..W {
-        let want = (j + W - s) % W;
-        let p = arr.iter().position(|&x| x == want).expect("bit present");
-        if p != j {
-            out.push((j, p));
-            arr.swap(j, p);
-        }
-    }
-    out
+    Iso::seq(Iso::seq(fl.clone(), seq_list(n, cascade)), Iso::sym(fl))
 }
 
 /// ROTL operand iso: (rd, rs) <-> same; rd <- rd rotl (rs mod 8).
@@ -302,7 +209,7 @@ fn rotl_operand() -> Iso {
     }
     let rot_ty = Type::prod(word8(), word8());
     let fl = flatten(&rot_ty);
-    Iso::seq(Iso::seq(fl.clone(), seq_all(n, cascade)), Iso::sym(fl))
+    Iso::seq(Iso::seq(fl.clone(), seq_list(n, cascade)), Iso::sym(fl))
 }
 
 /// ROTR operand iso: adjoint of ROTL.
@@ -355,52 +262,6 @@ fn tof_prim() -> Iso {
     Iso::Prim(Box::new(def))
 }
 
-/// Apply a flat(2) prim at the head of flat(n).
-fn head2(n: usize, p: Iso) -> Iso {
-    assert!(n >= 2);
-    if n == 2 { return p; }
-    let r = flat(n - 2);
-    let reshape = Iso::AssocLProd(bit(), bit(), r.clone());
-    Iso::seq(
-        Iso::seq(reshape.clone(), Iso::times(p, Iso::Id(r))),
-        Iso::sym(reshape),
-    )
-}
-
-/// Apply a flat(3) prim at the head of flat(n).
-fn head3(n: usize, p: Iso) -> Iso {
-    assert!(n >= 3);
-    if n == 3 { return p; }
-    let r = flat(n - 3);
-    let reshape = Iso::seq(
-        Iso::times(Iso::Id(bit()), Iso::AssocLProd(bit(), bit(), r.clone())),
-        Iso::AssocLProd(bit(), Type::prod(bit(), bit()), r.clone()),
-    );
-    Iso::seq(
-        Iso::seq(reshape.clone(), Iso::times(p, Iso::Id(r))),
-        Iso::sym(reshape),
-    )
-}
-
-/// Apply a 2- or 3-wire prim at given leaves of flat(n).
-fn gate_at(n: usize, wires: &[usize], prim: Iso) -> Iso {
-    let w = wires.len();
-    assert!(w == 2 || w == 3);
-    let mut arr: Vec<usize> = (0..n).collect();
-    let mut swaps: Vec<Iso> = Vec::new();
-    for (slot, &orig) in wires.iter().enumerate() {
-        let p = arr.iter().position(|&x| x == orig).expect("leaf present");
-        assert!(p >= slot, "bubble-routing invariant");
-        for k in (slot..p).rev() {
-            swaps.push(swap_adj(n, k));
-            arr.swap(k, k + 1);
-        }
-    }
-    let route = seq_all(n, swaps);
-    let headed = if w == 2 { head2(n, prim) } else { head3(n, prim) };
-    Iso::seq(Iso::seq(route.clone(), headed), Iso::sym(route))
-}
-
 /// Compose a gate list into an iso on flat(n).
 fn gates_iso(n: usize, gates: &[Gate]) -> Iso {
     let isos: Vec<Iso> = gates
@@ -410,7 +271,7 @@ fn gates_iso(n: usize, gates: &[Gate]) -> Iso {
             Gate::Tof { c1, c2, t } => gate_at(n, &[c1, c2, t], tof_prim()),
         })
         .collect();
-    seq_all(n, isos)
+    seq_list(n, isos)
 }
 
 /// ADD operand iso: (Word8, Word8) <-> (Word8, Word8); rd <- rd + rs.
@@ -433,9 +294,9 @@ fn imm_mask_iso(imm: u8) -> Iso {
     let n = 2 * W;
     let nots: Vec<Iso> = (0..W)
         .filter(|i| (imm >> i) & 1 == 1)
-        .map(|i| at_leaf(n, W + i, not_iso()))
+        .map(|i| at_wire(n, W + i, not_iso()))
         .collect();
-    seq_all(n, nots)
+    seq_list(n, nots)
 }
 
 /// ADDI operand iso: (Word8, Word8) <-> same; rd <- rd + imm8.

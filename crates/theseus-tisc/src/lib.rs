@@ -10,4 +10,5 @@ pub mod addressing;
 pub mod decoder;
 pub mod energy;
 pub mod instr;
+pub(crate) mod plumbing;
 pub mod step;
