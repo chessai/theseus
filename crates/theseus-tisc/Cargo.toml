@@ -1,0 +1,19 @@
+[package]
+name = "theseus-tisc"
+description = "TISC-1 reversible CPU datapath: State type, register addressing, and instruction isos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+theseus-core = { path = "../theseus-core" }
+theseus-netlist = { path = "../theseus-netlist" }
+
+[dev-dependencies]
+theseus-eval = { path = "../theseus-eval" }
+theseus-check = { path = "../theseus-check" }
+theseus-syntax = { path = "../theseus-syntax" }
+
+[lints]
+workspace = true

@@ -10,6 +10,7 @@ members = [
   "crates/theseus-verify",
   "crates/theseus-spice",
   "crates/theseus-cli",
+  "crates/theseus-tisc",
 ]
 
 [workspace.package]
