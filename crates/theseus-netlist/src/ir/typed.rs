@@ -28,6 +28,17 @@ pub enum DistribDir {
     Factor,
 }
 
+/// Direction of the structural-recursion pair (`fold` / `unfold`,
+/// ADR-0037): both share one node shape; only the accumulator
+/// threading order differs (head-to-tail vs tail-to-head).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FoldDir {
+    /// `fold`: reversible mapAccumL, head-to-tail.
+    Fold,
+    /// `unfold`: the tail-to-head adjoint partner.
+    Unfold,
+}
+
 /// A typed netlist node: a region carrying its boundary types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypedNode {
@@ -58,6 +69,21 @@ pub enum NodeKind {
     /// Finite trace with the given carrier `u`; WCET ≤ |u| (ADR-0007,
     /// ADR-0009). Body has type `u + input ↔ u + output`.
     TraceLoop { carrier: Type, body: Box<TypedNode> },
+    /// Bounded counter-driven iteration (`iter n f`, ADR-0036): body
+    /// `f : a ↔ a` is applied `k` times where `k` is the unary numeral
+    /// carried in the DATA (first component) and preserved on output.
+    /// Node type: `counter × a ↔ counter × a`; `counter` is a numeral
+    /// type `1 + (1 + (… + 0))`, so `k ≤ |counter| − 1` bounds the
+    /// unroll (ADR-0039).
+    IterLoop { counter: Type, body: Box<TypedNode> },
+    /// Bounded structural recursion over a list spine (`fold`/`unfold
+    /// l f`, ADR-0037): body `f : b × c ↔ b × c` is applied once per
+    /// Cons node of the spine value, threading the accumulator
+    /// head-to-tail (`Fold`) or tail-to-head (`Unfold`); the spine is
+    /// preserved on output. Node type: `spine × c ↔ spine × c`;
+    /// `spine = 1 + (b × (1 + (b × (… + 0))))`, so its unroll depth − 1
+    /// bounds the unroll (ADR-0039).
+    FoldLoop { spine: Type, dir: FoldDir, body: Box<TypedNode> },
     /// Registry leaf: an admitted `(forward, backward)` mutual-inverse
     /// pair (ADR-0013 amended).
     Prim(Box<PrimDef>),
@@ -205,6 +231,48 @@ impl TypedNode {
                 let want_out = Type::sum(carrier.clone(), self.output.clone());
                 expect("trace body input", &want_in, &body.input)?;
                 expect("trace body output", &want_out, &body.output)?;
+                body.validate()
+            }
+            NodeKind::IterLoop { counter, body } => {
+                if !theseus_core::is_numeral_ty(counter) {
+                    return Err(TypedError::BadShape {
+                        context: "iter counter",
+                        ty: counter.clone(),
+                    });
+                }
+                expect("iter body endo", &body.input, &body.output)?;
+                let side = Type::prod(counter.clone(), body.input.clone());
+                expect("iter input", &side, &self.input)?;
+                expect("iter output", &side, &self.output)?;
+                body.validate()
+            }
+            NodeKind::FoldLoop { spine, dir: _, body } => {
+                expect("fold body endo", &body.input, &body.output)?;
+                let Type::Prod(elem, acc) = &body.input else {
+                    return Err(TypedError::BadShape {
+                        context: "fold body input",
+                        ty: body.input.clone(),
+                    });
+                };
+                match theseus_core::list_spine_elem_ty(spine) {
+                    None => {
+                        return Err(TypedError::BadShape {
+                            context: "fold spine",
+                            ty: spine.clone(),
+                        });
+                    }
+                    Some(Some(e)) if e != elem.as_ref() => {
+                        return Err(TypedError::TypeMismatch {
+                            context: "fold spine element",
+                            expected: e.clone(),
+                            got: elem.as_ref().clone(),
+                        });
+                    }
+                    _ => {}
+                }
+                let side = Type::prod(spine.clone(), acc.as_ref().clone());
+                expect("fold input", &side, &self.input)?;
+                expect("fold output", &side, &self.output)?;
                 body.validate()
             }
             NodeKind::Prim(def) => {

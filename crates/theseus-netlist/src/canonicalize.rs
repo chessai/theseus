@@ -11,9 +11,11 @@
 //! correctness of the dual-rail lowering — back-to-back Permutes each
 //! lower to zero cells — so it waits for the QoR pass.
 
-use theseus_core::{adjoint, Iso, Type, TypeError};
+use theseus_core::{adjoint, is_numeral_ty, list_spine_elem_ty, Iso, Type, TypeError};
 
-use crate::ir::typed::{flatten_layer, identity_sigma, DistribDir, Monoid, NodeKind, TypedNode};
+use crate::ir::typed::{
+    flatten_layer, identity_sigma, DistribDir, FoldDir, Monoid, NodeKind, TypedNode,
+};
 
 /// σ for swapping two flattened blocks: output layer `[B, A]` from input
 /// layer `[A, B]`, where `A` has `la` slots and `B` has `lb`.
@@ -298,24 +300,67 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
             kind: NodeKind::Prim(def.clone()),
         }),
 
-        // `iter` is a v0.2 *software-dialect* primitive (ADR-0036): it
-        // evaluates in theseus-eval but has no netlist lowering yet.
-        // Lowering it (bounded-counter loop node, ADR-0013) is a
-        // separate, later increment.
-        Iso::Iter(_, _) => unimplemented!(
-            "Iso::Iter is not supported by the netlist backend yet \
-             (v0.2 software dialect only; see ADR-0036 / ADR-0013)"
-        ),
+        // `iter n f` (ADR-0036) → the bounded-counter loop node
+        // (ADR-0013); its unroll lowering is ADR-0039. Typing mirrors
+        // `type_of`: `n` numeral, `f : a ↔ a` ⊢ `iter n f : n×a ↔ n×a`.
+        Iso::Iter(n, f) => {
+            if !is_numeral_ty(n) {
+                return Err(TypeError::IterCounterNotNumeral(n.clone()));
+            }
+            let body = canonicalize(f)?;
+            if body.input != body.output {
+                return Err(TypeError::IterBodyNotEndo {
+                    input: body.input.clone(),
+                    output: body.output.clone(),
+                });
+            }
+            let side = Type::prod(n.clone(), body.input.clone());
+            Ok(TypedNode {
+                input: side.clone(),
+                output: side,
+                kind: NodeKind::IterLoop { counter: n.clone(), body: Box::new(body) },
+            })
+        }
 
-        // `fold`/`unfold` are likewise v0.2 *software-dialect* primitives
-        // (ADR-0037): they evaluate in theseus-eval but have no netlist
-        // lowering yet. Lowering them (bounded structural loop node,
-        // ADR-0013) is a separate, later increment.
-        Iso::Fold(_, _) | Iso::Unfold(_, _) => unimplemented!(
-            "Iso::Fold/Iso::Unfold are not supported by the netlist \
-             backend yet (v0.2 software dialect only; see ADR-0037 / \
-             ADR-0013)"
-        ),
+        // `fold`/`unfold l f` (ADR-0037) → the bounded structural loop
+        // node (ADR-0013); unroll lowering is ADR-0039. Typing mirrors
+        // `type_of`: `l` list-spine over `b`, `f : b×c ↔ b×c` ⊢
+        // `fold l f : l×c ↔ l×c` (identically for `unfold`).
+        Iso::Fold(l, f) | Iso::Unfold(l, f) => {
+            let Some(spine_elem) = list_spine_elem_ty(l) else {
+                return Err(TypeError::FoldSpineNotList(l.clone()));
+            };
+            let body = canonicalize(f)?;
+            if body.input != body.output {
+                return Err(TypeError::FoldBodyNotEndo {
+                    input: body.input.clone(),
+                    output: body.output.clone(),
+                });
+            }
+            let (elem, acc) = match &body.input {
+                Type::Prod(e, c) => (e.as_ref().clone(), c.as_ref().clone()),
+                other => return Err(TypeError::FoldBodyNotElemProd(other.clone())),
+            };
+            if let Some(e) = spine_elem {
+                if e != &elem {
+                    return Err(TypeError::FoldBodyElemMismatch {
+                        expected: e.clone(),
+                        got: elem,
+                    });
+                }
+            }
+            let dir = if matches!(iso, Iso::Fold(_, _)) {
+                FoldDir::Fold
+            } else {
+                FoldDir::Unfold
+            };
+            let side = Type::prod(l.clone(), acc);
+            Ok(TypedNode {
+                input: side.clone(),
+                output: side,
+                kind: NodeKind::FoldLoop { spine: l.clone(), dir, body: Box::new(body) },
+            })
+        }
     }
 }
 

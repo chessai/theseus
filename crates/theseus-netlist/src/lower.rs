@@ -12,6 +12,7 @@
 //! | `Branch(f,g)` | CSWAP demux/merge with K1 Fredkin routing (ADR-0031) | varies |
 //! | `Distrib`/`Factor` | tag-pair regrouping — pure rail reordering | 0 |
 //! | `TraceLoop` | full unroll ≤ \|u\|+1 iterations (ADR-0026 C2.4) | varies |
+//! | `IterLoop`/`FoldLoop` | tag-gated full unroll (ADR-0039, [`crate::lower_iter`]) | varies |
 //!
 //! Every template is verified **per instance** against the prim's finite
 //! `(forward)` semantics before use — exhaustive over the domain
@@ -101,16 +102,44 @@ impl From<TypedError> for LowerError {
 /// + shared payload), products concatenate.
 ///
 /// The bit `1 + 1` is backward-compatible: `1 + max(0, 0) = 1` pair.
+///
+/// An *uninhabited* sum arm occupies zero payload rails: the tag can
+/// never select it, so no encoding is required. This makes the
+/// `0`-terminated numeral and list-spine types (ADR-0036/0037)
+/// encodable — e.g. `numeral_ty(k)` is `k` tag pairs, one-hot at the
+/// numeral's value (ADR-0039). `0` itself (and any other uninhabited
+/// type) stays unencodable at top level: such nets are statically dead.
 pub fn rail_width(ty: &Type) -> Result<usize, LowerError> {
     match ty {
         Type::One => Ok(0),
         Type::Sum(a, b) => {
-            let wa = rail_width(a)?;
-            let wb = rail_width(b)?;
+            let wa = sum_arm_width(a)?;
+            let wb = sum_arm_width(b)?;
             Ok(1 + wa.max(wb))
         }
         Type::Prod(a, b) => Ok(rail_width(a)? + rail_width(b)?),
         _ => Err(LowerError::UnsupportedType(ty.clone())),
+    }
+}
+
+/// Rail width of one arm of a sum: 0 for an uninhabited arm (never
+/// selected by the tag, so it needs no payload rails), the ordinary
+/// [`rail_width`] otherwise.
+fn sum_arm_width(ty: &Type) -> Result<usize, LowerError> {
+    if type_is_uninhabited(ty) {
+        Ok(0)
+    } else {
+        rail_width(ty)
+    }
+}
+
+/// Is `ty` uninhabited (zero values)? O(term size).
+fn type_is_uninhabited(ty: &Type) -> bool {
+    match ty {
+        Type::Zero => true,
+        Type::One => false,
+        Type::Sum(a, b) => type_is_uninhabited(a) && type_is_uninhabited(b),
+        Type::Prod(a, b) => type_is_uninhabited(a) || type_is_uninhabited(b),
     }
 }
 
@@ -125,8 +154,8 @@ pub fn bits_of(value: &Value, ty: &Type) -> Result<Vec<bool>, LowerError> {
     match (ty, value) {
         (Type::One, Value::Unit) => Ok(vec![]),
         (Type::Sum(ta, tb), Value::Left(a)) => {
-            let wa = rail_width(ta)?;
-            let wb = rail_width(tb)?;
+            let wa = sum_arm_width(ta)?;
+            let wb = sum_arm_width(tb)?;
             let max_w = wa.max(wb);
             let mut bits = vec![true]; // tag = Left
             bits.extend(bits_of(a, ta)?);
@@ -134,8 +163,8 @@ pub fn bits_of(value: &Value, ty: &Type) -> Result<Vec<bool>, LowerError> {
             Ok(bits)
         }
         (Type::Sum(ta, tb), Value::Right(b)) => {
-            let wa = rail_width(ta)?;
-            let wb = rail_width(tb)?;
+            let wa = sum_arm_width(ta)?;
+            let wb = sum_arm_width(tb)?;
             let max_w = wa.max(wb);
             let mut bits = vec![false]; // tag = Right
             bits.extend(bits_of(b, tb)?);
@@ -164,8 +193,8 @@ pub fn value_from_bits(ty: &Type, bits: &[bool]) -> Result<Value, LowerError> {
         match ty {
             Type::One => Ok(Value::Unit),
             Type::Sum(ta, tb) => {
-                let wa = rail_width(ta)?;
-                let wb = rail_width(tb)?;
+                let wa = sum_arm_width(ta)?;
+                let wb = sum_arm_width(tb)?;
                 let max_w = wa.max(wb);
                 let tag = bits[0];
                 let payload = &bits[1..1 + max_w];
@@ -241,20 +270,20 @@ pub fn prim_from_bits(
 
 /// A logical bit in flight: its rail pair and its arrival tick.
 #[derive(Clone, Copy, Debug)]
-struct BitAt {
-    pair: RailPair,
-    depth: u32,
+pub(crate) struct BitAt {
+    pub(crate) pair: RailPair,
+    pub(crate) depth: u32,
 }
 
 impl BitAt {
     /// NOT: exchange the two token-line roles. Zero cells, zero ticks
     /// (ADR-0031 NOT-in-Permute).
-    fn rail_swapped(self) -> BitAt {
+    pub(crate) fn rail_swapped(self) -> BitAt {
         BitAt { pair: self.pair.swapped(), depth: self.depth }
     }
 }
 
-struct Builder {
+pub(crate) struct Builder {
     next_line: u32,
     cells: Vec<Cell>,
     /// Ancilla input pairs needed by conditional-NOT constructions.
@@ -277,7 +306,7 @@ impl Builder {
     /// Allocate an ancilla pair with a known initial value.  The pair
     /// is recorded so that `lower()` can add it to the netlist's primary
     /// inputs.
-    fn alloc_ancilla(&mut self, value: bool) -> BitAt {
+    pub(crate) fn alloc_ancilla(&mut self, value: bool) -> BitAt {
         let pair = self.fresh_pair();
         self.ancilla_inputs.push((pair, value));
         BitAt { pair, depth: 0 }
@@ -285,7 +314,7 @@ impl Builder {
 
     /// Record a garbage output pair produced by a conditional-NOT
     /// construction.  `lower()` adds it to the netlist's primary outputs.
-    fn mark_garbage(&mut self, bit: BitAt) {
+    pub(crate) fn mark_garbage(&mut self, bit: BitAt) {
         self.ancilla_outputs.push((bit.pair, bit.depth));
     }
 
@@ -293,7 +322,7 @@ impl Builder {
     /// equal-arrival is the deferred balancer's job; the imbalance stays
     /// visible via `tick_imbalances`), and its phase is depth mod P
     /// (C2.3).
-    fn emit(&mut self, kind: CellKind, ins: &[BitAt]) -> Vec<BitAt> {
+    pub(crate) fn emit(&mut self, kind: CellKind, ins: &[BitAt]) -> Vec<BitAt> {
         debug_assert_eq!(ins.len(), kind.arity());
         let depth = ins.iter().map(|b| b.depth).max().expect("cell has inputs");
         let outputs: Vec<RailPair> = ins.iter().map(|_| self.fresh_pair()).collect();
@@ -310,7 +339,11 @@ impl Builder {
             .collect()
     }
 
-    fn apply(&mut self, node: &TypedNode, ins: &[BitAt]) -> Result<Vec<BitAt>, LowerError> {
+    pub(crate) fn apply(
+        &mut self,
+        node: &TypedNode,
+        ins: &[BitAt],
+    ) -> Result<Vec<BitAt>, LowerError> {
         match &node.kind {
             NodeKind::Seq(nodes) => {
                 let mut cur = ins.to_vec();
@@ -473,6 +506,15 @@ impl Builder {
             // sound. N = |u| + 1 iterations.
             NodeKind::TraceLoop { carrier, body } => {
                 self.lower_trace(carrier, body, ins)
+            }
+
+            // Iter/Fold/Unfold unrolling (ADR-0039): bounded
+            // data-driven loops, lowered in `crate::lower_iter` by
+            // unrolling to the type-derived bound with the one-hot
+            // counter/spine tags gating each body application.
+            NodeKind::IterLoop { counter, body } => self.lower_iter_loop(counter, body, ins),
+            NodeKind::FoldLoop { spine, dir, body } => {
+                self.lower_fold_loop(spine, *dir, body, ins)
             }
         }
     }
@@ -764,7 +806,7 @@ impl Builder {
     /// synthesise conditional K1 cells: position permutations use K1
     /// directly (conditional swap), and rail swaps (NOT) use an
     /// ancilla-based splitter/selector K1 pair (see Phase 2 below).
-    fn controlled_apply(
+    pub(crate) fn controlled_apply(
         &mut self,
         node: &TypedNode,
         data_ins: &[BitAt],

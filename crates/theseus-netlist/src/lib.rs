@@ -34,6 +34,7 @@ pub mod balance;
 pub mod canonicalize;
 pub mod ir;
 pub mod lower;
+pub mod lower_iter;
 pub mod ring;
 pub mod sim;
 
