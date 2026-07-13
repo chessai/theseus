@@ -34,6 +34,7 @@ pub mod balance;
 pub mod canonicalize;
 pub mod ir;
 pub mod lower;
+pub mod ring;
 pub mod sim;
 
 pub mod schedule {}
@@ -60,4 +61,5 @@ pub use ir::typed::{Monoid, NodeKind, TypedNode};
 pub use lower::{
     bits_of, lower, lower_iso, prim_from_bits, rail_width, value_from_bits, LowerError,
 };
+pub use ring::{pad_ring, RingError, RingNetlist};
 pub use sim::{simulate, SimError, SimResult};
