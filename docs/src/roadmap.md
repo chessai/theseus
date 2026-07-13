@@ -98,6 +98,99 @@ Slice 2.
 | e-graphs; guards; sized types; salsa; `@tag`; post-flatten rebalance (FPGA) | unchanged from v1 roadmap |
 | OpenLane/layout in silicon shell | rung 4 |
 
+## Beyond v1: the post-v1 DAG
+
+Ties the [version→feature map](#version--feature-mapping) and the parked-item
+wake conditions above into one dependency picture. Same convention as [The
+dependency graph](#the-dependency-graph): boxes at the same depth are
+parallelizable; edges are "unblocks"; **(wake: …)** is the condition that
+makes a parked node live. A node marked **▸** breaks down into its own
+sub-DAG below. Nothing here is started — v1's thesis is demonstrated end to
+end; this is the map of what "v2 and beyond" actually contains.
+
+### Top level — three tracks
+
+```text
+                 v1 COMPLETE  (M1 · M3a · M3b · M4-v1)
+                            │
+        ┌───────────────────┼───────────────────────┐
+        ▼                   ▼                         ▼
+  T1 RING MACHINE ▸   T2 SOFTWARE DIALECT ▸    T3 SILICON / OPT TAIL ▸
+     (M4-v2)              (v0.2)                   (v0.3+ / M5)
+        │                                         (independent — deepens
+        │ ring machine is the design input        the physics, not the
+        └───────────► Option-B memory bus         machine model)
+                      (lives in T2; see below)
+```
+
+The **only** hard cross-track edge is T1 → T2's Option-B memory bus: the
+recirculating machine is what the bus design is "informed by." T3 is
+independent of both.
+
+### T1 — Ring machine (M4-v2) ▸
+
+Recirculating execution so the CPU stops being unroll-only; this is what
+unblocks data-dependent branching. The SWAPBR injectivity obstruction
+(see `step.rs` module docs) is genuine, so branching is a *design* problem,
+not a coding gap.
+
+```text
+  balancer buffer-materialization fix        ── v1 follow-up; ENABLER:
+   (analytic pricing → streaming buffers)        lets step^T be balanced /
+              │                                   simulated at T>1, not just
+              ▼                                   eval'd + analytically priced
+  recirculating loop primitive (C2.4)   ── (wake: unrolled area unaffordable,
+              │                              formally declared by M4/ADR-0030)
+              ▼
+  reversible come-from / paired branch (Pendulum lineage)
+              │
+              ▼
+  branch-keyed step iso   ──►   SWAPBR / data-dependent control flow works
+```
+
+### T2 — Software dialect (v0.2) ▸
+
+```text
+  μ-types  (recursive / sized software dialect)      ── foundational
+        │
+        ├───────────────┬─────────────┬────────────┐
+        ▼               ▼             ▼            ▼
+   iter/fold/unfold  HandshakeLoop  guards       @tag
+                                    proposal   (tagged unions)
+
+  storage sub-chain (parallel to the language work above):
+
+   Option-B memory bus (ADR-0029)  ◄── ring machine (T1)
+        │                          ── (wake: fabric-resident storage
+        ▼                              dominates the energy report, C3.5)
+   Option-C SRAM macro prim        ── (wake: Option-B insufficient at scale)
+```
+
+`μ-types` is the one foundational node (iter/fold/unfold fold over recursive
+types); HandshakeLoop, guards, and `@tag` are parallel siblings.
+
+### T3 — Silicon / optimization tail (v0.3+ / M5) ▸
+
+```text
+  PARALLEL, mostly independent:
+
+    eqsat (ADR-0010)  ·  reduced swing + corners (ADR-0024)  ·
+    Xyce (ADR-0025, wake: block size > ngspice patience; validation gate first)
+
+  SEQUENTIAL — the idealization ladder (ADR-0032):
+
+    rung 2 ──► rung 3 ──► rung 4 ──► OpenLane / layout in silicon shell
+
+    S2LAL migration (ADR-0023) ── (wake: leakage-share threshold)
+              │
+    rung 3+ ──┤
+              ▼
+    TAPE-OUT (M5)  ── gated on: idealization rung 3+  AND  S2LAL trigger eval
+```
+
+The headline **CPU money plot** (below) is a *v1* artifact, not a v2 node —
+it reuses `theseus-tisc::energy` and needs nothing above.
+
 ## M4-v1 demonstration artifacts & follow-ups
 
 Landed for M4-v1: the TISC-1 datapath, decoder, and `step` cycle compile to
