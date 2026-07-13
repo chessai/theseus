@@ -27,7 +27,7 @@ use theseus_syntax::ast::{
     BinOp, Clause, CombKind, Decl, Expr, IsoBody, IsoDecl, Pattern, Program, Type as SurfType,
 };
 
-use crate::diagnostics::Diagnostic;
+use crate::diagnostics::{Code, Diagnostic};
 use crate::env::{self, Env, Inj};
 
 type ElabResult = Result<Iso, Vec<Diagnostic>>;
@@ -77,7 +77,7 @@ fn collect_where<'a>(iso: &'a IsoDecl, out: &mut BTreeMap<String, &'a IsoDecl>) 
 
 fn elab_iso(iso: &IsoDecl, env: &Env, isos: &BTreeMap<String, &IsoDecl>) -> ElabResult {
     match &iso.body {
-        IsoBody::Expr(e) => elab_expr(e, env, isos),
+        IsoBody::Expr(e) => elab_expr(e, env, isos, Some(&iso.lhs)),
         IsoBody::Clauses(cs) => {
             let labels = env.iso_labels(&iso.name.text);
             if labels.is_empty() {
@@ -89,17 +89,22 @@ fn elab_iso(iso: &IsoDecl, env: &Env, isos: &BTreeMap<String, &IsoDecl>) -> Elab
     }
 }
 
-fn elab_expr(e: &Expr, env: &Env, isos: &BTreeMap<String, &IsoDecl>) -> ElabResult {
+fn elab_expr(
+    e: &Expr,
+    env: &Env,
+    isos: &BTreeMap<String, &IsoDecl>,
+    iso_lhs: Option<&SurfType>,
+) -> ElabResult {
     match e {
-        Expr::Paren(inner, _) => elab_expr(inner, env, isos),
+        Expr::Paren(inner, _) => elab_expr(inner, env, isos, iso_lhs),
         Expr::Var(name) => match isos.get(&name.text) {
             Some(iso) => elab_iso(iso, env, isos),
             None => unsupported(),
         },
-        Expr::Adjoint(inner, _) => Ok(Iso::sym(elab_expr(inner, env, isos)?)),
+        Expr::Adjoint(inner, _) => Ok(Iso::sym(elab_expr(inner, env, isos, None)?)),
         Expr::Bin(op, l, r, _) => {
-            let lf = elab_expr(l, env, isos)?;
-            let rf = elab_expr(r, env, isos)?;
+            let lf = elab_expr(l, env, isos, None)?;
+            let rf = elab_expr(r, env, isos, None)?;
             Ok(match op {
                 BinOp::Seq => Iso::seq(lf, rf),
                 BinOp::Prod => Iso::times(lf, rf),
@@ -113,22 +118,75 @@ fn elab_expr(e: &Expr, env: &Env, isos: &BTreeMap<String, &IsoDecl>) -> ElabResu
         // expression. The result is gated on the CORE typing judgment
         // (ADR-0036/0037: counter-is-numeral, spine-is-list, body-is-endo,
         // element match), so an ill-formed combinator never reaches eval.
-        Expr::Combinator(kind, ty, body, _) => {
+        Expr::Combinator(kind, ty, body, span) => {
             let core_ty = env.lower(ty);
-            let body_iso = elab_expr(body, env, isos)?;
+            let body_iso = match body.as_ref() {
+                // Position type inference for `id` as combinator body (ADR-0038):
+                // infer the body's expected type from the combinator kind and the
+                // iso's declared signature.
+                Expr::Id(_) => {
+                    match infer_combinator_id_body(kind, &core_ty, iso_lhs, env) {
+                        Some(iso) => iso,
+                        None => elab_expr(body, env, isos, None)?,
+                    }
+                }
+                _ => elab_expr(body, env, isos, None)?,
+            };
             let iso = match kind {
                 CombKind::Iter => Iso::iter(core_ty, body_iso),
                 CombKind::Fold => Iso::fold(core_ty, body_iso),
                 CombKind::Unfold => Iso::unfold(core_ty, body_iso),
             };
-            if theseus_core::type_of(&iso).is_err() {
-                return unsupported();
+            if let Err(te) = theseus_core::type_of(&iso) {
+                use theseus_core::TypeError;
+                let code = match te {
+                    TypeError::IterCounterNotNumeral(_) => Code::T0601,
+                    TypeError::IterBodyNotEndo { .. } => Code::T0602,
+                    TypeError::FoldSpineNotList(_) => Code::T0603,
+                    TypeError::FoldBodyNotEndo { .. } => Code::T0604,
+                    TypeError::FoldBodyNotElemProd(_) => Code::T0605,
+                    TypeError::FoldBodyElemMismatch { .. } => Code::T0606,
+                    _ => return unsupported(),
+                };
+                return Err(vec![Diagnostic::new(code, *span)]);
             }
             Ok(iso)
         }
-        // `id` needs the type at its position (inference) — deferred; `Ctor`,
-        // `Tuple`, `Unit` do not appear as slice-1 combinator bodies.
+        // `Ctor`, `Tuple`, `Unit` do not appear as slice-1 combinator bodies.
         _ => unsupported(),
+    }
+}
+
+/// Position type inference for `id` as a combinator body (ADR-0038).
+///
+/// Given `iter T id` (or `fold`/`unfold T id`) and the iso's declared LHS type,
+/// infer the expected body type so that `id` elaborates to `Iso::Id(body_type)`.
+///
+/// For `iter T id` with iso lhs `T * A`: body type = `lower(A)`.
+/// For `fold T id` / `unfold T id` with iso lhs `T * A` and spine element `b`:
+///   body type = `b × lower(A)`.
+///
+/// Returns `None` when the iso signature is unavailable or doesn't match the
+/// expected shape — the caller falls back to normal (failing) elaboration.
+fn infer_combinator_id_body(
+    kind: &CombKind,
+    core_ty: &CoreType,
+    iso_lhs: Option<&SurfType>,
+    env: &Env,
+) -> Option<Iso> {
+    let lhs = iso_lhs?;
+    let core_lhs = env.lower(lhs);
+    // The iso's LHS should be `T × A` where T matches core_ty.
+    let acc = match &core_lhs {
+        CoreType::Prod(t, a) if t.as_ref() == core_ty => a.as_ref().clone(),
+        _ => return None,
+    };
+    match kind {
+        CombKind::Iter => Some(Iso::Id(acc)),
+        CombKind::Fold | CombKind::Unfold => {
+            let elem = theseus_core::list_spine_elem_ty(core_ty)?.cloned()?;
+            Some(Iso::Id(CoreType::prod(elem, acc)))
+        }
     }
 }
 

@@ -28,6 +28,18 @@ pub enum Code {
     T0302,
     /// Coverage: uncovered label state (T0303).
     T0303,
+    /// Combinator: `iter` counter type is not a numeral (T0601).
+    T0601,
+    /// Combinator: `iter` body is not an endo-iso (T0602).
+    T0602,
+    /// Combinator: `fold`/`unfold` spine type is not a uniform list (T0603).
+    T0603,
+    /// Combinator: `fold`/`unfold` body is not an endo-iso (T0604).
+    T0604,
+    /// Combinator: `fold`/`unfold` body type is not a product `b × c` (T0605).
+    T0605,
+    /// Combinator: `fold`/`unfold` body element type does not match spine element (T0606).
+    T0606,
 }
 
 /// Which side of a clause (or iso signature) a diagnostic refers to.

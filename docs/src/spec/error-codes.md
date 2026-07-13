@@ -15,6 +15,12 @@ truth for `--explain` (ADR-0020/0021). Skeleton allocation:
 | T0303 | label state space not covered |
 | T0401 | prim signature mismatch with registry |
 | T0501 | construct outside the synthesizable dialect |
+| T0601 | `iter` counter type is not a numeral |
+| T0602 | `iter` body is not an endo-iso |
+| T0603 | `fold`/`unfold` spine type is not a uniform list |
+| T0604 | `fold`/`unfold` body is not an endo-iso |
+| T0605 | `fold`/`unfold` body type is not a product `b × c` |
+| T0606 | `fold`/`unfold` body element type does not match spine element |
 
 Each code gets a worked-example page as it is implemented; diagnostic
 snapshots (code, spans, witness) live in the conformance suite.
