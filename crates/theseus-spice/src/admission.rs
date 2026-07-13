@@ -61,8 +61,9 @@
 //!
 //! # Candidate cells
 //!
-//! The reversible library cells — the k-CSWAP family (k ∈ {0, 1, 2, 3}) and the
-//! adiabatic TG buffer primitive — plus the two baseline DUTs (static CMOS
+//! The reversible library cells — the k-CSWAP family (k ∈ {0, 1, 2, 3}), the
+//! R1 rail-role swap (ADR-0040, same TG fabric with one routed conductor
+//! pair), and the adiabatic TG buffer primitive — plus the two baseline DUTs (static CMOS
 //! inverter, PFAL buffer), which the checklist must *reject*: that the same
 //! five gates admit the reversible cells and reject the baselines is the
 //! discrimination test of the checklist itself. Note the raw TG buffer is
@@ -78,8 +79,8 @@ use crate::adiabatic::{
 };
 use crate::bench::{parse_meas, run_ngspice_raw};
 use crate::cswap::{
-    cswap_energy_curve, cswap_functional_netlist, cswap_netlist, cswap_out, cswap_signals,
-    run_cswap_functional, CswapReading, CswapToken,
+    cell_energy_curve, cell_functional_netlist, cell_netlist, run_cell_functional, CellTopo,
+    CswapReading, CswapToken,
 };
 use crate::energy::{self, EnergyFit};
 
@@ -158,8 +159,9 @@ pub enum CandidateCell {
     CswapK2,
     /// k = 3 CSWAP: the 3-controlled swap.
     CswapK3,
-    /// R1 rail-role swap (ADR-0040): CNOT in one cell. Placeholder —
-    /// full B5 battery pending the R1 SPICE deck.
+    /// R1 rail-role swap (ADR-0040): CNOT in one cell — the K1 TG fabric
+    /// with one routed conductor pair instead of two. Runs the same full
+    /// B5 battery as the k-CSWAP cells.
     RoleSwapR1,
     /// The adiabatic transmission-gate buffer primitive (single-ended; see
     /// module docs for the INV-TOKEN degeneracy caveat).
@@ -179,6 +181,15 @@ impl CandidateCell {
             CandidateCell::CswapK2 => Some(2),
             CandidateCell::CswapK3 => Some(3),
             _ => None,
+        }
+    }
+
+    /// The TG-fabric topology, if this candidate is built on the shared
+    /// k-CSWAP/R1 transmission-gate fabric.
+    pub fn topo(self) -> Option<CellTopo> {
+        match self {
+            CandidateCell::RoleSwapR1 => Some(CellTopo::R1),
+            _ => self.cswap_k().map(CellTopo::K),
         }
     }
 }
@@ -274,35 +285,12 @@ impl AdmissionReport {
 /// fails outright is *recorded* as a gate-4 failure rather than an error.
 pub fn admit(cell: CandidateCell, rung: DeviceRung) -> io::Result<AdmissionReport> {
     match cell {
-        CandidateCell::CswapK0 | CandidateCell::CswapK1 | CandidateCell::CswapK2 | CandidateCell::CswapK3 => {
-            admit_cswap(cell, cell.cswap_k().expect("cswap cell"), rung)
-        }
-        CandidateCell::RoleSwapR1 => {
-            // Placeholder: full B5 battery pending the R1 SPICE deck
-            // (ADR-0040 follow-up). For now, report all gates as
-            // pending so the cell is recorded but not auto-admitted
-            // through this path.
-            let pending = || GateResult::fail(
-                "R1 admission pending: SPICE deck + full B5 battery not yet implemented \
-                 (ADR-0040 follow-up)".to_string()
-            );
-            let ev = ScalingEvidence {
-                points: vec![(1e-7, 0.0)],
-                fit: crate::energy::EnergyFit { k_adia: 0.0, k_leak: 0.0, k_res: 0.0, r_squared: 0.0 },
-                adia_share_fast: 0.0,
-                adia_share_slow: 0.0,
-                leak_share_slow: 0.0,
-            };
-            Ok(AdmissionReport {
-                cell,
-                rung,
-                functional: pending(),
-                conservation: pending(),
-                token_invariant: pending(),
-                reverse_drive: pending(),
-                scaling: pending(),
-                scaling_evidence: ev,
-            })
+        CandidateCell::CswapK0
+        | CandidateCell::CswapK1
+        | CandidateCell::CswapK2
+        | CandidateCell::CswapK3
+        | CandidateCell::RoleSwapR1 => {
+            admit_fabric_cell(cell, cell.topo().expect("TG-fabric cell"), rung)
         }
         CandidateCell::AdiabaticTg => admit_tg(rung),
         CandidateCell::CmosBaseline => admit_cmos(rung),
@@ -467,7 +455,7 @@ fn scaling_verdict(points: Vec<(f64, f64)>) -> (GateResult, ScalingEvidence) {
 }
 
 // ---------------------------------------------------------------------------
-// k-CSWAP admission
+// TG-fabric cell admission (k-CSWAP family + R1 rail-role swap)
 // ---------------------------------------------------------------------------
 
 /// Token-line base name for (signal, polarity) — mirrors the (private)
@@ -484,11 +472,13 @@ fn token_sig(t: CswapToken, sig: &str) -> bool {
         "c3" => t.c3,
         "a" => t.a,
         "b" => t.b,
+        // R1's target signal (ADR-0040) is carried in the `a` field.
+        "t" => t.a,
         other => panic!("unknown signal {other}"),
     }
 }
 
-/// The closure orbit for the k-cell: a short token sequence that pulses
+/// The closure orbit for the cell: a short token sequence that pulses
 /// **every token line** and conducts **every branch** of the cell, so that
 /// at rung 1 every output wire and every internal node is actively driven
 /// and re-parked within each orbit instead of floating. (An all-active
@@ -497,8 +487,21 @@ fn token_sig(t: CswapToken, sig: &str) -> bool {
 /// ΔE_stored reads their drift, not a closure violation — measured:
 /// −1.76 fJ/cycle on k0 at T = 1e-7 with the all-active token, versus
 /// ≈ 0 with this orbit.)
-fn closure_orbit(k: usize) -> Vec<CswapToken> {
+fn closure_orbit(topo: CellTopo) -> Vec<CswapToken> {
     let t = |c1, c2, c3, a, b| CswapToken { c1, c2, c3, a, b };
+    // All four (c, t) combos: pulses all four token lines (ct/cf/tt/tf) and
+    // conducts all six branches (oct[c1], ocf[c0], ott[c1∧t0], ott[c0∧t1],
+    // otf[c1∧t1], otf[c0∧t0]); every output line pulses at least once.
+    // (The R1 target `t` rides the token's `a` field.)
+    if topo == CellTopo::R1 {
+        return vec![
+            t(true, false, false, false, false),
+            t(true, false, false, true, false),
+            t(false, false, false, false, false),
+            t(false, false, false, true, false),
+        ];
+    }
+    let CellTopo::K(k) = topo else { unreachable!() };
     match k {
         // Both a-lines pulse.
         0 => vec![t(false, false, false, true, false), t(false, false, false, false, false)],
@@ -533,14 +536,18 @@ fn closure_orbit(k: usize) -> Vec<CswapToken> {
     }
 }
 
-fn admit_cswap(cell: CandidateCell, k: usize, rung: DeviceRung) -> io::Result<AdmissionReport> {
+fn admit_fabric_cell(
+    cell: CandidateCell,
+    topo: CellTopo,
+    rung: DeviceRung,
+) -> io::Result<AdmissionReport> {
     let period = functional_period(rung);
-    let (readings, _ecyc) = run_cswap_functional(k, rung, period)?;
-    let functional = cswap_functional_verdict(k, rung, &readings);
-    let token_invariant = cswap_token_verdict(k, rung, &readings);
-    let conservation = cswap_conservation_verdict(k, rung, period)?;
-    let reverse_drive = cswap_reverse_verdict(k, rung, period);
-    let curve = cswap_energy_curve(k, rung, &sweep_periods(rung))?;
+    let (readings, _ecyc) = run_cell_functional(topo, rung, period)?;
+    let functional = cell_functional_verdict(topo, rung, &readings);
+    let token_invariant = cell_token_verdict(topo, rung, &readings);
+    let conservation = cell_conservation_verdict(topo, rung, period)?;
+    let reverse_drive = cell_reverse_verdict(topo, rung, period);
+    let curve = cell_energy_curve(topo, rung, &sweep_periods(rung))?;
     let (scaling, scaling_evidence) =
         scaling_verdict(curve.iter().map(|p| (p.period_s, p.etot.abs())).collect());
     Ok(AdmissionReport {
@@ -555,9 +562,9 @@ fn admit_cswap(cell: CandidateCell, k: usize, rung: DeviceRung) -> io::Result<Ad
     })
 }
 
-/// Gate 1 for a k-CSWAP cell: typed decode of every per-token line reading
+/// Gate 1 for a TG-fabric cell: typed decode of every per-token line reading
 /// against the truth function.
-fn cswap_functional_verdict(k: usize, rung: DeviceRung, readings: &[CswapReading]) -> GateResult {
+fn cell_functional_verdict(topo: CellTopo, rung: DeviceRung, readings: &[CswapReading]) -> GateResult {
     let vdd = rung.vdd();
     let mut mismatches: Vec<String> = Vec::new();
     for r in readings {
@@ -571,13 +578,14 @@ fn cswap_functional_verdict(k: usize, rung: DeviceRung, readings: &[CswapReading
         }
     }
     let n_tokens = readings.iter().map(|r| r.token_idx).max().map_or(0, |m| m + 1);
-    let combos = 1usize << cswap_signals(k).len();
+    let combos = 1usize << topo.signals().len();
     if mismatches.is_empty() {
         GateResult::pass(format!(
             "typed decode ({DECODE_LO_FRAC:.1}/{DECODE_HI_FRAC:.1}·VDD, hysteresis band non-decoding, \
              sampled mid-validity): all {} line readings across {n_tokens} tokens \
-             (all {combos} control/data combos + pads) decode to the k{k} truth table at full dual-rail level",
-            readings.len()
+             (all {combos} control/data combos + pads) decode to the {} truth table at full dual-rail level",
+            readings.len(),
+            topo.label()
         ))
     } else {
         GateResult::fail(format!(
@@ -589,12 +597,12 @@ fn cswap_functional_verdict(k: usize, rung: DeviceRung, readings: &[CswapReading
     }
 }
 
-/// Gate 3 for a k-CSWAP cell: at every sampled valid tick, each signal's
+/// Gate 3 for a TG-fabric cell: at every sampled valid tick, each signal's
 /// token-line pair is exactly 1-of-2 asserted, so the total asserted-line
 /// count is invariant and equals the signal count.
-fn cswap_token_verdict(k: usize, rung: DeviceRung, readings: &[CswapReading]) -> GateResult {
+fn cell_token_verdict(topo: CellTopo, rung: DeviceRung, readings: &[CswapReading]) -> GateResult {
     let vdd = rung.vdd();
-    let n_sig = cswap_signals(k).len();
+    let n_sig = topo.signals().len();
     let mut violations: Vec<String> = Vec::new();
     let mut per_tick: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
     // Readings arrive (token, signal, pol=true) then (token, signal, pol=false):
@@ -634,19 +642,19 @@ fn cswap_token_verdict(k: usize, rung: DeviceRung, readings: &[CswapReading]) ->
     }
 }
 
-/// Gate 2 for a k-CSWAP cell: the closure orbit repeated; two consecutive
+/// Gate 2 for a TG-fabric cell: the closure orbit repeated; two consecutive
 /// settled orbits compared (periodicity), per-source sum vs total over the
 /// first measured orbit, and explicit-cap ΔE_stored over it from injected
 /// FIND measurements. The measured orbit starts at the first orbit boundary
 /// at or after cycle 8, so rung-1 devices get ≥ 5 leak-settling time
 /// constants (τ ≈ 140 ns at T = 1e-7) before anything is asserted.
-fn cswap_conservation_verdict(k: usize, rung: DeviceRung, period: f64) -> io::Result<GateResult> {
-    let orbit = closure_orbit(k);
+fn cell_conservation_verdict(topo: CellTopo, rung: DeviceRung, period: f64) -> io::Result<GateResult> {
+    let orbit = closure_orbit(topo);
     let len = orbit.len();
     let n0 = (8usize).div_ceil(len) * len; // first measured orbit boundary
     let n_tokens = n0 + 2 * len + 1;
     let tokens: Vec<CswapToken> = orbit.iter().copied().cycle().take(n_tokens).collect();
-    let deck = cswap_netlist(k, rung, period, &tokens, true);
+    let deck = cell_netlist(topo, rung, period, &tokens, true);
     let caps = parse_caps(&deck);
     assert!(!caps.is_empty(), "cswap deck must declare explicit caps");
     let (t0, t1) = (n0 as f64 * period, (n0 + len) as f64 * period);
@@ -673,8 +681,9 @@ fn cswap_conservation_verdict(k: usize, rung: DeviceRung, period: f64) -> io::Re
     }
     Ok(closure_result(
         &format!(
-            "k{k} closure orbit (len {len}, every line pulsed, every branch conducted), \
+            "{} closure orbit (len {len}, every line pulsed, every branch conducted), \
              T={period:.1e} s, settled orbits over cycles {n0}..{}, {} explicit caps",
+            topo.label(),
             n0 + 2 * len,
             caps.len()
         ),
@@ -702,9 +711,9 @@ fn replace_pwl_payload(line: &str, payload: &str) -> String {
 /// with the delayed-replica stimuli (see module docs — for the single-stage
 /// cell this IS the time-reversed phase sequence, modulo a global one-tick
 /// shift absorbed by keeping the measurement grid fixed).
-fn swap_input_replica_sources(deck: &str, k: usize) -> String {
+fn swap_input_replica_sources(deck: &str, topo: CellTopo) -> String {
     let mut lines: Vec<String> = deck.lines().map(str::to_string).collect();
-    for &sig in cswap_signals(k) {
+    for &sig in topo.signals() {
         for pol in [true, false] {
             let base = line_name(sig, pol);
             for rail in ['p', 'm'] {
@@ -728,11 +737,11 @@ fn swap_input_replica_sources(deck: &str, k: usize) -> String {
     lines.join("\n") + "\n"
 }
 
-/// Gate 4 for a k-CSWAP cell. Never errors: any failure (including an
+/// Gate 4 for a TG-fabric cell. Never errors: any failure (including an
 /// ngspice crash on the reversed deck) is *recorded* per the spec.
-fn cswap_reverse_verdict(k: usize, rung: DeviceRung, period: f64) -> GateResult {
-    let (deck, tokens) = cswap_functional_netlist(k, rung, period);
-    let deck = swap_input_replica_sources(&deck, k);
+fn cell_reverse_verdict(topo: CellTopo, rung: DeviceRung, period: f64) -> GateResult {
+    let (deck, tokens) = cell_functional_netlist(topo, rung, period);
+    let deck = swap_input_replica_sources(&deck, topo);
     let out = match run_ngspice_raw(&deck) {
         Ok(out) => out,
         Err(e) => {
@@ -747,8 +756,8 @@ fn cswap_reverse_verdict(k: usize, rung: DeviceRung, period: f64) -> GateResult 
     let mut mismatches: Vec<String> = Vec::new();
     for (j, &t) in tokens.iter().enumerate() {
         // Self-inverse cell: the adjoint truth table IS the forward table.
-        let adj = cswap_out(k, t);
-        for &sig in cswap_signals(k) {
+        let adj = topo.out(t);
+        for &sig in topo.signals() {
             for pol in [true, false] {
                 let base = format!("o{}", line_name(sig, pol));
                 total += 1;
@@ -777,8 +786,9 @@ fn cswap_reverse_verdict(k: usize, rung: DeviceRung, period: f64) -> GateResult 
     if mismatches.is_empty() {
         GateResult::pass(format!(
             "phase sequence reversed (forward/reverse port stimuli exchanged ≡ clock run backward \
-             modulo a global tick shift): adjoint (= self-inverse) k{k} truth table reproduced over \
-             all {total} line readings"
+             modulo a global tick shift): adjoint (= self-inverse) {} truth table reproduced over \
+             all {total} line readings",
+            topo.label()
         ))
     } else {
         let shown: Vec<String> = mismatches.iter().take(4).cloned().collect();
@@ -1365,6 +1375,28 @@ mod tests {
             return;
         }
         assert_admitted(CandidateCell::CswapK3, DeviceRung::Rung0Level1);
+    }
+
+    /// ADR-0040 phase A: the R1 rail-role swap passes the SAME full B5
+    /// battery as the k-CSWAP cells — no placeholder arm, no reduced bar.
+    /// The reverse-drive gate is additionally asserted (stronger than
+    /// `admitted()`, which records it non-blocking): R1 is self-inverse and
+    /// its physical-adjointness story is inherited from K1 verbatim, so a
+    /// reverse-drive failure would undercut the ADR's admissibility argument.
+    #[test]
+    fn admission_accepts_roleswap_r1_rung0() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        let r = admit(CandidateCell::RoleSwapR1, DeviceRung::Rung0Level1).expect("ngspice failed");
+        eprintln!("{}", r.summary());
+        assert!(r.functional.passed, "gate 1 failed:\n{}", r.summary());
+        assert!(r.conservation.passed, "gate 2 failed:\n{}", r.summary());
+        assert!(r.token_invariant.passed, "gate 3 failed:\n{}", r.summary());
+        assert!(r.reverse_drive.passed, "gate 4 (reverse drive) failed:\n{}", r.summary());
+        assert!(r.scaling.passed, "gate 5 failed:\n{}", r.summary());
+        assert!(r.admitted(), "R1 must be admitted:\n{}", r.summary());
     }
 
     #[test]

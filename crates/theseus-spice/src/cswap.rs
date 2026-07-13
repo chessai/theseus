@@ -1,7 +1,9 @@
 //! k-CSWAP adiabatic cell family (ADR-0027): the k-controlled dual-rail swap,
 //! k ∈ {0, 1, 2, 3}, in the verified 2LAL forward/reverse transmission-gate
 //! discipline of [`crate::adiabatic::two_lal_sr_netlist`], characterized at
-//! both device rungs (ADR-0032: rung 0 level-1 sandbox, rung 1 sky130 tt).
+//! both device rungs (ADR-0032: rung 0 level-1 sandbox, rung 1 sky130 tt) —
+//! plus the **R1 rail-role swap** (ADR-0040), which is the same fabric with a
+//! different branch table (see [`CellTopo`]).
 //!
 //! # Cells
 //!
@@ -11,9 +13,16 @@
 //!   controls pass through.
 //! * **k = 3** — the 3-controlled swap: swap `(a, b)` iff `c1 ∧ c2 ∧ c3`;
 //!   all three controls pass through.
+//! * **R1** — the 1-controlled rail-role swap (ADR-0040): `(c, t) → (c,
+//!   t ⊕ c)` at value level. Line level: the target pair's two token lines
+//!   are exchanged with each other iff the control carries a `1` token —
+//!   the same physical act as a K1 target section (a controlled exchange of
+//!   conductors' charge) routing ONE conductor pair where K1 routes two.
 //!
-//! All four are reversible and self-inverse; a controlled swap only routes
-//! charge, so the count of active rails is invariant per token (INV-TOKEN).
+//! All five are reversible and self-inverse; a controlled exchange only
+//! routes charge, so the count of active rails is invariant per token
+//! (INV-TOKEN) — for R1, exchanging the two lines of a 1-hot pair is still
+//! 1-hot.
 //!
 //! # Encoding: 1-of-2 token lines (why the SR's bare rail-pair is not enough)
 //!
@@ -118,9 +127,106 @@ impl CswapToken {
             "c3" => self.c3,
             "a" => self.a,
             "b" => self.b,
+            // R1's target signal (ADR-0040) is carried in the `a` field.
+            "t" => self.a,
             other => panic!("unknown signal {other}"),
         }
     }
+}
+
+/// Cell topology selector for the shared transmission-gate fabric: the
+/// k-CSWAP family (ADR-0027) or the R1 rail-role swap (ADR-0040). Everything
+/// but the branch table, the truth function, and the signal names is
+/// identical — same 2LAL stage, same forward/reverse TG discipline, same
+/// per-literal mirrored recovery chains, same measurement policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CellTopo {
+    /// k-CSWAP, k ∈ {0, 1, 2, 3}.
+    K(usize),
+    /// R1: the 1-controlled rail-role swap — value level `(c, t) → (c,
+    /// t ⊕ c)`; line level exchanges the target pair's two token lines iff
+    /// the control carries a `1` token (ADR-0040 D1). The target signal is
+    /// named `t` and carried in [`CswapToken::a`] (`c2`/`c3`/`b` unused).
+    R1,
+}
+
+impl CellTopo {
+    /// Short label for deck titles and diagnostics.
+    pub fn label(self) -> String {
+        match self {
+            CellTopo::K(k) => format!("k{k}-CSWAP"),
+            CellTopo::R1 => "R1 rail-role-swap".to_string(),
+        }
+    }
+
+    /// The cell's signal names (inputs and outputs coincide: every input has
+    /// a corresponding output line pair named `o<sig>`).
+    pub fn signals(self) -> &'static [&'static str] {
+        match self {
+            CellTopo::K(k) => cswap_signals(k),
+            CellTopo::R1 => &["c", "t"],
+        }
+    }
+
+    /// The cell's truth function on one token. Self-inverse for every topo.
+    pub fn out(self, t: CswapToken) -> CswapToken {
+        match self {
+            CellTopo::K(k) => cswap_out(k, t),
+            CellTopo::R1 => r1_out(t),
+        }
+    }
+
+    /// All input combinations for the truth-table run (4 for R1).
+    pub fn truth_tokens(self) -> Vec<CswapToken> {
+        match self {
+            CellTopo::K(k) => cswap_truth_tokens(k),
+            CellTopo::R1 => (0..4usize)
+                .map(|j| CswapToken {
+                    c1: j & 2 != 0,
+                    c2: false,
+                    c3: false,
+                    a: j & 1 != 0,
+                    b: false,
+                })
+                .collect(),
+        }
+    }
+
+    /// The OR-of-ANDs branch table for output `out_sig`'s `pol` line.
+    fn branches(self, out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
+        match self {
+            CellTopo::K(k) => cswap_branches(k, out_sig, pol),
+            CellTopo::R1 => r1_branches(out_sig, pol),
+        }
+    }
+
+    /// The energy-sweep token: the heaviest routing case, chosen so the
+    /// output line measured by `vmax` (see [`CellTopo::vmax_line`]) pulses.
+    fn energy_token(self) -> CswapToken {
+        match self {
+            // Every control and both data high — the swap path is exercised
+            // (at k ≥ 1) and the a-output 1-line pulses.
+            CellTopo::K(_) => CswapToken { c1: true, c2: true, c3: true, a: true, b: true },
+            // c = 1, t = 0: the exchange branch (c₁-line ∧ t0) conducts, the
+            // target output 1-line pulses (t′ = 1), and the control passes.
+            CellTopo::R1 => CswapToken { c1: true, c2: false, c3: false, a: false, b: false },
+        }
+    }
+
+    /// The output line whose rail the non-vacuity `vmax` measurement reads.
+    fn vmax_line(self) -> &'static str {
+        match self {
+            CellTopo::K(_) => "oat",
+            CellTopo::R1 => "ott",
+        }
+    }
+}
+
+/// The R1 truth function (ADR-0040 D1): the control passes through and the
+/// target value flips iff the control is 1 — `(c, t) → (c, t ⊕ c)`, i.e.
+/// CNOT in one cell. Self-inverse: `r1_out(r1_out(t)) == t`.
+pub fn r1_out(t: CswapToken) -> CswapToken {
+    CswapToken { a: t.a ^ t.c1, ..t }
 }
 
 /// The k-CSWAP truth function: swap `(a, b)` iff all k controls are 1.
@@ -215,6 +321,27 @@ fn cswap_branches(k: usize, out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
     }
 }
 
+/// The R1 branch table (ADR-0040 D2). The control line passes through
+/// exactly like a K-cell control. The target output's `pol` line pulses when
+/// the control is 1 and the target's ¬`pol` line pulsed (the exchange), or
+/// the control is 0 and the target's own `pol` line pulsed (pass-through):
+///
+/// ```text
+/// t1_out : F = (c₁-line ∧ t0) ∨ (c₀-line ∧ t1)
+/// t0_out : F = (c₁-line ∧ t1) ∨ (c₀-line ∧ t0)
+/// ```
+///
+/// — two branches of two literals each, control literal clock-side, data
+/// literal output-side: the identical shape as a K1 target output line, with
+/// ONE routed conductor pair where K1 routes two.
+fn r1_branches(out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
+    match out_sig {
+        "c" => vec![vec![("c", pol)]],
+        "t" => vec![vec![("c", true), ("t", !pol)], vec![("c", false), ("t", pol)]],
+        other => panic!("no R1 branch table for {other:?}"),
+    }
+}
+
 /// Line base name for a signal's polarity line: `at`/`af`, `c1t`/`c1f`, …
 /// Wires are `<base>p` (rail: rests 0, pulses high) and `<base>m` (mirror:
 /// rests VDD, dips low).
@@ -269,10 +396,7 @@ const WARMUP_CYCLES: usize = 3;
 /// settle internal state during them).
 const PAD_TOKENS: usize = 2;
 
-/// Build the k-CSWAP cell deck. `tokens` enter one per period; if
-/// `functional` every token's output lines get level measurements plus
-/// per-cycle energy integrals, otherwise the settled-cycle energy integrals
-/// (`etot`, `e0`, `e2`, `evdd`, `ein`, `eack`, `vmax`) are emitted.
+/// Build the k-CSWAP cell deck (see [`cell_netlist`]).
 pub fn cswap_netlist(
     k: usize,
     rung: DeviceRung,
@@ -280,7 +404,23 @@ pub fn cswap_netlist(
     tokens: &[CswapToken],
     functional: bool,
 ) -> String {
-    assert!(k <= 3, "k must be 0, 1, 2, or 3");
+    cell_netlist(CellTopo::K(k), rung, period_s, tokens, functional)
+}
+
+/// Build the cell deck for `topo`. `tokens` enter one per period; if
+/// `functional` every token's output lines get level measurements plus
+/// per-cycle energy integrals, otherwise the settled-cycle energy integrals
+/// (`etot`, `e0`, `e2`, `evdd`, `ein`, `eack`, `vmax`) are emitted.
+pub fn cell_netlist(
+    topo: CellTopo,
+    rung: DeviceRung,
+    period_s: f64,
+    tokens: &[CswapToken],
+    functional: bool,
+) -> String {
+    if let CellTopo::K(k) = topo {
+        assert!(k <= 3, "k must be 0, 1, 2, or 3");
+    }
     assert!(!tokens.is_empty(), "need at least one token");
     let q = period_s / 4.0;
     let vdd = rung.vdd();
@@ -290,12 +430,13 @@ pub fn cswap_netlist(
         DeviceRung::Rung0Level1 => (period_s / 4000.0).min(2e-11),
         DeviceRung::Rung1Sky130 => (period_s / 4000.0).min(5e-11).max(period_s / 40_000.0),
     };
-    let sigs = cswap_signals(k);
-    let outs = cswap_out_tokens(k, tokens);
+    let sigs = topo.signals();
+    let outs: Vec<CswapToken> = tokens.iter().map(|&t| topo.out(t)).collect();
 
     let mut l: Vec<String> = Vec::new();
     l.push(format!(
-        "k{k}-CSWAP adiabatic cell, {rung:?} (T={period_s:.6e} s, {} tokens)",
+        "{} adiabatic cell, {rung:?} (T={period_s:.6e} s, {} tokens)",
+        topo.label(),
         tokens.len()
     ));
     match rung {
@@ -371,7 +512,7 @@ pub fn cswap_netlist(
     for &sig in sigs {
         for pol in [true, false] {
             let obase = format!("o{}", line(sig, pol));
-            let brs = cswap_branches(k, sig, pol);
+            let brs = topo.branches(sig, pol);
             for (clk, suffix, park) in [("p0", "p", 0.0), ("p2", "m", vdd)] {
                 let wire = format!("{obase}{suffix}");
                 for (bi, br) in brs.iter().enumerate() {
@@ -483,19 +624,16 @@ pub fn cswap_netlist(
                 "meas tran {name} INTEG V({node}) FROM={mf:.9e} TO={mt:.9e}"
             ));
         }
-        // Non-vacuity: the a-output 1-line must actually swing.
+        // Non-vacuity: the measured data-output 1-line must actually swing
+        // (a-output for the K cells, t-output for R1).
         l.push(format!(
-            "meas tran vmax MAX V(oatp) FROM={mf:.9e} TO={mt:.9e}"
+            "meas tran vmax MAX V({}p) FROM={mf:.9e} TO={mt:.9e}",
+            topo.vmax_line()
         ));
     }
     l.push(".endc".into());
     l.push(".end".into());
     l.join("\n") + "\n"
-}
-
-/// Expected output token per input token (the truth function, per k).
-fn cswap_out_tokens(k: usize, tokens: &[CswapToken]) -> Vec<CswapToken> {
-    tokens.iter().map(|&t| cswap_out(k, t)).collect()
 }
 
 /// The functional (truth-table) deck: two unmeasured lead-in tokens, then
@@ -506,10 +644,19 @@ pub fn cswap_functional_netlist(
     rung: DeviceRung,
     period_s: f64,
 ) -> (String, Vec<CswapToken>) {
-    let truth = cswap_truth_tokens(k);
+    cell_functional_netlist(CellTopo::K(k), rung, period_s)
+}
+
+/// [`cswap_functional_netlist`] for any [`CellTopo`].
+pub fn cell_functional_netlist(
+    topo: CellTopo,
+    rung: DeviceRung,
+    period_s: f64,
+) -> (String, Vec<CswapToken>) {
+    let truth = topo.truth_tokens();
     let mut tokens = vec![truth[truth.len() - 1]; PAD_TOKENS];
     tokens.extend_from_slice(&truth);
-    let deck = cswap_netlist(k, rung, period_s, &tokens, true);
+    let deck = cell_netlist(topo, rung, period_s, &tokens, true);
     (deck, tokens)
 }
 
@@ -540,7 +687,16 @@ pub fn run_cswap_functional(
     rung: DeviceRung,
     period_s: f64,
 ) -> io::Result<CswapFunctionalRun> {
-    let (deck, tokens) = cswap_functional_netlist(k, rung, period_s);
+    run_cell_functional(CellTopo::K(k), rung, period_s)
+}
+
+/// [`run_cswap_functional`] for any [`CellTopo`].
+pub fn run_cell_functional(
+    topo: CellTopo,
+    rung: DeviceRung,
+    period_s: f64,
+) -> io::Result<CswapFunctionalRun> {
+    let (deck, tokens) = cell_functional_netlist(topo, rung, period_s);
     let out = run_ngspice_raw(&deck)?;
     let get = |name: &str| {
         parse_meas(&out, name)
@@ -548,8 +704,8 @@ pub fn run_cswap_functional(
     };
     let mut readings = Vec::new();
     for (j, &t) in tokens.iter().enumerate() {
-        let o = cswap_out(k, t);
-        for &sig in cswap_signals(k) {
+        let o = topo.out(t);
+        for &sig in topo.signals() {
             for pol in [true, false] {
                 let base = format!("o{}", line(sig, pol));
                 readings.push(CswapReading {
@@ -586,22 +742,30 @@ pub struct CswapEnergyPoint {
     pub vmax: f64,
 }
 
-/// The all-active energy token: every control and both data high (the
-/// heaviest routing case — at k ≥ 1 the swap path is exercised).
-fn energy_token() -> CswapToken {
-    CswapToken { c1: true, c2: true, c3: true, a: true, b: true }
+/// The energy deck: the topo's energy token (the heaviest routing case)
+/// repeated so the measured settled cycle has a token in flight;
+/// total-source energy over cycle [`WARMUP_CYCLES`], `WARMUP_CYCLES`+1.
+pub fn cswap_energy_netlist(k: usize, rung: DeviceRung, period_s: f64) -> String {
+    cell_energy_netlist(CellTopo::K(k), rung, period_s)
 }
 
-/// The energy deck: the all-active token repeated so the measured settled
-/// cycle has a token in flight; total-source energy over cycle
-/// [`WARMUP_CYCLES`], `WARMUP_CYCLES`+1.
-pub fn cswap_energy_netlist(k: usize, rung: DeviceRung, period_s: f64) -> String {
-    cswap_netlist(k, rung, period_s, &[energy_token(); WARMUP_CYCLES + 3], false)
+/// [`cswap_energy_netlist`] for any [`CellTopo`].
+pub fn cell_energy_netlist(topo: CellTopo, rung: DeviceRung, period_s: f64) -> String {
+    cell_netlist(topo, rung, period_s, &[topo.energy_token(); WARMUP_CYCLES + 3], false)
 }
 
 /// Run one energy point.
 pub fn cswap_energy_point(k: usize, rung: DeviceRung, period_s: f64) -> io::Result<CswapEnergyPoint> {
-    let out = run_ngspice_raw(&cswap_energy_netlist(k, rung, period_s))?;
+    cell_energy_point(CellTopo::K(k), rung, period_s)
+}
+
+/// [`cswap_energy_point`] for any [`CellTopo`].
+pub fn cell_energy_point(
+    topo: CellTopo,
+    rung: DeviceRung,
+    period_s: f64,
+) -> io::Result<CswapEnergyPoint> {
+    let out = run_ngspice_raw(&cell_energy_netlist(topo, rung, period_s))?;
     let get = |name: &str| {
         parse_meas(&out, name)
             .unwrap_or_else(|| panic!("measurement '{name}' missing from ngspice output"))
@@ -624,9 +788,18 @@ pub fn cswap_energy_curve(
     rung: DeviceRung,
     periods: &[f64],
 ) -> io::Result<Vec<CswapEnergyPoint>> {
+    cell_energy_curve(CellTopo::K(k), rung, periods)
+}
+
+/// [`cswap_energy_curve`] for any [`CellTopo`].
+pub fn cell_energy_curve(
+    topo: CellTopo,
+    rung: DeviceRung,
+    periods: &[f64],
+) -> io::Result<Vec<CswapEnergyPoint>> {
     periods
         .iter()
-        .map(|&t| cswap_energy_point(k, rung, t))
+        .map(|&t| cell_energy_point(topo, rung, t))
         .collect()
 }
 
@@ -643,17 +816,18 @@ mod tests {
     use crate::bench::ngspice_available;
 
     /// Assert every reading is at full level and print the measured table.
-    fn assert_full_levels(k: usize, rung: DeviceRung, readings: &[CswapReading]) {
+    fn assert_full_levels(topo: CellTopo, rung: DeviceRung, readings: &[CswapReading]) {
         let vdd = rung.vdd();
+        let label = topo.label();
         let mut last_idx = usize::MAX;
         for r in readings {
             if r.token_idx != last_idx {
                 last_idx = r.token_idx;
                 let t = r.token;
                 eprintln!(
-                    "k{k} {rung:?} token {}: c1={} c2={} c3={} a={} b={} -> {:?}",
+                    "{label} {rung:?} token {}: c1={} c2={} c3={} a={} b={} -> {:?}",
                     r.token_idx, t.c1 as u8, t.c2 as u8, t.c3 as u8, t.a as u8, t.b as u8,
-                    cswap_out(k, t)
+                    topo.out(t)
                 );
             }
             eprintln!(
@@ -663,14 +837,14 @@ mod tests {
             if r.expected_active {
                 assert!(
                     r.rail_v > 0.9 * vdd && r.mirror_v < 0.1 * vdd,
-                    "k{k} {rung:?} token {} line {}: active line not full-level \
+                    "{label} {rung:?} token {} line {}: active line not full-level \
                      (rail min {:.4} V, mirror max {:.4} V, VDD {vdd})",
                     r.token_idx, r.line, r.rail_v, r.mirror_v
                 );
             } else {
                 assert!(
                     r.rail_v < 0.1 * vdd && r.mirror_v > 0.9 * vdd,
-                    "k{k} {rung:?} token {} line {}: inactive line disturbed \
+                    "{label} {rung:?} token {} line {}: inactive line disturbed \
                      (rail max {:.4} V, mirror min {:.4} V, VDD {vdd})",
                     r.token_idx, r.line, r.rail_v, r.mirror_v
                 );
@@ -678,27 +852,32 @@ mod tests {
         }
     }
 
-    fn truth_table_rung0(k: usize) {
+    fn truth_table_rung0_topo(topo: CellTopo) {
         if !ngspice_available() {
             eprintln!("[skip] ngspice unavailable");
             return;
         }
-        let (readings, ecyc) = run_cswap_functional(k, DeviceRung::Rung0Level1, 1e-6)
-            .expect("ngspice failed");
-        assert_full_levels(k, DeviceRung::Rung0Level1, &readings);
+        let label = topo.label();
+        let (readings, ecyc) =
+            run_cell_functional(topo, DeviceRung::Rung0Level1, 1e-6).expect("ngspice failed");
+        assert_full_levels(topo, DeviceRung::Rung0Level1, &readings);
         // No period-independent tail burn on any settled cycle: at T = 1e-6
         // even a single 5 fF internal-node charge-sharing event is ~2.4e-15 J
         // (the bug the per-literal reverse gating fixed measured 1.05e-14 J
         // on a≠b tokens); settled adiabatic cycles measure ≤ 9.6e-16 J
         // (k2 worst).
         for &(i, e) in ecyc.iter().skip(2) {
-            eprintln!("k{k} rung0 cycle {i}: {e:.3e} J");
+            eprintln!("{label} rung0 cycle {i}: {e:.3e} J");
             assert!(
                 e.abs() < 1.5e-15,
-                "k{k} rung0 cycle {i} energy {e:.3e} J is not adiabatic \
+                "{label} rung0 cycle {i} energy {e:.3e} J is not adiabatic \
                  (internal-node charge-sharing or tail burn)"
             );
         }
+    }
+
+    fn truth_table_rung0(k: usize) {
+        truth_table_rung0_topo(CellTopo::K(k));
     }
 
     #[test]
@@ -719,6 +898,55 @@ mod tests {
     #[test]
     fn cswap_k3_truth_table_rung0() {
         truth_table_rung0(3);
+    }
+
+    /// R1 rail-role swap (ADR-0040): the CNOT truth table — all 4 (c, t)
+    /// combos at full dual-rail level, INV-TOKEN held, settled cycles
+    /// adiabatic (same bound as the K cells).
+    #[test]
+    fn r1_truth_table_rung0() {
+        truth_table_rung0_topo(CellTopo::R1);
+    }
+
+    /// R1 value-level truth function is CNOT and self-inverse (pure logic).
+    #[test]
+    fn r1_out_is_cnot_and_self_inverse() {
+        for c in [false, true] {
+            for t in [false, true] {
+                let tok = CswapToken { c1: c, c2: false, c3: false, a: t, b: false };
+                let out = r1_out(tok);
+                assert_eq!(out.c1, c, "control must pass through");
+                assert_eq!(out.a, t ^ c, "target must be t XOR c");
+                assert_eq!(r1_out(out), tok, "R1 must be self-inverse");
+            }
+        }
+    }
+
+    /// Rung-0 adiabatic slope for the R1 rail-role swap: same window as the
+    /// Fredkin cell (its topology superset), slope ≈ −1 (ADR-0040 D2).
+    #[test]
+    fn r1_slope_rung0() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        let periods = [1e-8, 1e-7, 1e-6, 1e-5];
+        let curve = cell_energy_curve(CellTopo::R1, DeviceRung::Rung0Level1, &periods).unwrap();
+        for p in &curve {
+            eprintln!(
+                "R1 rung0 T={:.2e}: etot={:.3e} epc={:.3e} evdd={:.3e} ein={:.3e} eack={:.3e} vmax={:.3}",
+                p.period_s, p.etot, p.epc, p.evdd, p.ein, p.eack, p.vmax
+            );
+            assert!(p.etot > 0.0, "energy must be positive: {p:?}");
+            assert!(p.vmax > 0.9, "cell must do work (vmax {:.3} V)", p.vmax);
+            assert!(p.ein.abs() < 1e-17 && p.eack.abs() < 1e-17, "boundary sources must be ~0: {p:?}");
+        }
+        let slope = curve_slope(&curve);
+        eprintln!("R1 rung0 slope = {slope:.4}");
+        assert!(
+            (-1.15..=-0.85).contains(&slope),
+            "R1 rung0 slope must be ≈ −1, got {slope:.4}"
+        );
     }
 
     /// Rung-0 adiabatic slope for the Fredkin cell: 3 decades, slope ≈ −1.
@@ -777,7 +1005,7 @@ mod tests {
 
     // ----- rung 1 (sky130) -----
 
-    fn truth_table_sky130(k: usize) {
+    fn truth_table_sky130_topo(topo: CellTopo) {
         if !ngspice_available() {
             eprintln!("[skip] ngspice unavailable");
             return;
@@ -786,9 +1014,13 @@ mod tests {
             eprintln!("[skip] sky130 PDK unavailable");
             return;
         }
-        let (readings, _ecyc) = run_cswap_functional(k, DeviceRung::Rung1Sky130, 1e-7)
-            .expect("ngspice failed");
-        assert_full_levels(k, DeviceRung::Rung1Sky130, &readings);
+        let (readings, _ecyc) =
+            run_cell_functional(topo, DeviceRung::Rung1Sky130, 1e-7).expect("ngspice failed");
+        assert_full_levels(topo, DeviceRung::Rung1Sky130, &readings);
+    }
+
+    fn truth_table_sky130(k: usize) {
+        truth_table_sky130_topo(CellTopo::K(k));
     }
 
     #[test]
@@ -809,6 +1041,13 @@ mod tests {
     #[test]
     fn cswap_k3_truth_table_sky130() {
         truth_table_sky130(3);
+    }
+
+    /// R1 truth table on real silicon models (same operating point as the
+    /// K cells; skips without the PDK).
+    #[test]
+    fn r1_truth_table_sky130() {
+        truth_table_sky130_topo(CellTopo::R1);
     }
 
     /// Rung-1 slope over the adiabatic regime (2.5 decades). Real silicon:
