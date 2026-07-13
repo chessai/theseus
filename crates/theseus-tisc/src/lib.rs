@@ -4,6 +4,7 @@
 //! instruction isos for the TISC-1 ISA. Each instruction is an
 //! `Iso : State <-> State` that can be lowered to a cell netlist.
 
+pub mod asm;
 pub mod types;
 pub mod addressing;
 pub mod decoder;
