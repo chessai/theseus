@@ -1,9 +1,12 @@
 # Roadmap v2: two tracks, layers, parked items
 
-> **Current status (2026-07-13):** M1, M3a, M3b, and **M4-v1** (the TISC-1 CPU)
-> are all done and merged on `chessai/theseus-v2` (`m4-v1-complete`). See
-> [Project status](status.md) for the full picture. Nearest wanted artifact: the
-> **CPU money plot** (below).
+> **Current status (2026-07-13):** M1, M3a, M3b, **M4-v1**, the **M4-v2
+> ring-machine core** (recirculating CPU + reversible branching, runs Fibonacci on
+> the ring at 20× area saving), and the **v0.2 software dialect** (μ-types +
+> iter/fold/unfold, source→cells) are all done and merged on `chessai/theseus-v2`
+> (`2315ac2`). See [Project status](status.md) for the full picture. The post-v1
+> DAG below is largely realized — remaining: physically-closing ring (Bennett
+> wrap into `run_true`), energy-price a compiled loop, and the CPU money plot.
 
 Post-pivot (ADR-0022): the project is **two-tracked**, and the tracks
 are independent for months.
@@ -105,8 +108,17 @@ wake conditions above into one dependency picture. Same convention as [The
 dependency graph](#the-dependency-graph): boxes at the same depth are
 parallelizable; edges are "unblocks"; **(wake: …)** is the condition that
 makes a parked node live. A node marked **▸** breaks down into its own
-sub-DAG below. Nothing here is started — v1's thesis is demonstrated end to
-end; this is the map of what "v2 and beyond" actually contains.
+sub-DAG below. This is the map of what "v2 and beyond" actually contains.
+
+> **Progress (2026-07-13):** most of this DAG is now realized.
+> **T1 ring machine** — ✅ recirculating loop + reversible come-from/branching
+> (ADR-0034) + balance-compact enabler + ring driver + Fibonacci-on-the-ring demo;
+> only the *physically-closing* ring remains (Bennett wrap into `run_true`, or an
+> ADR-0027 rail-role-swap cell — see status.md). **T2 software dialect** — ✅
+> μ-types + iter/fold/unfold with surface syntax, core, eval, **and netlist
+> lowering** (ADRs 0035–0039); remaining: HandshakeLoop, guards, `@tag`, the
+> Option-B memory bus, and depth-annotation surface syntax. **T3 silicon tail** —
+> unchanged (v0.3+/M5).
 
 ### Top level — three tracks
 

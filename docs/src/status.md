@@ -10,8 +10,10 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`m4-v1-complete`. Everything below is merged there; each milestone is tagged and
-git-bundled under `~/theseus-overnight/`.
+`2315ac2`. Everything below is merged there. Since M4-v1 this branch also landed
+the **M4-v2 ring-machine core** (a recirculating CPU) and the **v0.2 software
+dialect** (μ-types + iter/fold/unfold, source-to-cells) — see the two new
+sections below and ADRs 0033–0039.
 
 ## Status at a glance
 
@@ -21,8 +23,10 @@ git-bundled under `~/theseus-overnight/`.
 | **M2** FPGA / Verilator | ⏸ parked | `theseus-emit`/`theseus-verify` are stubs; roadmap downgrades this to a *demo, not a phase* |
 | **M3a** physics money plot | ✅ done | adiabatic slope −1 vs CMOS-flat vs PFAL, on sky130 ngspice; char DB + DUT matrix |
 | **M3b** compiled energy | ✅ done | compiler lowers programs → phased adiabatic cells → oracle-verified → energy. **Full adder** and **Fibonacci** compiled to *measured* joules |
-| **M4-v1** TISC-1 CPU | ✅ **done** | `m4-v1-complete`: the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** — ADR-0030's milestone, met |
-| **M4-v2** ring machine | ⏳ next-gen | recirculating/looping CPU (C2.4); parked until unrolled area is unaffordable |
+| **M4-v1** TISC-1 CPU | ✅ **done** | the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** — ADR-0030's milestone, met |
+| **M4-v2** ring machine | ✅ **core done** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving** vs unroll; reversible branching works (ADR-0034). Physical closure quantified (ancilla parity obstruction, ADR-0033). Follow-up: wire Bennett wrap into `run_true`. |
+| **v0.2 dialect** software | ✅ **done** | μ-types + `iter`/`fold`/`unfold`: core + eval + surface syntax + **netlist lowering** + diagnostics; writable `.thse` programs run source→cells (ADRs 0035–0039) |
+| **M2** FPGA / Verilator | ⏸ parked | still stubs; a demo, not a phase |
 
 ## The compile pipeline
 
@@ -50,9 +54,14 @@ network (Miller–Maslov–Dueck; Toffoli-k → CSWAP+ancilla, AND-reduced to st
 ## TISC-1 (the M4-v1 CPU) — `crates/theseus-tisc`
 
 A reversible ISA (ADR-0030): 160-bit State (8×W8 regs + PC + BR + IR16 + 8
-scratch), 14 instructions each an iso on State, `step = fetch;decode;execute;
-unfetch;PC++`. **Unroll-only in v1** (C2.4): a program is a straight-line ROM;
-running T cycles = `step` applied T times. Spec: `docs/src/design/tisc-1-spec.md`.
+scratch), 14 instructions each an iso on State. The machine cycle is now
+`step_v2` (ADR-0034): `fetch; decode_execute; unfetch; PC += BR + 1` — **no
+instruction writes PC**, SWAPBR swaps BR↔rd, and the uniform end-of-step
+`PC += BR + 1` makes **data-dependent branching work as a total bijection**
+(the v1 SWAPBR injectivity obstruction is resolved; BR=0 fall-through keeps every
+straight-line ROM bit-identical). Running T cycles = `step` applied T times, now
+available two ways: **unroll** (v1) or **recirculate one balanced step** (M4-v2,
+below). Spec: `docs/src/design/tisc-1-spec.md`.
 
 - **Datapath** (`instr.rs`): ADD/SUB/ADDI/SUBI (Takahashi–Kunihiro in-place
   ripple, ≤K2), XOR/XORI, ROTL/ROTR/ROTLI/ROTRI, EXCH, CSWAP (control-threaded
@@ -81,6 +90,54 @@ running T cycles = `step` applied T times. Spec: `docs/src/design/tisc-1-spec.md
   as you slow down — the adiabatic advantage over (flat) CMOS. See the **CPU
   money plot** on the roadmap.
 
+## M4-v2: the ring machine (recirculating CPU) — core done
+
+The v1 CPU *unrolls* `step` T times (area ∝ T). M4-v2 **recirculates** one balanced
+`step` instead. What landed this cycle (ADR-0033/0034):
+
+- **Reversible branching** (`step_v2`, ADR-0034): SWAPBR = BR↔rd, uniform
+  `PC += BR + 1`; a total bijection on all 2^160 State (proof sketch in
+  `step.rs`); the v1 SWAPBR obstruction dissolved; fib/feistel bit-identical.
+- **Compact-buffer balancer** (`balance_compact`): stores K0 buffer *runs* as
+  per-input delay counts, so a full `step` is balanced *and* simulated without the
+  ~1.6 M-cell materialization (the old memory wall). This is the enabler.
+- **Ring driver** (`theseus-tisc::ring_run`): recirculates the compact-balanced
+  `step` R revolutions; oracle-verified `ring.run(state, R) == eval(step)^R`, cell
+  inventory independent of R.
+- **Demo**: the CPU **computes Fibonacci on the ring** (`1,1,2,3,5,…,89,144`) —
+  one ~9.18 M-cell body serves all 20 cycles vs 183.5 M cells unrolled = **20×
+  area saving**.
+- **Physical closure — quantified, not hand-waved** (ADR-0033): a *machine-checked
+  parity theorem* shows K0–K3 cells permute rail-pairs, so a CNOT/Toffoli
+  provably cannot leave its ancillas constant — zero ancilla residue is impossible
+  in this vocabulary. A composition-level **Bennett wrap** (`bennett.rs`) restores
+  every forward ancilla to init, concentrating the irreducible residue into a
+  **fixed, data-independent boundary** (166/320 slots on the step, ~2× cells). So
+  true hardware recirculation (`run_true`) isn't literally closed, but the
+  obstruction is now a small re-suppliable fixed port set. Follow-ups: wire the
+  Bennett wrap into `run_true`; or an ADR-0027 controlled rail-role-swap cell
+  (voids the parity law → garbage-free CNOTs).
+
+## v0.2: the software dialect — done (source to cells)
+
+The v0.2 dialect adds recursive types and structural iteration, all the way from
+surface syntax to adiabatic cells (ADRs 0035–0039):
+
+- **μ-types** (ADR-0035): recursive `type Nat = Zero | Succ Nat` lowers by
+  bounded unrolling to a finite Core Π type (depth-annotated), so coverage stays
+  decidable.
+- **`iter`** (ADR-0036, count-driven) and **`fold`/`unfold`** (ADR-0037,
+  structure-driven, a reversible mapAccumL / its dual) as core Iso primitives —
+  adjoint-closed, total by structural induction, fuel-costed.
+- **Surface syntax** (ADR-0038): `iter Nat notb`, `fold BitList cnot`, … parse →
+  coverage/linearity-check → elaborate → eval **forward and backward**; conformance
+  programs 0016–0020 grade both directions; ill-formed combinators get first-class
+  T0xxx diagnostics.
+- **Netlist lowering** (ADR-0039): all three primitives **compile to k-CSWAP
+  cells** (tag-gated unroll, ≤K2), differential-oracle verified — so v0.2 programs
+  are not interpreter-only. Runtime (adiabatic) lowering of the *loop* forms is
+  done; energy-pricing a compiled iter/fold program is the open follow-up.
+
 ## Verification norm
 
 Correctness is the **differential oracle**: the lowered cell netlist, simulated,
@@ -93,18 +150,23 @@ depth-tracking bug) that unit tests missed.
 
 ## Open items & next steps
 
-- **CPU money plot** *(wanted; on roadmap)* — sweep step/program energy across
-  clock ramps via the char-DB fits; plot the machine-level adiabatic slope −1
-  crossing below a CMOS reference. Reuses `theseus-tisc::energy`.
-- **SWAPBR loop / data-dependent branching** — currently SWAPBR degenerates to
-  PC-advance: a mid-step PC change breaks the fetch/unfetch symmetry that keeps
-  IR provably zero (P4). Needs reversible come-from / paired-branch machinery.
-  v1 is unroll-only, so this is v2-flavored.
-- **Balancer buffer memory** — balancing one `step` materializes ~1.6 M K0
-  buffers (tens of GB). A compact/streaming buffer representation would let
-  `step^T` be *balanced/simulated* at T>1, not only eval'd + analytically priced.
-- Parked (roadmap): M2/FPGA demo; μ-types/iter/fold (v0.2); ring machine (M4-v2);
-  idealization rungs 2–4 / layout (M5); higher-k cells if ever needed.
+- **Physically-closing ring** — wire the Bennett wrap (`bennett.rs`) into
+  `StepRing::run_true` so true recirculation feeds back the clean 1138 ancillas
+  and re-supplies only the fixed 320-slot boundary; and/or evaluate an ADR-0027
+  **controlled rail-role-swap cell** that would void the parity obstruction and
+  make CNOTs garbage-free.
+- **Energy-price a compiled loop** — now that `iter`/`fold`/`unfold` lower to
+  cells, run one through `theseus-spice::annotate` for a joules figure (extends
+  the M3b/energy story to the software dialect).
+- **CPU money plot** *(wanted)* — sweep step/program energy across clock ramps via
+  the char-DB fits; plot the machine-level adiabatic slope −1 below a CMOS
+  reference. Reuses `theseus-tisc::energy`.
+- **v0.2 surface polish** — depth-annotation syntax for μ-types (currently an env
+  default); the remaining ADR-0038 deferrals.
+- Resolved this cycle: reversible branching (was "SWAPBR degenerates"); the
+  balancer memory wall (now `balance_compact`); v0.2 μ-types/iter/fold (now done).
+- Parked (roadmap): M2/FPGA demo; idealization rungs 2–4 / layout (M5); higher-k
+  cells if ever needed.
 
 ## Honest caveats (the claims boundary)
 
@@ -135,3 +197,10 @@ depth-tracking bug) that unit tests missed.
 - **Match agent capability to problem depth** — the hard reversible constructions
   (general synthesis, decoder, in-place adder, both programs) needed the
   strongest model; mechanical lifting did not.
+- **The K0–K3 fabric has a parity law** (ADR-0033, machine-checked): every cell
+  permutes rail-pair values, so `parity(data_out) ⊕ parity(anc_out)` is fixed up
+  to a constant. A conditional-NOT's parity deviation *is* its AND, so isolated
+  CNOT/Toffoli lowerings *cannot* be ancilla-clean — garbage-free reversible logic
+  in this vocabulary is provably impossible without a new (rail-role-swap) cell.
+  Bennett compute-uncompute concentrates the residue into a fixed boundary; it
+  does not eliminate it.
