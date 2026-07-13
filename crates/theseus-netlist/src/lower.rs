@@ -568,6 +568,9 @@ impl Builder {
         if w_in == 5 && w_out == 5 && prim_matches(def, |bits| CellKind::K3.eval(bits))? {
             return Ok(self.emit(CellKind::K3, ins));
         }
+        // (Garbage-free CNOT/Toffoli via R1 — the emit_mcnot rewrite — is
+        // ADR-0040 phase C; R1 exists as a CellKind here but synthesis does
+        // not yet emit it.)
 
         // General CSWAP-network synthesis (B4.2): any other admitted
         // prim, via transformation-based multi-controlled-NOT synthesis.
@@ -1011,12 +1014,20 @@ impl Builder {
             return Ok((current, cur_tag));
         }
 
-        // Check for K3 cells in the sub-builder (can't promote to K4).
+        // Check for K3 or R1 cells in the sub-builder (can't promote
+        // K3 to K4, and R1 promotion requires R2 which is not yet in
+        // the vocabulary).
         for cell in &sub.cells {
             if cell.kind == CellKind::K3 {
                 return Err(LowerError::Deferred {
                     node: "Branch (K3 in arm)",
                     plan: "K4 not in vocabulary",
+                });
+            }
+            if cell.kind == CellKind::R1 {
+                return Err(LowerError::Deferred {
+                    node: "Branch (R1 in arm)",
+                    plan: "R2 not in vocabulary",
                 });
             }
         }
@@ -1125,7 +1136,7 @@ impl Builder {
                     };
                     cur_tag = tag_out;
                 }
-                CellKind::K3 => unreachable!("checked above"),
+                CellKind::K3 | CellKind::R1 => unreachable!("checked above"),
             }
         }
 

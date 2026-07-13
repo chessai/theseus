@@ -135,5 +135,36 @@
                 r_squared: 1.0,
             ),
         ),
+        // PLACEHOLDER (ADR-0040 follow-up): R1 rail-role-swap cell.
+        // Copied from cswap-k1 (R1 is energetically ≈ K1 per ADR-0040
+        // D2 — a subset topology). Replace with real ngspice
+        // characterization when the R1 SPICE deck lands.
+        "cswap-r1": (
+            key: "cswap-r1",
+            points: [
+                (
+                    t_ramp: 0.00000001,
+                    energy: 0.0000000000000528092,
+                ),
+                (
+                    t_ramp: 0.0000001,
+                    energy: 0.0000000000000053831,
+                ),
+                (
+                    t_ramp: 0.000001,
+                    energy: 0.000000000000000539023,
+                ),
+                (
+                    t_ramp: 0.00001,
+                    energy: 0.0000000000000000540172,
+                ),
+            ],
+            fit: (
+                k_adia: 0.0000000000000000000005274988527165761,
+                k_leak: -0.000000000006627786425021296,
+                k_res: 0.00000000000000006346309259260184,
+                r_squared: 1.0,
+            ),
+        ),
     },
 )

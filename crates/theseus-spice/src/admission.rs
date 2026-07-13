@@ -158,6 +158,9 @@ pub enum CandidateCell {
     CswapK2,
     /// k = 3 CSWAP: the 3-controlled swap.
     CswapK3,
+    /// R1 rail-role swap (ADR-0040): CNOT in one cell. Placeholder —
+    /// full B5 battery pending the R1 SPICE deck.
+    RoleSwapR1,
     /// The adiabatic transmission-gate buffer primitive (single-ended; see
     /// module docs for the INV-TOKEN degeneracy caveat).
     AdiabaticTg,
@@ -273,6 +276,33 @@ pub fn admit(cell: CandidateCell, rung: DeviceRung) -> io::Result<AdmissionRepor
     match cell {
         CandidateCell::CswapK0 | CandidateCell::CswapK1 | CandidateCell::CswapK2 | CandidateCell::CswapK3 => {
             admit_cswap(cell, cell.cswap_k().expect("cswap cell"), rung)
+        }
+        CandidateCell::RoleSwapR1 => {
+            // Placeholder: full B5 battery pending the R1 SPICE deck
+            // (ADR-0040 follow-up). For now, report all gates as
+            // pending so the cell is recorded but not auto-admitted
+            // through this path.
+            let pending = || GateResult::fail(
+                "R1 admission pending: SPICE deck + full B5 battery not yet implemented \
+                 (ADR-0040 follow-up)".to_string()
+            );
+            let ev = ScalingEvidence {
+                points: vec![(1e-7, 0.0)],
+                fit: crate::energy::EnergyFit { k_adia: 0.0, k_leak: 0.0, k_res: 0.0, r_squared: 0.0 },
+                adia_share_fast: 0.0,
+                adia_share_slow: 0.0,
+                leak_share_slow: 0.0,
+            };
+            Ok(AdmissionReport {
+                cell,
+                rung,
+                functional: pending(),
+                conservation: pending(),
+                token_invariant: pending(),
+                reverse_drive: pending(),
+                scaling: pending(),
+                scaling_evidence: ev,
+            })
         }
         CandidateCell::AdiabaticTg => admit_tg(rung),
         CandidateCell::CmosBaseline => admit_cmos(rung),

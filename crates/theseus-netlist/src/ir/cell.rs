@@ -60,8 +60,9 @@ impl RailPair {
     }
 }
 
-/// k-CSWAP cell kind (ADR-0027). All four are reversible and
-/// self-inverse; a controlled swap only routes charge, so the count of
+/// Cell kind: the k-CSWAP family (ADR-0027) plus the controlled
+/// rail-role-swap family (ADR-0040). All variants are reversible and
+/// self-inverse; every cell only routes charge, so the count of
 /// asserted rails is invariant per token (INV-TOKEN).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CellKind {
@@ -73,6 +74,10 @@ pub enum CellKind {
     K2,
     /// 3-controlled swap: swap `(a, b)` iff `c1 ∧ c2 ∧ c3`; controls pass.
     K3,
+    /// 1-controlled rail-role swap (ADR-0040): CNOT in one cell.
+    /// `(c, t) → (c, t ⊕ c)`. Arity = 2 rail pairs. NOT a k-CSWAP:
+    /// it flips a value (swaps lines within one pair), not a pair-swap.
+    R1,
 }
 
 impl CellKind {
@@ -85,6 +90,7 @@ impl CellKind {
             CellKind::K1 => 3,
             CellKind::K2 => 4,
             CellKind::K3 => 5,
+            CellKind::R1 => 2,
         }
     }
 
@@ -98,6 +104,7 @@ impl CellKind {
             CellKind::K1 => "cswap-k1",
             CellKind::K2 => "cswap-k2",
             CellKind::K3 => "cswap-k3",
+            CellKind::R1 => "cswap-r1",
         }
     }
 
@@ -106,17 +113,29 @@ impl CellKind {
     /// (cross-checked in this crate's tests). Self-inverse for all kinds.
     pub fn eval(self, bits: &[bool]) -> Vec<bool> {
         assert_eq!(bits.len(), self.arity(), "cell port-count mismatch");
-        let k = match self {
-            CellKind::K0 => 0,
-            CellKind::K1 => 1,
-            CellKind::K2 => 2,
-            CellKind::K3 => 3,
-        };
-        let mut out = bits.to_vec();
-        if k > 0 && bits[..k].iter().all(|&c| c) {
-            out.swap(k, k + 1);
+        match self {
+            CellKind::R1 => {
+                // (c, t) → (c, t ⊕ c): control passes, target flips
+                // iff control is 1.
+                let c = bits[0];
+                let t = bits[1];
+                vec![c, t ^ c]
+            }
+            _ => {
+                let k = match self {
+                    CellKind::K0 => 0,
+                    CellKind::K1 => 1,
+                    CellKind::K2 => 2,
+                    CellKind::K3 => 3,
+                    CellKind::R1 => unreachable!(),
+                };
+                let mut out = bits.to_vec();
+                if k > 0 && bits[..k].iter().all(|&c| c) {
+                    out.swap(k, k + 1);
+                }
+                out
+            }
         }
-        out
     }
 }
 
@@ -622,14 +641,14 @@ mod tests {
                     CellKind::K0 => vec![t.a],
                     CellKind::K1 => vec![t.c1, t.a, t.b],
                     CellKind::K2 => vec![t.c1, t.c2, t.a, t.b],
-                    CellKind::K3 => unreachable!("loop covers k<=2"),
+                    CellKind::K3 | CellKind::R1 => unreachable!("loop covers k<=2"),
                 };
                 let o = cswap_out(k, t);
                 let want: Vec<bool> = match kind {
                     CellKind::K0 => vec![o.a],
                     CellKind::K1 => vec![o.c1, o.a, o.b],
                     CellKind::K2 => vec![o.c1, o.c2, o.a, o.b],
-                    CellKind::K3 => unreachable!("loop covers k<=2"),
+                    CellKind::K3 | CellKind::R1 => unreachable!("loop covers k<=2"),
                 };
                 assert_eq!(kind.eval(&bits), want, "kind {kind:?}, token {t:?}");
             }
@@ -638,7 +657,7 @@ mod tests {
 
     #[test]
     fn cell_eval_self_inverse() {
-        for kind in [CellKind::K0, CellKind::K1, CellKind::K2, CellKind::K3] {
+        for kind in [CellKind::K0, CellKind::K1, CellKind::K2, CellKind::K3, CellKind::R1] {
             let n = kind.arity();
             for x in 0..1u32 << n {
                 let bits: Vec<bool> = (0..n).map(|i| (x >> i) & 1 == 1).collect();
