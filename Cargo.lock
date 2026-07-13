@@ -218,6 +218,7 @@ dependencies = [
  "theseus-core",
  "theseus-eval",
  "theseus-netlist",
+ "theseus-spice",
  "theseus-syntax",
 ]
 

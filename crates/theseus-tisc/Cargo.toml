@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 theseus-core = { path = "../theseus-core" }
 theseus-netlist = { path = "../theseus-netlist" }
+theseus-spice = { path = "../theseus-spice" }
 
 [dev-dependencies]
 theseus-eval = { path = "../theseus-eval" }
