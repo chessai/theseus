@@ -14,3 +14,4 @@ theseus-syntax = { path = "../theseus-syntax" }
 theseus-check = { path = "../theseus-check" }
 theseus-eval = { path = "../theseus-eval" }
 theseus-core = { path = "../theseus-core" }
+theseus-netlist = { path = "../theseus-netlist" }

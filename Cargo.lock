@@ -161,6 +161,7 @@ dependencies = [
  "theseus-check",
  "theseus-core",
  "theseus-eval",
+ "theseus-netlist",
  "theseus-syntax",
 ]
 
