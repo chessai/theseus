@@ -2,6 +2,7 @@
 
 [Introduction](introduction.md)
 [Project status](status.md)
+[Surface → compiled circuit](surface-to-cells.md)
 
 # Architecture Decision Records
 
