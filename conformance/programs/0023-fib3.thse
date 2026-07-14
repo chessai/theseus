@@ -1,0 +1,25 @@
+-- Conformance P0023 (dialect: synthesizable, ADR-0042 M-A)
+-- Constant-count Fibonacci: three steps of the 1-bit fib iteration,
+-- composed explicitly (no data-dependent iter). This is the M-A demo:
+-- the result compiles to a TISC-1 ROM and runs on the simulated CPU.
+--
+-- fibStep = swap2 ; addInto = (a,b) |-> (b, a xor b)
+-- fib3 = fibStep ; fibStep ; fibStep
+--
+-- Starting from (1,1), three steps give:
+--   (1,1) -> (1,0) -> (0,1) -> (1,1)   (mod 2, period 3)
+
+type Bit = O | I
+
+iso swap2 : Bit * Bit <-> Bit * Bit
+| (a, b) <-> (b, a)
+
+iso addInto : Bit * Bit <-> Bit * Bit
+| (O, O) <-> (O, O)
+| (O, I) <-> (O, I)
+| (I, O) <-> (I, I)
+| (I, I) <-> (I, O)
+
+iso fibStep : Bit * Bit <-> Bit * Bit = swap2 ; addInto
+
+iso fib3 : Bit * Bit <-> Bit * Bit = fibStep ; fibStep ; fibStep
