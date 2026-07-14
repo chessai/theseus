@@ -1172,9 +1172,7 @@ fn exec_instr(instr: Instr, state: &mut StateVals) {
             state.regs[rd as usize] ^= state.regs[rs as usize];
         }
         Instr::Exch { rd, rs } => {
-            let tmp = state.regs[rd as usize];
-            state.regs[rd as usize] = state.regs[rs as usize];
-            state.regs[rs as usize] = tmp;
+            state.regs.swap(rd as usize, rs as usize);
         }
         Instr::Rotl { rd, rs } => {
             let amount = state.regs[rs as usize] & 7;
@@ -1186,20 +1184,14 @@ fn exec_instr(instr: Instr, state: &mut StateVals) {
         }
         Instr::Cswap { rd, rs, rt } => {
             if state.regs[rd as usize] & 1 == 1 {
-                let tmp = state.regs[rs as usize];
-                state.regs[rs as usize] = state.regs[rt as usize];
-                state.regs[rt as usize] = tmp;
+                state.regs.swap(rs as usize, rt as usize);
             }
         }
         Instr::Xchg { rd, sx } => {
-            let tmp = state.regs[rd as usize];
-            state.regs[rd as usize] = state.scratch[sx as usize];
-            state.scratch[sx as usize] = tmp;
+            std::mem::swap(&mut state.regs[rd as usize], &mut state.scratch[sx as usize]);
         }
         Instr::Swapbr { rd } => {
-            let tmp = state.regs[rd as usize];
-            state.regs[rd as usize] = state.br;
-            state.br = tmp;
+            std::mem::swap(&mut state.regs[rd as usize], &mut state.br);
         }
         Instr::Addi { rd, imm } => {
             state.regs[rd as usize] = state.regs[rd as usize].wrapping_add(imm);
@@ -1221,9 +1213,14 @@ fn exec_instr(instr: Instr, state: &mut StateVals) {
 
 /// Fast direct TISC-1 simulation: compile → assemble → run → unmarshal.
 ///
-/// Equivalent to `run_on_cpu` but uses direct byte-level interpretation
-/// instead of the step iso evaluator. The budget is `instrs.len()` steps
-/// (worst-case trace length; after the ROM ends the machine idles).
+/// A byte-level re-implementation of the ISA, used only as a *fast* oracle
+/// for routine tests. It is **NOT the authoritative CPU model**: correctness
+/// is defined against [`run_on_cpu`], which drives the real `step` core-iso
+/// evaluator we energy-account. This function is pinned to that model by the
+/// `*_real_cpu` tests in `tests/compile.rs` (each asserts real == eval; the
+/// routine tests assert fast == eval). Do not treat a green `run_on_cpu_fast`
+/// as acceptance on its own. The budget is `instrs.len()` steps (worst-case
+/// trace length; after the ROM ends the machine idles).
 pub fn run_on_cpu_fast(
     iso: &Iso,
     input: &Value,
