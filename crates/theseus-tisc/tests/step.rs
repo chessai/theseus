@@ -178,7 +178,7 @@ fn fetch_isolated() {
     let max_kind = counts.keys().max().copied().unwrap_or(CellKind::K0);
     let total: usize = counts.values().sum();
     eprintln!("fetch(rom1, len 8): {total} cells, max kind {max_kind:?}, counts {counts:?}");
-    assert!(max_kind <= CellKind::K3);
+    assert!((max_kind <= CellKind::K3 || max_kind == CellKind::R1));
 
     // Semantics: IR <- rom[pc] at every in-range pc, IR untouched out
     // of range; everything else preserved.
@@ -206,7 +206,10 @@ fn pc_add_br_isolated() {
     let max_kind = counts.keys().max().copied().unwrap_or(CellKind::K0);
     let total: usize = counts.values().sum();
     eprintln!("pc_add_br: {total} cells, max kind {max_kind:?}, counts {counts:?}");
-    assert!(max_kind <= CellKind::K2, "pc_add_br: max kind {max_kind:?} > K2");
+    assert!(
+        max_kind <= CellKind::K2 || max_kind == CellKind::R1,
+        "pc_add_br: max kind {max_kind:?} exceeds the admitted K0..K2 + R1 vocabulary"
+    );
 
     // Sample: PC += BR for various (pc, br) pairs.
     for (pc, br) in [(0u8, 0u8), (10, 5), (0xFF, 1), (0x80, 0x80), (0, 0xFF), (42, 200)] {
@@ -244,7 +247,7 @@ fn pc_inc_isolated() {
     let max_kind = counts.keys().max().copied().unwrap_or(CellKind::K0);
     let total: usize = counts.values().sum();
     eprintln!("pc_inc: {total} cells, max kind {max_kind:?}, counts {counts:?}");
-    assert!(max_kind <= CellKind::K3);
+    assert!((max_kind <= CellKind::K3 || max_kind == CellKind::R1));
 
     for pc in [0u8, 1, 2, 7, 8, 0x0F, 0x7F, 0x80, 0xFE, 0xFF] {
         let s = st(regs_a(), pc);
@@ -314,7 +317,7 @@ fn ctx() -> &'static Ctx {
         let total: usize = counts.values().sum();
         eprintln!("== PER-STEP COST (rom1, 8 words) ==");
         eprintln!("step: {total} cells, max kind {max_kind:?}, counts {counts:?}");
-        assert!(max_kind <= CellKind::K3, "step: max kind {max_kind:?} > K3");
+        assert!((max_kind <= CellKind::K3 || max_kind == CellKind::R1), "step: max kind {max_kind:?} > K3");
 
         let n_data = rail_width(&in_ty).unwrap();
         assert_eq!(net.inputs.len(), n_data + ancilla.len());

@@ -7,8 +7,9 @@
 //!   (c) adjoint checks where applicable
 
 use theseus_core::{type_of, Iso};
+use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_netlist::{
-    balance, bits_of, lower_iso, rail_width, simulate, CellKind,
+    balance, bits_of, rail_width, simulate, CellKind,
 };
 use theseus_tisc::instr;
 use theseus_tisc::types::{StateVals};
@@ -22,17 +23,22 @@ struct Lowered {
     in_ty: theseus_core::Type,
     out_ty: theseus_core::Type,
     n_data_out: usize,
+    /// Real ancilla init values (from `lower_iso_with_ancillas`) — R1-based
+    /// lowering (ADR-0040) needs these seeded correctly, not a fabricated
+    /// pattern.
+    ancilla_init: Vec<bool>,
 }
 
 fn prepare(name: &str, iso: &Iso) -> Lowered {
     let (in_ty, out_ty) = type_of(iso).unwrap_or_else(|e| panic!("{name}: type_of failed: {e:?}"));
-    let net = lower_iso(iso).unwrap_or_else(|e| panic!("{name}: lowering failed: {e}"));
+    let (net, ancilla_init) =
+        lower_iso_with_ancillas(iso).unwrap_or_else(|e| panic!("{name}: lowering failed: {e}"));
     assert_eq!(net.validate(), Ok(()), "{name}: lowered netlist invalid");
 
     let counts = net.cell_counts();
     let max_kind = counts.keys().max().copied().unwrap_or(CellKind::K0);
     assert!(
-        max_kind <= CellKind::K3,
+        (max_kind <= CellKind::K3 || max_kind == CellKind::R1),
         "{name}: max cell kind {max_kind:?} exceeds K3"
     );
     eprintln!("{name}: cell counts {counts:?}, max kind {max_kind:?}");
@@ -46,7 +52,7 @@ fn prepare(name: &str, iso: &Iso) -> Lowered {
     eprintln!("{name}: balanced cell counts {:?}", balanced.cell_counts());
 
     let n_data_out = rail_width(&out_ty).unwrap();
-    Lowered { balanced, in_ty, out_ty, n_data_out }
+    Lowered { balanced, in_ty, out_ty, n_data_out, ancilla_init }
 }
 
 fn check_case(name: &str, iso: &Iso, low: &Lowered, sample: &StateVals) {
@@ -60,10 +66,14 @@ fn check_case(name: &str, iso: &Iso, low: &Lowered, sample: &StateVals) {
     let data_bits = bits_of(&val, &low.in_ty).unwrap();
 
     let mut input_bits = data_bits;
-    let n_ancilla = low.balanced.inputs.len() - input_bits.len();
-    for i in 0..n_ancilla {
-        input_bits.push(i % 2 == 0);
-    }
+    // Seed ancillas with their REAL init values (ADR-0040 R1 lowering needs
+    // correct ancilla inits; the old fabricated `i % 2` pattern corrupts them).
+    input_bits.extend_from_slice(&low.ancilla_init);
+    assert_eq!(
+        input_bits.len(),
+        low.balanced.inputs.len(),
+        "{name}: data + ancilla inputs must match the balanced net's input count"
+    );
 
     let sim = simulate(&low.balanced, &input_bits)
         .unwrap_or_else(|e| panic!("{name}: simulate failed: {e:?}"));

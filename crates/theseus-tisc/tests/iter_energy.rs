@@ -99,11 +99,12 @@ fn assert_sane_breakdown(bd: &EnergyBreakdown, label: &str) {
     );
     assert!(!bd.by_kind.is_empty(), "{label}: breakdown must have entries");
 
-    // Must have at least one active cell kind (K1, K2, or K3).
+    // Must have at least one active cell kind (K1, K2, K3, or R1 — the
+    // ADR-0040 rail-role-swap cell, e.g. a NOT lowers to R1).
     let has_active = bd
         .by_kind
         .keys()
-        .any(|k| k.starts_with("cswap-k") && !k.contains("balance"));
+        .any(|k| (k.starts_with("cswap-k") || k.starts_with("cswap-r")) && !k.contains("balance"));
     assert!(has_active, "{label}: breakdown must contain active cell kinds");
 }
 

@@ -256,7 +256,7 @@ fn per_instruction_lowering_and_semantics() {
         let max_kind = counts.keys().max().copied().unwrap_or(CellKind::K0);
         let total: usize = counts.values().sum();
         eprintln!("{op:?}: {total} cells, max kind {max_kind:?}, counts {counts:?}");
-        assert!(max_kind <= CellKind::K3, "{op:?}: max kind {max_kind:?} > K3");
+        assert!((max_kind <= CellKind::K3 || max_kind == CellKind::R1), "{op:?}: max kind {max_kind:?} > K3");
 
         // Semantics on this op's samples (eval-level).
         for (i, s) in op_samples(op).iter().enumerate() {
@@ -320,7 +320,7 @@ fn ctx() -> &'static Ctx {
         let total: usize = counts.values().sum();
         eprintln!("decode_execute: {total} cells, max kind {max_kind:?}, counts {counts:?}");
         assert!(
-            max_kind <= CellKind::K3,
+            (max_kind <= CellKind::K3 || max_kind == CellKind::R1),
             "decode_execute: max cell kind {max_kind:?} exceeds K3"
         );
 
