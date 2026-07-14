@@ -5,8 +5,10 @@
 > the ring at 20× area saving), and the **v0.2 software dialect** (μ-types +
 > iter/fold/unfold, source→cells) are all done and merged on `chessai/theseus-v2`
 > (`2315ac2`). See [Project status](status.md) for the full picture. The post-v1
-> DAG below is largely realized — remaining: physically-closing ring (Bennett
-> wrap into `run_true`), energy-price a compiled loop, and the CPU money plot.
+> DAG below is largely realized — the physically-closing (zero-garbage) ring and
+> the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
+> shows machine-level adiabatic slope −0.997 crossing below the CMOS floor);
+> remaining: energy-price a compiled loop.
 
 Post-pivot (ADR-0022): the project is **two-tracked**, and the tracks
 are independent for months.
@@ -111,10 +113,12 @@ makes a parked node live. A node marked **▸** breaks down into its own
 sub-DAG below. This is the map of what "v2 and beyond" actually contains.
 
 > **Progress (2026-07-13):** most of this DAG is now realized.
-> **T1 ring machine** — ✅ recirculating loop + reversible come-from/branching
-> (ADR-0034) + balance-compact enabler + ring driver + Fibonacci-on-the-ring demo;
-> only the *physically-closing* ring remains (Bennett wrap into `run_true`, or an
-> ADR-0027 rail-role-swap cell — see status.md). **T2 software dialect** — ✅
+> **T1 ring machine** — ✅ **complete**: recirculating loop + reversible
+> come-from/branching (ADR-0034) + balance-compact enabler + ring driver +
+> Fibonacci-on-the-ring demo + the *physically-closing zero-garbage* ring (ADR-0027
+> rail-role-swap cell R1, ADR-0040: `StepRing::run` closes with zero boundary) +
+> the machine-level CPU money plot (slope −0.997 below the CMOS floor). **T2
+> software dialect** — ✅
 > μ-types + iter/fold/unfold with surface syntax, core, eval, **and netlist
 > lowering** (ADRs 0035–0039); remaining: HandshakeLoop, guards, `@tag`, the
 > Option-B memory bus, and depth-annotation surface syntax. **T3 silicon tail** —
@@ -214,7 +218,7 @@ are *counted* from `line_arrivals`, not materialized, so a single `step`'s
 
 | Item | Notes / wakes when |
 |---|---|
-| **CPU "money plot"** (energy-per-cycle vs. clock ramp) | *Wanted.* Sweep the `step`/program energy across `t_ramp` (1e-8…1e-5) via the char-DB `E(T)=k_adia/T+k_leak·T+k_res` fits (energy model already merged, `theseus-tisc::energy`), plot log-log: the adiabatic **slope −1** for the CPU crossing **below** a flat CMOS reference — the "it gets arbitrarily low as you slow the clock, unlike irreversible logic" demonstration, at the *machine* level (mirrors the M3a cell money plot). Non-blocking; a headline artifact. |
+| **CPU "money plot"** (energy-per-cycle vs. clock ramp) | ✅ **Done** (`theseus-tisc::money_plot`, `examples/cpu_money_plot.rs`). Sweeps `step` energy across `t_ramp` (1e-8…1e-5) via the char-DB `E(T)=k_adia/T+k_leak·T+k_res` fits over the **zero-garbage** step (4939 active cells, 487 R1). Machine-level adiabatic **slope −0.997** crosses **below** the flat CMOS ½CV² floor (ngspice-derived committed constant, 5.03e-9 J/step) at t_ramp ≈ 2.1e-8 s; active logic beats CMOS across the whole range — the "arbitrarily low as you slow the clock, unlike irreversible logic" demonstration at the *machine* level. |
 | **SWAPBR loop / data-dependent branching** | v2-flavored. SWAPBR currently degenerates to PC-advance: a mid-step PC change breaks the fetch/unfetch symmetry that keeps IR provably zero (P4). Needs the reversible come-from / paired-branch machinery (Pendulum lineage). v1 uses straight-line unrolled ROMs (consistent with unroll-only). |
 | **Balancer buffer-materialization memory** | The systolic K0 buffers dominate both cell count and energy; balancing one `step` is ~1.6 M cells / tens of GB. A compact/streaming buffer representation (or not materializing pass-through buffers) would let `step^T` be balanced/simulated at T>1, not just eval'd + analytically priced. |
 

@@ -16,12 +16,14 @@
 //! **As of ADR-0040 phase C** (R1-based `emit_mcnot` rewrite), the
 //! plain lowering IS ancilla-clean: `ancillas_restored == true` on all
 //! sampled states, with ~468 ancilla lines (down from 1138 under the
-//! old splitter/selector synthesis). [`StepRing::run_true`] — which
-//! feeds ancilla outputs back instead of re-supplying fresh inits —
-//! equals `eval(step)^R` and equals [`StepRing::run`]. The ring
-//! physically closes with **zero per-revolution boundary**: nothing
-//! is re-supplied, nothing exits. This is the literal zero-garbage
-//! ring.
+//! old splitter/selector synthesis). [`StepRing::run`] is therefore the
+//! **default, zero-garbage runner**: it feeds ancilla outputs back as
+//! the next revolution's inputs (TRUE recirculation), so the ring
+//! physically closes with **zero per-revolution boundary** — nothing is
+//! re-supplied, nothing exits. It equals `eval(step)^R`, and equals
+//! [`StepRing::run_open`] (the open-loop variant that re-supplies fresh
+//! inits) — that equivalence is what certifies the closure. This is the
+//! literal zero-garbage ring.
 //!
 //! # Closed ring (Bennett path — fallback)
 //!
@@ -80,38 +82,30 @@ pub fn step_ring(rom: &[u16]) -> StepRing {
 }
 
 impl StepRing {
-    /// Recirculate the step `revolutions` times starting from `start`.
+    /// Recirculate the step `revolutions` times starting from `start`,
+    /// with the ring CLOSED — the **default, zero-garbage** runner
+    /// (ADR-0040 phase C).
     ///
-    /// Each revolution: assemble input = \[data\_bits ++ ancilla\_init\],
-    /// simulate, take the first `n_data` output bits as the next state,
-    /// discard ancilla outputs (re-supply fresh ancilla\_init).
+    /// Each revolution feeds the ancilla *outputs* back as the next
+    /// revolution's ancilla *inputs* (TRUE recirculation): nothing is
+    /// re-supplied, nothing exits — the ring physically closes with
+    /// **zero per-revolution boundary**. This is valid because the
+    /// R1-based lowering is ancilla-clean ([`Self::ancillas_restored`]
+    /// is true), so the fed-back ancillas equal their inits every
+    /// revolution; the `debug_assert!` below catches any regression that
+    /// would make feed-back diverge from a fresh re-supply.
+    ///
+    /// For a lowering that is *not* ancilla-clean (e.g. K-only-dirty
+    /// fan-outs), use [`Self::run_open`] (re-supply fresh inits) or the
+    /// Bennett [`ClosedStepRing`] fallback instead.
     pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
-        let ty = state_ty();
-        let mut data_bits =
-            bits_of(&start.encode(), &ty).expect("bits_of");
-        assert_eq!(data_bits.len(), self.n_data);
-
-        for _ in 0..revolutions {
-            let mut input = data_bits.clone();
-            input.extend_from_slice(&self.ancilla_init);
-            let sim =
-                self.compact.simulate(&input).expect("simulate");
-            data_bits = sim.outputs[..self.n_data].to_vec();
-        }
-
-        let val =
-            value_from_bits(&ty, &data_bits).expect("value_from_bits");
-        StateVals::decode(&val)
-    }
-
-    /// Run with TRUE recirculation: feed ancilla outputs back as inputs
-    /// (instead of re-supplying fresh ancilla\_init). Valid only when
-    /// [`Self::ancillas_restored`] is true for the given start state.
-    pub fn run_true(
-        &self,
-        start: &StateVals,
-        revolutions: u32,
-    ) -> StateVals {
+        debug_assert!(
+            self.ancillas_restored(start),
+            "StepRing::run assumes an ancilla-clean lowering (zero-garbage \
+             ring); this lowering leaves garbage — use run_open or \
+             ClosedStepRing. mismatches: {:?}",
+            self.ancilla_mismatches(start)
+        );
         let ty = state_ty();
         let mut data_bits =
             bits_of(&start.encode(), &ty).expect("bits_of");
@@ -124,6 +118,36 @@ impl StepRing {
                 self.compact.simulate(&input).expect("simulate");
             data_bits = sim.outputs[..self.n_data].to_vec();
             ancilla_bits = sim.outputs[self.n_data..].to_vec();
+        }
+
+        let val =
+            value_from_bits(&ty, &data_bits).expect("value_from_bits");
+        StateVals::decode(&val)
+    }
+
+    /// Recirculate with the ring OPEN: each revolution discards the
+    /// ancilla outputs and re-supplies fresh `ancilla_init`.
+    ///
+    /// Always correct (independent of ancilla cleanliness); equals
+    /// [`Self::run`] exactly when the lowering is ancilla-clean, which is
+    /// the equivalence that certifies the zero-garbage closure. Retained
+    /// as the robust fallback for non-ancilla-clean lowerings.
+    pub fn run_open(
+        &self,
+        start: &StateVals,
+        revolutions: u32,
+    ) -> StateVals {
+        let ty = state_ty();
+        let mut data_bits =
+            bits_of(&start.encode(), &ty).expect("bits_of");
+        assert_eq!(data_bits.len(), self.n_data);
+
+        for _ in 0..revolutions {
+            let mut input = data_bits.clone();
+            input.extend_from_slice(&self.ancilla_init);
+            let sim =
+                self.compact.simulate(&input).expect("simulate");
+            data_bits = sim.outputs[..self.n_data].to_vec();
         }
 
         let val =

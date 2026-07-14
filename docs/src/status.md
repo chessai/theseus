@@ -24,7 +24,7 @@ sections below and ADRs 0033–0039.
 | **M3a** physics money plot | ✅ done | adiabatic slope −1 vs CMOS-flat vs PFAL, on sky130 ngspice; char DB + DUT matrix |
 | **M3b** compiled energy | ✅ done | compiler lowers programs → phased adiabatic cells → oracle-verified → energy. **Full adder** and **Fibonacci** compiled to *measured* joules |
 | **M4-v1** TISC-1 CPU | ✅ **done** | the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** — ADR-0030's milestone, met |
-| **M4-v2** ring machine | ✅ **done + zero-garbage** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving**; reversible branching works (ADR-0034). **Physical closure achieved**: the R1 rail-role-swap cell (ADR-0040, real ngspice, adiabatic slope −1) makes lowering garbage-free — the step is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so `run_true == eval^R` closes with **zero** re-supplied boundary. |
+| **M4-v2** ring machine | ✅ **done + zero-garbage** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving**; reversible branching works (ADR-0034). **Physical closure achieved**: the R1 rail-role-swap cell (ADR-0040, real ngspice, adiabatic slope −1) makes lowering garbage-free — the step is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so the default runner `run == eval^R` closes with **zero** re-supplied boundary. The machine-level **money plot** confirms it: energy/step falls at adiabatic slope **−0.997**, crossing below the flat CMOS ½CV² floor at t_ramp ≈ 2.1e-8 s (active logic below CMOS across the whole clock range). |
 | **v0.2 dialect** software | ✅ **done** | μ-types + `iter`/`fold`/`unfold`: core + eval + surface syntax + **netlist lowering** + diagnostics; writable `.thse` programs run source→cells (ADRs 0035–0039) |
 | **M2** FPGA / Verilator | ⏸ parked | still stubs; a demo, not a phase |
 
@@ -120,9 +120,12 @@ The v1 CPU *unrolls* `step` T times (area ∝ T). M4-v2 **recirculates** one bal
   now lowers CNOT→one R1, Toffoli→a clean K1-R1-K1 sandwich, any k-control→
   AND-chain+R1 — all ancilla-clean **with R1 alone**. Result: the TISC-1 step's
   plain lowering is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so
-  `StepRing::run_true == eval(step)^R` **physically closes with zero re-supplied
-  boundary** — a genuinely self-contained recirculating CPU. The Bennett wrap
-  demotes to the fallback for residual K-only-dirty fan-outs (trace/iter chains).
+  the **default** ring runner `StepRing::run` (feeds ancilla outputs back)
+  `== eval(step)^R` and **physically closes with zero re-supplied boundary** — a
+  genuinely self-contained recirculating CPU. (`StepRing::run_open`, the open-loop
+  fresh-re-supply variant, agrees with `run` exactly — the equivalence that
+  certifies the closure.) The Bennett wrap demotes to the fallback for residual
+  K-only-dirty fan-outs (trace/iter chains).
 
 ## v0.2: the software dialect — done (source to cells)
 
@@ -156,17 +159,21 @@ depth-tracking bug) that unit tests missed.
 
 ## Open items & next steps
 
-- **Physically-closing ring** — wire the Bennett wrap (`bennett.rs`) into
-  `StepRing::run_true` so true recirculation feeds back the clean 1138 ancillas
-  and re-supplies only the fixed 320-slot boundary; and/or evaluate an ADR-0027
-  **controlled rail-role-swap cell** that would void the parity obstruction and
-  make CNOTs garbage-free.
+- **Physically-closing ring** — ✅ **done.** The ADR-0027 controlled rail-role-swap
+  cell (R1, ADR-0040) voids the parity obstruction, so `StepRing::run` (the
+  default, closed runner) feeds ancilla outputs back and re-supplies **nothing** —
+  zero boundary. The Bennett wrap (`bennett.rs`, 320-slot boundary) remains the
+  fallback for residual K-only-dirty fan-outs.
+- **CPU money plot** — ✅ **done** (`theseus-tisc::money_plot`,
+  `examples/cpu_money_plot.rs`). Sweeps energy/step across the power-clock ramp
+  from the committed char-DB fits over the zero-garbage step (4939 active cells,
+  487 R1, priced as `cswap-r1`); the machine-level adiabatic **slope −0.997**
+  crosses below the flat CMOS ½CV² floor (ngspice-derived committed constant,
+  5.03e-9 J/step) at t_ramp ≈ 2.1e-8 s, and the active logic beats CMOS across the
+  entire [1e-8, 1e-5] s range.
 - **Energy-price a compiled loop** — now that `iter`/`fold`/`unfold` lower to
   cells, run one through `theseus-spice::annotate` for a joules figure (extends
   the M3b/energy story to the software dialect).
-- **CPU money plot** *(wanted)* — sweep step/program energy across clock ramps via
-  the char-DB fits; plot the machine-level adiabatic slope −1 below a CMOS
-  reference. Reuses `theseus-tisc::energy`.
 - **v0.2 surface polish** — depth-annotation syntax for μ-types (currently an env
   default); the remaining ADR-0038 deferrals.
 - Resolved this cycle: reversible branching (was "SWAPBR degenerates"); the

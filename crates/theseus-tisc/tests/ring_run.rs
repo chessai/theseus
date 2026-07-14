@@ -190,12 +190,12 @@ fn true_recirculation_matches_eval_oracle() {
         let mut oracle = start.clone();
 
         for r in 0..=MAX_R {
-            let true_result = c.ring.run_true(&start, r);
+            let true_result = c.ring.run(&start, r);
             assert_eq!(
                 true_result, oracle,
-                "run_true(s, {r}) != eval^{r} at pc={pc} — \
-                 true recirculation (feed ancilla outputs back) must \
-                 equal the eval oracle when ancillas are restored"
+                "run(s, {r}) != eval^{r} at pc={pc} — \
+                 the default closed (zero-garbage) runner feeds ancilla \
+                 outputs back and must equal the eval oracle"
             );
             oracle = eval_state(
                 &format!("true_recirc/pc={pc}/r={r}"),
@@ -212,8 +212,9 @@ fn true_recirculation_matches_eval_oracle() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 5. run_true == run: both paths agree (ancilla-clean step means
-//    feeding back restored ancillas == re-supplying fresh ones)
+// 5. run (closed) == run_open (fresh re-supply): both paths agree
+//    (ancilla-clean step means feeding back restored ancillas ==
+//    re-supplying fresh ones — this equivalence certifies the closure)
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -224,12 +225,13 @@ fn run_true_equals_run_when_ancillas_restored() {
     for &pc in &[0u8, 1, 2, 4] {
         let start = sample_state(pc);
         for r in 0..=MAX_R {
-            let fresh = c.ring.run(&start, r);
-            let feedback = c.ring.run_true(&start, r);
+            let feedback = c.ring.run(&start, r);
+            let fresh = c.ring.run_open(&start, r);
             assert_eq!(
                 fresh, feedback,
-                "run(s, {r}) != run_true(s, {r}) at pc={pc} — \
-                 with ancillas restored, both paths must agree"
+                "run_open(s, {r}) != run(s, {r}) at pc={pc} — \
+                 with ancillas restored, closed feed-back and fresh \
+                 re-supply must agree"
             );
         }
     }
