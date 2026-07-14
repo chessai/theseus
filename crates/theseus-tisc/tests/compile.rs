@@ -1,18 +1,20 @@
-//! Run-on-CPU differential oracle for the M-A compiler (ADR-0042 §6).
+//! Run-on-CPU differential oracle for the M-A/M-B compiler
+//! (ADR-0042 §6, ADR-0043 §5).
 //!
-//! For each M-A program, for EVERY value in `enumerate_values(input_ty)`,
+//! For each program, for EVERY value in `enumerate_values(input_ty)`,
 //! asserts `cpu_run(iso, v) == theseus_eval::eval(iso, v)`.
 
 use theseus_core::{enumerate_values, type_of, Iso, Type, Value};
-use theseus_tisc::compile::{compile, run_on_cpu};
+use theseus_tisc::compile::{compile, run_on_cpu_fast};
 
 fn cpu_run(iso: &Iso, input: &Value) -> Result<Value, theseus_tisc::compile::CompileError> {
-    run_on_cpu(iso, input, theseus_eval::eval)
+    run_on_cpu_fast(iso, input)
 }
 
 const CNOT_SRC: &str = include_str!("../../../conformance/programs/0004-cnot.thse");
 const FIB_SRC: &str = include_str!("../../../conformance/programs/0022-fib.thse");
 const FIB3_SRC: &str = include_str!("../../../conformance/programs/0023-fib3.thse");
+const SWAPMAY_SRC: &str = include_str!("../../../conformance/programs/0025-swapmaybe.thse");
 
 // ── Surface → core Iso (same pattern as fib_lowering.rs) ─────────────
 
@@ -55,7 +57,7 @@ fn assert_oracle(name: &str, iso: &Iso) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// (a) cnot — controlled-NOT via the controlled-op idiom → XOR
+// M-A tests (must remain green — no regression)
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -63,17 +65,12 @@ fn cnot_compiles_and_oracle_agrees() {
     let iso = elaborate(CNOT_SRC, "cnot");
     let instrs = compile(&iso).expect("cnot should compile");
     eprintln!("cnot instructions: {instrs:?}");
-    // Should contain at least one XOR.
     assert!(
         instrs.iter().any(|i| matches!(i, theseus_tisc::asm::Instr::Xor { .. })),
         "cnot ROM should contain an XOR instruction"
     );
     assert_oracle("cnot", &iso);
 }
-
-// ══════════════════════════════════════════════════════════════════════
-// (b) bare SwapProd — product swap → EXCH
-// ══════════════════════════════════════════════════════════════════════
 
 #[test]
 fn swap_compiles_to_exch() {
@@ -85,10 +82,6 @@ fn swap_compiles_to_exch() {
     assert_oracle("swap", &iso);
 }
 
-// ══════════════════════════════════════════════════════════════════════
-// (c) fibStep from 0022-fib.thse (swap2 ; addInto) → EXCH + XOR
-// ══════════════════════════════════════════════════════════════════════
-
 #[test]
 fn fibstep_compiles_and_oracle_agrees() {
     let iso = elaborate(FIB_SRC, "fibStep");
@@ -97,33 +90,17 @@ fn fibstep_compiles_and_oracle_agrees() {
     assert_oracle("fibStep", &iso);
 }
 
-// ══════════════════════════════════════════════════════════════════════
-// (d) 0023-fib3.thse — constant-count (3× fibStep) → oracle agrees
-// ══════════════════════════════════════════════════════════════════════
-
 #[test]
 fn fib3_compiles_and_oracle_agrees() {
     let iso = elaborate(FIB3_SRC, "fib3");
     let instrs = compile(&iso).expect("fib3 should compile");
     eprintln!("fib3 instructions: {instrs:?}");
-    // 3 fibSteps × 2 instrs each = 6 instructions expected.
     assert_oracle("fib3", &iso);
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// (e) NEGATIVE: data-dependent iter must be rejected
+// M-A negative tests (still rejected)
 // ══════════════════════════════════════════════════════════════════════
-
-#[test]
-fn data_dependent_iter_rejected() {
-    let iso = elaborate(FIB_SRC, "fib");
-    let result = compile(&iso);
-    assert!(
-        result.is_err(),
-        "data-dependent iter (fib) must be rejected, not miscompiled"
-    );
-    eprintln!("fib (data-dependent iter) correctly rejected: {}", result.unwrap_err());
-}
 
 #[test]
 fn bare_trace_rejected() {
@@ -131,7 +108,7 @@ fn bare_trace_rejected() {
     let body = Iso::SwapSum(bit.clone(), Type::One);
     let iso = Iso::trace(bit, body);
     let result = compile(&iso);
-    assert!(result.is_err(), "Trace must be rejected in M-A");
+    assert!(result.is_err(), "Trace must be rejected in M-B");
 }
 
 #[test]
@@ -140,5 +117,73 @@ fn bare_fold_rejected() {
     let body = Iso::SwapProd(bit.clone(), bit.clone());
     let iso = Iso::fold(Type::list_spine_ty(bit.clone(), 3), body);
     let result = compile(&iso);
-    assert!(result.is_err(), "Fold must be rejected in M-A");
+    assert!(result.is_err(), "Fold must be rejected in M-B");
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// M-B (a): data-dependent fib — iter Nat fibStep (the M-A blocker)
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn fib_data_dependent_compiles_and_oracle_agrees() {
+    let iso = elaborate(FIB_SRC, "fib");
+    let instrs = compile(&iso).expect("fib (data-dependent iter) should compile in M-B");
+    eprintln!("fib instructions ({} total): {instrs:?}", instrs.len());
+    assert_oracle("fib", &iso);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// M-B (b): general controlled op — multi-instruction arm
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn general_controlled_op_oracle_agrees() {
+    // Build a controlled-add: (ctrl, (a, b)) ↦ (ctrl, if ctrl then (a, a+b) else (a, b))
+    // This is the Distrib;Plus(Id, addInto);Factor idiom where addInto = XOR
+    // (two instructions: the controlled-op idiom itself produces a multi-instr arm).
+    //
+    // Use the cnot program's addInto: it's `Seq(SwapProd, Seq(Distrib, Seq(Plus(Id,NOT), Seq(Factor, SwapProd))))`.
+    // Instead, build a controlled swap2;addInto = controlled fibStep (2 instrs).
+    let fib_step = elaborate(FIB_SRC, "fibStep");
+    let bit = Type::sum(Type::One, Type::One);
+    let bit2 = Type::prod(bit.clone(), bit.clone());
+
+    // Build: SwapProd(Bit, Bit*Bit) ; Distrib(Bit*Bit, One, One) ;
+    //        Plus(Id((Bit*Bit)*One), Times(fibStep, Id(One))) ;
+    //        Factor(Bit*Bit, One, One) ; SwapProd(Bit*Bit, Bit)
+    let ctrl_idiom = Iso::seq(
+        Iso::SwapProd(bit.clone(), bit2.clone()),
+        Iso::seq(
+            Iso::Distrib(bit2.clone(), Type::One, Type::One),
+            Iso::seq(
+                Iso::Plus(
+                    Box::new(Iso::Id(Type::prod(bit2.clone(), Type::One))),
+                    Box::new(Iso::Times(
+                        Box::new(fib_step),
+                        Box::new(Iso::Id(Type::One)),
+                    )),
+                ),
+                Iso::seq(
+                    Iso::Factor(bit2.clone(), Type::One, Type::One),
+                    Iso::SwapProd(bit2.clone(), bit.clone()),
+                ),
+            ),
+        ),
+    );
+
+    let instrs = compile(&ctrl_idiom).expect("controlled fibStep should compile in M-B");
+    eprintln!("controlled fibStep instructions ({} total): {instrs:?}", instrs.len());
+    assert_oracle("controlled_fibStep", &ctrl_idiom);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// M-B (c): bare-sum program — swapMaybe
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn swapmay_bare_sum_oracle_agrees() {
+    let iso = elaborate(SWAPMAY_SRC, "swapMaybe");
+    let instrs = compile(&iso).expect("swapMaybe should compile in M-B");
+    eprintln!("swapMaybe instructions ({} total): {instrs:?}", instrs.len());
+    assert_oracle("swapMaybe", &iso);
 }

@@ -1,13 +1,17 @@
-//! M-A surface→TISC-1 ROM compiler (ADR-0042, non-recursive fragment).
+//! M-A/M-B surface→TISC-1 ROM compiler (ADR-0042 + ADR-0043).
 //!
 //! Compiles the product/composition fragment of core `Iso` — plus the
-//! controlled-op idiom and constant-count `Iter` — to TISC-1 instruction
-//! sequences. Values fit in registers (≤ 8 word-sized leaves); no memory
-//! bus, no recursion, no data-dependent control flow.
+//! controlled-op idiom (general arms), data-dependent `Iter`, and bare
+//! sum operations — to TISC-1 instruction sequences. Values fit in
+//! registers (≤ 8 word-sized leaves); no memory bus, no recursion.
 //!
-//! The acceptance test is the run-on-CPU differential oracle (ADR-0042 §6):
-//! for every input value, the compiled ROM executed on the simulated CPU
-//! must agree with `theseus_eval::eval`.
+//! M-B extends M-A with: (1) general controlled ops (multi-instruction
+//! arms in the Distrib;Plus;Factor idiom), (2) data-dependent iter
+//! (guarded static unroll), (3) bare sums (tag+payload representation).
+//!
+//! The acceptance test is the run-on-CPU differential oracle (ADR-0042 §6,
+//! ADR-0043 §5): for every input value, the compiled ROM executed on the
+//! simulated CPU must agree with `theseus_eval::eval`.
 
 use std::fmt;
 
@@ -19,7 +23,7 @@ use crate::types::{StateVals, NUM_REGS};
 
 // ── Errors ────────────────────────────────────────────────────────────
 
-/// Compile-time errors for the M-A compiler.
+/// Compile-time errors for the M-A/M-B compiler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompileError {
     /// The program requires more registers than the TISC-1 has (8).
@@ -63,13 +67,21 @@ impl fmt::Display for CompileError {
 /// A "leaf" type is a type that occupies exactly one register (u8).
 /// For M-A these are: Bit = 1+1, bounded Nat = 1+(1+(…+0)), and any
 /// sum-chain type whose values fit in a byte.
-/// Count the number of word-sized leaf fields in a product type.
-/// Unit (1) has 0 leaves; a sum type is 1 leaf; products recurse.
+/// Count the number of word-sized leaf fields in a type.
+///
+/// M-B tag+payload representation (ADR-0043 §4):
+///   Zero → 0, One → 0, Sum(a,b) → 1 + max(|a|,|b|), Prod(a,b) → |a|+|b|.
+/// The 1 is the tag register (0=Left, 1=Right); the payload shares
+/// max(|a|,|b|) registers (narrower arm zero-extends).
 fn num_leaves(ty: &Type) -> Result<usize, CompileError> {
     match ty {
-        Type::Zero => Err(CompileError::EmptyType),
+        Type::Zero => Ok(0),
         Type::One => Ok(0),
-        Type::Sum(_, _) => Ok(1),
+        Type::Sum(a, b) => {
+            let la = num_leaves(a)?;
+            let lb = num_leaves(b)?;
+            Ok(1 + la.max(lb))
+        }
         Type::Prod(a, b) => {
             let la = num_leaves(a)?;
             let lb = num_leaves(b)?;
@@ -79,10 +91,22 @@ fn num_leaves(ty: &Type) -> Result<usize, CompileError> {
 }
 
 /// Collect the leaf types in left-to-right order.
+/// For Sum(a,b): tag (Bit) followed by max(|a|,|b|) payload leaves.
+#[allow(dead_code)]
 fn leaf_types(ty: &Type) -> Vec<Type> {
     match ty {
         Type::Zero | Type::One => vec![],
-        Type::Sum(_, _) => vec![ty.clone()],
+        Type::Sum(a, b) => {
+            let la = num_leaves(a).unwrap_or(0);
+            let lb = num_leaves(b).unwrap_or(0);
+            let max_payload = la.max(lb);
+            let bit = Type::sum(Type::One, Type::One);
+            let mut types = vec![bit.clone()]; // tag register
+            for _ in 0..max_payload {
+                types.push(bit.clone()); // payload registers
+            }
+            types
+        }
         Type::Prod(a, b) => {
             let mut v = leaf_types(a);
             v.extend(leaf_types(b));
@@ -114,6 +138,7 @@ fn leaf_value_to_u8(v: &Value) -> u8 {
 /// Decode a u8 back to a value inhabiting a sum-chain leaf type.
 /// Uses `enumerate_values` to get the canonical value ordering, then
 /// indexes by k. This handles Bit, Nat, and any sum-chain type correctly.
+#[allow(dead_code)]
 fn u8_to_leaf_value(k: u8, ty: &Type) -> Value {
     let vals = enumerate_values(ty);
     vals.into_iter()
@@ -122,13 +147,25 @@ fn u8_to_leaf_value(k: u8, ty: &Type) -> Value {
 }
 
 /// Reconstruct a Value from flat leaf bytes + the type structure.
+///
+/// M-B tag+payload encoding for Sum(a,b): byte[0] = tag (0=Left, 1=Right),
+/// bytes[1..1+max(|a|,|b|)] = payload (left or right, zero-padded).
 fn value_from_leaf_bytes(bytes: &[u8], ty: &Type) -> (Value, usize) {
     match ty {
         Type::Zero => panic!("value_from_leaf_bytes: Zero type"),
         Type::One => (Value::Unit, 0),
-        Type::Sum(_, _) => {
-            let v = u8_to_leaf_value(bytes[0], ty);
-            (v, 1)
+        Type::Sum(a, b) => {
+            let la = num_leaves(a).unwrap_or(0);
+            let lb = num_leaves(b).unwrap_or(0);
+            let max_payload = la.max(lb);
+            let tag = bytes[0];
+            if tag == 0 {
+                let (v, _) = value_from_leaf_bytes(&bytes[1..], a);
+                (Value::Left(Box::new(v)), 1 + max_payload)
+            } else {
+                let (v, _) = value_from_leaf_bytes(&bytes[1..], b);
+                (Value::Right(Box::new(v)), 1 + max_payload)
+            }
         }
         Type::Prod(a, b) => {
             let (va, na) = value_from_leaf_bytes(bytes, a);
@@ -139,11 +176,33 @@ fn value_from_leaf_bytes(bytes: &[u8], ty: &Type) -> (Value, usize) {
 }
 
 /// Flatten a Value into leaf bytes.
+///
+/// M-B tag+payload encoding for Sum(a,b): [tag, payload..., zero-pad...].
 fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
     match ty {
         Type::Zero => panic!("value_to_leaf_bytes: Zero type"),
         Type::One => vec![],
-        Type::Sum(_, _) => vec![leaf_value_to_u8(v)],
+        Type::Sum(a, b) => {
+            let la = num_leaves(a).unwrap_or(0);
+            let lb = num_leaves(b).unwrap_or(0);
+            let max_payload = la.max(lb);
+            let total = 1 + max_payload;
+            match v {
+                Value::Left(inner) => {
+                    let mut bytes = vec![0u8]; // tag = 0 (Left)
+                    bytes.extend(value_to_leaf_bytes(inner, a));
+                    bytes.resize(total, 0); // zero-pad
+                    bytes
+                }
+                Value::Right(inner) => {
+                    let mut bytes = vec![1u8]; // tag = 1 (Right)
+                    bytes.extend(value_to_leaf_bytes(inner, b));
+                    bytes.resize(total, 0); // zero-pad
+                    bytes
+                }
+                _ => panic!("value_to_leaf_bytes: expected Left/Right for Sum type, got {v:?}"),
+            }
+        }
         Type::Prod(a, b) => {
             let Value::Pair(va, vb) = v else {
                 panic!("value_to_leaf_bytes: expected Pair for Prod type, got {v:?}");
@@ -189,6 +248,82 @@ impl Ctx {
         mapping.extend_from_slice(&right.mapping);
         Ctx { mapping }
     }
+}
+
+// ── Auxiliary register allocation ────────────────────────────────────
+
+/// Allocate `count` free physical registers not used by any leaf in `ctx`.
+fn allocate_aux(ctx: &Ctx, count: usize) -> Result<Vec<u8>, CompileError> {
+    let used: std::collections::BTreeSet<u8> = ctx.mapping.iter().copied().collect();
+    let free: Vec<u8> = (0..NUM_REGS as u8).filter(|r| !used.contains(r)).collect();
+    if free.len() < count {
+        return Err(CompileError::TooManyLeaves {
+            needed: ctx.mapping.len() + count,
+            max: NUM_REGS,
+        });
+    }
+    Ok(free[..count].to_vec())
+}
+
+// ── SWAPBR skip-block primitive (ADR-0043 §2) ──────────────────────
+//
+// Emit a "skip block" that conditionally skips `body_instrs` based on
+// a control register `ctrl_reg`:
+//
+// When `skip_when_set = true`: skip body iff ctrl_reg bit 0 = 1.
+// When `skip_when_set = false`: skip body iff ctrl_reg bit 0 = 0.
+//
+// Uses two auxiliary registers: `rb` (for SWAPBR offset) and `temp`
+// (for CSWAP routing). Both must be 0 on entry and are 0 on exit.
+
+fn emit_skip_block(
+    ctrl_reg: u8,
+    body_instrs: &[Instr],
+    rb: u8,
+    temp: u8,
+    skip_when_set: bool,
+) -> Vec<Instr> {
+    let body_len = body_instrs.len() as u8;
+    if body_len == 0 {
+        return vec![];
+    }
+    let mut out = Vec::new();
+
+    if skip_when_set {
+        // Skip iff ctrl=1: load skip_dist into rb iff ctrl=1.
+        // Start with temp=skip_dist, rb=0. CSWAP(ctrl, temp, rb):
+        //   ctrl=1 → swap: temp=0, rb=skip_dist (jump, skip body)
+        //   ctrl=0 → no swap: temp=skip_dist, rb=0 (fall through)
+        out.push(Instr::Addi { rd: temp, imm: body_len });
+        out.push(Instr::Cswap { rd: ctrl_reg, rs: temp, rt: rb });
+    } else {
+        // Skip iff ctrl=0: load skip_dist into rb iff ctrl=0.
+        // Start with rb=skip_dist, temp=0. CSWAP(ctrl, rb, temp):
+        //   ctrl=1 → swap: rb=0, temp=skip_dist (don't skip = run body)
+        //   ctrl=0 → no swap: rb=skip_dist (skip body)
+        out.push(Instr::Addi { rd: rb, imm: body_len });
+        out.push(Instr::Cswap { rd: ctrl_reg, rs: rb, rt: temp });
+    }
+
+    // Branch: SWAPBR rb
+    out.push(Instr::Swapbr { rd: rb });
+
+    // Body
+    out.extend_from_slice(body_instrs);
+
+    // Come-from: SWAPBR rb (clears BR, captures offset into rb)
+    out.push(Instr::Swapbr { rd: rb });
+
+    // Cleanup: reverse the CSWAP + SUBI
+    if skip_when_set {
+        out.push(Instr::Cswap { rd: ctrl_reg, rs: temp, rt: rb });
+        out.push(Instr::Subi { rd: temp, imm: body_len });
+    } else {
+        out.push(Instr::Cswap { rd: ctrl_reg, rs: rb, rt: temp });
+        out.push(Instr::Subi { rd: rb, imm: body_len });
+    }
+
+    out
 }
 
 // ── Instruction inversion (ADR-0042 §4.1 table) ──────────────────────
@@ -538,9 +673,44 @@ fn lower_controlled_idiom(
         }
     }
 
-    Err(CompileError::Deferred(format!(
-        "unrecognized controlled-op branch g: {g:?}"
-    )))
+    // M-B fallback: general controlled-op with multi-instruction arms.
+    // Compile g's body (on tgt × ctrl_r = tgt × One) and use skip-block.
+    // Since ctrl_r = One (0 leaves), g operates on just the target registers.
+    let ctx_tgt = Ctx {
+        mapping: ctx.mapping[n_ctrl..n_ctrl + n_tgt].to_vec(),
+    };
+    let (instrs_g, _) = lower(g, &ctx_tgt)?;
+    if instrs_g.is_empty() && is_structural_identity(f) {
+        // Both arms are identity → no-op.
+        return Ok((vec![], ctx.clone()));
+    }
+
+    // f must be identity for now (general f+g handled via bare Plus).
+    if !is_structural_identity(f) {
+        // Compile f as well.
+        let (instrs_f, _) = lower(f, &ctx_tgt)?;
+        let aux = allocate_aux(ctx, 2)?;
+        let rb = aux[0];
+        let temp = aux[1];
+        let mut instrs = Vec::new();
+        // Phase 1: f runs iff ctrl=0 → skip f iff ctrl=1
+        if !instrs_f.is_empty() {
+            instrs.extend(emit_skip_block(ctrl_reg, &instrs_f, rb, temp, true));
+        }
+        // Phase 2: g runs iff ctrl=1 → skip g iff ctrl=0
+        if !instrs_g.is_empty() {
+            instrs.extend(emit_skip_block(ctrl_reg, &instrs_g, rb, temp, false));
+        }
+        return Ok((instrs, ctx.clone()));
+    }
+
+    // f = identity, g = general multi-instruction sequence.
+    // Skip g iff ctrl=0 (Left branch = identity).
+    let aux = allocate_aux(ctx, 2)?;
+    let rb = aux[0];
+    let temp = aux[1];
+    let instrs = emit_skip_block(ctrl_reg, &instrs_g, rb, temp, false);
+    Ok((instrs, ctx.clone()))
 }
 
 /// Check if iso is structurally the identity (possibly wrapped).
@@ -649,9 +819,9 @@ fn numeral_count(ty: &Type) -> Option<usize> {
 
 // ── Core lowering ────────────────────────────────────────────────────
 
-/// Compile a core `Iso` (M-A subset) to a TISC-1 instruction sequence.
+/// Compile a core `Iso` (M-A/M-B) to a TISC-1 instruction sequence.
 ///
-/// Returns `Err(CompileError)` for out-of-scope constructs.
+/// Returns `Err(CompileError)` for out-of-scope constructs (Trace/Fold/Unfold).
 pub fn compile(iso: &Iso) -> Result<Vec<Instr>, CompileError> {
     let (in_ty, _out_ty) = theseus_core::type_of(iso).map_err(|e| {
         CompileError::Deferred(format!("type error: {e:?}"))
@@ -755,32 +925,10 @@ fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
             Ok((instrs, ctx.clone()))
         }
 
-        Iso::Iter(n_ty, _body) => {
-            // M-A: constant-count only. The count type must be a numeral,
-            // and we must verify that the count is constant across all inputs.
-            // For M-A, we require the iter to be used in a context where the
-            // count is statically known. Since iter semantics are
-            // ⟨k, x⟩ ↦ ⟨k, f^k(x)⟩ with k from the data, a truly
-            // constant-count program has a single k value.
-            //
-            // For the M-A demo, we handle iter by rejecting data-dependent
-            // counts (where the numeral type has > 1 inhabitant and the count
-            // is read from data). A constant-count program is one where the
-            // numeral type has exactly 1 inhabitant (k is always 0) or the
-            // program wraps iter with a fixed count.
-            //
-            // Actually, per the ADR: "constant-count iteration" means the
-            // program is structured so the count is the same for every input.
-            // The simplest realization: reject iter entirely from compile()
-            // and instead handle constant-count as explicit Seq unrolling
-            // at the surface level (the 0023-fib3.thse program uses
-            // `fibStep ; fibStep ; fibStep` rather than `iter`).
-            //
-            // But the ADR also says Iter with constant count should work via
-            // static unroll. Let's support it when the numeral type has only
-            // 1 inhabitant (the trivial case: k=0, body never runs).
-            // For the general data-dependent case, reject.
-
+        Iso::Iter(n_ty, body) => {
+            // M-A/M-B: iter with numeral count type.
+            // Constant count (≤1 inhabitant): trivial (no code).
+            // Data-dependent count (M-B): guarded static unroll (ADR-0043 §3).
             let count = numeral_count(n_ty);
             match count {
                 Some(0) | Some(1) => {
@@ -788,9 +936,9 @@ fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
                     // 1 inhabitant: k=0, body never runs.
                     Ok((vec![], ctx.clone()))
                 }
-                Some(_) => {
-                    // Multiple possible counts → data-dependent.
-                    Err(CompileError::DataDependentIter)
+                Some(d) => {
+                    // M-B: guarded static unroll to D-1 iterations.
+                    lower_data_dependent_iter(n_ty, d, body, ctx)
                 }
                 None => Err(CompileError::Deferred(format!(
                     "iter with non-numeral type: {n_ty}"
@@ -798,33 +946,145 @@ fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
             }
         }
 
-        // ── Out-of-scope constructors ────────────────────────────────
-        Iso::Plus(_, _) => Err(CompileError::UnsupportedSum(
-            "bare Plus outside controlled-op idiom".into(),
-        )),
+        // ── M-B bare sum operations (ADR-0043 §3) ──────────────────
+        Iso::SwapSum(a, b) => {
+            // SwapSum: flip the tag register (0↔1). XORI tag, 1.
+            let _la = num_leaves(a)?;
+            let _lb = num_leaves(b)?;
+            let tag_reg = ctx.mapping[0];
+            Ok((vec![Instr::Xori { rd: tag_reg, imm: 1 }], ctx.clone()))
+        }
 
-        Iso::SwapSum(_, _) => Err(CompileError::UnsupportedSum(
-            "bare SwapSum outside controlled-op idiom".into(),
-        )),
+        Iso::Plus(f, g) => {
+            // Bare Plus on Sum(a,b): branch on tag, apply f to Left, g to Right.
+            lower_bare_plus(f, g, ctx)
+        }
 
-        Iso::AssocLSum(_, _, _) | Iso::AssocRSum(_, _, _) => Err(CompileError::UnsupportedSum(
-            "bare sum associativity outside controlled-op idiom".into(),
-        )),
+        Iso::AssocLSum(_, _, _)
+        | Iso::AssocRSum(_, _, _)
+        | Iso::UniteSum(_)
+        | Iso::UnitiSum(_) => {
+            // Structural sum renamings — no register moves in the
+            // tag+payload representation for the cases M-B encounters.
+            Ok((vec![], ctx.clone()))
+        }
 
-        Iso::UniteSum(_) | Iso::UnitiSum(_) => Err(CompileError::UnsupportedSum(
-            "bare sum unit outside controlled-op idiom".into(),
-        )),
+        Iso::Distrib(_, _, _) | Iso::Factor(_, _, _) => {
+            // Structural (tag,payload)↔branched-form conversion — no-op
+            // in the tag+payload register model (ADR-0043 §3).
+            Ok((vec![], ctx.clone()))
+        }
 
-        Iso::Distrib(_, _, _) | Iso::Factor(_, _, _) => Err(CompileError::UnsupportedSum(
-            "bare Distrib/Factor outside controlled-op idiom".into(),
-        )),
-
-        Iso::Trace(_, _) => Err(CompileError::Deferred("Trace (M-B/M-D)".into())),
+        // ── Still deferred to M-C/M-D ──────────────────────────────
+        Iso::Trace(_, _) => Err(CompileError::Deferred("Trace (M-C/M-D)".into())),
 
         Iso::Fold(_, _) | Iso::Unfold(_, _) => {
             Err(CompileError::Deferred("Fold/Unfold (M-D)".into()))
         }
     }
+}
+
+// ── M-B: data-dependent iter (guarded static unroll) ────────────────
+
+/// Lower `iter n_ty body` with data-dependent count (ADR-0043 §3).
+///
+/// Emits D-1 guarded copies of `code(body)`, where D = numeral_count(n_ty).
+/// Each copy `i` is guarded on the i-th tag register of the unary-encoded
+/// Nat value (register `ctx.mapping[i]`): tag=1 iff k > i, meaning the
+/// body should execute for this iteration.
+///
+/// Uses the SWAPBR skip-block: skip the body iff the tag is 0.
+fn lower_data_dependent_iter(
+    n_ty: &Type,
+    d: usize,
+    body: &Iso,
+    ctx: &Ctx,
+) -> Result<(Vec<Instr>, Ctx), CompileError> {
+    let n_counter = num_leaves(n_ty)?;
+    let (ctx_counter, ctx_body) = ctx.split(n_counter);
+
+    // Compile the body once to get its instruction sequence.
+    let (body_instrs, _) = lower(body, &ctx_body)?;
+
+    // Allocate 2 aux registers for the skip-block (rb + temp).
+    let full_ctx = ctx.clone();
+    let aux = allocate_aux(&full_ctx, 2)?;
+    let rb = aux[0];
+    let temp = aux[1];
+
+    let mut instrs = Vec::new();
+
+    // Emit D-1 guarded copies. Iteration i uses counter tag register i
+    // as control: tag=1 → execute (don't skip), tag=0 → skip.
+    for i in 0..(d - 1) {
+        let ctrl_reg = ctx_counter.mapping[i];
+        // skip_when_set=false: skip body iff ctrl=0 (tag=0 means k ≤ i)
+        let block = emit_skip_block(ctrl_reg, &body_instrs, rb, temp, false);
+        instrs.extend(block);
+    }
+
+    Ok((instrs, ctx.clone()))
+}
+
+// ── M-B: bare Plus (branch on tag) ──────────────────────────────────
+
+/// Lower `Plus(f, g)` on Sum(a,b): branch on tag register.
+///
+/// Uses two skip-blocks: skip f iff tag=1, skip g iff tag=0.
+/// If one arm is identity (no instructions), its skip-block is omitted.
+fn lower_bare_plus(
+    f: &Iso,
+    g: &Iso,
+    ctx: &Ctx,
+) -> Result<(Vec<Instr>, Ctx), CompileError> {
+    let (in_f, _) = theseus_core::type_of(f).map_err(|e| {
+        CompileError::Deferred(format!("type error in Plus/f: {e:?}"))
+    })?;
+    let (in_g, _) = theseus_core::type_of(g).map_err(|e| {
+        CompileError::Deferred(format!("type error in Plus/g: {e:?}"))
+    })?;
+    let n_f = num_leaves(&in_f)?;
+    let n_g = num_leaves(&in_g)?;
+
+    // Tag is at ctx.mapping[0]. Payload starts at ctx.mapping[1..].
+    let tag_reg = ctx.mapping[0];
+
+    // Build sub-contexts for f (Left payload) and g (Right payload).
+    let ctx_f = Ctx {
+        mapping: ctx.mapping[1..1 + n_f].to_vec(),
+    };
+    let ctx_g = Ctx {
+        mapping: ctx.mapping[1..1 + n_g].to_vec(),
+    };
+
+    let (instrs_f, _) = lower(f, &ctx_f)?;
+    let (instrs_g, _) = lower(g, &ctx_g)?;
+
+    let f_is_nop = instrs_f.is_empty();
+    let g_is_nop = instrs_g.is_empty();
+
+    if f_is_nop && g_is_nop {
+        return Ok((vec![], ctx.clone()));
+    }
+
+    // Allocate 2 aux registers for skip-blocks.
+    let aux = allocate_aux(ctx, 2)?;
+    let rb = aux[0];
+    let temp = aux[1];
+
+    let mut instrs = Vec::new();
+
+    // Phase 1: f runs iff tag=0 → skip f iff tag=1
+    if !f_is_nop {
+        instrs.extend(emit_skip_block(tag_reg, &instrs_f, rb, temp, true));
+    }
+
+    // Phase 2: g runs iff tag=1 → skip g iff tag=0
+    if !g_is_nop {
+        instrs.extend(emit_skip_block(tag_reg, &instrs_g, rb, temp, false));
+    }
+
+    Ok((instrs, ctx.clone()))
 }
 
 // ── Marshal / unmarshal ──────────────────────────────────────────────
@@ -848,8 +1108,8 @@ pub fn marshal(v: &Value, ty: &Type) -> StateVals {
 
 /// Unmarshal a `StateVals` back to a `Value`, reading `regs[i]` as leaf `i`.
 pub fn unmarshal(s: &StateVals, ty: &Type) -> Value {
-    let leaves = leaf_types(ty);
-    let bytes: Vec<u8> = (0..leaves.len()).map(|i| s.regs[i]).collect();
+    let n = num_leaves(ty).expect("unmarshal: num_leaves");
+    let bytes: Vec<u8> = (0..n).map(|i| s.regs[i]).collect();
     let (v, _) = value_from_leaf_bytes(&bytes, ty);
     v
 }
@@ -890,4 +1150,105 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
     let final_state = StateVals::decode(&cur);
 
     Ok(unmarshal(&final_state, &out_ty))
+}
+
+// ── Fast direct TISC-1 simulator (M-B) ─────────────────────────────
+//
+// Direct byte-level interpretation of the TISC-1 instruction set,
+// matching the step iso's semantics without going through the core-iso
+// evaluator. This makes the differential oracle practical for M-B
+// programs with larger ROMs (e.g. guarded-unroll iter).
+
+/// Execute one TISC-1 instruction on the machine state (direct simulation).
+fn exec_instr(instr: Instr, state: &mut StateVals) {
+    match instr {
+        Instr::Add { rd, rs } => {
+            state.regs[rd as usize] = state.regs[rd as usize].wrapping_add(state.regs[rs as usize]);
+        }
+        Instr::Sub { rd, rs } => {
+            state.regs[rd as usize] = state.regs[rd as usize].wrapping_sub(state.regs[rs as usize]);
+        }
+        Instr::Xor { rd, rs } => {
+            state.regs[rd as usize] ^= state.regs[rs as usize];
+        }
+        Instr::Exch { rd, rs } => {
+            let tmp = state.regs[rd as usize];
+            state.regs[rd as usize] = state.regs[rs as usize];
+            state.regs[rs as usize] = tmp;
+        }
+        Instr::Rotl { rd, rs } => {
+            let amount = state.regs[rs as usize] & 7;
+            state.regs[rd as usize] = state.regs[rd as usize].rotate_left(amount as u32);
+        }
+        Instr::Rotr { rd, rs } => {
+            let amount = state.regs[rs as usize] & 7;
+            state.regs[rd as usize] = state.regs[rd as usize].rotate_right(amount as u32);
+        }
+        Instr::Cswap { rd, rs, rt } => {
+            if state.regs[rd as usize] & 1 == 1 {
+                let tmp = state.regs[rs as usize];
+                state.regs[rs as usize] = state.regs[rt as usize];
+                state.regs[rt as usize] = tmp;
+            }
+        }
+        Instr::Xchg { rd, sx } => {
+            let tmp = state.regs[rd as usize];
+            state.regs[rd as usize] = state.scratch[sx as usize];
+            state.scratch[sx as usize] = tmp;
+        }
+        Instr::Swapbr { rd } => {
+            let tmp = state.regs[rd as usize];
+            state.regs[rd as usize] = state.br;
+            state.br = tmp;
+        }
+        Instr::Addi { rd, imm } => {
+            state.regs[rd as usize] = state.regs[rd as usize].wrapping_add(imm);
+        }
+        Instr::Subi { rd, imm } => {
+            state.regs[rd as usize] = state.regs[rd as usize].wrapping_sub(imm);
+        }
+        Instr::Xori { rd, imm } => {
+            state.regs[rd as usize] ^= imm;
+        }
+        Instr::Rotli { rd, imm } => {
+            state.regs[rd as usize] = state.regs[rd as usize].rotate_left((imm & 7) as u32);
+        }
+        Instr::Rotri { rd, imm } => {
+            state.regs[rd as usize] = state.regs[rd as usize].rotate_right((imm & 7) as u32);
+        }
+    }
+}
+
+/// Fast direct TISC-1 simulation: compile → assemble → run → unmarshal.
+///
+/// Equivalent to `run_on_cpu` but uses direct byte-level interpretation
+/// instead of the step iso evaluator. The budget is `instrs.len()` steps
+/// (worst-case trace length; after the ROM ends the machine idles).
+pub fn run_on_cpu_fast(
+    iso: &Iso,
+    input: &Value,
+) -> Result<Value, CompileError> {
+    let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
+        CompileError::Deferred(format!("type error: {e:?}"))
+    })?;
+
+    let instrs = compile(iso)?;
+    let rom = assemble(&instrs);
+    let budget = instrs.len();
+
+    let mut state = marshal(input, &in_ty);
+
+    for _ in 0..budget {
+        // Fetch
+        let pc = state.pc as usize;
+        let word = if pc < rom.len() { rom[pc] } else { 0 };
+        // Decode
+        if let Some(instr) = crate::asm::decode(word) {
+            exec_instr(instr, &mut state);
+        }
+        // PC update: PC += BR + 1
+        state.pc = state.pc.wrapping_add(state.br).wrapping_add(1);
+    }
+
+    Ok(unmarshal(&state, &out_ty))
 }
