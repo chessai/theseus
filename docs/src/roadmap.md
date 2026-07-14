@@ -8,7 +8,10 @@
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
 > shows machine-level adiabatic slope −0.997 crossing below the CMOS floor);
-> remaining: energy-price a compiled loop.
+> remaining: energy-price a compiled loop. ADR-0041 names the two execution
+models (spatial/per-program circuit vs temporal/stored-program CPU) and positions
+the surface→TISC-1 ISA backend as a v3 milestone, with a word-oriented stepping
+stone as a v2.5/early-v3 increment.
 
 Post-pivot (ADR-0022): the project is **two-tracked**, and the tracks
 are independent for months.
