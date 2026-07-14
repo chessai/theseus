@@ -1,0 +1,38 @@
+-- Conformance 0022 (dialect: software, v0.2 — ADR-0036 iter, ADR-0038 surface)
+-- Reversible Fibonacci as a compiled surface program.
+--
+-- State is a pair of 1-bit registers (a, b). The fib step is the bijection
+--   (a, b) |-> (b, a + b)   (mod 2),
+-- built compositionally: swap the registers, then add the first into the
+-- second. Addition mod 2 is XOR, i.e. a controlled-NOT (`addInto` below is
+-- exactly `cnot`); `swap2` is the structural pair swap.
+--
+-- Fibonacci is then the reversible LOOP `iter Nat fibStep`: the iteration
+-- count k is read off the leading Nat and `fibStep` is applied k times,
+--   <k, (a, b)> |-> <k, fibStep^k (a, b)> = <k, (fib_k, fib_{k+1})>  (mod 2).
+-- This is the source-level analogue of the TISC-1 ring machine recirculating
+-- one balanced `step`: one reversible body, applied k times, count in the data.
+--
+-- The whole program elaborates to a core Iso and lowers to a k-CSWAP/R1 cell
+-- netlist whose untimed evaluation matches the interpreter over the entire
+-- finite domain (see theseus-netlist `tests/fib_lowering.rs`).
+
+type Bit = O | I
+type Nat = Zero | Succ Nat
+
+-- Swap the two registers.
+iso swap2 : Bit * Bit <-> Bit * Bit
+| (a, b) <-> (b, a)
+
+-- Add the first register into the second (mod 2): <c, x> |-> <c, x xor c>.
+iso addInto : Bit * Bit <-> Bit * Bit
+| (O, O) <-> (O, O)
+| (O, I) <-> (O, I)
+| (I, O) <-> (I, I)
+| (I, I) <-> (I, O)
+
+-- One fib step: <a, b> |-> <b, a>  then  <b, a> |-> <b, a + b>.
+iso fibStep : Bit * Bit <-> Bit * Bit = swap2 ; addInto
+
+-- Fibonacci as a reversible, count-controlled loop.
+iso fib : Nat * (Bit * Bit) <-> Nat * (Bit * Bit) = iter Nat fibStep
