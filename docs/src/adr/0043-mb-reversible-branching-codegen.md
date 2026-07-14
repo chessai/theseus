@@ -1,8 +1,28 @@
 # ADR-0043: M-B — reversible-branching codegen (conditional execution)
 
-**Status:** Proposed (design; M-B implementation is a follow-on gated by its
-run-on-CPU differential oracle). Authored by the advisor after two delegated
-drafting attempts were write-blocked; the design below is the reviewed plan.
+**Status:** Accepted — **M-B implemented** (`theseus-tisc::compile`, merged at
+`d722481`). Authored by the advisor after two delegated drafting attempts were
+write-blocked; the design below is the reviewed plan, realized as specified.
+
+**Implementation note (what shipped).** The design here is the codegen that
+landed: guarded static unroll for data-dependent `iter` (§3), the SWAPBR
+skip-block conditional primitive (`emit_skip_block`, §2), tag+payload sum
+representation (§4), and general controlled ops with multi-instruction arms
+(§3). Verified by the run-on-CPU differential oracle (§5) over the whole finite
+domain for the real `iter Nat fibStep` (`0022-fib.thse` → a 24-instruction ROM
+computing Fibonacci, 16 inputs), a general controlled op, and a bare-sum
+program (`swapMaybe`) — all `== theseus_eval::eval`.
+
+**Acceptance authority (a review correction).** The authority is
+`compile::run_on_cpu`, which runs the ROM on the **real `step` core-iso CPU**
+we energy-account. A first cut wired the oracle to a faster hand-written
+byte-level simulator (`run_on_cpu_fast`); that only proves the compiler agrees
+with a second interpreter by the same author (cf. L15), not the real machine.
+The fast simulator is retained as a *pinned convenience* — routine tests assert
+`fast == eval`; authoritative `#[ignore]`d `*_real_cpu` tests assert
+`real == eval` (run pre-merge via `--ignored`, ~30 min because each step-iso
+evaluation of the 160-bit machine costs seconds). Do not treat a green
+`run_on_cpu_fast` as acceptance on its own.
 
 ## 1. Where M-B sits
 

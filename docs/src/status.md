@@ -14,10 +14,12 @@ Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
 thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU
-that fetches and executes ROMs compiled from arbitrary `.thse` code). Its first
-milestone **M-A** is done: non-recursive `.thse` compiles to a TISC-1 ROM that
-runs on the CPU, provably equal to the interpreter. See the sections below and
-ADRs 0033–0043.
+that fetches and executes ROMs compiled from arbitrary `.thse` code). Milestones
+**M-A and M-B** are done: non-recursive *and* branching / data-dependent `.thse`
+compiles to a TISC-1 ROM that runs on the CPU, provably equal to the interpreter
+— including the real data-dependent `fib` (`iter Nat fibStep`), which now
+computes Fibonacci on the simulated CPU. See the sections below and ADRs
+0033–0043.
 
 ## Status at a glance
 
@@ -30,7 +32,7 @@ ADRs 0033–0043.
 | **M4-v1** TISC-1 CPU | ✅ **done** | the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** — ADR-0030's milestone, met |
 | **M4-v2** ring machine | ✅ **done + zero-garbage** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving**; reversible branching works (ADR-0034). **Physical closure achieved**: the R1 rail-role-swap cell (ADR-0040, real ngspice, adiabatic slope −1) makes lowering garbage-free — the step is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so the default runner `run == eval^R` closes with **zero** re-supplied boundary. The machine-level **money plot** confirms it: energy/step falls at adiabatic slope **−0.997**, crossing below the flat CMOS ½CV² floor at t_ramp ≈ 2.1e-8 s (active logic below CMOS across the whole clock range). |
 | **v0.2 dialect** software | ✅ **done** | μ-types + `iter`/`fold`/`unfold`: core + eval + surface syntax + **netlist lowering** + diagnostics; writable `.thse` programs run source→cells (ADRs 0035–0039) |
-| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **M-A done** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive fragment: products + controlled-op idiom + constant-count iter) compiles → ROM → runs on the CPU → `run_on_cpu == eval` over the whole domain (`theseus-tisc::compile`). Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042); **M-B** (branching + data-dependent iter) design in progress (ADR-0043) |
+| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **M-A + M-B done** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive: products + controlled-op idiom + constant-count iter) and **M-B** (reversible branching + **data-dependent iter** via guarded unroll + general controlled ops + bare sums, ADR-0043) both compile → ROM → run on the CPU → `run_on_cpu == eval` over the whole domain (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience (see compiler section). Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042); **next: M-C** (memory bus, ADR-0029) |
 | **stdlib** | ✅ increment 1–2 | implicit prelude (`Bit`, `Nat`, `notb`, `swapBit`, `cnot`, `toffoli`) via structural-dedup merge — no imports needed; a compositional reversible adder demonstrates arithmetic composes (ADR-0038 constraint respected) |
 | **M2** FPGA / Verilator | ⏸ parked | still stubs; a demo, not a phase |
 
@@ -172,11 +174,22 @@ ISA. The design is ADR-0042, decomposed into milestones:
   (`cnot`→XOR, `swap`→EXCH, `fibStep`, a constant-count fib). Out-of-scope
   constructs (data-dependent `iter`, `Trace`/`Fold`, unrecognized controlled
   ops) are cleanly **rejected**, not miscompiled.
-- **M-B — design in progress (ADR-0043).** Reversible **conditional execution**:
-  general controlled ops, **data-dependent `iter`** (so the *real* `iter Nat
-  fibStep` and thus `0022-fib.thse` compile), and bare sums. Built on SWAPBR +
-  come-from re-convergence (ADR-0034); the control is preserved so the merge is
-  clean, with Bennett uncompute only for per-arm internal ancillas.
+- **M-B — done (ADR-0043).** Reversible **conditional execution**: general
+  controlled ops (multi-instruction arms), **data-dependent `iter`** via guarded
+  static unroll, and **bare sums** (tag+payload register rep). Built on the
+  SWAPBR skip-block primitive (`emit_skip_block`) + come-from re-convergence
+  (ADR-0034); the control is preserved so the merge is clean, with Bennett
+  uncompute only for per-arm internal ancillas. The **real `iter Nat fibStep`**
+  (`0022-fib.thse`) compiles to a 24-instruction ROM that computes Fibonacci on
+  the CPU — `run_on_cpu == eval` over the whole domain (16 inputs), alongside a
+  general controlled op and a bare-sum `swapMaybe`.
+  - *Oracle authority (review correction).* The acceptance oracle is
+    `run_on_cpu`, which runs the ROM on the **real `step`-iso CPU**. A byte-level
+    `run_on_cpu_fast` simulator is retained only as a *pinned convenience*:
+    routine tests assert `fast == eval` (~40 s), while authoritative `#[ignore]`d
+    `*_real_cpu` tests assert `real == eval` (run pre-merge via `--ignored`,
+    ~30 min). A green fast-sim alone is *not* acceptance — it would only prove the
+    compiler agrees with a second interpreter by the same author (cf. L15).
 - **M-C** — wake the Option-B memory bus (ADR-0029) for values exceeding the
   register file; **M-D** — full algebraic codegen (heap value rep,
   `Fold`/`Unfold`/`Trace`, calling convention) = *arbitrary* `.thse`; **M-E** —
@@ -202,11 +215,12 @@ depth-tracking bug) that unit tests missed.
 
 ## Open items & next steps
 
-- **Surface → TISC-1 compiler (the #1 goal) — active.** M-A done; **M-B** is
-  next (reversible-branching codegen, ADR-0043 design under review → then
-  implementation gated by its run-on-CPU oracle). M-B unlocks the real
-  data-dependent `iter Nat fibStep`, so `0022-fib.thse` runs on the CPU
-  end-to-end. Then M-C (memory) → M-D (arbitrary `.thse`) → M-E (energy).
+- **Surface → TISC-1 compiler (the #1 goal) — active.** M-A **and M-B** done:
+  the real data-dependent `iter Nat fibStep` (`0022-fib.thse`) now runs on the
+  CPU end-to-end, `run_on_cpu == eval`. **Next: M-C** — wake the Option-B memory
+  bus (ADR-0029) for values exceeding the register file, the boundary before
+  arbitrary `.thse`. Then M-D (heap value rep, `Fold`/`Unfold`/`Trace` =
+  arbitrary `.thse`) → M-E (energy-price compiled ROMs).
 - **Energy-price a compiled loop** — now that `iter`/`fold`/`unfold` (and
   compiled ROMs) lower to cells, run one through `theseus-spice::annotate` for a
   joules figure. Natural M-E artifact.
