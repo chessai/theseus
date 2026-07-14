@@ -1,0 +1,16 @@
+-- Theseus standard prelude: implicit types and isos available in every program.
+
+type Bit = O | I
+type Nat = Zero | Succ Nat
+
+iso notb : Bit <-> Bit
+| O <-> I
+| I <-> O
+
+iso swapBit : Bit * Bit <-> Bit * Bit
+| (a, b) <-> (b, a)
+
+iso cnot : Bit * Bit <-> Bit * Bit
+| (O, b) <-> (O, b)
+| (I, O) <-> (I, I)
+| (I, I) <-> (I, O)

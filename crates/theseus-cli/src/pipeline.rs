@@ -14,6 +14,7 @@ use theseus_syntax::parser::ParseError;
 /// Parse then run all static checks. Returns diagnostics (empty = well-formed).
 pub fn diagnostics(src: &str) -> Result<Vec<Diagnostic>, ParseError> {
     let program = theseus_syntax::parse(src)?;
+    let program = theseus_check::prelude::with_prelude(&program);
     Ok(theseus_check::check(&program))
 }
 
@@ -27,6 +28,7 @@ pub struct ElaboratedProgram {
 /// Parse, check, and elaborate a source string.
 pub fn elaborate(src: &str) -> Result<ElaboratedProgram, ElabError> {
     let program = theseus_syntax::parse(src).map_err(ElabError::Parse)?;
+    let program = theseus_check::prelude::with_prelude(&program);
     let diags = theseus_check::check(&program);
     if !diags.is_empty() {
         return Err(ElabError::Check(diags));
