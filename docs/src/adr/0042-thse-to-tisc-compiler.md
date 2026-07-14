@@ -1,7 +1,10 @@
 # ADR-0042: Surface theseus → TISC-1 ROM compiler architecture
 
-**Status:** Proposed (design accepted-in-principle; M-A implementation is
-a follow-on task gated by its run-on-CPU oracle)
+**Status:** Accepted — **M-A implemented** (`theseus-tisc::compile`,
+`tests/compile.rs`): the non-recursive fragment compiles to a TISC-1 ROM that
+runs on the CPU, verified `run_on_cpu == eval` over the whole domain, with
+out-of-scope constructs cleanly rejected. M-B design is ADR-0043; M-C/M-D/M-E
+follow.
 
 > **Revision (advisor review, before M-A implementation).** The first
 > draft drew the M-A/M-B line at "any sum type → M-B" and used

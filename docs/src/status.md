@@ -1,4 +1,4 @@
-# Project status — where theseus is (2026-07-13)
+# Project status — where theseus is (2026-07-14)
 
 One-paragraph orientation for anyone (human or agent) picking this up. theseus
 is a **reversible-computing compiler + adiabatic-silicon backend**: a total,
@@ -10,10 +10,14 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`2315ac2`. Everything below is merged there. Since M4-v1 this branch also landed
-the **M4-v2 ring-machine core** (a recirculating CPU) and the **v0.2 software
-dialect** (μ-types + iter/fold/unfold, source-to-cells) — see the two new
-sections below and ADRs 0033–0039.
+`2424f7c`. Everything below is merged there. Since M4-v1 this branch landed the
+**M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
+(μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
+thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU
+that fetches and executes ROMs compiled from arbitrary `.thse` code). Its first
+milestone **M-A** is done: non-recursive `.thse` compiles to a TISC-1 ROM that
+runs on the CPU, provably equal to the interpreter. See the sections below and
+ADRs 0033–0043.
 
 ## Status at a glance
 
@@ -26,6 +30,8 @@ sections below and ADRs 0033–0039.
 | **M4-v1** TISC-1 CPU | ✅ **done** | the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** — ADR-0030's milestone, met |
 | **M4-v2** ring machine | ✅ **done + zero-garbage** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving**; reversible branching works (ADR-0034). **Physical closure achieved**: the R1 rail-role-swap cell (ADR-0040, real ngspice, adiabatic slope −1) makes lowering garbage-free — the step is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so the default runner `run == eval^R` closes with **zero** re-supplied boundary. The machine-level **money plot** confirms it: energy/step falls at adiabatic slope **−0.997**, crossing below the flat CMOS ½CV² floor at t_ramp ≈ 2.1e-8 s (active logic below CMOS across the whole clock range). |
 | **v0.2 dialect** software | ✅ **done** | μ-types + `iter`/`fold`/`unfold`: core + eval + surface syntax + **netlist lowering** + diagnostics; writable `.thse` programs run source→cells (ADRs 0035–0039) |
+| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **M-A done** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive fragment: products + controlled-op idiom + constant-count iter) compiles → ROM → runs on the CPU → `run_on_cpu == eval` over the whole domain (`theseus-tisc::compile`). Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042); **M-B** (branching + data-dependent iter) design in progress (ADR-0043) |
+| **stdlib** | ✅ increment 1–2 | implicit prelude (`Bit`, `Nat`, `notb`, `swapBit`, `cnot`, `toffoli`) via structural-dedup merge — no imports needed; a compositional reversible adder demonstrates arithmetic composes (ADR-0038 constraint respected) |
 | **M2** FPGA / Verilator | ⏸ parked | still stubs; a demo, not a phase |
 
 ## The compile pipeline
@@ -147,6 +153,43 @@ surface syntax to adiabatic cells (ADRs 0035–0039):
   are not interpreter-only. Runtime (adiabatic) lowering of the *loop* forms is
   done; energy-pricing a compiled iter/fold program is the open follow-up.
 
+## Surface → TISC-1 compiler (the #1 goal) — `theseus-tisc::compile`
+
+The current headline thread. Two execution models coexist (ADR-0041): a `.thse`
+program can compile to its **own circuit** (surface→cells, the guide in
+[Surface → compiled circuit](surface-to-cells.md)), *or* — the goal here —
+compile to a **ROM** the fabricated general **TISC-1 CPU** fetches and executes.
+The gap this closes: there was no compiler from surface theseus to the TISC-1
+ISA. The design is ADR-0042, decomposed into milestones:
+
+- **M-A — done.** The non-recursive fragment compiles: products +
+  composition + adjoint (`Sym`), the **controlled-op idiom**
+  (`Distrib;Plus(f,g);Factor` recognized as a macro → `XOR`/`CSWAP` — this is
+  where `cnot`/`xor` actually arrive, *not* as `Prim`), and **constant-count
+  `iter`** (static unroll). `compile(iso) → Vec<Instr>` → `run_on_cpu` executes
+  it on the CPU; the **run-on-CPU differential oracle** proves
+  `run_on_cpu(iso,v) == theseus_eval::eval(iso,v)` over the whole domain
+  (`cnot`→XOR, `swap`→EXCH, `fibStep`, a constant-count fib). Out-of-scope
+  constructs (data-dependent `iter`, `Trace`/`Fold`, unrecognized controlled
+  ops) are cleanly **rejected**, not miscompiled.
+- **M-B — design in progress (ADR-0043).** Reversible **conditional execution**:
+  general controlled ops, **data-dependent `iter`** (so the *real* `iter Nat
+  fibStep` and thus `0022-fib.thse` compile), and bare sums. Built on SWAPBR +
+  come-from re-convergence (ADR-0034); the control is preserved so the merge is
+  clean, with Bennett uncompute only for per-arm internal ancillas.
+- **M-C** — wake the Option-B memory bus (ADR-0029) for values exceeding the
+  register file; **M-D** — full algebraic codegen (heap value rep,
+  `Fold`/`Unfold`/`Trace`, calling convention) = *arbitrary* `.thse`; **M-E** —
+  polish + energy-price compiled ROMs.
+
+Ergonomics landed alongside: an implicit **stdlib** prelude (no import syntax
+needed — structural-dedup merge), a `theseus lower <file> <iso>` verb +
+`surface_to_cells` one-call helper (self-checking via the oracle), and the
+pipeline guide. Reviewer note: ADR-0042's first draft mis-drew the M-A/M-B line
+at "any sum → M-B"; advisor review caught that controlled ops *elaborate* to
+`Distrib;Plus;Factor`, so M-A would compile nothing — the boundary is
+**recursion, not sums**, and the ADR was revised accordingly.
+
 ## Verification norm
 
 Correctness is the **differential oracle**: the lowered cell netlist, simulated,
@@ -159,6 +202,20 @@ depth-tracking bug) that unit tests missed.
 
 ## Open items & next steps
 
+- **Surface → TISC-1 compiler (the #1 goal) — active.** M-A done; **M-B** is
+  next (reversible-branching codegen, ADR-0043 design under review → then
+  implementation gated by its run-on-CPU oracle). M-B unlocks the real
+  data-dependent `iter Nat fibStep`, so `0022-fib.thse` runs on the CPU
+  end-to-end. Then M-C (memory) → M-D (arbitrary `.thse`) → M-E (energy).
+- **Energy-price a compiled loop** — now that `iter`/`fold`/`unfold` (and
+  compiled ROMs) lower to cells, run one through `theseus-spice::annotate` for a
+  joules figure. Natural M-E artifact.
+- **Test hygiene (done this cycle):** the ADR-0040 **R1** cell had silently
+  broken a cohort of tisc tests (only ever gated by a fast build+clippy cert, not
+  the full suite): stale `≤K3`/`≤K2` vocabulary bounds, a `state_instr` harness
+  feeding *fabricated* ancilla inits (so it wasn't validating R1 lowering at all),
+  and an R1-unaware energy check. All fixed; the tisc + netlist suites are green
+  and now actually exercise R1.
 - **Physically-closing ring** — ✅ **done.** The ADR-0027 controlled rail-role-swap
   cell (R1, ADR-0040) voids the parity obstruction, so `StepRing::run` (the
   default, closed runner) feeds ancilla outputs back and re-supplies **nothing** —
