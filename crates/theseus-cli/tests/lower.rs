@@ -25,6 +25,19 @@ fn fib_surface_to_cells_validates_and_oracle_agrees() {
     assert_eq!(n, 16, "fib domain should have exactly 16 inputs");
 }
 
+/// `Bit` and `cnot` come from the implicit prelude — no local declarations.
+#[test]
+fn prelude_cnot_lowers_and_oracle_agrees() {
+    // Neither Bit nor cnot are declared; both come from the prelude.
+    let src = "iso uncnot : Bit * Bit <-> Bit * Bit = ~cnot\n";
+    let lowered = lower::surface_to_cells(src, "uncnot")
+        .expect("surface_to_cells should succeed with prelude-provided cnot/Bit");
+    assert_eq!(lowered.net.validate(), Ok(()), "netlist must validate");
+    let n = lower::oracle_check(&lowered.iso, &lowered)
+        .expect("oracle_check should pass for prelude-cnot adjoint");
+    assert_eq!(n, 4, "Bit*Bit domain should have exactly 4 inputs");
+}
+
 #[test]
 fn unknown_iso_name_returns_error() {
     let result = lower::surface_to_cells(CNOT_SRC, "nonexistent");
