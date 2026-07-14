@@ -43,6 +43,42 @@ iso myNotb : Bit <-> Bit
     assert!(diags.is_empty(), "expected no diagnostics, got: {diags:?}");
 }
 
+/// A program that uses toffoli (and cnot) WITHOUT declaring them should
+/// parse, check clean under with_prelude, and elaborate successfully —
+/// proving toffoli is now in the implicit prelude.
+#[test]
+fn prelude_provides_toffoli_and_cnot() {
+    let src = r#"
+iso idb : Bit <-> Bit
+| O <-> O
+| I <-> I
+
+iso asc : (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)
+| (x, (y, z)) <-> ((x, y), z)
+
+iso cnotMid : (Bit, (Bit, Bit)) <-> (Bit, (Bit, Bit))
+= asc ; (cnot * idb) ; ~asc
+
+iso tofMid : (Bit, (Bit, Bit)) <-> (Bit, (Bit, Bit))
+= asc ; (toffoli * idb) ; ~asc
+"#;
+    let program = theseus_syntax::parse(src).unwrap();
+    let merged = with_prelude(&program);
+    let diags = theseus_check::check(&merged);
+    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:?}");
+
+    let env = theseus_check::env::resolve(&merged);
+    let isos = elaborate_program(&merged, &env);
+    assert!(
+        isos.get("cnotMid").unwrap().is_ok(),
+        "cnotMid (using prelude cnot) should elaborate"
+    );
+    assert!(
+        isos.get("tofMid").unwrap().is_ok(),
+        "tofMid (using prelude toffoli) should elaborate"
+    );
+}
+
 /// The prelude itself must parse and every prelude iso must elaborate to Ok.
 #[test]
 fn prelude_source_parses_and_elaborates() {
