@@ -3,6 +3,27 @@
 **Status:** Proposed (design accepted-in-principle; M-A implementation is
 a follow-on task gated by its run-on-CPU oracle)
 
+> **Revision (advisor review, before M-A implementation).** The first
+> draft drew the M-A/M-B line at "any sum type → M-B" and used
+> `fibStep = swap ; cnot` as the M-A example — but a controlled operation
+> does **not** stay a `Prim`: `synthesize_controlled`
+> ([`elaborate.rs:668`](../../../crates/theseus-check/src/elaborate.rs))
+> lowers every controlled op to `SwapProd ; Distrib ; Plus(f,g) ; Factor ;
+> SwapProd`. So `cnot`/`xor`/`toffoli` — the *substance* of reversible
+> computing — all elaborate to `Distrib`/`Plus`/`Factor`, which the draft
+> excluded; M-A as first drawn could compile nothing but pure register
+> rearrangement, not even its own example. **The correct M-A/M-B line is
+> recursion, not sums.** M-A now includes the **controlled-op idiom** —
+> the fixed, non-recursive, structurally-reconverging `Distrib ; Plus(f,g)
+> ; Factor` shape — recognized *as a whole* and mapped to CPU
+> instructions (controlled-NOT → `XOR`, controlled-swap → `CSWAP`),
+> WITHOUT implementing general `Plus`/branching. Deferred to M-B+ is only
+> what genuinely needs new machinery: general/unrecognized controlled-`f`
+> (conditional instruction execution), **recursion** (`Trace`/`Fold`/
+> `Unfold`), heap, and **data-dependent `iter` counts** (M-A does
+> *constant-count* iteration via static unroll). §2, §4.1, §7 below carry
+> this correction.
+
 ## 1. Goal and roadmap
 
 **Goal.** A simulated TISC-1 CPU fetches and executes ROMs compiled from
@@ -13,17 +34,22 @@ on a finite domain, so the target is finite.
 
 **Milestone decomposition:**
 
-- **M-A — Register-only word-subset compiler (this ADR's focus).**
-  Compile the product/primitive/composition/bounded-iter fragment of core
-  `Iso` to TISC-1 ROMs. Values fit in registers; no memory bus, no sum
-  types, no heap. The acceptance test is the run-on-CPU differential
-  oracle (§6).
+- **M-A — Register-only, non-recursive compiler (this ADR's focus).**
+  Compile the product/composition fragment PLUS the **controlled-op
+  idiom** (§2) and **constant-count `iter`** to TISC-1 ROMs. Values fit in
+  registers; no memory bus, no recursion, no data-dependent control flow.
+  Controlled ops (`cnot`/`xor`/`toffoli`) are recognized structurally and
+  mapped to `XOR`/`CSWAP` — no general `Plus`/branch codegen. The
+  acceptance test is the run-on-CPU differential oracle (§6).
 
-- **M-B — General sum-branching + ancilla/Bennett uncompute.** Add
-  `Plus`, all sum-structural isos (`SwapSum`, `AssocLSum`, `AssocRSum`,
-  `UniteSum`, `UnitiSum`), `Distrib`, `Factor`. Requires reversible
-  branching via CSWAP-then-SWAPBR (ADR-0034 D5) and Bennett-style
-  uncomputation of garbage bits produced by branch dispatch.
+- **M-B — Conditional execution + data-dependent control.** The cases the
+  M-A idiom-recognizer rejects: a controlled op whose branch `f`/`g` is
+  *not* a recognized single-instruction pattern (needs conditional
+  execution of an instruction *sequence* — CSWAP-guarded predication or
+  SWAPBR branching, ADR-0034 D5, with Bennett-style uncompute of the
+  branch witness), and **data-dependent `iter`** counts (guard each
+  unrolled body on a runtime count comparison). Bare (non-idiom) sum
+  values also land here.
 
 - **M-C — Memory subsystem.** Wakes Option-B (ADR-0029): LOAD/STORE/
   EXCH-mem via a swap-bus interface. Needed for recursive/heap values
@@ -55,37 +81,60 @@ on a finite domain, so the target is finite.
 | `Prim(Box<PrimDef>)` | `iso.rs:107` | Opaque bijection — instruction selection |
 | `Iter(Type, Box<Iso>)` | `iso.rs:80` | Bounded iteration — static unroll |
 
-These are exactly the constructors whose types are products of word-sized
-leaves (no sums). Products nest into tuples of registers; `Iter` counts
-are read from a register and statically unrolled to depth D; `Prim` maps
-to TISC-1 instruction sequences via a recognition table.
+Products nest into tuples of registers; constant-count `Iter` is
+statically unrolled; `Prim` maps declared primitives to TISC-1 sequences
+via a recognition table.
+
+### Included: the controlled-op idiom
+
+Controlled operations (`cnot`, `xor`, `toffoli`, any clause-defined
+bijection where one component predicates a transform on another) do **not**
+elaborate to `Prim`. `synthesize_controlled`
+([`elaborate.rs:668`](../../../crates/theseus-check/src/elaborate.rs))
+emits every controlled op as the fixed shape
+
+```
+SwapProd(c,t) ; Distrib(t, cₗ, cᵣ) ; Plus(f, g) ; Factor(t, cₗ, cᵣ) ; SwapProd(t,c)
+```
+
+This is **not** general sum computation — it is a *closed, non-recursive,
+structurally-reconverging idiom*: `Distrib` splits the target by the
+control's tag, `Plus(f,g)` applies one transform per tag, `Factor`
+immediately recombines. No spine, no loop, no data-dependent PC change;
+the control value is preserved. M-A therefore treats this whole
+five-constructor shape as **one recognized macro** (§4.1) and maps it to a
+single CPU instruction — it does **not** implement `Distrib`/`Plus`/
+`Factor` as general constructors. Recognized cases for M-A:
+
+| Idiom (control `c`, target `t`) | CPU instruction |
+|---|---|
+| `Plus(Id, Not)` — controlled-NOT | `XOR t, c` |
+| `Plus(Id, Swap)` — controlled-swap (Fredkin) | `CSWAP c, t₀, t₁` |
+
+An idiom whose `Plus(f,g)` branch is not one of these single-instruction
+patterns is rejected by M-A (→ M-B, conditional execution of a sequence).
 
 ### Deferred constructors
 
 | Constructor | Deferred to | Reason |
 |---|---|---|
-| `Plus` | M-B | Sum-type dispatch requires reversible branching (CSWAP + SWAPBR, ADR-0034) and garbage uncompute |
-| `SwapSum`, `AssocLSum`, `AssocRSum`, `UniteSum`, `UnitiSum` | M-B | Structural sum isos — same: need tag-bit routing + branching |
-| `Distrib`, `Factor` | M-B | Sum–product distributivity — produces/consumes sum tags |
-| `Trace` | M-D | Iteration over the sum spine via `u + a ↔ u + b` — needs sum dispatch (M-B) + potentially heap (M-C) |
-| `Fold`, `Unfold` | M-D | Structural recursion over list spines — needs sum dispatch (M-B, for the `1 + (b × …)` spine) + heap (M-C, for spine values exceeding registers) |
+| `Plus(f,g)` outside a recognized controlled idiom, or with non-trivial `f`/`g` | M-B | Needs conditional execution of an instruction *sequence* (CSWAP-guarded predication / SWAPBR) + Bennett uncompute of the branch witness |
+| bare `SwapSum`, `AssocLSum`, `AssocRSum`, `UniteSum`, `UnitiSum` (not part of an idiom) | M-B | Tag-bit routing on first-class sum values |
+| `Trace` | M-B/M-D | Iteration over the sum spine `u + a ↔ u + b` — data-dependent branching (M-B) + possibly heap for `u` (M-C) |
+| `Fold`, `Unfold` | M-D | Structural **recursion** over a list spine `1 + (b × …)` — needs branching (M-B) + heap for spine values exceeding registers (M-C) |
+| data-dependent `Iter` (count read from data, varies per input) | M-B | Each unrolled body must be guarded on a runtime count comparison — conditional execution |
 
-**Reasoning per group:**
-- *Sum ops (Plus, SwapSum, Assoc, Unite, Distrib, Factor):* Sum types are
-  `a + b` — tagged unions. Routing on a tag bit requires conditional
-  execution (CSWAP gates a swap on a predicate register, then SWAPBR
-  branches). The branch produces garbage (the tag bit is consumed but the
-  predicate register retains information); reversible erasure requires
-  Bennett uncompute or ancilla discipline. This is genuinely new
-  machinery — M-B's scope.
-- *Trace:* `trace f : a ↔ b` where `f : u + a ↔ u + b` iterates `f`
-  until the output exits on the `b` side. This is sum-dispatched iteration
-  — needs M-B's branching machinery, and potentially heap storage for the
-  loop state `u` if it exceeds register width.
-- *Fold/Unfold:* These traverse a finite list spine `1 + (b × (1 + (b ×
-  …)))`, applying the body at each element. The spine is a sum-type
-  structure (the `1 + …` nesting), so dispatch requires M-B. The spine
-  values may exceed register capacity, requiring M-C.
+**Reasoning — the line is recursion, not sums.** The controlled-op idiom
+is finite, non-recursive, and reconverges by construction, so it costs one
+instruction (above). What genuinely needs new machinery is: (1)
+*conditional execution of a whole instruction sequence* — a controlled-`f`
+where `f` isn't a single native op — which requires CSWAP-guarded
+predication or SWAPBR branching with witness uncompute (M-B); (2)
+*recursion over a spine* — `Trace`/`Fold`/`Unfold` walk a `1 + (b × …)`
+structure a data-dependent number of times (M-B for the branch, M-C/M-D
+for heap-sized spine values); and (3) *data-dependent iteration counts*,
+which are conditional execution in disguise (M-B). M-A is exactly the
+*non-recursive, statically-scheduled* fragment.
 
 ## 3. Value representation (M-A)
 
@@ -260,60 +309,51 @@ does not match any recognized pattern, the compiler emits an
 "unsupported primitive in M-A" error. M-B and beyond may lower
 arbitrary small-domain prims via a reversible lookup-table synthesis.
 
-**`Iter(n_ty, body)`** — Bounded iteration. `iter n f : n × a ↔ n × a`
-applies `f : a ↔ a` exactly `k` times, where `k` is read from the
-first component (a unary numeral of type `n`).
+**The controlled-op idiom** — This is where `cnot`/`xor`/`toffoli` and
+every other clause-defined controlled bijection actually arrive (they are
+NOT `Prim`; see §2). The compiler pattern-matches the whole
+`synthesize_controlled` shape as a unit:
 
-**M-A strategy: static unroll to depth D.** The numeral type `n` is
-finite with `|n|` inhabitants (0 through `|n|-1`). The compiler emits
-code that handles each possible count value via **complete unrolling**:
-the body is inlined `|n|-1` times (the maximum count), with each
-application guarded by a count check.
-
-Concretely, for `Iter` with maximum count `D = |n| - 1`:
-
-1. The count register `r_k` holds the iteration count as a byte.
-2. For each iteration `i` from `0` to `D-1`:
-   - Emit a guard: `CSWAP { rd: r_k, rs: r_flag, rt: r_flag' }` where
-     `r_flag` enables/disables the body. (This is M-B machinery —
-     see the simplification below.)
-
-**M-A simplification.** Since M-A restricts to the garbage-free
-product/prim fragment, and `Iter` is only included for *small, known*
-bounds, the M-A implementation uses **unconditional static unroll**:
-the compiler unrolls the body exactly `D` times. The iteration count `k`
-is carried through but the body executes all `D` times regardless. This
-is correct ONLY when the program is structured so that the count is
-always the maximum (i.e., the iteration bound equals the actual runtime
-count for every input). Programs where `k < D` for some inputs require
-conditional execution (CSWAP-based guarding, deferred to M-B).
-
-For the word-subset programs that M-A targets — notably the Fibonacci
-step `iter Nat fibStep` compiled with a fixed small `Nat` type —
-the count is typically fixed or the program is written so that
-every input exercises the same count. The compiler checks this
-(whole-domain verification via the differential oracle, §6) and
-rejects programs where unconditional unroll would disagree with the
-interpreter.
-
-**Alternative considered: SWAPBR loop.** A SWAPBR-driven loop
-(ADR-0034) would emit the body once and loop `k` times using
-a decrement-and-branch pattern:
-
-```text
-  LOOP: [body instructions]
-        SUBI r_count, 1
-        ;; if r_count != 0, branch back
-        CSWAP r_count, r_offset, r_zero  ;; swap offset in if nonzero
-        SWAPBR r_offset
-        ;; come-from at LOOP
+```
+match:  SwapProd(c,t) ; Distrib(t,cₗ,cᵣ) ; Plus(f,g) ; Factor(t,cₗ,cᵣ) ; SwapProd(t,c)
 ```
 
-This is more efficient for large `D` but requires reversible branch
-re-convergence (the come-from at the loop entry must clear the incoming
-offset — ADR-0034 D5) and conditional uncompute of the loop control.
-**Deferred to M-B**, where sum-branching machinery exists. For M-A's
-small, fully-unrolled cases, static unroll is simpler and correct.
+and lowers by the recognized `(f, g)` (matching is *structural on the core
+Iso*, robust — not a dense clause-table enumeration):
+
+| `(f, g)` | Meaning | Emission |
+|---|---|---|
+| `(Id, SwapSum(1,1))` — i.e. `Plus(Id, Not)` | controlled-NOT: `t ⊕= c` | `XOR { rd: reg_t, rs: reg_c }` |
+| `(Id, SwapProd(_,_))` | controlled-swap of the two target sub-registers | `CSWAP { rd: reg_c, rs: reg_t0, rt: reg_t1 }` |
+
+An idiom whose `(f,g)` is neither pattern (e.g. a controlled *add* or a
+controlled instruction *sequence*) is rejected → **M-B** (conditional
+execution of a sequence). Multi-bit controlled ops (e.g. a `u8` XOR that
+elaborates to a per-bit CNOT ripple) lower to the corresponding *sequence*
+of `XOR`/`CSWAP` instructions — correct, though not yet using a single
+native `ADD`/`XOR` word op (that instruction-selection optimization is
+M-E). Verified by the §6 oracle.
+
+**`Iter(n_ty, body)`** — Bounded iteration. `iter n f : n × a ↔ n × a`
+applies `f : a ↔ a` exactly `k` times, where `k` is the numeral in the
+first component.
+
+**M-A handles only *constant-count* iteration** — where `k` is fixed at
+compile time (the same for every input, e.g. an `iter` applied at a
+statically-known count, or a program whose count component is a literal).
+The compiler statically unrolls: `lower(Iter, ctx) = lower(body) ++ … ++
+lower(body)` (`k` copies), threading `ctx`. No guards, no branching — a
+straight-line body repeated `k` times.
+
+**Data-dependent counts are deferred to M-B.** When `k` is read from
+*input data* and varies per input (the general `iter n f` semantics — e.g.
+`conformance/programs/0022-fib.thse`'s `iter Nat fibStep` run at different
+`k`), each unrolled body must be *guarded* on a runtime comparison `i < k`
+— conditional execution of a sequence, which is M-B machinery (CSWAP
+predication or a SWAPBR decrement-and-branch loop with come-from
+re-convergence, ADR-0034 D5). M-A rejects data-dependent `iter`; the
+first end-to-end demo is a **constant-count** program (§7: a fixed
+`k`-step Fibonacci compiling to the `fib_cpu.rs` ROM).
 
 ### 4.2. Register allocation
 
@@ -412,6 +452,17 @@ sampling (but M-A's ≤ 8 registers × 8-bit words remain feasible for
 many practical programs).
 
 ## 7. Hand-worked example: Fibonacci step → TISC-1 ROM
+
+> **Note (per the §2 correction).** This walkthrough treats `addInto` as a
+> native add prim (→ `ADD`) to show the ROM *shape* against the existing
+> `fib_cpu.rs`. In the actual 1-bit `conformance/programs/0022-fib.thse`,
+> `addInto = cnot`, which elaborates to the controlled-NOT **idiom**, so
+> M-A emits `XOR reg_t, reg_c` (§4.1) — i.e. `fibStep` compiles to
+> `EXCH r1,r2 ; XOR r2,r1`, verified below to compute `(a,b) ↦ (b, a⊕b)`.
+> A `u8` add would elaborate to a per-bit CNOT ripple and compile to a
+> *sequence* of `XOR`/`CSWAP` (native-`ADD` instruction selection is M-E).
+> Either way the iterated program below is compiled at a **constant** `k`
+> (M-A does not yet handle data-dependent counts).
 
 ### 7.1. The surface program
 
@@ -584,15 +635,17 @@ agreement on all 256 × 256 = 65536 inputs of type `u8 × u8`.
    sub-iso is inlined at the call site. This is tractable because M-A
    programs are small (register-width values, bounded iteration).
 
-4. **Garbage-free restriction.** M-A programs are restricted to the
-   product/prim/iter fragment where no garbage bits are produced. No
-   Bennett uncompute is emitted. Programs involving sum types (which
-   produce tag-bit garbage) are rejected.
+4. **Garbage-free by construction.** M-A's fragment — products, the
+   controlled-op idiom (`Distrib ; Plus(f,g) ; Factor` reconverges
+   structurally), and constant-count iter — produces no residual garbage,
+   so no Bennett uncompute is emitted. Rejected (→ M-B) is exactly what
+   *would* leave a witness: conditional execution of an instruction
+   sequence, and data-dependent branching.
 
-5. **Static unroll for Iter.** The iteration body is inlined `D` times
-   (unconditional). Correct only when every input exercises the maximum
-   count, or when conditional guarding is not needed. The differential
-   oracle (§6) catches any disagreement.
+5. **Constant-count Iter only.** The body is inlined `k` times where `k`
+   is fixed at compile time — straight-line, no guards. Data-dependent
+   counts (the general `iter` semantics) are M-B (guarded unroll). The
+   differential oracle (§6) catches any disagreement.
 
 ### Open risks for M-B / M-C / M-D
 
