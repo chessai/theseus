@@ -49,6 +49,7 @@
   - [0040 Controlled rail-role swap: voiding the parity law](adr/0040-rail-role-swap-cell.md)
   - [0041 Execution models: per-program hardware vs stored-program CPU](adr/0041-execution-models.md)
   - [0042 Surface theseus → TISC-1 ROM compiler](adr/0042-thse-to-tisc-compiler.md)
+  - [0043 M-B: reversible-branching codegen](adr/0043-mb-reversible-branching-codegen.md)
 
 # Design Document
 
