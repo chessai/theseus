@@ -11,7 +11,11 @@
 > remaining: energy-price a compiled loop. ADR-0041 names the two execution
 models (spatial/per-program circuit vs temporal/stored-program CPU) and positions
 the surface→TISC-1 ISA backend as a v3 milestone, with a word-oriented stepping
-stone as a v2.5/early-v3 increment.
+stone as a v2.5/early-v3 increment. ADR-0042 specifies the concrete compiler
+architecture for this backend: a milestone-decomposed design from the
+register-only word-subset (M-A) through full algebraic codegen (M-D), with
+lowering rules per core `Iso` constructor and a run-on-CPU differential oracle
+as the acceptance test.
 
 Post-pivot (ADR-0022): the project is **two-tracked**, and the tracks
 are independent for months.
