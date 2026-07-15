@@ -1,14 +1,21 @@
 # Roadmap v2: two tracks, layers, parked items
 
-> **Current status (2026-07-14):** M1, M3a, M3b, **M4-v1**, the **M4-v2
-> ring-machine core** (recirculating CPU + reversible branching, runs Fibonacci on
-> the ring at 20× area saving), and the **v0.2 software dialect** (μ-types +
-> iter/fold/unfold, source→cells) are all done and merged on `chessai/theseus-v2`
-> (`2424f7c`). The **current headline thread** is the **surface → TISC-1 ROM
-> compiler** (the #1 goal): milestone **M-A is done** — non-recursive `.thse`
-> compiles to a ROM the CPU executes, `run_on_cpu == eval` over the whole domain
-> (`theseus-tisc::compile`, ADR-0042); **M-B** (branching + data-dependent iter,
-> ADR-0043) is in design. See [Project status](status.md) for the full picture. The post-v1
+> **Current status (2026-07-15):** M1, M3a, M3b, **M4-v1**, the **M4-v2
+> ring-machine core** (recirculating CPU + reversible branching, Fibonacci on the
+> ring at 20× area saving, zero-garbage closure), and the **v0.2 software dialect**
+> are all done and merged on `chessai/theseus-v2` (`91bd4b4`). The **headline
+> thread** is the **surface → TISC-1 ROM compiler** (the #1 goal), now at **M-A +
+> M-B + M-C1 + M-C2 Layer 1 done**: non-recursive, branching, data-dependent `iter`
+> (the real `fib`), register↔scratch spill, *and* resident memory via a reversible
+> `MEXCH` exchange + 1-of-N Fredkin tree — all `run_on_cpu == eval`
+> (`theseus-tisc::compile`, ADRs 0042–0046). **Conjecture C1** (the addressed-
+> exchange tree is ancilla-clean) is discharged. The **Option-B external memory
+> bus** (M-C2 Stage 1) is now designed and **proven buildable**: a 2-agent formal
+> spike + proofs ([theory/reversible-memory-closure.md](theory/reversible-memory-closure.md))
+> established composite-ring closure (ADR-0046 §4.5.8) — energy-equivalent to
+> Option A (it buys area + a CPU body invariant in N + the Option-C seam, not
+> joules). **Next: Stage 1a** (composite-aware addressing + externalize MemState),
+> then Stage 1b (the composite ring). See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
 > shows machine-level adiabatic slope −0.997 crossing below the CMOS floor);
