@@ -106,6 +106,50 @@ marshalling):
 **Settle before delegating.** The `MemState` word layout, address encoding, and
 `BusMsg` line layout must match ADR-0045's setup (dual-rail, `word:W8`, `addr:AddrW`)
 **now**, so Stage 1's externalization does not force a re-marshal of Layer 1's work.
+The two settled items follow (§3.1).
+
+## 3.1 Finalized Layer-1 spec (the two settled items)
+
+**MemState layout.** `MEM_WORDS = N` words of `W8`, resident in `State` as fields
+appended after the 8 scratch words: field order becomes
+`[r0..r7, PC, BR, IR_lo, IR_hi, s0..s7, m0..m_{N-1}]`, `NUM_FIELDS = 20 + N`.
+**Default `N = 8`** (3-bit address fits the `rt` field; `State` → 224 bits). The
+addressed-exchange tree and marshalling are **parameterized by `N`**; C1 is
+demonstrated whole-domain at `N ∈ {2,4,8}`. (If the real-`step` oracle is
+intractable at N=8, the shipped default may drop to N=4 — note it explicitly; the
+tree + C1 demonstration stay at {2,4,8}.)
+
+**One instruction — `MEXCH rd, addr`** (`reg[rd] ↔ mem[addr]`, self-inverse). There
+is no separate LOAD vs STORE: memory access *is* exchange (ADR-0029), so
+"LOAD"/"STORE" are compiler-intent names for the one `MEXCH`. Encode **R-format,
+opcode `0b1001`**, `rd` in the rd field, `addr` in the `rt` field (3 bits, N≤8;
+extensible to `rs`+`rt` = 6 bits, N≤64, later). Decode = select `reg[rd]` (the
+existing 1-of-8 `select_fields`) and `mem[addr]` (a **1-of-N** `select_fields`
+generalization), swap, unselect — this mem-select crossbar **is the C1 tree**.
+
+**Canonical layout + homes.** Leaf `L`: `L<8 → Reg(L)`; `8≤L<14 → Scratch(L−6)`
+(`s2..s7`); `14≤L<14+N → Mem(L−14)`. `marshal`: `i<8→regs[i]`, `8≤i<14→scratch[i−6]`,
+`14≤i<14+N→mem[i−14]`; `unmarshal` mirrors; `Ctx::new` inits canonical homes.
+
+**Zero-parking — resolved (Lemma 7.2, the transient-squat option).** Paging a
+`Mem`-home leaf into a register for an op uses the **`with_registers` sandwich**,
+identical in discipline to M-C1's scratch paging: `MEXCH` the leaf into a spare
+register (the swap transiently squats the spare's leaf in `mem[addr]`), run the op,
+`MEXCH` back (self-inverse) — canonical restored at the boundary, **no free-zero
+cell consumed** (the squat is undone within the sandwich, Lemma 7.2's legal case).
+A free-zero cell is needed *only* for the **branch aux zero-source** (M-C1 §2.4,
+Lemma 7.1), now drawn from any unused (marshalling-zeroed) scratch *or* memory word.
+
+**Honest ceiling (Lemma 7.1 accounting).** Straight-line: **14 + N**. Branching:
+**12 + N** (two free-zero cells consumed to zero the two aux registers).
+`num_leaves` cap = `14 + N`; `allocate_aux` errors `TooManyLeaves` when it cannot
+secure two free-zero cells. This is *not* a flat `14 + N` — the park cells are
+charged, exactly as M-C1's 14→12.
+
+**BusMsg layout (pinned for Stage 1; not built in Layer 1).**
+`BusMsg = (enable:Bit, addr:⌈log₂N⌉, word:W8)`, dual-rail — so Stage 1's
+externalization reuses Layer 1's `MemState` word layout and address encoding
+without a re-marshal.
 
 ## 4. Stage 1 — single-body composite ring
 
