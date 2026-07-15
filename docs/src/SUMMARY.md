@@ -51,6 +51,7 @@
   - [0042 Surface theseus → TISC-1 ROM compiler](adr/0042-thse-to-tisc-compiler.md)
   - [0043 M-B: reversible-branching codegen](adr/0043-mb-reversible-branching-codegen.md)
   - [0044 M-C: compiler-targeted memory](adr/0044-mc-compiler-memory.md)
+  - [0045 M-C2: the Option-B memory bus](adr/0045-mc2-memory-bus.md)
 
 # Design Document
 
