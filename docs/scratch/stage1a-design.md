@@ -151,6 +151,33 @@ keep its garbage-free test green (or move the assertion onto the real path).
    `run_on_cpu`/`run_on_cpu_fast`.
 5. **Oracle + shared-ISA guard (F3) + ceiling (F6)** all green.
 
+## Delegation decomposition (A then B) — added after a turn-budget failure
+
+The first whole-Stage-1a delegation (`01KXKPPN…`, tier 0) hit
+`turn_budget_exceeded` at the default 25-turn cap having only *read* the code
+(zero diff). Lesson: **set `budget.turns` explicitly** (the driven-CLI default is
+25). And to fit the profile's ~60-min lifetime ceiling with margin — and to bank
+the reviewer's top serial gate first — Stage 1a is delegated as two gate-green
+increments:
+
+- **1a-A (routing primitive; delegate first).** *Additive* width-parameterized
+  routing (`route_to_head`/`at_fields`/`on_fields` usable at any `n_fields`, via
+  new `_n` variants or a widened signature; existing callers keep behavior at
+  `n = NUM_FIELDS`) **plus** the generic `cross_ctrl_fredkin(ctrl_field, ctrl_bit,
+  word_a, word_b)` primitive **plus** a whole-domain self-inverse test over a
+  **synthetic 2-factor product** (small left/right field groups) — the L15 gate,
+  proven *before* any carrier change depends on it. No `State` change, no
+  `MemState`, no oracle: existing tests stay green; the one new test proves the
+  primitive. Independently mergeable.
+- **1a-B (carrier split + oracle; delegate after A merges).** Everything else in
+  this note — externalize `MemState`, `system_step`, re-target `MEXCH`/`instr::mexch`
+  via the (now-proven) `cross_ctrl_fredkin`, split marshalling, re-point the oracle,
+  the shared-ISA guard, and **C1 re-verification on the real re-targeted
+  `select_mem` tree**. Branches from the post-A base.
+
+Build steps 1–5 above still describe the *combined* work; A covers step 2's
+primitive, B covers steps 1,3,4,5.
+
 ## Explicitly OUT of scope (Stage 1b)
 
 `BusMsg`; emit/mem/absorb; seam rotation; the `StepRing` composite certificate;
