@@ -1,17 +1,14 @@
-//! M-A/M-B surface→TISC-1 ROM compiler (ADR-0042 + ADR-0043).
+//! M-A/M-B/M-C1 surface→TISC-1 ROM compiler (ADR-0042 + ADR-0043 + ADR-0044).
 //!
 //! Compiles the product/composition fragment of core `Iso` — plus the
 //! controlled-op idiom (general arms), data-dependent `Iter`, and bare
-//! sum operations — to TISC-1 instruction sequences. Values fit in
-//! registers (≤ 8 word-sized leaves); no memory bus, no recursion.
-//!
-//! M-B extends M-A with: (1) general controlled ops (multi-instruction
-//! arms in the Distrib;Plus;Factor idiom), (2) data-dependent iter
-//! (guarded static unroll), (3) bare sums (tag+payload representation).
+//! sum operations — to TISC-1 instruction sequences. M-C1 extends the
+//! register-only M-A/M-B fragment with scratch-spill support via Xchg,
+//! raising the leaf ceiling from 8 to 14 (straight-line) or 12 (branching).
 //!
 //! The acceptance test is the run-on-CPU differential oracle (ADR-0042 §6,
-//! ADR-0043 §5): for every input value, the compiled ROM executed on the
-//! simulated CPU must agree with `theseus_eval::eval`.
+//! ADR-0043 §5, ADR-0044 §4): for every input value, the compiled ROM
+//! executed on the simulated CPU must agree with `theseus_eval::eval`.
 
 use std::fmt;
 
@@ -19,14 +16,14 @@ use theseus_core::typing::is_numeral_ty;
 use theseus_core::{adjoint, Iso, Type, Value};
 
 use crate::asm::{assemble, Instr};
-use crate::types::{StateVals, NUM_REGS};
+use crate::types::{StateVals, NUM_REGS, NUM_SCRATCH};
 
 // ── Errors ────────────────────────────────────────────────────────────
 
-/// Compile-time errors for the M-A/M-B compiler.
+/// Compile-time errors for the M-A/M-B/M-C1 compiler.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompileError {
-    /// The program requires more registers than the TISC-1 has (8).
+    /// The program requires more leaves than the compiler supports.
     TooManyLeaves { needed: usize, max: usize },
     /// A sum-type constructor outside the controlled-op idiom.
     UnsupportedSum(String),
@@ -46,7 +43,7 @@ impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CompileError::TooManyLeaves { needed, max } => {
-                write!(f, "program needs {needed} registers but TISC-1 has {max}")
+                write!(f, "program needs {needed} leaves but maximum is {max}")
             }
             CompileError::UnsupportedSum(msg) => write!(f, "unsupported sum: {msg}"),
             CompileError::Deferred(msg) => write!(f, "deferred to later milestone: {msg}"),
@@ -214,55 +211,282 @@ fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
     }
 }
 
+// ── Location and constants (M-C1, ADR-0044 §2) ─────────────────────
+
+/// Where a leaf value resides: in a general register or a scratch word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Location {
+    Reg(u8),
+    Scratch(u8),
+}
+
+/// Maximum leaves for straight-line programs (8 regs + s2..s7 = 14).
+const MAX_LEAVES: usize = 14;
+
+/// Maximum leaves for branching programs (need 2 free scratch for aux
+/// zero-source, ADR-0044 §2.4).
+const MAX_LEAVES_BRANCHING: usize = 12;
+
+/// First spillable scratch index (s0/s1 are decoder-reserved).
+const SCRATCH_SPILL_BASE: u8 = 2;
+
 // ── Register allocation context ──────────────────────────────────────
 
-/// Maps leaf positions to physical register indices.
+/// Maps leaf positions to physical locations (register or scratch word).
+/// Between every instruction the machine is in canonical layout — every
+/// leaf sits in its home (ADR-0044 §2.1).
 #[derive(Clone, Debug)]
 struct Ctx {
-    /// `mapping[i]` = physical register index for leaf `i`.
-    mapping: Vec<u8>,
+    /// `homes[i]` = canonical physical location for leaf `i`.
+    homes: Vec<Location>,
 }
 
 impl Ctx {
-    /// Initial context: leaf i → reg i.
+    /// Canonical home layout (ADR-0044 §2.1):
+    /// L < 8 → Reg(L); 8 ≤ L < 14 → Scratch(L − 6).
     fn new(n_leaves: usize) -> Self {
         Ctx {
-            mapping: (0..n_leaves as u8).collect(),
+            homes: (0..n_leaves)
+                .map(|i| {
+                    if i < NUM_REGS {
+                        Location::Reg(i as u8)
+                    } else {
+                        Location::Scratch((i - 6) as u8)
+                    }
+                })
+                .collect(),
         }
     }
 
     /// Split into two sub-contexts for `Times(f, g)`.
     fn split(&self, n_left: usize) -> (Ctx, Ctx) {
         let left = Ctx {
-            mapping: self.mapping[..n_left].to_vec(),
+            homes: self.homes[..n_left].to_vec(),
         };
         let right = Ctx {
-            mapping: self.mapping[n_left..].to_vec(),
+            homes: self.homes[n_left..].to_vec(),
         };
         (left, right)
     }
 
     /// Merge two sub-contexts back.
     fn merge(left: &Ctx, right: &Ctx) -> Ctx {
-        let mut mapping = left.mapping.clone();
-        mapping.extend_from_slice(&right.mapping);
-        Ctx { mapping }
+        let mut homes = left.homes.clone();
+        homes.extend_from_slice(&right.homes);
+        Ctx { homes }
     }
 }
 
-// ── Auxiliary register allocation ────────────────────────────────────
+// ── with_registers (M-C1 §2.3) ─────────────────────────────────────
 
-/// Allocate `count` free physical registers not used by any leaf in `ctx`.
-fn allocate_aux(ctx: &Ctx, count: usize) -> Result<Vec<u8>, CompileError> {
-    let used: std::collections::BTreeSet<u8> = ctx.mapping.iter().copied().collect();
-    let free: Vec<u8> = (0..NUM_REGS as u8).filter(|r| !used.contains(r)).collect();
-    if free.len() < count {
+/// Page scratch-resident operands into spare registers, emit instructions
+/// via the closure, then undo the paging to restore canonical layout.
+///
+/// For each scratch-home operand, Xchg it into a spare register (one whose
+/// home-leaf is not an operand; ≥5 always exist since ops touch ≤3).
+/// After the closure, undo the Xchgs in reverse order.
+fn with_registers(
+    ctx: &Ctx,
+    leaf_indices: &[usize],
+    emit: impl FnOnce(&[u8]) -> Result<Vec<Instr>, CompileError>,
+) -> Result<Vec<Instr>, CompileError> {
+    let mut used_regs = std::collections::BTreeSet::new();
+    let mut reg_for = vec![0u8; leaf_indices.len()];
+    let mut scratch_ops: Vec<(usize, u8)> = Vec::new();
+
+    for (i, &leaf) in leaf_indices.iter().enumerate() {
+        match ctx.homes[leaf] {
+            Location::Reg(r) => {
+                used_regs.insert(r);
+                reg_for[i] = r;
+            }
+            Location::Scratch(sx) => {
+                scratch_ops.push((i, sx));
+            }
+        }
+    }
+
+    if scratch_ops.is_empty() {
+        return emit(&reg_for);
+    }
+
+    // Spare registers: any of 0..7 not used by register-home operands.
+    let mut spares: Vec<u8> = (0..NUM_REGS as u8)
+        .filter(|r| !used_regs.contains(r))
+        .collect();
+
+    let mut page_in = Vec::new();
+    let mut xchg_stack: Vec<(u8, u8)> = Vec::new();
+
+    for &(i, sx) in &scratch_ops {
+        let spare = spares
+            .pop()
+            .expect("with_registers: no spare register");
+        reg_for[i] = spare;
+        page_in.push(Instr::Xchg { rd: spare, sx });
+        xchg_stack.push((spare, sx));
+    }
+
+    let body = emit(&reg_for)?;
+
+    let page_out: Vec<Instr> = xchg_stack
+        .iter()
+        .rev()
+        .map(|&(r, sx)| Instr::Xchg { rd: r, sx })
+        .collect();
+
+    let mut result = page_in;
+    result.extend(body);
+    result.extend(page_out);
+    Ok(result)
+}
+
+// ── swap_homes (SwapProd with spill) ────────────────────────────────
+
+/// Swap data between two leaf homes. Handles Reg↔Reg (Exch),
+/// Reg↔Scratch (Xchg), and Scratch↔Scratch (3-Xchg via temp register).
+fn swap_homes(ctx: &Ctx, leaf_a: usize, leaf_b: usize) -> Vec<Instr> {
+    let ha = ctx.homes[leaf_a];
+    let hb = ctx.homes[leaf_b];
+    match (ha, hb) {
+        (Location::Reg(ra), Location::Reg(rb)) => {
+            if ra == rb {
+                vec![]
+            } else {
+                vec![Instr::Exch { rd: ra, rs: rb }]
+            }
+        }
+        (Location::Reg(r), Location::Scratch(sx))
+        | (Location::Scratch(sx), Location::Reg(r)) => {
+            vec![Instr::Xchg { rd: r, sx }]
+        }
+        (Location::Scratch(sa), Location::Scratch(sb)) => {
+            if sa == sb {
+                return vec![];
+            }
+            // 3-Xchg swap via a temp register. The sequence saves and
+            // restores the temp register's value.
+            let tmp = 0u8;
+            vec![
+                Instr::Xchg { rd: tmp, sx: sa },
+                Instr::Xchg { rd: tmp, sx: sb },
+                Instr::Xchg { rd: tmp, sx: sa },
+            ]
+        }
+    }
+}
+
+// ── Auxiliary register allocation (M-C1 §2.4) ──────────────────────
+
+/// Allocate `count` auxiliary registers (zero-valued on entry) for
+/// skip-block use.
+///
+/// Returns `(aux_regs, page_in, page_out, displaced_ctx)`.
+///
+/// When free registers exist, they're already 0 (marshal zeroes
+/// everything). When the register file is full, uses the **zero-source
+/// pattern** (ADR-0044 §2.4): Xchg a register-home leaf into a free
+/// (already-zero) scratch slot, which zeroes the register and parks
+/// the leaf data in scratch.
+///
+/// `exclude_leaves`: leaf indices that must NOT be displaced (e.g. the
+/// control leaf, whose data must remain accessible during the skip block).
+fn allocate_aux(
+    ctx: &Ctx,
+    count: usize,
+    exclude_leaves: &[usize],
+) -> Result<(Vec<u8>, Vec<Instr>, Vec<Instr>, Ctx), CompileError> {
+    let used_regs: std::collections::BTreeSet<u8> = ctx
+        .homes
+        .iter()
+        .filter_map(|h| match h {
+            Location::Reg(r) => Some(*r),
+            _ => None,
+        })
+        .collect();
+    let free_regs: Vec<u8> = (0..NUM_REGS as u8)
+        .filter(|r| !used_regs.contains(r))
+        .collect();
+
+    if free_regs.len() >= count {
+        return Ok((free_regs[..count].to_vec(), vec![], vec![], ctx.clone()));
+    }
+
+    // Zero-source: displace register-home leaves into free scratch slots.
+    let used_scratch: std::collections::BTreeSet<u8> = ctx
+        .homes
+        .iter()
+        .filter_map(|h| match h {
+            Location::Scratch(s) => Some(*s),
+            _ => None,
+        })
+        .collect();
+    let mut free_scratch: Vec<u8> = (SCRATCH_SPILL_BASE..NUM_SCRATCH as u8)
+        .filter(|s| !used_scratch.contains(s))
+        .collect();
+
+    let needed = count - free_regs.len();
+
+    // Displaceable = register-home leaves NOT in the exclude set.
+    let displaceable: Vec<(usize, u8)> = ctx
+        .homes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| match h {
+            Location::Reg(r) if !exclude_leaves.contains(&i) => Some((i, *r)),
+            _ => None,
+        })
+        .collect();
+
+    if free_scratch.len() < needed || displaceable.len() < needed {
         return Err(CompileError::TooManyLeaves {
-            needed: ctx.mapping.len() + count,
-            max: NUM_REGS,
+            needed: ctx.homes.len(),
+            max: MAX_LEAVES_BRANCHING,
         });
     }
-    Ok(free[..count].to_vec())
+
+    let mut aux_regs = free_regs;
+    let mut page_in = Vec::new();
+    let mut page_out = Vec::new();
+    let mut modified_homes = ctx.homes.clone();
+
+    for i in 0..needed {
+        let (leaf_idx, reg) = displaceable[displaceable.len() - 1 - i];
+        let sx = free_scratch.pop().unwrap();
+        page_in.push(Instr::Xchg { rd: reg, sx });
+        page_out.push(Instr::Xchg { rd: reg, sx });
+        modified_homes[leaf_idx] = Location::Scratch(sx);
+        aux_regs.push(reg);
+    }
+
+    page_out.reverse();
+    Ok((
+        aux_regs[..count].to_vec(),
+        page_in,
+        page_out,
+        Ctx {
+            homes: modified_homes,
+        },
+    ))
+}
+
+/// Ensure a leaf is in a register. If it's in scratch, page it into a
+/// spare register (excluded from `exclude_regs`).
+/// Returns `(register_index, page_in_instrs, page_out_instrs)`.
+fn ensure_reg(ctx: &Ctx, leaf: usize, exclude_regs: &[u8]) -> (u8, Vec<Instr>, Vec<Instr>) {
+    match ctx.homes[leaf] {
+        Location::Reg(r) => (r, vec![], vec![]),
+        Location::Scratch(sx) => {
+            let spare = (0..NUM_REGS as u8)
+                .find(|r| !exclude_regs.contains(r))
+                .expect("ensure_reg: no spare register");
+            (
+                spare,
+                vec![Instr::Xchg { rd: spare, sx }],
+                vec![Instr::Xchg { rd: spare, sx }],
+            )
+        }
+    }
 }
 
 // ── SWAPBR skip-block primitive (ADR-0043 §2) ──────────────────────
@@ -294,15 +518,29 @@ fn emit_skip_block(
         // Start with temp=skip_dist, rb=0. CSWAP(ctrl, temp, rb):
         //   ctrl=1 → swap: temp=0, rb=skip_dist (jump, skip body)
         //   ctrl=0 → no swap: temp=skip_dist, rb=0 (fall through)
-        out.push(Instr::Addi { rd: temp, imm: body_len });
-        out.push(Instr::Cswap { rd: ctrl_reg, rs: temp, rt: rb });
+        out.push(Instr::Addi {
+            rd: temp,
+            imm: body_len,
+        });
+        out.push(Instr::Cswap {
+            rd: ctrl_reg,
+            rs: temp,
+            rt: rb,
+        });
     } else {
         // Skip iff ctrl=0: load skip_dist into rb iff ctrl=0.
         // Start with rb=skip_dist, temp=0. CSWAP(ctrl, rb, temp):
         //   ctrl=1 → swap: rb=0, temp=skip_dist (don't skip = run body)
         //   ctrl=0 → no swap: rb=skip_dist (skip body)
-        out.push(Instr::Addi { rd: rb, imm: body_len });
-        out.push(Instr::Cswap { rd: ctrl_reg, rs: rb, rt: temp });
+        out.push(Instr::Addi {
+            rd: rb,
+            imm: body_len,
+        });
+        out.push(Instr::Cswap {
+            rd: ctrl_reg,
+            rs: rb,
+            rt: temp,
+        });
     }
 
     // Branch: SWAPBR rb
@@ -316,11 +554,25 @@ fn emit_skip_block(
 
     // Cleanup: reverse the CSWAP + SUBI
     if skip_when_set {
-        out.push(Instr::Cswap { rd: ctrl_reg, rs: temp, rt: rb });
-        out.push(Instr::Subi { rd: temp, imm: body_len });
+        out.push(Instr::Cswap {
+            rd: ctrl_reg,
+            rs: temp,
+            rt: rb,
+        });
+        out.push(Instr::Subi {
+            rd: temp,
+            imm: body_len,
+        });
     } else {
-        out.push(Instr::Cswap { rd: ctrl_reg, rs: rb, rt: temp });
-        out.push(Instr::Subi { rd: rb, imm: body_len });
+        out.push(Instr::Cswap {
+            rd: ctrl_reg,
+            rs: rb,
+            rt: temp,
+        });
+        out.push(Instr::Subi {
+            rd: rb,
+            imm: body_len,
+        });
     }
 
     out
@@ -353,66 +605,90 @@ fn invert_instr(instr: Instr) -> Instr {
 use theseus_core::prim::{enumerate_values, PrimDef};
 
 /// Try to recognize a PrimDef as a known TISC-1 instruction pattern.
+/// All register accesses are routed through `with_registers` so that
+/// scratch-resident operands are paged in/out correctly.
 fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> {
     let n_in = num_leaves(&def.input_ty)?;
     let n_out = num_leaves(&def.output_ty)?;
+    let leaves: Vec<usize> = (0..n_in).collect();
 
     // Two-register prims: (a, b) ↦ (a', b')
     if n_in == 2 && n_out == 2 {
-        let rd = ctx.mapping[0]; // first leaf
-        let rs = ctx.mapping[1]; // second leaf
-
-        // Check each known two-register pattern by evaluating the clause table.
         let in_ty = &def.input_ty;
         let vals = enumerate_values(in_ty);
 
         // addInto: (a, b) ↦ (a, a + b mod 256)
-        // The source (first) is preserved, target (second) gets src + tgt.
         if check_pattern_2reg(&def.forward, &vals, |a, b| (a, a.wrapping_add(b))) {
-            return Ok(vec![Instr::Add { rd: rs, rs: rd }]);
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![Instr::Add {
+                    rd: regs[1],
+                    rs: regs[0],
+                }])
+            });
         }
 
         // subFrom: (a, b) ↦ (a, b - a mod 256)
         if check_pattern_2reg(&def.forward, &vals, |a, b| (a, b.wrapping_sub(a))) {
-            return Ok(vec![Instr::Sub { rd: rs, rs: rd }]);
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![Instr::Sub {
+                    rd: regs[1],
+                    rs: regs[0],
+                }])
+            });
         }
 
         // xorInto: (a, b) ↦ (a, a ^ b)
         if check_pattern_2reg(&def.forward, &vals, |a, b| (a, a ^ b)) {
-            return Ok(vec![Instr::Xor { rd: rs, rs: rd }]);
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![Instr::Xor {
+                    rd: regs[1],
+                    rs: regs[0],
+                }])
+            });
         }
 
         // swap: (a, b) ↦ (b, a)
         if check_pattern_2reg(&def.forward, &vals, |a, b| (b, a)) {
-            if rd == rs {
-                return Err(CompileError::AliasedRegisters {
-                    instr: "EXCH".into(),
-                });
-            }
-            return Ok(vec![Instr::Exch { rd, rs }]);
+            return with_registers(ctx, &leaves, |regs| {
+                if regs[0] == regs[1] {
+                    return Err(CompileError::AliasedRegisters {
+                        instr: "EXCH".into(),
+                    });
+                }
+                Ok(vec![Instr::Exch {
+                    rd: regs[0],
+                    rs: regs[1],
+                }])
+            });
         }
 
         // rotl: (a, b) ↦ (a, rotl(b, a & 7))
         if check_pattern_2reg(&def.forward, &vals, |a, b| {
             (a, b.rotate_left((a & 7) as u32))
         }) {
-            return Ok(vec![Instr::Rotl { rd: rs, rs: rd }]);
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![Instr::Rotl {
+                    rd: regs[1],
+                    rs: regs[0],
+                }])
+            });
         }
 
         // rotr: (a, b) ↦ (a, rotr(b, a & 7))
         if check_pattern_2reg(&def.forward, &vals, |a, b| {
             (a, b.rotate_right((a & 7) as u32))
         }) {
-            return Ok(vec![Instr::Rotr { rd: rs, rs: rd }]);
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![Instr::Rotr {
+                    rd: regs[1],
+                    rs: regs[0],
+                }])
+            });
         }
     }
 
     // Three-register prims: (c, a, b)
     if n_in == 3 && n_out == 3 {
-        let rc = ctx.mapping[0];
-        let ra = ctx.mapping[1];
-        let rb = ctx.mapping[2];
-
         let vals = enumerate_values(&def.input_ty);
 
         // cswap: (c, a, b) ↦ (c, if c&1 then (b,a) else (a,b))
@@ -423,33 +699,48 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
                 (c, a, b)
             }
         }) {
-            return Ok(vec![Instr::Cswap {
-                rd: rc,
-                rs: ra,
-                rt: rb,
-            }]);
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![Instr::Cswap {
+                    rd: regs[0],
+                    rs: regs[1],
+                    rt: regs[2],
+                }])
+            });
         }
     }
 
     // One-register prims: a ↦ f(a)
     if n_in == 1 && n_out == 1 {
-        let rd = ctx.mapping[0];
         let vals = enumerate_values(&def.input_ty);
 
         // addi_K: a ↦ a + K
-        // Try to find a constant K that works.
         if let Some(k) = find_constant_1reg(&def.forward, &vals, |a, k| a.wrapping_add(k)) {
-            return Ok(vec![Instr::Addi { rd, imm: k }]);
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![Instr::Addi {
+                    rd: regs[0],
+                    imm: k,
+                }])
+            });
         }
 
         // subi_K: a ↦ a - K
         if let Some(k) = find_constant_1reg(&def.forward, &vals, |a, k| a.wrapping_sub(k)) {
-            return Ok(vec![Instr::Subi { rd, imm: k }]);
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![Instr::Subi {
+                    rd: regs[0],
+                    imm: k,
+                }])
+            });
         }
 
         // xori_K: a ↦ a ^ K
         if let Some(k) = find_constant_1reg(&def.forward, &vals, |a, k| a ^ k) {
-            return Ok(vec![Instr::Xori { rd, imm: k }]);
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![Instr::Xori {
+                    rd: regs[0],
+                    imm: k,
+                }])
+            });
         }
     }
 
@@ -604,7 +895,7 @@ fn is_bit_not(iso: &Iso) -> bool {
 }
 
 /// Lower a recognized controlled-op idiom to TISC-1 instructions.
-/// The `outer_ctx` covers [ctrl_leaves..., tgt_leaves...] (the input layout
+/// The `ctx` covers [ctrl_leaves..., tgt_leaves...] (the input layout
 /// before the first SwapProd).
 fn lower_controlled_idiom(
     ctrl_ty: &Type,
@@ -617,9 +908,6 @@ fn lower_controlled_idiom(
 ) -> Result<(Vec<Instr>, Ctx), CompileError> {
     let n_ctrl = num_leaves(ctrl_ty)?;
     let n_tgt = num_leaves(tgt_ty)?;
-
-    // The `f` branch: tgt × ctrl_l. It should be identity.
-    // The `g` branch: tgt × ctrl_r. This determines the instruction.
 
     // For M-A, we only handle ctrl = Bit = Sum(One, One),
     // so ctrl_l = ctrl_r = One (zero leaves each), and n_ctrl = 1.
@@ -636,80 +924,60 @@ fn lower_controlled_idiom(
         )));
     }
 
-    // g operates on tgt × One. Check what it does to tgt.
-    // Recognized patterns:
-    //   1. NOT on a single-bit target: g = Times(SwapSum(1,1), Id(1))
-    //      or g = Seq(Plus(SwapSum,SwapSum), SwapSum) on Bit×One
-    //      → XOR instruction
-    //   2. SWAP on a two-leaf target: g = Times(SwapProd(a,b), Id(1))
-    //      → CSWAP instruction
-
-    // The context is [ctrl_regs..., tgt_regs...] (original layout).
-    // The ctrl reg is ctx.mapping[0..n_ctrl] and tgt regs are ctx.mapping[n_ctrl..].
-    let ctrl_reg = ctx.mapping[0]; // n_ctrl == 1 for Bit control
-
-    // Try to recognize g as controlled-NOT (target is single Bit).
-    if n_tgt == 1 {
-        let tgt_reg = ctx.mapping[n_ctrl];
-        // g should be NOT-on-target × Id(One)
-        if is_not_on_target_times_id(g, tgt_ty) {
-            return Ok((vec![Instr::Xor { rd: tgt_reg, rs: ctrl_reg }], ctx.clone()));
-        }
+    // Single-instruction recognition: CNOT (ctrl XOR into target)
+    if n_tgt == 1 && is_not_on_target_times_id(g, tgt_ty) {
+        let instrs = with_registers(ctx, &[0, n_ctrl], |regs| {
+            Ok(vec![Instr::Xor {
+                rd: regs[1],
+                rs: regs[0],
+            }])
+        })?;
+        return Ok((instrs, ctx.clone()));
     }
 
-    // Try to recognize g as controlled-SWAP (target is two leaves).
-    if n_tgt == 2 {
-        let tgt_r0 = ctx.mapping[n_ctrl];
-        let tgt_r1 = ctx.mapping[n_ctrl + 1];
-        if is_swap_on_target_times_id(g, tgt_ty) {
-            return Ok((
-                vec![Instr::Cswap {
-                    rd: ctrl_reg,
-                    rs: tgt_r0,
-                    rt: tgt_r1,
-                }],
-                ctx.clone(),
-            ));
-        }
+    // Single-instruction recognition: CSWAP
+    if n_tgt == 2 && is_swap_on_target_times_id(g, tgt_ty) {
+        let instrs = with_registers(ctx, &[0, n_ctrl, n_ctrl + 1], |regs| {
+            Ok(vec![Instr::Cswap {
+                rd: regs[0],
+                rs: regs[1],
+                rt: regs[2],
+            }])
+        })?;
+        return Ok((instrs, ctx.clone()));
     }
 
-    // M-B fallback: general controlled-op with multi-instruction arms.
-    // Compile g's body (on tgt × ctrl_r = tgt × One) and use skip-block.
-    // Since ctrl_r = One (0 leaves), g operates on just the target registers.
-    let ctx_tgt = Ctx {
-        mapping: ctx.mapping[n_ctrl..n_ctrl + n_tgt].to_vec(),
-    };
-    let (instrs_g, _) = lower(g, &ctx_tgt)?;
-    if instrs_g.is_empty() && is_structural_identity(f) {
-        // Both arms are identity → no-op.
+    // Both identity → no-op
+    if is_structural_identity(g) {
         return Ok((vec![], ctx.clone()));
     }
 
-    // f must be identity for now (general f+g handled via bare Plus).
-    if !is_structural_identity(f) {
-        // Compile f as well.
-        let (instrs_f, _) = lower(f, &ctx_tgt)?;
-        let aux = allocate_aux(ctx, 2)?;
-        let rb = aux[0];
-        let temp = aux[1];
-        let mut instrs = Vec::new();
-        // Phase 1: f runs iff ctrl=0 → skip f iff ctrl=1
-        if !instrs_f.is_empty() {
-            instrs.extend(emit_skip_block(ctrl_reg, &instrs_f, rb, temp, true));
-        }
-        // Phase 2: g runs iff ctrl=1 → skip g iff ctrl=0
-        if !instrs_g.is_empty() {
-            instrs.extend(emit_skip_block(ctrl_reg, &instrs_g, rb, temp, false));
-        }
-        return Ok((instrs, ctx.clone()));
+    // General case: compile g's body and use skip-block.
+    // Allocate aux first (may displace register-home leaves to scratch).
+    let (aux, aux_pi, aux_po, dctx) = allocate_aux(ctx, 2, &[0])?;
+    let rb = aux[0];
+    let temp = aux[1];
+
+    let (ctrl_reg, ctrl_pi, ctrl_po) = ensure_reg(&dctx, 0, &[rb, temp]);
+
+    // Compile g's body with the displaced context's target sub-slice.
+    let ctx_tgt = Ctx {
+        homes: dctx.homes[n_ctrl..n_ctrl + n_tgt].to_vec(),
+    };
+    let (instrs_g, _) = lower(g, &ctx_tgt)?;
+
+    if instrs_g.is_empty() {
+        return Ok((vec![], ctx.clone()));
     }
 
     // f = identity, g = general multi-instruction sequence.
     // Skip g iff ctrl=0 (Left branch = identity).
-    let aux = allocate_aux(ctx, 2)?;
-    let rb = aux[0];
-    let temp = aux[1];
-    let instrs = emit_skip_block(ctrl_reg, &instrs_g, rb, temp, false);
+    let mut instrs = Vec::new();
+    instrs.extend(aux_pi);
+    instrs.extend(ctrl_pi);
+    instrs.extend(emit_skip_block(ctrl_reg, &instrs_g, rb, temp, false));
+    instrs.extend(ctrl_po);
+    instrs.extend(aux_po);
     Ok((instrs, ctx.clone()))
 }
 
@@ -819,7 +1087,7 @@ fn numeral_count(ty: &Type) -> Option<usize> {
 
 // ── Core lowering ────────────────────────────────────────────────────
 
-/// Compile a core `Iso` (M-A/M-B) to a TISC-1 instruction sequence.
+/// Compile a core `Iso` (M-A/M-B/M-C1) to a TISC-1 instruction sequence.
 ///
 /// Returns `Err(CompileError)` for out-of-scope constructs (Trace/Fold/Unfold).
 pub fn compile(iso: &Iso) -> Result<Vec<Instr>, CompileError> {
@@ -827,10 +1095,10 @@ pub fn compile(iso: &Iso) -> Result<Vec<Instr>, CompileError> {
         CompileError::Deferred(format!("type error: {e:?}"))
     })?;
     let n = num_leaves(&in_ty)?;
-    if n > NUM_REGS {
+    if n > MAX_LEAVES {
         return Err(CompileError::TooManyLeaves {
             needed: n,
-            max: NUM_REGS,
+            max: MAX_LEAVES,
         });
     }
     let ctx = Ctx::new(n);
@@ -870,36 +1138,17 @@ fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
         Iso::SwapProd(a, b) => {
             let n_a = num_leaves(a)?;
             let n_b = num_leaves(b)?;
+            let total = n_a + n_b;
+            // Decompose the permutation into transpositions, using
+            // swap_homes to handle Reg↔Reg, Reg↔Scratch, Scratch↔Scratch.
+            let target: Vec<usize> = (n_a..total).chain(0..n_a).collect();
+            let mut perm: Vec<usize> = (0..total).collect();
             let mut instrs = Vec::new();
-            // Emit EXCH instructions to physically swap the register
-            // contents. After the EXCHs, the data has moved into the
-            // standard positions, so the context mapping does NOT change.
-            if n_a == n_b {
-                // Equal-sized sides: pairwise EXCH.
-                for i in 0..n_a {
-                    let rd = ctx.mapping[i];
-                    let rs = ctx.mapping[n_a + i];
-                    if rd != rs {
-                        instrs.push(Instr::Exch { rd, rs });
-                    }
-                }
-            } else {
-                // Unequal sizes: permute via transpositions.
-                // Target permutation: positions [0..n_b) get values from
-                // [n_a..n_a+n_b), positions [n_b..n_a+n_b) get values from [0..n_a).
-                let total = n_a + n_b;
-                let target: Vec<usize> = (n_a..total).chain(0..n_a).collect();
-                let mut perm: Vec<usize> = (0..total).collect();
-                for i in 0..total {
-                    if perm[i] != target[i] {
-                        let j = perm.iter().position(|&x| x == target[i]).unwrap();
-                        let rd = ctx.mapping[i];
-                        let rs = ctx.mapping[j];
-                        if rd != rs {
-                            instrs.push(Instr::Exch { rd, rs });
-                        }
-                        perm.swap(i, j);
-                    }
+            for i in 0..total {
+                if perm[i] != target[i] {
+                    let j = perm.iter().position(|&x| x == target[i]).unwrap();
+                    instrs.extend(swap_homes(ctx, i, j));
+                    perm.swap(i, j);
                 }
             }
             Ok((instrs, ctx.clone()))
@@ -951,8 +1200,13 @@ fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
             // SwapSum: flip the tag register (0↔1). XORI tag, 1.
             let _la = num_leaves(a)?;
             let _lb = num_leaves(b)?;
-            let tag_reg = ctx.mapping[0];
-            Ok((vec![Instr::Xori { rd: tag_reg, imm: 1 }], ctx.clone()))
+            let instrs = with_registers(ctx, &[0], |regs| {
+                Ok(vec![Instr::Xori {
+                    rd: regs[0],
+                    imm: 1,
+                }])
+            })?;
+            Ok((instrs, ctx.clone()))
         }
 
         Iso::Plus(f, g) => {
@@ -990,7 +1244,7 @@ fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
 ///
 /// Emits D-1 guarded copies of `code(body)`, where D = numeral_count(n_ty).
 /// Each copy `i` is guarded on the i-th tag register of the unary-encoded
-/// Nat value (register `ctx.mapping[i]`): tag=1 iff k > i, meaning the
+/// Nat value (register `ctx.homes[i]`): tag=1 iff k > i, meaning the
 /// body should execute for this iteration.
 ///
 /// Uses the SWAPBR skip-block: skip the body iff the tag is 0.
@@ -1001,28 +1255,38 @@ fn lower_data_dependent_iter(
     ctx: &Ctx,
 ) -> Result<(Vec<Instr>, Ctx), CompileError> {
     let n_counter = num_leaves(n_ty)?;
-    let (ctx_counter, ctx_body) = ctx.split(n_counter);
 
-    // Compile the body once to get its instruction sequence.
-    let (body_instrs, _) = lower(body, &ctx_body)?;
-
-    // Allocate 2 aux registers for the skip-block (rb + temp).
-    let full_ctx = ctx.clone();
-    let aux = allocate_aux(&full_ctx, 2)?;
+    // Allocate 2 aux registers for skip-blocks, excluding counter leaves.
+    let exclude: Vec<usize> = (0..n_counter).collect();
+    let (aux, aux_pi, aux_po, dctx) = allocate_aux(ctx, 2, &exclude)?;
     let rb = aux[0];
     let temp = aux[1];
 
+    // Compile the body once with the displaced context's body sub-slice.
+    let (_, dctx_body) = dctx.split(n_counter);
+    let (body_instrs, body_ctx_out) = lower(body, &dctx_body)?;
+
+    // §2.6 guarded-unroll consistency: canonical layout at body boundary.
+    debug_assert_eq!(
+        dctx_body.homes, body_ctx_out.homes,
+        "M-C1 §2.6: Ctx residence changed during body lowering — \
+         frozen unroll body requires canonical layout at boundaries"
+    );
+
     let mut instrs = Vec::new();
+    instrs.extend(aux_pi);
 
     // Emit D-1 guarded copies. Iteration i uses counter tag register i
     // as control: tag=1 → execute (don't skip), tag=0 → skip.
     for i in 0..(d - 1) {
-        let ctrl_reg = ctx_counter.mapping[i];
+        let (ctrl_reg, ctrl_pi, ctrl_po) = ensure_reg(&dctx, i, &[rb, temp]);
+        instrs.extend(ctrl_pi);
         // skip_when_set=false: skip body iff ctrl=0 (tag=0 means k ≤ i)
-        let block = emit_skip_block(ctrl_reg, &body_instrs, rb, temp, false);
-        instrs.extend(block);
+        instrs.extend(emit_skip_block(ctrl_reg, &body_instrs, rb, temp, false));
+        instrs.extend(ctrl_po);
     }
 
+    instrs.extend(aux_po);
     Ok((instrs, ctx.clone()))
 }
 
@@ -1046,15 +1310,26 @@ fn lower_bare_plus(
     let n_f = num_leaves(&in_f)?;
     let n_g = num_leaves(&in_g)?;
 
-    // Tag is at ctx.mapping[0]. Payload starts at ctx.mapping[1..].
-    let tag_reg = ctx.mapping[0];
+    // Early out: both structurally identity → no-op.
+    if is_structural_identity(f) && is_structural_identity(g) {
+        return Ok((vec![], ctx.clone()));
+    }
 
-    // Build sub-contexts for f (Left payload) and g (Right payload).
+    // Allocate 2 aux registers for skip-blocks, excluding tag leaf 0.
+    let (aux, aux_pi, aux_po, dctx) = allocate_aux(ctx, 2, &[0])?;
+    let rb = aux[0];
+    let temp = aux[1];
+
+    // Tag register (may need paging from scratch).
+    let (tag_reg, tag_pi, tag_po) = ensure_reg(&dctx, 0, &[rb, temp]);
+
+    // Build sub-contexts for f (Left payload) and g (Right payload)
+    // from the displaced context.
     let ctx_f = Ctx {
-        mapping: ctx.mapping[1..1 + n_f].to_vec(),
+        homes: dctx.homes[1..1 + n_f].to_vec(),
     };
     let ctx_g = Ctx {
-        mapping: ctx.mapping[1..1 + n_g].to_vec(),
+        homes: dctx.homes[1..1 + n_g].to_vec(),
     };
 
     let (instrs_f, _) = lower(f, &ctx_f)?;
@@ -1067,12 +1342,9 @@ fn lower_bare_plus(
         return Ok((vec![], ctx.clone()));
     }
 
-    // Allocate 2 aux registers for skip-blocks.
-    let aux = allocate_aux(ctx, 2)?;
-    let rb = aux[0];
-    let temp = aux[1];
-
     let mut instrs = Vec::new();
+    instrs.extend(aux_pi);
+    instrs.extend(tag_pi);
 
     // Phase 1: f runs iff tag=0 → skip f iff tag=1
     if !f_is_nop {
@@ -1084,13 +1356,16 @@ fn lower_bare_plus(
         instrs.extend(emit_skip_block(tag_reg, &instrs_g, rb, temp, false));
     }
 
+    instrs.extend(tag_po);
+    instrs.extend(aux_po);
     Ok((instrs, ctx.clone()))
 }
 
-// ── Marshal / unmarshal ──────────────────────────────────────────────
+// ── Marshal / unmarshal (M-C1 §2.7) ────────────────────────────────
 
 /// Marshal a `Value` of a given type into `StateVals`, writing leaf `i`
-/// to `regs[i]`. All other state fields are zeroed.
+/// to its canonical home: `regs[i]` for i < 8, `scratch[i-6]` for
+/// 8 ≤ i < 14. All other state fields are zeroed.
 pub fn marshal(v: &Value, ty: &Type) -> StateVals {
     let bytes = value_to_leaf_bytes(v, ty);
     let mut state = StateVals {
@@ -1098,18 +1373,33 @@ pub fn marshal(v: &Value, ty: &Type) -> StateVals {
         pc: 0,
         br: 0,
         ir: 0,
-        scratch: [0; NUM_REGS],
+        scratch: [0; NUM_SCRATCH],
     };
     for (i, &b) in bytes.iter().enumerate() {
-        state.regs[i] = b;
+        if i < NUM_REGS {
+            state.regs[i] = b;
+        } else {
+            // Spill: leaf i → scratch[i - 6] (s2..s7, skipping s0/s1).
+            state.scratch[i - 6] = b;
+        }
     }
     state
 }
 
-/// Unmarshal a `StateVals` back to a `Value`, reading `regs[i]` as leaf `i`.
+/// Unmarshal a `StateVals` back to a `Value`, reading leaf `i` from
+/// its canonical home: `regs[i]` for i < 8, `scratch[i-6]` for
+/// 8 ≤ i < 14.
 pub fn unmarshal(s: &StateVals, ty: &Type) -> Value {
     let n = num_leaves(ty).expect("unmarshal: num_leaves");
-    let bytes: Vec<u8> = (0..n).map(|i| s.regs[i]).collect();
+    let bytes: Vec<u8> = (0..n)
+        .map(|i| {
+            if i < NUM_REGS {
+                s.regs[i]
+            } else {
+                s.scratch[i - 6]
+            }
+        })
+        .collect();
     let (v, _) = value_from_leaf_bytes(&bytes, ty);
     v
 }

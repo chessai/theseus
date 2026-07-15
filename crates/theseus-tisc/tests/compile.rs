@@ -245,3 +245,228 @@ fn swapmay_bare_sum_oracle_agrees() {
 fn swapmay_bare_sum_real_cpu() {
     assert_oracle("swapMaybe", &elaborate(SWAPMAY_SRC, "swapMaybe"));
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// M-C1 (a): pure spill — straight-line programs needing 9–14 leaves
+// ══════════════════════════════════════════════════════════════════════
+
+/// Right-nested product of `n` Bits.
+fn bit_prod(n: usize) -> Type {
+    let bit = Type::sum(Type::One, Type::One);
+    if n == 1 {
+        bit
+    } else {
+        Type::prod(bit, bit_prod(n - 1))
+    }
+}
+
+/// Authoritative oracle on a representative sample (for large domains
+/// where exhaustive real-CPU evaluation is infeasible).
+fn assert_oracle_sample(name: &str, iso: &Iso, count: usize) {
+    let (in_ty, _) = type_of(iso).expect("iso types");
+    let vals = enumerate_values(&in_ty);
+    let n = vals.len();
+    // Evenly spaced indices + boundaries.
+    let mut indices: Vec<usize> = (0..count)
+        .map(|i| {
+            if count <= 1 {
+                0
+            } else {
+                i * (n - 1) / (count - 1)
+            }
+        })
+        .collect();
+    indices.push(0);
+    if n > 0 {
+        indices.push(n - 1);
+    }
+    indices.sort();
+    indices.dedup();
+
+    let mut checked = 0usize;
+    for &i in &indices {
+        let v = &vals[i];
+        let cpu_out = cpu_run(iso, v).unwrap_or_else(|e| {
+            panic!("{name} (real-CPU sample): failed on #{i}: {e}")
+        });
+        let mut fuel = 100_000u64;
+        let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
+            .unwrap_or_else(|e| panic!("{name}: eval failed on #{i}: {e:?}"));
+        assert_eq!(
+            cpu_out, eval_out,
+            "{name} (real-CPU sample): CPU disagrees with eval on input #{i} {v:?}"
+        );
+        checked += 1;
+    }
+    let instr_count = compile(iso).unwrap().len();
+    eprintln!(
+        "{name} (real-CPU sample): oracle agrees on {checked}/{n} inputs ({instr_count} instructions)"
+    );
+}
+
+#[test]
+fn spill_11_leaves_swap_oracle_agrees() {
+    // SwapProd on 11 leaves: exercises spill (leaves 8–10 in scratch).
+    let iso = Iso::SwapProd(bit_prod(5), bit_prod(6));
+    let instrs = compile(&iso).expect("11-leaf SwapProd should compile");
+    eprintln!("11-leaf SwapProd: {} instructions", instrs.len());
+    assert_oracle_fast("spill_11_swap", &iso);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow); run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn spill_11_leaves_swap_real_cpu() {
+    assert_oracle_sample(
+        "spill_11_swap",
+        &Iso::SwapProd(bit_prod(5), bit_prod(6)),
+        15,
+    );
+}
+
+#[test]
+fn spill_14_leaves_ceiling_oracle_agrees() {
+    // SwapProd on 14 leaves: the straight-line ceiling.
+    let iso = Iso::SwapProd(bit_prod(7), bit_prod(7));
+    let instrs = compile(&iso).expect("14-leaf SwapProd should compile");
+    eprintln!("14-leaf SwapProd: {} instructions", instrs.len());
+    assert_oracle_fast("spill_14_ceiling", &iso);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow); run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn spill_14_leaves_ceiling_real_cpu() {
+    assert_oracle_sample(
+        "spill_14_ceiling",
+        &Iso::SwapProd(bit_prod(7), bit_prod(7)),
+        15,
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// M-C1 (b): spill + branch — controlled-op / iter on >8 leaves
+// ══════════════════════════════════════════════════════════════════════
+
+/// Build a controlled NOT on Bit^10 (1 ctrl + 9 target). The g arm
+/// flips the first target bit; f = identity.
+fn build_spill_controlled_not() -> Iso {
+    let bit = Type::sum(Type::One, Type::One);
+    let tgt_ty = bit_prod(9);
+    let g_body = Iso::Times(
+        Box::new(Iso::SwapSum(Type::One, Type::One)),
+        Box::new(Iso::Id(bit_prod(8))),
+    );
+    Iso::seq(
+        Iso::SwapProd(bit.clone(), tgt_ty.clone()),
+        Iso::seq(
+            Iso::Distrib(tgt_ty.clone(), Type::One, Type::One),
+            Iso::seq(
+                Iso::Plus(
+                    Box::new(Iso::Id(Type::prod(tgt_ty.clone(), Type::One))),
+                    Box::new(Iso::Times(
+                        Box::new(g_body),
+                        Box::new(Iso::Id(Type::One)),
+                    )),
+                ),
+                Iso::seq(
+                    Iso::Factor(tgt_ty.clone(), Type::One, Type::One),
+                    Iso::SwapProd(tgt_ty, bit),
+                ),
+            ),
+        ),
+    )
+}
+
+#[test]
+fn spill_branch_controlled_not_oracle_agrees() {
+    let iso = build_spill_controlled_not();
+    let instrs = compile(&iso).expect("10-leaf controlled NOT should compile");
+    eprintln!("spill+branch controlled NOT: {} instructions", instrs.len());
+    assert_oracle_fast("spill_branch_ctrl_not", &iso);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow); run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn spill_branch_controlled_not_real_cpu() {
+    assert_oracle_sample("spill_branch_ctrl_not", &build_spill_controlled_not(), 15);
+}
+
+/// Build a data-dependent iter on a value with enough leaves to spill.
+/// Iter Nat3 (NOT first bit) on Nat3 × Bit^9 = 11 total leaves.
+fn build_spill_iter() -> Iso {
+    let body = Iso::Times(
+        Box::new(Iso::SwapSum(Type::One, Type::One)),
+        Box::new(Iso::Id(bit_prod(8))),
+    );
+    let nat3 = Type::sum(
+        Type::One,
+        Type::sum(Type::One, Type::sum(Type::One, Type::Zero)),
+    );
+    Iso::Iter(nat3, Box::new(body))
+}
+
+#[test]
+fn spill_branch_iter_oracle_agrees() {
+    let iso = build_spill_iter();
+    let instrs = compile(&iso).expect("11-leaf iter should compile");
+    eprintln!("spill+branch iter: {} instructions", instrs.len());
+    assert_oracle_fast("spill_branch_iter", &iso);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow); run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn spill_branch_iter_real_cpu() {
+    assert_oracle_sample("spill_branch_iter", &build_spill_iter(), 15);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// M-C1 (c): negative tests — ceiling enforcement
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn spill_15_leaves_straight_line_rejected() {
+    // 15 > 14 (straight-line ceiling) → TooManyLeaves.
+    let iso = Iso::Id(bit_prod(15));
+    let result = compile(&iso);
+    assert!(result.is_err(), "15-leaf program must be rejected");
+    assert!(matches!(
+        result.unwrap_err(),
+        theseus_tisc::compile::CompileError::TooManyLeaves { .. }
+    ));
+}
+
+#[test]
+fn spill_13_leaves_branching_rejected() {
+    // 13 leaves with branching > 12 (branching ceiling) → TooManyLeaves.
+    // 1 ctrl (Bit) + 12 target = 13 total, controlled-op triggers allocate_aux.
+    let bit = Type::sum(Type::One, Type::One);
+    let tgt_ty = bit_prod(12);
+    let g_body = Iso::Times(
+        Box::new(Iso::SwapSum(Type::One, Type::One)),
+        Box::new(Iso::Id(bit_prod(11))),
+    );
+    let iso = Iso::seq(
+        Iso::SwapProd(bit.clone(), tgt_ty.clone()),
+        Iso::seq(
+            Iso::Distrib(tgt_ty.clone(), Type::One, Type::One),
+            Iso::seq(
+                Iso::Plus(
+                    Box::new(Iso::Id(Type::prod(tgt_ty.clone(), Type::One))),
+                    Box::new(Iso::Times(
+                        Box::new(g_body),
+                        Box::new(Iso::Id(Type::One)),
+                    )),
+                ),
+                Iso::seq(
+                    Iso::Factor(tgt_ty.clone(), Type::One, Type::One),
+                    Iso::SwapProd(tgt_ty, bit),
+                ),
+            ),
+        ),
+    );
+    let result = compile(&iso);
+    assert!(result.is_err(), "13-leaf branching program must be rejected");
+    assert!(matches!(
+        result.unwrap_err(),
+        theseus_tisc::compile::CompileError::TooManyLeaves { .. }
+    ));
+}
