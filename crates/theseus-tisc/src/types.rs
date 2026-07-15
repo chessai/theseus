@@ -1,14 +1,14 @@
 //! TISC-1 State type and Word helpers.
 //!
-//! State layout (160 bits, fixed field order):
-//!   [r0, r1, r2, r3, r4, r5, r6, r7, PC, BR, IR_lo, IR_hi, s0, s1, s2, s3, s4, s5, s6, s7]
+//! State layout (field order, `NUM_FIELDS` Word8 fields):
+//!   [r0..r7, PC, BR, IR_lo, IR_hi, s0..s7, m0..m_{MEM_WORDS-1}]
 //!
-//! Each general register, PC, BR, and scratch word is a Word8 (8 bits,
-//! right-nested product, index 0 = LSB). IR is a Word16 (two Word8s:
-//! IR_lo x IR_hi).
+//! Each general register, PC, BR, scratch word, and memory word is a
+//! Word8 (8 bits, right-nested product, index 0 = LSB). IR is a Word16
+//! (two Word8s: IR_lo x IR_hi).
 //!
 //! The product nesting is right-associated at the field level:
-//!   r0 x (r1 x (r2 x ... x s7))
+//!   r0 x (r1 x (r2 x ... x m_{MEM_WORDS-1}))
 
 use theseus_core::{Type, Value};
 use theseus_netlist::{bits_of, value_from_bits};
@@ -22,12 +22,17 @@ pub const NUM_REGS: usize = 8;
 /// Number of scratch words.
 pub const NUM_SCRATCH: usize = 8;
 
+/// Number of memory words (M-C2 Layer 1, ADR-0046 §3.1).
+/// Parameterized; C1 demonstrated at N ∈ {2,4,8}. Shipped N=4
+/// (the largest N that keeps all tests green without OOM/timeout).
+pub const MEM_WORDS: usize = 4;
+
 /// Total number of Word8-sized fields in State:
-/// 8 regs + PC + BR + IR_lo + IR_hi + 8 scratch = 20 fields.
-pub const NUM_FIELDS: usize = 20;
+/// 8 regs + PC + BR + IR_lo + IR_hi + 8 scratch + MEM_WORDS mem = 20 + MEM_WORDS.
+pub const NUM_FIELDS: usize = 20 + MEM_WORDS;
 
 /// Total bits in State.
-pub const STATE_BITS: usize = NUM_FIELDS * W; // 160
+pub const STATE_BITS: usize = NUM_FIELDS * W;
 
 // ── Type helpers ────────────────────────────────────────────────────
 
@@ -66,15 +71,16 @@ fn right_nested(types: &[Type]) -> Type {
     }
 }
 
-/// The 160-bit State Type as a right-nested product of its 20 Word8 fields.
+/// The State Type as a right-nested product of its `NUM_FIELDS` Word8 fields.
 ///
 /// Field order (index):
-///   0..8   = r0..r7    (general registers)
-///   8      = PC
-///   9      = BR
-///   10     = IR_lo     (low byte of 16-bit IR)
-///   11     = IR_hi     (high byte of 16-bit IR)
-///   12..20 = s0..s7    (scratch words)
+///   0..8            = r0..r7    (general registers)
+///   8               = PC
+///   9               = BR
+///   10              = IR_lo     (low byte of 16-bit IR)
+///   11              = IR_hi     (high byte of 16-bit IR)
+///   12..20          = s0..s7    (scratch words)
+///   20..20+MEM_WORDS = m0..m_{MEM_WORDS-1}  (memory bank, M-C2 Layer 1)
 pub fn state_ty() -> Type {
     let fields: Vec<Type> = (0..NUM_FIELDS).map(|_| word8()).collect();
     right_nested(&fields)
@@ -106,6 +112,12 @@ pub fn scratch_field(i: usize) -> usize {
     12 + i
 }
 
+/// Field index of memory word `i` (0..MEM_WORDS).
+pub fn mem_field(i: usize) -> usize {
+    assert!(i < MEM_WORDS);
+    20 + i
+}
+
 // ── StateVals encode / decode ──────────────────────────────────────
 
 /// Byte-level representation of the TISC-1 machine State.
@@ -116,6 +128,7 @@ pub struct StateVals {
     pub br: u8,
     pub ir: u16,
     pub scratch: [u8; NUM_SCRATCH],
+    pub mem: [u8; MEM_WORDS],
 }
 
 impl StateVals {
@@ -123,7 +136,7 @@ impl StateVals {
     pub fn encode(&self) -> Value {
         let ty = state_ty();
         let mut all_bits: Vec<bool> = Vec::with_capacity(STATE_BITS);
-        // Fields in order: r0..r7, PC, BR, IR_lo, IR_hi, s0..s7
+        // Fields in order: r0..r7, PC, BR, IR_lo, IR_hi, s0..s7, m0..m_{N-1}
         for &r in &self.regs {
             push_u8_bits(&mut all_bits, r);
         }
@@ -133,6 +146,9 @@ impl StateVals {
         push_u8_bits(&mut all_bits, (self.ir >> 8) as u8); // IR_hi
         for &s in &self.scratch {
             push_u8_bits(&mut all_bits, s);
+        }
+        for &m in &self.mem {
+            push_u8_bits(&mut all_bits, m);
         }
         value_from_bits(&ty, &all_bits).expect("StateVals::encode")
     }
@@ -156,8 +172,12 @@ impl StateVals {
         for (i, s) in scratch.iter_mut().enumerate() {
             *s = read_u8_bits(&all_bits, (12 + i) * W);
         }
+        let mut mem = [0u8; MEM_WORDS];
+        for (i, m) in mem.iter_mut().enumerate() {
+            *m = read_u8_bits(&all_bits, (20 + i) * W);
+        }
 
-        StateVals { regs, pc, br, ir, scratch }
+        StateVals { regs, pc, br, ir, scratch, mem }
     }
 }
 

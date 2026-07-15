@@ -34,7 +34,7 @@ use theseus_netlist::{
     balance, bits_of, lower_iso, rail_width, simulate, CellKind,
 };
 use theseus_tisc::step::{fetch, pc_add_br, pc_inc, step};
-use theseus_tisc::types::StateVals;
+use theseus_tisc::types::{MEM_WORDS, StateVals};
 
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -75,6 +75,7 @@ fn ref_instr(word: u16, s: &mut StateVals) {
             }
             0b0111 => std::mem::swap(&mut s.regs[rd], &mut s.scratch[rt]),
             0b1000 => std::mem::swap(&mut s.regs[rd], &mut s.br),
+            0b1001 => { if rt < MEM_WORDS { std::mem::swap(&mut s.regs[rd], &mut s.mem[rt]); } }
             _ => {} // reserved
         }
     } else {
@@ -143,6 +144,7 @@ fn st(regs: [u8; 8], pc: u8) -> StateVals {
         br: 0,
         ir: 0,
         scratch: [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
+        mem: [0; MEM_WORDS],
     }
 }
 
@@ -525,6 +527,7 @@ fn v1_counterexample_distinct_post_states() {
         br: 9,
         ir: 0,
         scratch: [0; 8],
+        mem: [0; MEM_WORDS],
     };
     let a_out = eval_state("counterex/A", &iso, &a);
 
@@ -538,6 +541,7 @@ fn v1_counterexample_distinct_post_states() {
         br: 5,
         ir: 0,
         scratch: [0; 8],
+        mem: [0; MEM_WORDS],
     };
     let b_out = eval_state("counterex/B", &iso, &b);
 

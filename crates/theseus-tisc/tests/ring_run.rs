@@ -16,7 +16,7 @@ use theseus_tisc::ring_run::{
     closed_step_ring, step_ring, ClosedStepRing, StepRing,
 };
 use theseus_tisc::step::step;
-use theseus_tisc::types::{state_ty, StateVals};
+use theseus_tisc::types::{state_ty, MEM_WORDS, StateVals};
 
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -82,6 +82,7 @@ fn sample_state(pc: u8) -> StateVals {
         br: 0,
         ir: 0,
         scratch: [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
+        mem: [0; MEM_WORDS],
     }
 }
 

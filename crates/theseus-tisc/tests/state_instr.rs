@@ -12,7 +12,7 @@ use theseus_netlist::{
     balance, bits_of, rail_width, simulate, CellKind,
 };
 use theseus_tisc::instr;
-use theseus_tisc::types::{StateVals};
+use theseus_tisc::types::{MEM_WORDS, StateVals};
 
 const EVAL_FUEL: u64 = 50_000_000;
 
@@ -93,6 +93,7 @@ fn base_state() -> StateVals {
         br: 0x00,
         ir: 0x0000,
         scratch: [0x00; 8],
+        mem: [0; MEM_WORDS],
     }
 }
 
@@ -103,6 +104,7 @@ fn edge_state() -> StateVals {
         br: 0x24,
         ir: 0x0000,
         scratch: [0x00; 8],
+        mem: [0; MEM_WORDS],
     }
 }
 
@@ -113,6 +115,7 @@ fn mixed_state() -> StateVals {
         br: 0xFF,
         ir: 0x0000,
         scratch: [0x00; 8],
+        mem: [0; MEM_WORDS],
     }
 }
 

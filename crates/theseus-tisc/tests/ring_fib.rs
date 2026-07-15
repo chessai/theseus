@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 use theseus_tisc::asm::{assemble, Instr};
 use theseus_tisc::ring_run::{step_ring, StepRing};
 use theseus_tisc::step::step;
-use theseus_tisc::types::StateVals;
+use theseus_tisc::types::{MEM_WORDS, StateVals};
 
 /// Generous per-eval fuel.
 const EVAL_FUEL: u64 = 8_000_000_000;
@@ -47,6 +47,7 @@ fn seed() -> StateVals {
         br: 0,
         ir: 0,
         scratch: [0; 8],
+        mem: [0; MEM_WORDS],
     };
     s.regs[1] = 1;
     s.regs[2] = 1;

@@ -6,6 +6,7 @@
 
 use theseus_core::{enumerate_values, type_of, Iso, Type, Value};
 use theseus_tisc::compile::{compile, run_on_cpu, run_on_cpu_fast};
+use theseus_tisc::types::MEM_WORDS;
 
 // ── Two oracles: one authoritative, one fast ─────────────────────────
 //
@@ -423,21 +424,18 @@ fn spill_branch_iter_real_cpu() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn spill_15_leaves_straight_line_rejected() {
-    // 15 > 14 (straight-line ceiling) → TooManyLeaves.
+fn spill_15_leaves_straight_line_now_compiles() {
+    // With M-C2 memory (MEM_WORDS ≥ 1), 15 leaves fit within 14+N.
+    // Previously rejected at the M-C1 ceiling of 14.
     let iso = Iso::Id(bit_prod(15));
     let result = compile(&iso);
-    assert!(result.is_err(), "15-leaf program must be rejected");
-    assert!(matches!(
-        result.unwrap_err(),
-        theseus_tisc::compile::CompileError::TooManyLeaves { .. }
-    ));
+    assert!(result.is_ok(), "15-leaf program should compile with memory (ceiling = {})", 14 + MEM_WORDS);
 }
 
 #[test]
-fn spill_13_leaves_branching_rejected() {
-    // 13 leaves with branching > 12 (branching ceiling) → TooManyLeaves.
-    // 1 ctrl (Bit) + 12 target = 13 total, controlled-op triggers allocate_aux.
+fn spill_13_leaves_branching_now_compiles() {
+    // With M-C2 memory (MEM_WORDS ≥ 1), 13 branching leaves fit within 12+N.
+    // Previously rejected at the M-C1 branching ceiling of 12.
     let bit = Type::sum(Type::One, Type::One);
     let tgt_ty = bit_prod(12);
     let g_body = Iso::Times(
@@ -464,7 +462,136 @@ fn spill_13_leaves_branching_rejected() {
         ),
     );
     let result = compile(&iso);
-    assert!(result.is_err(), "13-leaf branching program must be rejected");
+    assert!(result.is_ok(), "13-leaf branching program should compile with memory (ceiling = {})", 12 + MEM_WORDS);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// M-C2 Layer 1 (a): spill-to-memory — programs needing >14 leaves
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn mem_spill_15_leaves_swap_oracle_agrees() {
+    // 15 leaves = 8 reg + 6 scratch + 1 mem: exercises memory spill.
+    // Previously would have been rejected as TooManyLeaves.
+    let iso = Iso::SwapProd(bit_prod(7), bit_prod(8));
+    let instrs = compile(&iso).expect("15-leaf SwapProd should compile with memory");
+    eprintln!("15-leaf SwapProd (mem spill): {} instructions", instrs.len());
+    assert_oracle_fast("mem_spill_15_swap", &iso);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow); run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn mem_spill_15_leaves_swap_real_cpu() {
+    assert_oracle_sample(
+        "mem_spill_15_swap",
+        &Iso::SwapProd(bit_prod(7), bit_prod(8)),
+        12,
+    );
+}
+
+#[test]
+fn mem_spill_max_leaves_swap_oracle_agrees() {
+    // 14 + MEM_WORDS leaves: the straight-line ceiling with memory.
+    let n = 14 + MEM_WORDS;
+    let half = n / 2;
+    let iso = Iso::SwapProd(bit_prod(half), bit_prod(n - half));
+    let instrs = compile(&iso).expect(&format!("{n}-leaf SwapProd should compile"));
+    eprintln!("{n}-leaf SwapProd (max mem): {} instructions", instrs.len());
+    assert_oracle_fast("mem_spill_max_ceiling", &iso);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow); run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn mem_spill_max_leaves_swap_real_cpu() {
+    let n = 14 + MEM_WORDS;
+    let half = n / 2;
+    assert_oracle_sample(
+        "mem_spill_max_ceiling",
+        &Iso::SwapProd(bit_prod(half), bit_prod(n - half)),
+        12,
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// M-C2 Layer 1 (b): store-then-reload round-trip through memory
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn mem_store_reload_round_trip_oracle_agrees() {
+    // A product of 15 Bits with a swap that forces data through memory
+    // and back. The compiler's marshal puts leaf 14 in mem[0], and any
+    // op that touches it must MEXCH it in and out.
+    // SwapProd of the last bit with the first exercises the full
+    // reg → mem → reg path.
+    let n = 15.min(14 + MEM_WORDS);
+    let iso = Iso::SwapProd(bit_prod(1), bit_prod(n - 1));
+    let instrs = compile(&iso).expect("store-reload should compile");
+    eprintln!("store-reload round-trip: {} instructions on {n} leaves", instrs.len());
+    assert_oracle_fast("mem_store_reload", &iso);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow); run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn mem_store_reload_round_trip_real_cpu() {
+    let n = 15.min(14 + MEM_WORDS);
+    assert_oracle_sample(
+        "mem_store_reload",
+        &Iso::SwapProd(bit_prod(1), bit_prod(n - 1)),
+        12,
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// M-C2 Layer 1 (c): negative tests — updated ceiling enforcement
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn mem_over_ceiling_straight_line_rejected() {
+    // 14 + MEM_WORDS + 1 > 14 + MEM_WORDS → TooManyLeaves.
+    let over = 14 + MEM_WORDS + 1;
+    let iso = Iso::Id(bit_prod(over));
+    let result = compile(&iso);
+    assert!(result.is_err(), "{over}-leaf straight-line program must be rejected");
+    assert!(matches!(
+        result.unwrap_err(),
+        theseus_tisc::compile::CompileError::TooManyLeaves { .. }
+    ));
+}
+
+#[test]
+fn mem_over_ceiling_branching_rejected() {
+    // 12 + MEM_WORDS + 1 leaves with branching → TooManyLeaves.
+    let over = 12 + MEM_WORDS + 1;
+    let bit = Type::sum(Type::One, Type::One);
+    let tgt_ty = bit_prod(over - 1);
+    let g_body = Iso::Times(
+        Box::new(Iso::SwapSum(Type::One, Type::One)),
+        Box::new(Iso::Id(bit_prod(over - 2))),
+    );
+    let iso = Iso::seq(
+        Iso::SwapProd(bit.clone(), tgt_ty.clone()),
+        Iso::seq(
+            Iso::Distrib(tgt_ty.clone(), Type::One, Type::One),
+            Iso::seq(
+                Iso::Plus(
+                    Box::new(Iso::Id(Type::prod(tgt_ty.clone(), Type::One))),
+                    Box::new(Iso::Times(
+                        Box::new(g_body),
+                        Box::new(Iso::Id(Type::One)),
+                    )),
+                ),
+                Iso::seq(
+                    Iso::Factor(tgt_ty.clone(), Type::One, Type::One),
+                    Iso::SwapProd(tgt_ty, bit),
+                ),
+            ),
+        ),
+    );
+    let result = compile(&iso);
+    assert!(
+        result.is_err(),
+        "{over}-leaf branching program must be rejected"
+    );
     assert!(matches!(
         result.unwrap_err(),
         theseus_tisc::compile::CompileError::TooManyLeaves { .. }

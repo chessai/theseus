@@ -13,7 +13,7 @@ use crate::addressing::{at_fields, at_reg1, at_reg2, at_reg3};
 use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_list, swap_adj,
 };
-use crate::types::{bit, flat, word8, reg_field, scratch_field, BR_FIELD, W};
+use crate::types::{bit, flat, word8, reg_field, scratch_field, mem_field, BR_FIELD, W};
 
 // ══════════════════════════════════════════════════════════════════════
 // Operand-level iso builders (lifted from verified test files)
@@ -394,4 +394,10 @@ pub fn rotli(rd: usize, imm: u8) -> Iso {
 /// `ROTRI rd, imm8` : `rd <- rd rotr (imm8 mod 8)`.
 pub fn rotri(rd: usize, imm: u8) -> Iso {
     at_reg1(rotri_operand(imm as usize), reg_field(rd))
+}
+
+/// `MEXCH rd, addr` : swap register `rd` with memory word `mem[addr]`.
+/// Self-inverse (M-C2 Layer 1, ADR-0046 §3.1).
+pub fn mexch(rd: usize, addr: usize) -> Iso {
+    at_fields(swap_words_iso(), &[reg_field(rd), mem_field(addr)])
 }

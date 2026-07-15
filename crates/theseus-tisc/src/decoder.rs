@@ -73,7 +73,8 @@ use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_balanced, seq_list,
 };
 use crate::types::{
-    flat, reg_field, scratch_field, word8, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD, W,
+    flat, mem_field, reg_field, scratch_field, word8, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD,
+    MEM_WORDS, W,
 };
 
 // ── Aux-field conventions ──────────────────────────────────────────
@@ -206,6 +207,41 @@ pub fn select_reg(sel: RegSel) -> Iso {
 /// Bring scratch word `s[sel]` to the fixed slot s0 (field 12).
 pub fn select_scratch(sel: RegSel) -> Iso {
     select_fields(sel, scratch_field)
+}
+
+/// The 1-of-N select tree over the memory bank fields `mem_field(0)..mem_field(N-1)`.
+/// Parameterized by `MEM_WORDS`; supports N ∈ {2, 4, 8}.
+/// THIS IS THE C1 TREE (ADR-0046 §3.1, §4.3): it MUST be ancilla-clean
+/// (Bennett-sandwiched controls, self-inverse routing brackets).
+pub fn select_mem(sel: RegSel) -> Iso {
+    let n = MEM_WORDS;
+    let n_bits = match n {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        8 => 3,
+        _ => panic!("select_mem: MEM_WORDS={n} not in {{2,4,8}}"),
+    };
+    let mut steps = Vec::new();
+    // Tree levels from MSB down to LSB (same pattern as select_fields for 8).
+    for level in (0..n_bits).rev() {
+        let stride = 1usize << level;
+        for i in 0..stride {
+            if i + stride < n {
+                steps.push(ctrl_word_swap(
+                    sel.ir_field,
+                    sel.bits[level],
+                    mem_field(i),
+                    mem_field(i + stride),
+                ));
+            }
+        }
+    }
+    if steps.is_empty() {
+        Iso::Id(crate::types::state_ty())
+    } else {
+        seq_balanced(steps)
+    }
 }
 
 /// Reference model of the crossbar's register permutation (for tests):
@@ -506,6 +542,30 @@ fn xchg_instr() -> Iso {
     predicated(&r_pred(0b0111), body)
 }
 
+/// MEXCH rd, addr: gated swap of r[rd] ↔ mem[addr] (M-C2 Layer 1,
+/// ADR-0046 §3.1). The register crossbar routes r[rd] to r0; the
+/// memory crossbar (the C1 tree) routes mem[addr] to m0; a predicated
+/// swap exchanges r0 ↔ m0; both crossbars undo. Self-inverse.
+fn mexch_instr() -> Iso {
+    let selr = select_reg(R_RD);
+    let selm = select_mem(R_RT);
+    // Gated swap between reg_field(0) and mem_field(0), controlled on pred.
+    let gsw = on_fields(
+        &[reg_field(0), mem_field(0), AUX_PRED_FIELD],
+        (0..W)
+            .map(|i| gate_at(3 * W, &[2 * W, i, W + i], fredkin_prim()))
+            .collect(),
+    );
+    let body = Iso::seq(
+        selr.clone(),
+        Iso::seq(
+            selm.clone(),
+            Iso::seq(gsw, Iso::seq(Iso::sym(selm), Iso::sym(selr))),
+        ),
+    );
+    predicated(&r_pred(0b1001), body)
+}
+
 /// SWAPBR rd: gated swap of BR ↔ r[rd] (ADR-0034 D1, Pendulum
 /// semantics). EXCH-shaped: route r[rd] to the r0 slot via the R_RD
 /// crossbar, perform a predicated swap of r0-slot and BR, route back.
@@ -596,7 +656,7 @@ fn rotri_instr() -> Iso {
 // Public dispatch
 // ══════════════════════════════════════════════════════════════════════
 
-/// The 14 live TISC-1 instructions.
+/// The 15 live TISC-1 instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
     Add,
@@ -608,6 +668,7 @@ pub enum Op {
     Cswap,
     Xchg,
     Swapbr,
+    Mexch,
     Addi,
     Subi,
     Xori,
@@ -616,7 +677,7 @@ pub enum Op {
 }
 
 impl Op {
-    pub const ALL: [Op; 14] = [
+    pub const ALL: [Op; 15] = [
         Op::Add,
         Op::Sub,
         Op::Xor,
@@ -626,6 +687,7 @@ impl Op {
         Op::Cswap,
         Op::Xchg,
         Op::Swapbr,
+        Op::Mexch,
         Op::Addi,
         Op::Subi,
         Op::Xori,
@@ -648,6 +710,7 @@ pub fn instruction(op: Op) -> Iso {
         Op::Cswap => cswap_instr(),
         Op::Xchg => xchg_instr(),
         Op::Swapbr => swapbr_instr(),
+        Op::Mexch => mexch_instr(),
         Op::Addi => addi_instr(),
         Op::Subi => subi_instr(),
         Op::Xori => xori_instr(),

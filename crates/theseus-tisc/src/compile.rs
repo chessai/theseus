@@ -16,7 +16,7 @@ use theseus_core::typing::is_numeral_ty;
 use theseus_core::{adjoint, Iso, Type, Value};
 
 use crate::asm::{assemble, Instr};
-use crate::types::{StateVals, NUM_REGS, NUM_SCRATCH};
+use crate::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
 // ── Errors ────────────────────────────────────────────────────────────
 
@@ -213,19 +213,20 @@ fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
 
 // ── Location and constants (M-C1, ADR-0044 §2) ─────────────────────
 
-/// Where a leaf value resides: in a general register or a scratch word.
+/// Where a leaf value resides: register, scratch word, or memory word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Location {
     Reg(u8),
     Scratch(u8),
+    Mem(u8),
 }
 
-/// Maximum leaves for straight-line programs (8 regs + s2..s7 = 14).
-const MAX_LEAVES: usize = 14;
+/// Maximum leaves for straight-line programs (8 regs + s2..s7 + MEM_WORDS mem = 14+N).
+const MAX_LEAVES: usize = 14 + MEM_WORDS;
 
-/// Maximum leaves for branching programs (need 2 free scratch for aux
-/// zero-source, ADR-0044 §2.4).
-const MAX_LEAVES_BRANCHING: usize = 12;
+/// Maximum leaves for branching programs (need 2 free-zero cells for aux
+/// zero-source, ADR-0044 §2.4 / ADR-0046 §3.1).
+const MAX_LEAVES_BRANCHING: usize = 12 + MEM_WORDS;
 
 /// First spillable scratch index (s0/s1 are decoder-reserved).
 const SCRATCH_SPILL_BASE: u8 = 2;
@@ -242,16 +243,18 @@ struct Ctx {
 }
 
 impl Ctx {
-    /// Canonical home layout (ADR-0044 §2.1):
-    /// L < 8 → Reg(L); 8 ≤ L < 14 → Scratch(L − 6).
+    /// Canonical home layout (ADR-0044 §2.1 + ADR-0046 §3.1):
+    /// L < 8 → Reg(L); 8 ≤ L < 14 → Scratch(L − 6); 14 ≤ L < 14+N → Mem(L − 14).
     fn new(n_leaves: usize) -> Self {
         Ctx {
             homes: (0..n_leaves)
                 .map(|i| {
                     if i < NUM_REGS {
                         Location::Reg(i as u8)
-                    } else {
+                    } else if i < 14 {
                         Location::Scratch((i - 6) as u8)
+                    } else {
+                        Location::Mem((i - 14) as u8)
                     }
                 })
                 .collect(),
@@ -279,12 +282,15 @@ impl Ctx {
 
 // ── with_registers (M-C1 §2.3) ─────────────────────────────────────
 
-/// Page scratch-resident operands into spare registers, emit instructions
-/// via the closure, then undo the paging to restore canonical layout.
+/// Page scratch-resident and memory-resident operands into spare registers,
+/// emit instructions via the closure, then undo the paging to restore
+/// canonical layout.
 ///
-/// For each scratch-home operand, Xchg it into a spare register (one whose
-/// home-leaf is not an operand; ≥5 always exist since ops touch ≤3).
-/// After the closure, undo the Xchgs in reverse order.
+/// For each scratch-home operand, Xchg it into a spare register.
+/// For each mem-home operand, Mexch it into a spare register (the
+/// transient-squat pattern, Lemma 7.2 — the spare's leaf transiently
+/// squats in mem[addr] and is restored by the self-inverse Mexch).
+/// After the closure, undo the page-ins in reverse order.
 fn with_registers(
     ctx: &Ctx,
     leaf_indices: &[usize],
@@ -293,6 +299,7 @@ fn with_registers(
     let mut used_regs = std::collections::BTreeSet::new();
     let mut reg_for = vec![0u8; leaf_indices.len()];
     let mut scratch_ops: Vec<(usize, u8)> = Vec::new();
+    let mut mem_ops: Vec<(usize, u8)> = Vec::new();
 
     for (i, &leaf) in leaf_indices.iter().enumerate() {
         match ctx.homes[leaf] {
@@ -303,10 +310,13 @@ fn with_registers(
             Location::Scratch(sx) => {
                 scratch_ops.push((i, sx));
             }
+            Location::Mem(addr) => {
+                mem_ops.push((i, addr));
+            }
         }
     }
 
-    if scratch_ops.is_empty() {
+    if scratch_ops.is_empty() && mem_ops.is_empty() {
         return emit(&reg_for);
     }
 
@@ -315,8 +325,9 @@ fn with_registers(
         .filter(|r| !used_regs.contains(r))
         .collect();
 
+    // Page-in/out stack: records (instr) for undo in reverse.
     let mut page_in = Vec::new();
-    let mut xchg_stack: Vec<(u8, u8)> = Vec::new();
+    let mut page_out_stack: Vec<Instr> = Vec::new();
 
     for &(i, sx) in &scratch_ops {
         let spare = spares
@@ -324,16 +335,21 @@ fn with_registers(
             .expect("with_registers: no spare register");
         reg_for[i] = spare;
         page_in.push(Instr::Xchg { rd: spare, sx });
-        xchg_stack.push((spare, sx));
+        page_out_stack.push(Instr::Xchg { rd: spare, sx });
+    }
+
+    for &(i, addr) in &mem_ops {
+        let spare = spares
+            .pop()
+            .expect("with_registers: no spare register for mem page-in");
+        reg_for[i] = spare;
+        page_in.push(Instr::Mexch { rd: spare, addr });
+        page_out_stack.push(Instr::Mexch { rd: spare, addr });
     }
 
     let body = emit(&reg_for)?;
 
-    let page_out: Vec<Instr> = xchg_stack
-        .iter()
-        .rev()
-        .map(|&(r, sx)| Instr::Xchg { rd: r, sx })
-        .collect();
+    let page_out: Vec<Instr> = page_out_stack.into_iter().rev().collect();
 
     let mut result = page_in;
     result.extend(body);
@@ -343,8 +359,8 @@ fn with_registers(
 
 // ── swap_homes (SwapProd with spill) ────────────────────────────────
 
-/// Swap data between two leaf homes. Handles Reg↔Reg (Exch),
-/// Reg↔Scratch (Xchg), and Scratch↔Scratch (3-Xchg via temp register).
+/// Swap data between two leaf homes. Handles all combinations of
+/// Reg, Scratch, Mem via the appropriate exchange instructions.
 fn swap_homes(ctx: &Ctx, leaf_a: usize, leaf_b: usize) -> Vec<Instr> {
     let ha = ctx.homes[leaf_a];
     let hb = ctx.homes[leaf_b];
@@ -360,17 +376,41 @@ fn swap_homes(ctx: &Ctx, leaf_a: usize, leaf_b: usize) -> Vec<Instr> {
         | (Location::Scratch(sx), Location::Reg(r)) => {
             vec![Instr::Xchg { rd: r, sx }]
         }
+        (Location::Reg(r), Location::Mem(addr))
+        | (Location::Mem(addr), Location::Reg(r)) => {
+            vec![Instr::Mexch { rd: r, addr }]
+        }
         (Location::Scratch(sa), Location::Scratch(sb)) => {
             if sa == sb {
                 return vec![];
             }
-            // 3-Xchg swap via a temp register. The sequence saves and
-            // restores the temp register's value.
             let tmp = 0u8;
             vec![
                 Instr::Xchg { rd: tmp, sx: sa },
                 Instr::Xchg { rd: tmp, sx: sb },
                 Instr::Xchg { rd: tmp, sx: sa },
+            ]
+        }
+        (Location::Scratch(sx), Location::Mem(addr))
+        | (Location::Mem(addr), Location::Scratch(sx)) => {
+            // Scratch↔Mem via temp register: Xchg into reg, Mexch, Xchg back.
+            let tmp = 0u8;
+            vec![
+                Instr::Xchg { rd: tmp, sx },
+                Instr::Mexch { rd: tmp, addr },
+                Instr::Xchg { rd: tmp, sx },
+            ]
+        }
+        (Location::Mem(a), Location::Mem(b)) => {
+            if a == b {
+                return vec![];
+            }
+            // Mem↔Mem via temp register.
+            let tmp = 0u8;
+            vec![
+                Instr::Mexch { rd: tmp, addr: a },
+                Instr::Mexch { rd: tmp, addr: b },
+                Instr::Mexch { rd: tmp, addr: a },
             ]
         }
     }
@@ -417,7 +457,8 @@ fn allocate_aux(
         return Ok((free_regs[..count].to_vec(), vec![], vec![], ctx.clone()));
     }
 
-    // Zero-source: displace register-home leaves into free scratch slots.
+    // Zero-source: displace register-home leaves into free scratch OR
+    // free memory slots (ADR-0046 §3.1 — unused marshalling-zeroed words).
     let used_scratch: std::collections::BTreeSet<u8> = ctx
         .homes
         .iter()
@@ -426,9 +467,31 @@ fn allocate_aux(
             _ => None,
         })
         .collect();
-    let mut free_scratch: Vec<u8> = (SCRATCH_SPILL_BASE..NUM_SCRATCH as u8)
-        .filter(|s| !used_scratch.contains(s))
+    let used_mem: std::collections::BTreeSet<u8> = ctx
+        .homes
+        .iter()
+        .filter_map(|h| match h {
+            Location::Mem(a) => Some(*a),
+            _ => None,
+        })
         .collect();
+
+    // Collect free zero-source slots: scratch s2..s7 first, then mem words.
+    enum ZeroSlot {
+        Scratch(u8),
+        Mem(u8),
+    }
+    let mut free_slots: Vec<ZeroSlot> = Vec::new();
+    for s in (SCRATCH_SPILL_BASE..NUM_SCRATCH as u8).rev() {
+        if !used_scratch.contains(&s) {
+            free_slots.push(ZeroSlot::Scratch(s));
+        }
+    }
+    for a in (0..MEM_WORDS as u8).rev() {
+        if !used_mem.contains(&a) {
+            free_slots.push(ZeroSlot::Mem(a));
+        }
+    }
 
     let needed = count - free_regs.len();
 
@@ -443,7 +506,7 @@ fn allocate_aux(
         })
         .collect();
 
-    if free_scratch.len() < needed || displaceable.len() < needed {
+    if free_slots.len() < needed || displaceable.len() < needed {
         return Err(CompileError::TooManyLeaves {
             needed: ctx.homes.len(),
             max: MAX_LEAVES_BRANCHING,
@@ -457,10 +520,19 @@ fn allocate_aux(
 
     for i in 0..needed {
         let (leaf_idx, reg) = displaceable[displaceable.len() - 1 - i];
-        let sx = free_scratch.pop().unwrap();
-        page_in.push(Instr::Xchg { rd: reg, sx });
-        page_out.push(Instr::Xchg { rd: reg, sx });
-        modified_homes[leaf_idx] = Location::Scratch(sx);
+        let slot = free_slots.pop().unwrap();
+        match slot {
+            ZeroSlot::Scratch(sx) => {
+                page_in.push(Instr::Xchg { rd: reg, sx });
+                page_out.push(Instr::Xchg { rd: reg, sx });
+                modified_homes[leaf_idx] = Location::Scratch(sx);
+            }
+            ZeroSlot::Mem(addr) => {
+                page_in.push(Instr::Mexch { rd: reg, addr });
+                page_out.push(Instr::Mexch { rd: reg, addr });
+                modified_homes[leaf_idx] = Location::Mem(addr);
+            }
+        }
         aux_regs.push(reg);
     }
 
@@ -489,6 +561,16 @@ fn ensure_reg(ctx: &Ctx, leaf: usize, exclude_regs: &[u8]) -> (u8, Vec<Instr>, V
                 spare,
                 vec![Instr::Xchg { rd: spare, sx }],
                 vec![Instr::Xchg { rd: spare, sx }],
+            )
+        }
+        Location::Mem(addr) => {
+            let spare = (0..NUM_REGS as u8)
+                .find(|r| !exclude_regs.contains(r))
+                .expect("ensure_reg: no spare register for mem");
+            (
+                spare,
+                vec![Instr::Mexch { rd: spare, addr }],
+                vec![Instr::Mexch { rd: spare, addr }],
             )
         }
     }
@@ -596,6 +678,7 @@ fn invert_instr(instr: Instr) -> Instr {
         Instr::Rotr { rd, rs } => Instr::Rotl { rd, rs },
         Instr::Cswap { rd, rs, rt } => Instr::Cswap { rd, rs, rt },
         Instr::Xchg { rd, sx } => Instr::Xchg { rd, sx },
+        Instr::Mexch { rd, addr } => Instr::Mexch { rd, addr },
         Instr::Swapbr { rd } => Instr::Swapbr { rd },
         Instr::Addi { rd, imm } => Instr::Subi { rd, imm },
         Instr::Subi { rd, imm } => Instr::Addi { rd, imm },
@@ -1370,7 +1453,8 @@ fn lower_bare_plus(
 
 /// Marshal a `Value` of a given type into `StateVals`, writing leaf `i`
 /// to its canonical home: `regs[i]` for i < 8, `scratch[i-6]` for
-/// 8 ≤ i < 14. All other state fields are zeroed.
+/// 8 ≤ i < 14, `mem[i-14]` for 14 ≤ i < 14+MEM_WORDS.
+/// All other state fields are zeroed.
 pub fn marshal(v: &Value, ty: &Type) -> StateVals {
     let bytes = value_to_leaf_bytes(v, ty);
     let mut state = StateVals {
@@ -1379,13 +1463,17 @@ pub fn marshal(v: &Value, ty: &Type) -> StateVals {
         br: 0,
         ir: 0,
         scratch: [0; NUM_SCRATCH],
+        mem: [0; MEM_WORDS],
     };
     for (i, &b) in bytes.iter().enumerate() {
         if i < NUM_REGS {
             state.regs[i] = b;
-        } else {
+        } else if i < 14 {
             // Spill: leaf i → scratch[i - 6] (s2..s7, skipping s0/s1).
             state.scratch[i - 6] = b;
+        } else {
+            // Memory: leaf i → mem[i - 14].
+            state.mem[i - 14] = b;
         }
     }
     state
@@ -1393,15 +1481,17 @@ pub fn marshal(v: &Value, ty: &Type) -> StateVals {
 
 /// Unmarshal a `StateVals` back to a `Value`, reading leaf `i` from
 /// its canonical home: `regs[i]` for i < 8, `scratch[i-6]` for
-/// 8 ≤ i < 14.
+/// 8 ≤ i < 14, `mem[i-14]` for 14 ≤ i < 14+MEM_WORDS.
 pub fn unmarshal(s: &StateVals, ty: &Type) -> Value {
     let n = num_leaves(ty).expect("unmarshal: num_leaves");
     let bytes: Vec<u8> = (0..n)
         .map(|i| {
             if i < NUM_REGS {
                 s.regs[i]
-            } else {
+            } else if i < 14 {
                 s.scratch[i - 6]
+            } else {
+                s.mem[i - 14]
             }
         })
         .collect();
@@ -1484,6 +1574,9 @@ fn exec_instr(instr: Instr, state: &mut StateVals) {
         }
         Instr::Xchg { rd, sx } => {
             std::mem::swap(&mut state.regs[rd as usize], &mut state.scratch[sx as usize]);
+        }
+        Instr::Mexch { rd, addr } => {
+            std::mem::swap(&mut state.regs[rd as usize], &mut state.mem[addr as usize]);
         }
         Instr::Swapbr { rd } => {
             std::mem::swap(&mut state.regs[rd as usize], &mut state.br);

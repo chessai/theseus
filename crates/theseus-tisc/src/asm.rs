@@ -26,7 +26,7 @@
 //! [`decode`] is the inverse (for round-trip checks and listings);
 //! reserved opcodes and set pad bits decode to `None`.
 
-use crate::types::{NUM_REGS, NUM_SCRATCH};
+use crate::types::{MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
 /// One TISC-1 instruction with typed operands.
 ///
@@ -55,6 +55,9 @@ pub enum Instr {
     /// register is a PC offset consumed by the uniform end-of-step
     /// update `PC += BR + 1`.
     Swapbr { rd: u8 },
+    /// `r[rd] ↔ mem[addr]` (M-C2 Layer 1, ADR-0046 §3.1). Self-inverse
+    /// memory exchange; `addr` indexes the memory bank (0..MEM_WORDS).
+    Mexch { rd: u8, addr: u8 },
     /// `r[rd] += imm` (mod 256).
     Addi { rd: u8, imm: u8 },
     /// `r[rd] -= imm` (mod 256).
@@ -145,6 +148,13 @@ pub fn encode(instr: Instr) -> u16 {
             );
             r_word(0b1000, rd, 0, 0)
         }
+        Instr::Mexch { rd, addr } => {
+            assert!(
+                (addr as usize) < MEM_WORDS,
+                "MEXCH r{rd}, m{addr}: memory address out of range (MEM_WORDS={MEM_WORDS})"
+            );
+            r_word(0b1001, rd, 0, addr)
+        }
         Instr::Addi { rd, imm } => i_word(0b000, rd, imm),
         Instr::Subi { rd, imm } => i_word(0b001, rd, imm),
         Instr::Xori { rd, imm } => i_word(0b010, rd, imm),
@@ -176,6 +186,7 @@ pub fn decode(word: u16) -> Option<Instr> {
             0b0110 => Some(Instr::Cswap { rd, rs, rt }),
             0b0111 => Some(Instr::Xchg { rd, sx: rt }),
             0b1000 => Some(Instr::Swapbr { rd }),
+            0b1001 => Some(Instr::Mexch { rd, addr: rt }),
             _ => None, // reserved
         }
     } else {

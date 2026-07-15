@@ -16,7 +16,7 @@
 use theseus_core::Iso;
 use theseus_tisc::asm::{assemble, Instr};
 use theseus_tisc::step::step;
-use theseus_tisc::types::StateVals;
+use theseus_tisc::types::{MEM_WORDS, StateVals};
 
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -49,6 +49,7 @@ fn ref_instr(word: u16, s: &mut StateVals) {
             }
             0b0111 => std::mem::swap(&mut s.regs[rd], &mut s.scratch[rt]),
             0b1000 => std::mem::swap(&mut s.regs[rd], &mut s.br),
+            0b1001 => { if rt < MEM_WORDS { std::mem::swap(&mut s.regs[rd], &mut s.mem[rt]); } }
             _ => {}
         }
     } else {
@@ -118,6 +119,7 @@ fn taken_branch_with_come_from() {
         br: 0,
         ir: 0,
         scratch: [0; 8],
+        mem: [0; MEM_WORDS],
     };
 
     // Step through the program, checking the reference at each step.
@@ -194,6 +196,7 @@ fn branch_forward_then_backward() {
         br: 0,
         ir: 0,
         scratch: [0; 8],
+        mem: [0; MEM_WORDS],
     };
 
     // T forward steps.
@@ -244,6 +247,7 @@ fn v1_counterexample_produces_distinct_outputs() {
         br: 9,
         ir: 0,
         scratch: [0; 8],
+        mem: [0; MEM_WORDS],
     };
     let b = StateVals {
         regs: [0x42, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3],
@@ -251,6 +255,7 @@ fn v1_counterexample_produces_distinct_outputs() {
         br: 5,
         ir: 0,
         scratch: [0; 8],
+        mem: [0; MEM_WORDS],
     };
 
     let a_out = eval_state("v1ce/A", &iso, &a);
@@ -297,6 +302,7 @@ fn ir_zero_and_scratch_after_branch() {
             br,
             ir: 0,
             scratch: [0; 8],
+            mem: [0; MEM_WORDS],
         };
         let got = eval_state(&format!("p4/pc={pc},br={br}"), &iso, &s);
         let expected = ref_step(&rom, &s);
@@ -329,6 +335,7 @@ fn br_zero_fall_through_is_pc_plus_one() {
             br: 0,
             ir: 0,
             scratch: [0; 8],
+            mem: [0; MEM_WORDS],
         };
         let got = eval_state(&format!("fallthrough/pc={pc}"), &iso, &s);
         // PC must advance by exactly 1.

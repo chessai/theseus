@@ -29,7 +29,7 @@
 use theseus_core::Iso;
 use theseus_tisc::asm::{assemble, decode, encode, Instr};
 use theseus_tisc::step::step;
-use theseus_tisc::types::StateVals;
+use theseus_tisc::types::{MEM_WORDS, StateVals};
 
 /// Generous per-eval fuel (same order as the step tests).
 const EVAL_FUEL: u64 = 8_000_000_000;
@@ -93,6 +93,7 @@ fn seed() -> StateVals {
         br: 0,
         ir: 0,
         scratch: [0; 8],
+        mem: [0; MEM_WORDS],
     };
     s.regs[1] = 1;
     s.regs[2] = 1;
@@ -151,7 +152,9 @@ fn assembler_encode_roundtrip() {
     // Pad-bit and reserved-opcode words don't decode.
     assert_eq!(decode(0x8141), None, "R-format pad bit set");
     assert_eq!(decode(0x06B5), None, "I-format pad bit set");
-    assert_eq!(decode(0xC800), None, "reserved R opcode 1001");
+    // R opcode 0b1001 is now MEXCH (M-C2 Layer 1).
+    assert_eq!(decode(0xC800), Some(Instr::Mexch { rd: 0, addr: 0 }), "MEXCH r0, m0");
+    assert_eq!(decode(0xD100), None, "reserved R opcode 1010");
     assert_eq!(decode(0x5000), None, "reserved I opc 101");
 
     // assemble = per-word encode.

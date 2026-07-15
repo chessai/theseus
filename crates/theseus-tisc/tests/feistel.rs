@@ -49,7 +49,7 @@ use theseus_spice::chardb::{rung0_measured, CharDb};
 use theseus_tisc::asm::{assemble, decode, Instr};
 use theseus_tisc::energy::{balanced_energy, instruction_energy};
 use theseus_tisc::step::step;
-use theseus_tisc::types::StateVals;
+use theseus_tisc::types::{MEM_WORDS, StateVals};
 
 /// Generous per-eval fuel (same order as fib_cpu.rs).
 const EVAL_FUEL: u64 = 8_000_000_000;
@@ -137,6 +137,7 @@ fn block_state(l: u8, r: u8, key: u8) -> StateVals {
         br: 0,
         ir: 0,
         scratch: [0; 8],
+        mem: [0; MEM_WORDS],
     };
     s.regs[1] = l;
     s.regs[2] = r;
