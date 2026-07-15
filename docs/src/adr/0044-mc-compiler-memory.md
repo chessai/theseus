@@ -1,8 +1,20 @@
 # ADR-0044: M-C — compiler-targeted memory (scratch spill → Option-B bus)
 
-**Status:** Proposed (design). Advisor-authored; the M-C implementation is a
-follow-on gated by its run-on-CPU differential oracle. Refines ADR-0029's
-Option-A/B stratification for the **compiler** (`theseus-tisc::compile`).
+**Status:** Accepted — **M-C1 implemented** (`theseus-tisc::compile`, merged
+`4af7862`); **M-C2 (Option-B bus) proposed** (§3, own design pass). Advisor-
+authored, then revised after an adversarial design review (§2's callout box).
+Refines ADR-0029's Option-A/B stratification for the **compiler**.
+
+**Implementation note (M-C1, what shipped).** Reversible register/scratch spill
+exactly per §2: a `Location`(`Reg`/`Scratch`) home per leaf, the `with_registers`
+page-in/out helper routing every emission site, `allocate_aux`'s zeroed-scratch
+aux source, the guarded-unroll canonical-residence `debug_assert`, and the
+off-by-two marshalling — pure `compile.rs`, no `State`/`step`/ISA change. Verified
+by the run-on-CPU oracle (§4): `run_on_cpu` on the **real `step`-iso CPU** `==
+eval` on the sampled inputs for pure spill (incl. the 14-leaf ceiling) and
+spill+branch (controlled op + `iter`), fast-sim green over the whole domain, and
+15-leaf / 13-leaf-branching programs rejected cleanly with `TooManyLeaves`. The
+honest ceilings hold: **14 straight-line, 12 branching.**
 
 ## 1. Where M-C sits
 
