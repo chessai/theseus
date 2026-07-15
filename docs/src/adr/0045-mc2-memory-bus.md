@@ -1,11 +1,16 @@
 # ADR-0045: M-C2 — the Option-B memory bus (external recirculating memory)
 
-**Status:** Proposed — **NOT accepted as designed.** A fresh-context adversarial
-review broke the §3 composition and the §3.1/§7 risk framing (see §0). The design
-below (§2–§7) is retained as the *scoping record*; the honest conclusion is that
-the **full external two-ring bus is an open research problem**, and the
-*deliverable* increment is a compiler-artifact **resident-memory** region (§0). Do
-not delegate §2–§7 as written.
+**Status:** Proposed — scoped, adversarially reviewed (§0), and **resolved by a
+2-agent research spike (§0.5).** Outcome: the external bus **is achievable** — but
+only as a **composite-ring** closure (CPU ⊗ bus ⊗ memory certified as one unit),
+never as per-ring closure (which is *provably* impossible, an information-flow
+theorem). It is **energy-equivalent to Option A** ("storage is motion"): it buys
+area, a CPU body invariant in N, and the seam behind which Option C (adiabatic
+SRAM) can later drop in — **not** an energy win. Therefore: the **deliverable M-C2
+now is a resident-memory region** (§0); the composite bus is a **documented,
+de-risked future design** (§0.5) to build when the area wall binds or Option C's
+wake condition (ADR-0029 C3.5) fires. The original §2–§7 sketch is retained as
+record; do not delegate it as written.
 
 ## 0. Scoping finding (adversarial review) — READ FIRST
 
@@ -51,6 +56,71 @@ as ADR-0044 §2.3–2.4.
 investigation against `ring_run.rs` to determine whether a cross-ring `BusMsg`
 exchange can preserve the closure certificate at all — *before* any implementation.
 It is not a delegatable milestone in its current form.
+
+## 0.5 Research-spike resolution (2 independent Fable design agents)
+
+Two independent Fable-tier design agents attacked the closure question from
+opposite directions — one **constructive** (design a closing two-ring bus), one
+**foundational** (prove whether closure is preservable at all). **They converged.**
+
+**Result 1 — per-ring closure is *provably impossible* (a theorem, not a wall).**
+If the CPU ring closes in isolation, its revolution map is a function of its own
+ports alone, so a `LOAD` reply `mem[addr]` would have to be a function of
+`CpuState` — but external memory holds exactly the information *not* recoverable
+from `CpuState` (the CPU swapped it out and moved on). Contradiction. So **genuine
+external memory ⟺ the CPU ring is an open system**; no wrap or re-supply schedule
+fixes a solo ring. This *confirms* §0 finding 1 and upgrades it: stop looking for a
+per-ring fix. (The obstruction is *autonomy/information-flow*, not
+reversibility/thermodynamics — nothing is erased.)
+
+**Result 2 — the *composite* (CPU ⊗ bus ⊗ memory) closes, with zero
+per-revolution boundary.** Both agents independently found the same mechanism:
+make `BusMsg` a **resident, marshalling-zeroed factor of the carrier** that returns
+to rest at *every revolution boundary* (the emit/absorb conjugation discipline —
+the fetch/unfetch proof shape applied to the bus). A resident factor that is
+boundary-constant but mid-revolution data-dependent **is exactly what the existing
+certificate already calls an ancilla**. So the zero-garbage invariant (ZG) —
+"`States × {ι}` is an invariant slice of the lowered bijection" — generalizes
+*verbatim* to the composite, with `data = (CpuState, MemState)` and `ι` extended by
+the (zeroed) bus lines + memory-tree scratch. This simultaneously repairs §0
+findings 1 (closure is on the composite), 2 (the resident-zeroed factor *is* the
+"no `uniti`" fix), and 3 (degeneracy is caught by a **structural MemState-line
+audit** — no MemState port reaches a CPU-phase active cell — since the value oracle
+provably cannot see it).
+
+**The minimal realization (agreed):** a **seam rotation** of `step`'s phase order
+so the bus emit/absorb falls *on* the revolution boundary — keeping the CPU body a
+single ordinary netlist with ports at depth 0/D (no mid-body ports, no netlist
+surgery) — plus a `CompositeRing` runner with the generalized certificate
+(`restored_ok ∧ run == run_open ∧ run == eval(system_step)^R` + the line audit), a
+1:1 period-locked sequencer, and an ancilla-clean 1-of-N Fredkin exchange tree
+(demonstrated whole-domain at N ∈ {2,4,8} first). Roll out in two stages
+(L15-safe): **Stage 1** = single-body composite ring reusing `StepRing` verbatim
+(bus + tree scratch land in the ancilla section) — exercises the *real* closure
+question end-to-end before any new machinery; **Stage 2** = two-body `SystemRing`
+with staggered ports for physical separability.
+
+**Result 3 — energy: Option B does *not* beat Option A (confirms §0 finding 4).**
+"Storage is motion" (ADR-0029 C2.1): N resident words cost `N·w` token-moves per
+tick regardless of topology — in State (A) or a mem ring (B). Topology relocates
+the tokens; it cannot stop them. What the bus **does** buy: (i) **area/feasibility**
+— the D4 buffer wall shrinks ~10²–10³× (a shallow mem loop vs. N words widening the
+full step body); (ii) a **CPU body invariant in N** (separate compilation, its own
+energy-ledger line = ADR-0029 C3.5's wake-condition meter); (iii) **the seam behind
+which Option C** (a static adiabatic SRAM that finally is *not* motion — the only
+real energy escape) can drop in **without touching the CPU**. The 8-bit immediate
+also caps N ≤ 256, so the asymptotics are academic today.
+
+**Recommendation (both agents, and adopted here).** Build the **resident-memory
+region** (§0) as M-C2 *now* — at N ≤ 256 it is oracle-gated, cheap, and
+**energy-identical** to the bus. Pursue the composite-ring bus **only** when (i) the
+D4 area wall actually binds (State widening makes the step body unbuildable) or
+(ii) Option C's wake condition fires (fabric-resident storage dominates the ledger,
+ADR-0029 C3.5) — at which point the seam-rotation + `CompositeRing` design above is
+the minimal path, with the zero-garbage certificate intact *for the composite*.
+The spike's value: it turned "open research problem" into a **solved-in-principle,
+deferred-on-purpose** design, and proved we are not leaving an energy win on the
+table by shipping resident-memory first.
 
 ---
 
