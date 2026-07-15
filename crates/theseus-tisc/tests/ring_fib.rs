@@ -105,6 +105,7 @@ fn ctx() -> &'static Ctx {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn ring_fib_matches_reference_and_oracle() {
     let c = ctx();
     let start = seed();
@@ -170,6 +171,7 @@ fn ring_fib_matches_reference_and_oracle() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn ring_fib_constant_area() {
     let c = ctx();
     let start = seed();

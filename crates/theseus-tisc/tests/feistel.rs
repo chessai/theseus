@@ -171,6 +171,7 @@ const SAMPLES: [(u8, u8, u8); 3] = [(0xAB, 0xCD, 0x5E), (0x00, 0x00, 0x00), (0xF
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn feistel_forward() {
     let prog = feistel_prog();
     let rom = assemble(&prog);
@@ -229,6 +230,7 @@ fn feistel_forward() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn feistel_forward_and_backward() {
     let rom = assemble(&feistel_prog());
     let (l0, r0, key) = SAMPLES[0];
@@ -286,6 +288,7 @@ fn feistel_step_net() -> &'static PhasedCellNetlist {
 }
 
 #[test]
+#[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn feistel_energy() {
     let db = char_db();
     let t = ROUND_LEN * ROUNDS;

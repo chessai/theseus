@@ -183,6 +183,7 @@ fn assembler_rejects_xchg_s0() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn fib_forward() {
     let rom = assemble(&fib_prog());
     let iso = step(&rom);
@@ -219,6 +220,7 @@ fn fib_forward() {
 }
 
 #[test]
+#[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn fib_step_adjoint_identity() {
     let rom = assemble(&fib_prog());
     let iso = step(&rom);
@@ -231,6 +233,7 @@ fn fib_step_adjoint_identity() {
 }
 
 #[test]
+#[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn fib_forward_and_backward() {
     let rom = assemble(&fib_prog());
     let start = seed();

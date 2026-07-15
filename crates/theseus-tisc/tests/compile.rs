@@ -495,7 +495,7 @@ fn mem_spill_max_leaves_swap_oracle_agrees() {
     let n = 14 + MEM_WORDS;
     let half = n / 2;
     let iso = Iso::SwapProd(bit_prod(half), bit_prod(n - half));
-    let instrs = compile(&iso).expect(&format!("{n}-leaf SwapProd should compile"));
+    let instrs = compile(&iso).unwrap_or_else(|_| panic!("{n}-leaf SwapProd should compile"));
     eprintln!("{n}-leaf SwapProd (max mem): {} instructions", instrs.len());
     assert_oracle_fast("mem_spill_max_ceiling", &iso);
 }

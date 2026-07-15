@@ -75,7 +75,7 @@ fn ref_instr(word: u16, s: &mut StateVals) {
             }
             0b0111 => std::mem::swap(&mut s.regs[rd], &mut s.scratch[rt]),
             0b1000 => std::mem::swap(&mut s.regs[rd], &mut s.br),
-            0b1001 => { if rt < MEM_WORDS { std::mem::swap(&mut s.regs[rd], &mut s.mem[rt]); } }
+            0b1001 if rt < MEM_WORDS => std::mem::swap(&mut s.regs[rd], &mut s.mem[rt]),
             _ => {} // reserved
         }
     } else {

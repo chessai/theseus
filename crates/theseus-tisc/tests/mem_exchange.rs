@@ -129,8 +129,8 @@ fn build_mexch_prim(n: usize) -> Iso {
         |bits| {
             let mut out = bits.to_vec();
             let mut addr = 0usize;
-            for i in 0..n_ctrl {
-                if bits[i] {
+            for (i, &b) in bits.iter().take(n_ctrl).enumerate() {
+                if b {
                     addr |= 1 << i;
                 }
             }
@@ -152,8 +152,8 @@ fn mexch_reference(n: usize, n_ctrl: usize) -> impl Fn(&[bool]) -> Vec<bool> {
     move |bits: &[bool]| {
         let mut out = bits.to_vec();
         let mut addr = 0usize;
-        for i in 0..n_ctrl {
-            if bits[i] {
+        for (i, &b) in bits.iter().take(n_ctrl).enumerate() {
+            if b {
                 addr |= 1 << i;
             }
         }

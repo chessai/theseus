@@ -65,11 +65,7 @@ fn reference(s: &StateVals) -> StateVals {
             }
             0b0111 => std::mem::swap(&mut out.regs[rd], &mut out.scratch[rt]),
             0b1000 => std::mem::swap(&mut out.regs[rd], &mut out.br),
-            0b1001 => {
-                if rt < MEM_WORDS {
-                    std::mem::swap(&mut out.regs[rd], &mut out.mem[rt]);
-                }
-            }
+            0b1001 if rt < MEM_WORDS => std::mem::swap(&mut out.regs[rd], &mut out.mem[rt]),
             _ => {} // reserved: identity
         }
     } else {
@@ -102,7 +98,7 @@ fn st(regs: [u8; 8], ir: u16) -> StateVals {
     let mut mem = [0u8; MEM_WORDS];
     // Fill memory with non-zero test values so exchange is visible.
     for (i, m) in mem.iter_mut().enumerate() {
-        *m = (0xA0 + i as u8) & 0xFF;
+        *m = 0xA0 + i as u8;
     }
     StateVals {
         regs,
