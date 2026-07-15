@@ -211,6 +211,141 @@ structural anti-degeneracy gate (§6). Note Proposition 1.3: `run == run_open` i
 strictly weaker than pointwise restoration, so keep the `debug_assert` on
 `ancillas_restored` too.
 
+### 4.5 Finalized Stage 1 spec (for delegation)
+
+> **Corrected after an adversarial review (§4.5.0) — Stage 1 is split into 1a
+> (delegatable now) and 1b (open obligation).** The subsections §4.5.1–§4.5.7 below
+> are the *original* finalized draft; three of their claims were broken and are
+> superseded by §4.5.0. Read §4.5.0 first.
+
+#### 4.5.0 Review correction — the split, and three fixes
+
+A fresh-context adversarial review broke the one-task framing on three grounds; all
+three are corrected here.
+
+- **FIX 1 — `MemState` is DATA, not a boundary-quiescent ancilla (a real
+  contradiction).** §4.5.1/§4.5.6's "MemState pinned at its init at every revolution
+  boundary" is *false*: `MemState` is a persistent spill store — a value written in
+  revolution *k* must still be there at *k+j* (Lemma 2.2's `STORE…;LOAD` witness), so
+  it is emphatically **not** boundary-zero mid-program. The proofs already place it
+  correctly: `system_step : (CpuState, MemState) ↔ (CpuState, MemState)`, `data =
+  (CpuState, MemState)` (Def 3.1, Thm 3.5). **Only `BusMsg` (+ tree scratch) is the
+  boundary-quiescent ancilla** that Lemma 3.2 admits. In the ring, `(CpuState,
+  MemState)` goes in the **data** section (both recirculate, persisting), `BusMsg` in
+  the **ancilla** section (restored to 0 each revolution). Putting `MemState` in the
+  ancilla section would make `StepRing::run` re-zero it every revolution and erase
+  every spilled value. The oracle's "no domain explosion" conclusion still holds, but
+  for the correct reason: `MemState` is init-0 at **program entry** (marshalling) and
+  **projected away at comparison** (surface programs aren't memory-typed, Prop 5.1) —
+  *not* because it is boundary-quiescent.
+- **FIX 2 — the seam-rotation premise is false against the code; it is an OPEN
+  obligation, not a phase reorder.** The decoder keeps **nothing decoded resident**
+  (only the raw `IR` word; decode is fused into the predicated gates, `decoder.rs`).
+  So "`emit` reads the live decoded instruction (`addr`, `reg[rd]`)" (§4.5.5, and
+  Lemma 3.3's "fields persist in CpuState") cannot be done by reordering the existing
+  5 phases — it needs **new resident decoded fields + an `emit`/`absorb`/prologue/
+  epilogue construction** that does not exist and is the proofs' unproven **H3**.
+  This is Stage 1b's design problem, not a delegatable increment.
+- **FIX 3 — "re-target the tree by passing indices" is not real.** `at_fields`/
+  `on_fields`/`route_to_head` are hardwired to `NUM_FIELDS`/`state_ty()`
+  (`addressing.rs`), so operating over a `(CpuState, BusMsg, MemState)` product needs
+  the **addressing layer made composite-carrier-aware** — a refactor, not an index
+  change. And C1 was tested on a *standalone reconstruction* (`build_mexch_prim`,
+  `tests/mem_exchange.rs`), not the real `select_mem` lowering, so **cleanliness of
+  the actual re-targeted tree must be verified**, not assumed.
+
+**The split.**
+
+- **Stage 1a — value-level externalization (delegatable now).** Move `MemState` out
+  of `State` into a separate factor; make the addressing layer composite-aware;
+  re-target `MEXCH` to swap `reg[rd] ↔ MemState[addr]` (external), composed into
+  `step` at the **value level** — **no `BusMsg`, no seam-rotation, no ring.** Prove
+  `system_step : (CpuState, MemState) ↔ (CpuState, MemState)` `== eval` on
+  spill-to-memory programs, under the existing full-step `run_on_cpu` loop
+  (whole-domain fast-sim + real-CPU sample; re-verify C1 on the real re-targeted
+  tree). This exercises FIX 1's carrier split + FIX 3's composite addressing + the
+  composite-iso plumbing (theseus-core has no shared-factor combinator, so thread the
+  product by explicit `Times`/`AssocProd` routing) — and *nothing else*. It is
+  honestly **degenerate** (Prop 5.1; the ring/line-audit distinguish Option-B later),
+  which is fine: it is a refactor-and-plumbing de-risk, not a closure claim.
+- **Stage 1b — the composite ring (open; own design pass).** Introduce `BusMsg` as
+  the resident port between `step` and a *separate* `mem` iso; solve the H3
+  emit/absorb/decode-latch/prologue construction (FIX 2); seam-rotate; run through
+  `StepRing` with `(CpuState, MemState)` in data and `BusMsg`+scratch in ancilla;
+  prove the composite certificate (`restored_ok ∧ run == run_open ∧ run == eval`) +
+  the line-audit. Gated on 1a green **and** the H3 construction being designed &
+  reviewed. This is where non-degeneracy (Option-B) is actually established.
+
+---
+
+*Original finalized draft (superseded in part by §4.5.0):*
+
+Concrete decisions, grounded in the post-Layer-1 code. **What Stage 1 reuses from
+Layer 1: the exchange tree (re-targeted, §4.5.4), `StepRing` (verbatim), the
+compiler's `Location::Mem` targeting. What changes: `State` (memory externalized),
+`step`'s phase order (seam rotation), and where the exchange sits (a `BusMsg`-
+crossing `mem` iso).**
+
+**4.5.1 The oracle contract (resolves the "biggest obstacle").** Memory stays a
+**hidden compilation artifact**, *never* a surface type (Proposition 5.1). The
+oracle therefore enumerates the **same surface-input domain as Layer 1** — there is
+**no domain explosion**. `run_on_cpu` compiles the surface iso to a `system_step`,
+runs it (which manages `MemState` internally, marshalling-initialized to 0), and
+compares the **CpuState projection** of the output to `eval(surface iso)`. `MemState`
+is an internal factor pinned at its init at every revolution boundary, not a degree
+of freedom the oracle ranges over. This keeps the Layer-1 oracle harness essentially
+intact (it gains a MemState-projection step, not a bigger domain).
+
+**4.5.2 Externalize `MemState` from `State`.** Move the `m0..m_{N-1}` fields out of
+`State` (`types.rs`): `CpuState` returns to 16 fields (`[r0..r7,PC,BR,IR_lo,IR_hi,
+s0..s7]`), and a separate `MemState` = `N` × `W8`. Split `encode`/`decode`
+accordingly. The composite carrier is `(CpuState, BusMsg, MemState)` (a product);
+`BusMsg = (enable:Bit, addr:⌈log₂N⌉, word:W8)` is a **resident, marshalling-zeroed
+factor** (§4.2).
+
+**4.5.3 The composite must be ONE iso term.** `StepRing` threads ancillas
+*holistically* over the netlist it lowers, so `system_step` must be a **single
+`Iso` expression** — `step′` (seam-rotated, §4.1) with the `mem` iso composed *in*
+via `Times`/`AssocProd` plumbing (theseus-core has no shared-factor combinator, so
+the `BusMsg` factor is threaded by explicit assoc/swap routing). Do **not** compose
+`step` and `mem` as two runtime-separate isos — the ring would not thread their
+ancillas together, and the certificate would not close.
+
+**4.5.4 Re-target the exchange tree (already C1-clean).** C1 is **already
+discharged** (Layer 1: `select_mem`/`ctrl_word_swap` are whole-domain ancilla-clean
+at `N ∈ {2,4,8}`). The tree operates on **generic field indices** (`on_fields`), so
+re-target it from `reg_field(0) ↔ mem_field(addr)` to `BusMsg.word ↔ MemState[addr]`
+by passing the composite-product field indices. **Re-verify cleanliness after
+re-targeting** (same structure, new indices — should hold; the `mem_exchange` test
+extends to the composite tree). This is the corrected reading of §4.3: not "prove
+C1" (done) but "re-target the proven-clean tree."
+
+**4.5.5 Seam rotation — the PC-constancy trap.** `step′ = absorb ; unfetch ;
+pc_update ; fetch ; decode_execute ; emit` (§4.1). The subtlety (`step.rs` invariant
+D1): PC must stay constant across a given instruction's `fetch…unfetch`. In `step′`
+that span *crosses the revolution boundary* (fetch+decode_execute+emit at end of rev
+k; absorb+unfetch at start of rev k+1) — it stays correct **only because `pc_update`
+is placed *after* unfetch**, so PC is unchanged from fetch through unfetch. `emit`
+reads the still-live decoded instruction (`addr`, `reg[rd]`) into `BusMsg`; `absorb`
+folds `BusMsg'.word` back — both require IR still holding the instruction, i.e.
+unfetch after absorb. A first/last partial-revolution prologue/epilogue handles the
+boundary; its semantics must be oracle-checked.
+
+**4.5.6 The line-audit (§6) and the certificate (§4.4).** After externalization the
+audit is meaningful: assert no `MemState` field index reaches a CPU-phase active cell
+(mechanical netlist incidence check) — the witness that this is *not* Layer 1's
+degenerate splice. Certificate at `N ∈ {2,4,8}`: `restored_ok ∧ run == run_open ∧
+run == eval` on the surface domain, `MemState`/`BusMsg` boundary-quiescent.
+
+**4.5.7 Start small, prove the certificate first.** Widening the carrier with `BusMsg`
++ the composite plumbing will (again) stress the ring lowering. **Begin at `N = 2`**,
+get `system_step` closing the certificate end-to-end, *then* scale to `{4,8}`. The
+heavy integration tests stay `#[ignore]`d (Layer-1 precedent). If the seam-rotated
+composite will not close the certificate at `N = 2`, **STOP and report the smallest
+failing state** — that is the realizability obligation the proofs flagged as open
+(seam-rotation realizability, protocol conformance), and it is better surfaced small
+than forced.
+
 ## 5. Stage 2 — two-body `SystemRing`
 
 `CompositeRing { cpu: CompactBalanced, mem: CompactBalanced }`: the CPU body's
