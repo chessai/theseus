@@ -688,12 +688,19 @@ conjecture outranks a hand-waved theorem):
   must be checked against the real lowering, and the spike itself demands the
   whole-domain demonstration at N ∈ {2,4,8} before any delegation
   (`0045-mc2-memory-bus.md:97-98`). Theorem 3.5 is conditional on this.
-- **H3 realizability (seam rotation).** That TISC-1's phase order admits a
-  rotation placing emit/absorb at depth 0/D with no mid-body ports and no
-  netlist surgery (`0045-mc2-memory-bus.md:91-96`) — engineering claim,
-  asserted by both spike agents, not proven. Likewise the 1:1 period-locked
-  sequencer and the composite `P | D` phase-closure condition (ADR-0033 D2
-  item 3 extended to the composite body).
+- **H3 realizability — DISCHARGED IN DESIGN** (2-agent H3 spike, ADR-0046
+  §4.5.8). The obligation is *dissolved*, not merely met: there is **no seam
+  rotation**. The revolution is the unrotated Lemma 3.3 factorization
+  `fetch;decode_execute′;emit;mem;absorb;unfetch;pc_add_br;pc_inc` (one iso
+  term); the transaction is *interior*, the cut falls after `pc_inc` (between
+  `absorb` and the next `fetch` — where Prop 3.4 requires), and rev 1 runs
+  correctly from IR=0 with **no prologue/epilogue**. `emit`/`absorb` re-derive
+  `(enable,rd,addr)` from the persistent raw IR (no new decode latch;
+  `absorb = sym(emit)`). One honest new obligation surfaced: `BusMsg` lowers to
+  *data* ports (not the lowering-ancilla section), so the composite ring must add
+  an explicit **bus-quiescence check** (BusMsg lines = 0 at every boundary) — the
+  existing `ancillas_restored` does not cover it. Full construction: ADR-0046
+  §4.1 (corrected) + §4.5.8.
 - **Protocol conformance (H4).** Lemma 3.3(b)'s table is a proof about the
   *specified* protocol; the implemented emit/absorb must match it. The
   discharge is the Stage-1 composite certificate itself:

@@ -1,13 +1,17 @@
 # ADR-0046: M-C2 build — the composite-ring memory bus
 
 **Status:** Accepted — **Layer 1 implemented** (`theseus-tisc`, merged `f5db17d`);
-Stages 1–2 proposed. Advisor-authored from the resolved scoping
+**Stage 1 split into 1a (delegatable) + 1b (design-resolved, buildable)**; Stage 2
+proposed. Advisor-authored from the resolved scoping
 ([ADR-0045](0045-mc2-memory-bus.md) §0.5) and the formal proofs
-([theory/reversible-memory-closure.md](../theory/reversible-memory-closure.md)).
-The delegatable design-of-record for the external memory bus. Implementation is
+([theory/reversible-memory-closure.md](../theory/reversible-memory-closure.md)),
+then corrected by two adversarial reviews (§4.5.0) and a **2-agent H3 design spike
+that discharged the realizability obligation** (§4.5.8): Stage 1b is buildable with
+no seam rotation, no decode latch, no prologue/epilogue — one in-revolution
+transaction order (§4.1) + a bus-quiescence certificate check. Implementation is
 staged and each stage is gated by its differential oracle **and** its closure
-certificate; the whole touches the ring and `step`'s phase order, so it carries the
-CLAUDE.md orchestration bar (adversarial review + real integration tests, per stage).
+certificate; it touches the ring and `step`, so it carries the CLAUDE.md
+orchestration bar (adversarial review + real integration tests, per stage).
 
 **Layer 1 implementation note (what shipped, `MEM_WORDS = 4`).** The addressed-
 exchange substrate landed exactly per §3.1: `State` gains 4 resident memory words
@@ -173,13 +177,22 @@ without a re-marshal.
 
 ## 4. Stage 1 — single-body composite ring
 
-### 4.1 Seam rotation (Proposition 3.4 — necessary)
-Reorder `step`'s phases so the bus emit/absorb falls **on** the revolution
-boundary: `step′ = absorb ; unfetch ; pc_update ; fetch ; decode_execute ; emit`.
-The bus is then quiescent (`0_b`) at the wrap — the **quiescent-cut** Theorem 3.5
-requires (H3) — and the CPU body stays a single ordinary netlist with ports at
-depth 0/D (no mid-body ports). Prop 3.4 proves a *straddling* transaction corrupts
-semantics, not just the certificate, so this rotation is mandatory, not cosmetic.
+### 4.1 The transaction order (CORRECTED — no seam rotation; §4.5.8)
+> **This subsection's original "seam rotation" was WRONG** and is corrected by the
+> H3 spike (§4.5.8). The rotated order `absorb ; unfetch ; pc_update ; fetch ;
+> decode_execute ; emit` puts the wrap cut *between* `emit` and `absorb` — a
+> **straddling transaction, which Prop 3.4 proves fatal** (the bus carries a live
+> request across the wrap). It cited Prop 3.4 while implementing its counterexample.
+
+**Correct order (Lemma 3.3's own factorization `N₂ = U∘A∘X∘E∘V`):** build
+`system_step = fetch ; decode_execute′ ; emit ; mem ; absorb ; unfetch ; pc_add_br ;
+pc_inc` as **one iso term** — the memory transaction (`emit ; mem ; absorb`) sits
+**interior** to a single revolution. Then the wrap cut (after `pc_inc`) falls
+between `absorb` and the next `fetch` — exactly where Prop 3.4 requires — the bus is
+`0_b` at every wrap by construction (§4.5.8's 3-cycle trace), **H3 discharges
+trivially, and no seam rotation / prologue / epilogue is needed** (rev 1 runs
+correctly from IR=0, uniform body). `decode_execute′` = `decode_execute` with
+`Op::Mexch` removed (its opcode now keys `emit`/`absorb`).
 
 ### 4.2 `BusMsg` as a resident composite ancilla (Lemma 3.2)
 `BusMsg = (enable, addr, word)` is a **resident, marshalling-zeroed factor** of the
@@ -335,16 +348,54 @@ boundary; its semantics must be oracle-checked.
 audit is meaningful: assert no `MemState` field index reaches a CPU-phase active cell
 (mechanical netlist incidence check) — the witness that this is *not* Layer 1's
 degenerate splice. Certificate at `N ∈ {2,4,8}`: `restored_ok ∧ run == run_open ∧
-run == eval` on the surface domain, `MemState`/`BusMsg` boundary-quiescent.
+run == eval` on the surface domain. ~~`MemState`/`BusMsg` boundary-quiescent~~
+**[STRUCK — FIX 1 landmine]:** `MemState` is DATA and is **not** boundary-quiescent
+(it holds spilled values across boundaries); **only `BusMsg`** is boundary-zero, and
+that requires the explicit bus-quiescence check of §4.5.8 (the existing
+`ancillas_restored` does not cover it, since `BusMsg` lowers to *data* ports).
 
 **4.5.7 Start small, prove the certificate first.** Widening the carrier with `BusMsg`
 + the composite plumbing will (again) stress the ring lowering. **Begin at `N = 2`**,
 get `system_step` closing the certificate end-to-end, *then* scale to `{4,8}`. The
-heavy integration tests stay `#[ignore]`d (Layer-1 precedent). If the seam-rotated
-composite will not close the certificate at `N = 2`, **STOP and report the smallest
-failing state** — that is the realizability obligation the proofs flagged as open
-(seam-rotation realizability, protocol conformance), and it is better surfaced small
-than forced.
+heavy integration tests stay `#[ignore]`d (Layer-1 precedent). If the composite will
+not close the certificate at `N = 2`, **STOP and report the smallest failing state**.
+
+#### 4.5.8 H3 spike resolution (2 Fable agents — Stage 1b is BUILDABLE)
+
+Two independent Fable design spikes (constructive + adversarial) **converged**: the
+H3 realizability obligation is discharged in design — Stage 1b is buildable, with
+**no seam rotation**, **no new decode latch**, and **no prologue/epilogue**.
+
+- **The transaction is an in-revolution insertion, not a rotation (§4.1 corrected).**
+  `system_step = fetch ; decode_execute′ ; emit ; mem ; absorb ; unfetch ; pc_add_br
+  ; pc_inc`, one iso term. The rotated order was Prop 3.4's forbidden straddle.
+- **No decode latch (FIX 2 was overcautious).** The persistent raw IR *is* the
+  latch: `emit` and `absorb` re-derive `(enable, rd, addr)` from IR via the existing
+  `r_pred(0b1001)`/`select_reg(R_RD)` machinery. **`absorb = Iso::sym(emit)`** — one
+  line. IR persists interior to the revolution (set by `fetch`, cleared by `unfetch`
+  after `absorb`); PC is untouched by emit/absorb.
+- **The construction** (all reuse existing decoder idioms): `emit` (predicated on
+  `r_pred(0b1001)`) sets `enable ^= p`, `addr ^= IR.rt`, and swaps `reg[rd] ↔
+  BusMsg.word`; `mem` = the **re-keyed C1 tree** (controls = `BusMsg.addr`, *not* IR
+  — so it touches **zero** CpuState fields, passing the §6 line-audit) doing
+  `word ↔ MemState[addr]` gated on `enable`; `absorb` = `sym(emit)`. The
+  `emit→mem→absorb` **3-cycle provably returns `BusMsg` to `0_b`** (the zero `emit`
+  parks in `reg[rd]` is the same zero that re-enters the bus at `absorb` — zeros
+  conserved, Lemma 7.1/3.3(b)).
+- **The one honest new ring machinery — a bus-quiescence check.** `BusMsg` is a
+  carrier-type factor, so it lowers to **data** ports (`n_data = inputs −
+  lowering_ancillas`), *not* the ancilla section. So `ancillas_restored` does **not**
+  cover it. Add a `SystemRing` check: assert the `BusMsg`-designated data lines `= 0`
+  at every revolution boundary — else the certificate greenwashes ZG-over-enlarged-
+  data instead of ZG-2 (Prop 1.3 silent-residue risk). Data partition:
+  `(CpuState, MemState)` + `BusMsg` are data (MemState persists, BusMsg checked-zero);
+  lowering scratch is ancilla.
+- **Residual Stage-1b work** (all bounded, gated as usual): the FIX-3 addressing
+  refactor (Stage 1a); **re-verify C1 on the real re-keyed `select_mem` lowering** at
+  `N ∈ {2,4,8}` (Layer 1's discharge used a standalone reconstruction); remove
+  `Op::Mexch` from `decode_execute′`; the `SystemRing` bus-quiescence extension. The
+  "seam rotation" is re-homed to Stage 2 as a port-placement question (and may be
+  unneeded there too, §5).
 
 ## 5. Stage 2 — two-body `SystemRing`
 
