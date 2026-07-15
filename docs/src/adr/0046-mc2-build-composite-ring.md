@@ -1,0 +1,233 @@
+# ADR-0046: M-C2 build — the composite-ring memory bus
+
+**Status:** Proposed (build design). Advisor-authored from the resolved scoping
+([ADR-0045](0045-mc2-memory-bus.md) §0.5) and the formal proofs
+([theory/reversible-memory-closure.md](../theory/reversible-memory-closure.md)).
+This is the **delegatable design-of-record** for building the external memory bus.
+Implementation is staged and each stage is gated by its differential oracle **and**
+its closure certificate; the whole touches the ring and `step`'s phase order, so it
+carries the CLAUDE.md orchestration bar (adversarial review + real integration
+tests, per stage).
+
+## 1. Decision and honest framing
+
+We **build** the external Option-B memory bus — realized, per the proofs, as a
+**composite ring**: the certified unit grows to `CPU ⊗ bus ⊗ memory`, closing under
+the *same* zero-garbage invariant the ring already certifies (Theorem 3.5). We do
+this knowing (Theorem 6.1) it is **not an energy win** — `N` resident words cost
+`N·w` token-moves/tick in any topology. The payoff (Corollary 6.2) is architectural
+and strategic: a **CPU body invariant in `N`**, a separately-characterized memory
+block in the energy ledger, ~10²–10³× **area** reduction of the buffer wall, and —
+decisively — **the seam behind which Option C** (static adiabatic SRAM, the only
+real escape from `O(N)`-per-tick holding, ADR-0029) drops in without touching the
+CPU. Per-ring closure is *not* attempted: it is provably impossible (Theorem 2.3).
+
+## 2. The build layers (each independently gated)
+
+> A prior draft mis-scoped the first layer as "pure `compile.rs`". An adversarial
+> review corrected it: **there is no pure-compiler memory layer.** A runtime-
+> effective `LOAD`/`STORE` needs the CPU to *decode* it (a new `Op` + the 1-of-N
+> select tree in `decode_execute`, `decoder.rs`) and a physical *home* for the
+> words (`State` is fixed at 160 bits, `types.rs:27-30`, so it must grow a bank) —
+> else the real CPU no-ops the reserved opcode (`decoder.rs`) and the L19 real-CPU
+> oracle cannot gate it. Compiler-scope with CPU-authority is unbuildable.
+
+- **Layer 1 — addressed-exchange substrate + resident memory** (CPU **and**
+  compiler; **orchestration-critical**). `State` gains an `N`-word memory bank;
+  `decode_execute` gains `LOAD`/`STORE` = the **1-of-N reversible addressed-
+  exchange tree** (§4.3, generalizing `select_fields`); `instr.rs`/`asm.rs` gain
+  the encodings; `compile.rs` targets memory addresses (§3). This is honest
+  **Option-A capacity** — memory resident in the carrier, deliberately *degenerate*
+  (the §6 line-audit does **not** yet apply; the oracle compares the CpuState
+  projection to `eval` of the surface iso — Prop 5.1 — so there is nothing
+  degenerate to catch). **Conjecture C1 — the tree's whole-domain ancilla-
+  cleanliness — is discharged HERE at `N ∈ {2,4,8}`: the load-bearing risk is
+  *front-loaded*, not deferred.** Carries the full CLAUDE.md bar.
+- **Stage 1 — externalize: single-body composite ring** (closure gate). Lift
+  `MemState` out of the CPU carrier and re-place the exchange as its **own iso**
+  crossing a resident `BusMsg` (Lemma 3.3), so the §6 line-audit passes; run through
+  the *existing* `StepRing` (bus + tree scratch in the ancilla section) and confirm
+  the composite closure certificate (Theorem 3.5). **Reused from Layer 1 verbatim:
+  the tree machinery, the ISA, the compiler targeting. What changes: *where* the
+  exchange sits** — spliced into `step` (Layer 1) → a separate factor (Stage 1);
+  the review's honest correction to "reuse verbatim". This exercises the real
+  closure question with **zero new ring machinery**.
+- **Stage 2 — two-body `SystemRing`** (physical separation). Make `mem` its own
+  recirculating block with staggered ports and compile-time cross-edge arrival
+  equations, so `MemState` circulates a shallow loop instead of the full step body
+  — where the area payoff (Corollary 6.2) materializes.
+
+Layer 1 is the first delegation (once §3's zero-parking is spec'd and the layout is
+settled). Stages 1–2 are gated on the prior stage's certificate.
+
+## 3. Layer 1 — addressed-exchange substrate + resident memory
+
+**CPU side** (orchestration-critical — `types.rs`, `decoder.rs`, `instr.rs`,
+`asm.rs`; the reason Layer 1 is *not* compiler-only):
+
+- **`State` memory bank.** Widen `State`/`StateVals` with an `N`-word bank
+  (`types.rs:27-30`); extend `encode`/`decode` and the `NUM_FIELDS`-indexed
+  field machinery every phase uses (`decoder.rs` `on_fields`/`at_fields`), and the
+  `STATE_BITS`/domain-sampler assumptions in `ring_run.rs` and the oracle.
+- **`LOAD`/`STORE` decode.** New `Op` variants + `load_instr`/`store_instr` in
+  `decode_execute`, each the **1-of-N addressed-exchange tree** (§4.3) — this is
+  the C1 gate. Encodings in `instr.rs`/`asm.rs` (free opcodes, `addr` in
+  `rt`/immediate, §7).
+- **Real-CPU authority.** `run_on_cpu` executes `LOAD`/`STORE` on the real `step`,
+  so the oracle is authoritative (L19) — which is *only* possible because the CPU
+  decodes them; a compiler-only layer would leave the real CPU no-opping the
+  opcode.
+
+**Compiler side** (`compile.rs`, extends M-C1's `Ctx`/`Location`/`with_registers`/
+marshalling):
+
+- **`Location::Mem(addr)`** homes for leaves beyond the register+scratch file;
+  `LOAD`/`STORE` = the one addressed exchange (`word ↔ mem[addr]`, move discipline).
+  Compile-time addressing (the compiler knows the address — no data-dependent
+  addressing; that is M-D).
+- **`with_registers` extends** to page a `Mem`-home leaf into a register via `LOAD`
+  and back via `STORE`. The **zero-parking obligation is non-negotiable** (Lemmas
+  7.1/7.2): a swap-based `LOAD` into an *occupied* register displaces the other
+  leaf into `mem[addr]` (the loaded leaf's home), so a **free-zero cell** and a
+  **3-cycle** (a 2-cycle cannot, Lemma 7.2) are required to park the displaced leaf
+  at rest. **This blocks delegation until written** to ADR-0044 §2.3–2.4
+  concreteness: name the park-cell source (a designated rest register/scratch/
+  memory cell), the per-site free-zero set, and the error path.
+- **The ceiling is NOT `14 + N`.** The park cell is charged, exactly as M-C1's aux
+  drops the branching ceiling 14→12. **Re-derive the honest ceiling** (straight-
+  line and branching) from the free-zero-cell accounting; error `TooManyLeaves`
+  when no park cell exists. Asserting `14 + N` repeats the dishonesty M-C1's review
+  corrected.
+- **Oracle:** `run_on_cpu` (real `step`) `== eval` of the *original surface iso*
+  (memory is a **compilation artifact**, never surface-visible — Proposition 5.1);
+  whole-domain fast-sim + real-CPU sample per L19; **plus the C1 whole-domain
+  cleanliness demonstration at `N ∈ {2,4,8}`** — Layer 1's defining gate.
+
+**Settle before delegating.** The `MemState` word layout, address encoding, and
+`BusMsg` line layout must match ADR-0045's setup (dual-rail, `word:W8`, `addr:AddrW`)
+**now**, so Stage 1's externalization does not force a re-marshal of Layer 1's work.
+
+## 4. Stage 1 — single-body composite ring
+
+### 4.1 Seam rotation (Proposition 3.4 — necessary)
+Reorder `step`'s phases so the bus emit/absorb falls **on** the revolution
+boundary: `step′ = absorb ; unfetch ; pc_update ; fetch ; decode_execute ; emit`.
+The bus is then quiescent (`0_b`) at the wrap — the **quiescent-cut** Theorem 3.5
+requires (H3) — and the CPU body stays a single ordinary netlist with ports at
+depth 0/D (no mid-body ports). Prop 3.4 proves a *straddling* transaction corrupts
+semantics, not just the certificate, so this rotation is mandatory, not cosmetic.
+
+### 4.2 `BusMsg` as a resident composite ancilla (Lemma 3.2)
+`BusMsg = (enable, addr, word)` is a **resident, marshalling-zeroed factor** of the
+carrier (Proposition 4.1: it cannot be `uniti`-introduced). It is data-dependent
+mid-revolution but returns to `0_b` at every boundary via the emit/exchange/absorb
+conjugation (Lemma 3.3) — which, by Lemma 3.2, makes it **admissible as a composite
+ancilla under the existing (ZG)**. So it joins `ι` (the ancilla init) and needs no
+new certificate machinery.
+
+### 4.3 The memory iso (the 1-of-N Fredkin exchange tree)
+`mem : (MemState, BusMsg) ↔ (MemState, BusMsg')`. When `enable`: a Branch/CSWAP
+tree on the `addr` bits steers `word ↔ MemState[addr]` — the ADR-0027 cell,
+generalizing `decoder.rs`'s 1-of-8 `select_fields` crossbar to 1-of-N. Controls are
+pass-through (the one legal fanout, ADR-0029); the tree is value-permuting with the
+routing brackets self-cancelling (`Seq(sel, Seq(core, Sym(sel)))`, as `select_fields`
+already is). **This is Conjecture C1** — cleanliness is argued by analogy, not
+proven; Stage 1's exit criterion is to *demonstrate* it whole-domain at
+`N ∈ {2,4,8}` (`ancilla_clean.rs` style). If a construct stays K-dirty, the scoped
+`O(log N)` Bennett fallback (control subcircuit only, never the `2·w` full wrap)
+applies.
+
+### 4.4 The composite certificate (generalize `ring_run.rs`)
+`system_step : (CpuState, MemState) ↔ (CpuState, MemState)` = `step′` with `mem`
+composed and `BusMsg` pinned at rest on both sides. In Stage 1, run it through the
+**existing `StepRing`** (bus + tree scratch in the ancilla section). The certificate
+is the existing one, generalized (Definition 3.1, ZG-2):
+`restored_ok ∧ run == run_open ∧ run == eval(system_step)^R` — **plus** the
+structural anti-degeneracy gate (§6). Note Proposition 1.3: `run == run_open` is
+strictly weaker than pointwise restoration, so keep the `debug_assert` on
+`ancillas_restored` too.
+
+## 5. Stage 2 — two-body `SystemRing`
+
+`CompositeRing { cpu: CompactBalanced, mem: CompactBalanced }`: the CPU body's
+bus-out ports exit at internal depth, the mem body enters/exits at its natural
+depths, cross edges carry fixed transit delays. Generalize ADR-0033 D2's checks
+with per-cross-edge arrival equations (all compile-time constants) and a 1:1
+period lock (`D_mem | D_cpu`, choose equal; pad the shallow mem body with delay
+counts). `MemState` circulates only the mem sub-loop — the area payoff. Same
+semantics, same certificate as Stage 1; what Stage 2 adds is physical separability
+and a separately-characterized memory block in the ledger.
+
+## 6. Anti-degeneracy — the MemState-line audit (Proposition 5.2)
+The value oracle is **provably blind** to Option-B-vs-degenerate-A (Proposition
+5.1). Non-degeneracy is therefore a **structural, mechanical check on the netlist**:
+no `MemState` port index reaches a CPU-phase *active* cell (it may ride pure K0
+delay only). A builder assertion rejects any composite that violates it.
+
+**The audit applies at Stage 1+, NOT Layer 1.** Layer 1 is *intentionally
+degenerate* — `MemState` is resident in the carrier and the exchange is composed
+into `step`, which the audit would (correctly) reject. That is fine: Layer 1 claims
+only Option-A capacity, and its oracle (CpuState projection vs. `eval` of the
+surface iso) is meaningful precisely because there is no memory-typed surface
+program to be degenerate about (Prop 5.1). The audit becomes the honest witness of
+externalization exactly when Stage 1 lifts the exchange into a separate factor — and
+passing it is Stage 1's definition of "not Option A with indirection".
+
+## 7. ISA
+`LOAD`/`STORE` in the free opcode space (10 slots: 7 R-format, 3 I-format), `addr`
+in the `rt`/immediate field per the `Xchg` template. The 8-bit immediate caps
+`N ≤ 256` — adequate for compile-time-addressed spill; a wider address (multi-word
+or a base register) is deferred with data-dependent addressing to M-D.
+
+## 8. Acceptance, per stage (per L19)
+- **Layer 1:** `run_on_cpu`(real `step`) `== eval`(surface iso) — pure-spill-to-
+  memory program (>14 leaves) and a store+reload round-trip; whole-domain fast-sim +
+  real-CPU sample; negatives error cleanly; no M-A/M-B/M-C1 regression.
+- **Stage 1:** the composite certificate (§4.4) holds whole-domain at `N ∈ {2,4,8}`;
+  **C1 demonstrated** (tree ancilla-clean); the line-audit (§6) passes.
+- **Stage 2:** the two-body run `== system_step^R` (Stage 1); arrival equations and
+  period lock validated; line-audit passes.
+
+## 9. Energy (honest, per Theorem 6.1)
+Not a win — `O(N)`-per-tick holding is topology-invariant (Axiom E1, storage is
+motion). The memory block sums into `energy.rs` as its own ledger line (ADR-0028),
+making ADR-0029 C3.5's wake condition **measurable** — which is exactly the meter
+that will later justify Option C. Anyone reading this as cheaper joules is reading
+it wrong (Corollary 6.2).
+
+## 10. Proof obligations / risks (the review must probe these)
+- **C1 (load-bearing).** The 1-of-N tree's whole-domain cleanliness is a
+  *conjecture*. Stage 1 exists to discharge it at small `N` before any scaling; a
+  failure is a redesign of the tree lowering, not a small fix.
+- **Zero-parking (§3).** Under-specifying the free-zero-cell discipline re-opens the
+  M-C1 hole (Lemmas 7.1/7.2); spec it to ADR-0044 §2.3–2.4 concreteness.
+- **Seam-rotation realizability.** Reordering `step`'s phases must preserve the
+  fetch/unfetch/PC invariants (ADR-0034); the prologue/epilogue for the first/last
+  partial revolution must be semantics-checked.
+- **Domain coverage.** The `2^(160+8N)` composite domain forces sampling for the
+  real-CPU authority (as M-C1); design the sample around the exchange-boundary
+  states a residue bug would hide in.
+- **Degeneracy.** Without the §6 line-audit, a green oracle proves the wrong artifact
+  (Proposition 5.1). The audit is not optional at Stage 1+ (it does not apply to the
+  intentionally-degenerate Layer 1, §6).
+- **Layer-1 scope is CPU-wide, not compiler-only** (§2 correction). It touches
+  `types.rs` (State bank), `decoder.rs` (LOAD/STORE decode + the C1 tree),
+  `instr.rs`/`asm.rs` (encodings), and `compile.rs` — full orchestration bar, not
+  the small pure-compiler task a prior draft implied.
+- **Exchange-placement rework across the Layer1→Stage1 boundary.** Layer 1 splices
+  the exchange into `step`; Stage 1 re-places it as a separate factor to pass the
+  audit. The tree/ISA/compiler-targeting reuse verbatim, but the *placement* is
+  re-architected — plan for it, and settle the `MemState`/`BusMsg` layout up front
+  (§3) so the marshaller is not redone.
+
+## Cross-references
+- [theory/reversible-memory-closure.md](../theory/reversible-memory-closure.md) —
+  the formal results this build realizes (Thm 2.3, 3.5, 6.1; Lemmas 1.4, 3.2, 3.3;
+  Props 3.4, 4.1, 5.1, 5.2; Conjecture C1; Lemmas 7.1/7.2).
+- [ADR-0045](0045-mc2-memory-bus.md) — the scoping + spike resolution.
+- [ADR-0033](0033-ring-machine.md) / [ADR-0040](0040-rail-role-swap-cell.md) — the
+  ring + zero-garbage closure this generalizes.
+- [ADR-0029](0029-memory.md) / [ADR-0027](0027-cell-library.md) — exchange
+  discipline, Options A/B/C, the Fredkin cell.
+- [ADR-0044](0044-mc-compiler-memory.md) — M-C1 spill, the Layer-1 base.
+- [ADR-0008](0008-differential-testing.md) — the oracle norm (L19).
