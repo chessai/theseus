@@ -391,11 +391,16 @@ fn swap_homes(ctx: &Ctx, leaf_a: usize, leaf_b: usize) -> Vec<Instr> {
 ///
 /// `exclude_leaves`: leaf indices that must NOT be displaced (e.g. the
 /// control leaf, whose data must remain accessible during the skip block).
+/// Result of `allocate_aux`: the zeroed aux register indices, the instructions
+/// that page leaves out to free the registers, the instructions that restore
+/// them afterward, and the updated `Ctx` reflecting the temporary residence.
+type AuxAlloc = (Vec<u8>, Vec<Instr>, Vec<Instr>, Ctx);
+
 fn allocate_aux(
     ctx: &Ctx,
     count: usize,
     exclude_leaves: &[usize],
-) -> Result<(Vec<u8>, Vec<Instr>, Vec<Instr>, Ctx), CompileError> {
+) -> Result<AuxAlloc, CompileError> {
     let used_regs: std::collections::BTreeSet<u8> = ctx
         .homes
         .iter()
