@@ -15,11 +15,13 @@ Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
 (μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
 thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU
 that fetches and executes ROMs compiled from arbitrary `.thse` code). Milestones
-**M-A, M-B, and M-C1** are done: non-recursive *and* branching / data-dependent
-`.thse` compiles to a TISC-1 ROM that runs on the CPU, provably equal to the
-interpreter — including the real data-dependent `fib` (`iter Nat fibStep`), which
-now computes Fibonacci on the simulated CPU — and values up to **14 leaves**
-(register↔scratch spill, M-C1). See the sections below and ADRs 0033–0044.
+**M-A, M-B, M-C1, and M-C2 Layer 1** are done: non-recursive *and* branching /
+data-dependent `.thse` compiles to a TISC-1 ROM that runs on the CPU, provably
+equal to the interpreter — including the real data-dependent `fib` (`iter Nat
+fibStep`), which now computes Fibonacci on the simulated CPU — and values that
+spill into scratch *and* **resident memory** (a reversible `MEXCH` exchange +
+1-of-N Fredkin tree, ceiling `14 + N`). See the sections below and ADRs 0033–0046,
+and [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md).
 
 ## Status at a glance
 
@@ -32,7 +34,7 @@ now computes Fibonacci on the simulated CPU — and values up to **14 leaves**
 | **M4-v1** TISC-1 CPU | ✅ **done** | the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** — ADR-0030's milestone, met |
 | **M4-v2** ring machine | ✅ **done + zero-garbage** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving**; reversible branching works (ADR-0034). **Physical closure achieved**: the R1 rail-role-swap cell (ADR-0040, real ngspice, adiabatic slope −1) makes lowering garbage-free — the step is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so the default runner `run == eval^R` closes with **zero** re-supplied boundary. The machine-level **money plot** confirms it: energy/step falls at adiabatic slope **−0.997**, crossing below the flat CMOS ½CV² floor at t_ramp ≈ 2.1e-8 s (active logic below CMOS across the whole clock range). |
 | **v0.2 dialect** software | ✅ **done** | μ-types + `iter`/`fold`/`unfold`: core + eval + surface syntax + **netlist lowering** + diagnostics; writable `.thse` programs run source→cells (ADRs 0035–0039) |
-| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **M-A + M-B + M-C1 done** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive), **M-B** (reversible branching + **data-dependent iter** + general controlled ops + bare sums, ADR-0043), and **M-C1** (reversible register↔scratch **spill**, ADR-0044) all compile → ROM → run on the CPU → `run_on_cpu == eval` (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. M-C1 lifts the leaf ceiling 8 → **14** (straight-line) / **12** (branching) by spilling into scratch `s2..s7`. Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience (see compiler section). Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042); **next: M-C2** (Option-B memory bus, ADR-0044 §3 / ADR-0029) |
+| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **M-A + M-B + M-C1 + M-C2/L1 done** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive), **M-B** (reversible branching + **data-dependent iter** + general controlled ops + bare sums, ADR-0043), **M-C1** (register↔scratch **spill**, ADR-0044), and **M-C2 Layer 1** (resident **memory** + a reversible `MEXCH` exchange instruction + 1-of-N Fredkin tree, ADR-0046) all compile → ROM → run on the CPU → `run_on_cpu == eval` (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. Leaf ceiling now **14 + N** (straight-line) / **12 + N** (branching), N=4 resident memory words. **Conjecture C1 discharged** (the addressed-exchange tree is whole-domain ancilla-clean). Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience. Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042); **next: M-C2 Stage 1** (externalize memory into the composite ring, ADR-0046) |
 | **stdlib** | ✅ increment 1–2 | implicit prelude (`Bit`, `Nat`, `notb`, `swapBit`, `cnot`, `toffoli`) via structural-dedup merge — no imports needed; a compositional reversible adder demonstrates arithmetic composes (ADR-0038 constraint respected) |
 | **M2** FPGA / Verilator | ⏸ parked | still stubs; a demo, not a phase |
 
@@ -201,10 +203,21 @@ ISA. The design is ADR-0042, decomposed into milestones:
   0008; fast-sim runs the whole domain). *An adversarial design review corrected
   the first draft's dishonest 8→16 ceiling and caught two data-loss bugs (aux
   zero-source, unroll consistency) before implementation — see ADR-0044 §2.*
-- **M-C2 — next (Option-B bus, ADR-0044 §3 / ADR-0029).** For values exceeding the
-  register+scratch file: `step` becomes `(CpuState, BusMsg) ↔ …`, memory a
-  separately-compiled Fredkin-tree exchange iso through the ring. Its own design
-  pass, now that the ring machine exists to inform the protocol.
+- **M-C2 Layer 1 — done (ADR-0046).** Resident **memory** + a self-inverse `MEXCH
+  rd, addr` exchange instruction (`reg[rd] ↔ mem[addr]`) whose decode is a **1-of-N
+  Fredkin exchange tree**; the compiler spills into it (`Location::Mem`, transient-
+  squat zero-parking). Ceiling → **14 + N / 12 + N** (N=4). **Conjecture C1
+  discharged**: the tree is whole-domain ancilla-clean at `N ∈ {2,4,8}`. Verified by
+  the real-`step` oracle (`run_on_cpu == eval`, sampled). *This is honest Option-A
+  capacity* — the area cost of widening `State` is real (it inflated the ring-
+  lowering tests past the gate timeout; the heavy ones are now `#[ignore]`d,
+  Theorem 6.1), which is exactly why **Stage 1 externalizes** memory.
+- **M-C2 Stage 1 — next (ADR-0046 §4).** Lift `MemState` out of the carrier into a
+  **composite ring**: `step` gains a resident `BusMsg` port, memory becomes a
+  separately-compiled Fredkin iso, and the closure certificate is proven for the
+  composite (per [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md)
+  Thm 3.5) — where memory stops bloating the step body. Then **Stage 2** (two-body
+  physical separation).
 - **M-D** — full algebraic codegen (heap value rep, `Fold`/`Unfold`/`Trace`,
   calling convention) = *arbitrary* `.thse`; **M-E** — polish + energy-price
   compiled ROMs.
@@ -229,12 +242,15 @@ depth-tracking bug) that unit tests missed.
 
 ## Open items & next steps
 
-- **Surface → TISC-1 compiler (the #1 goal) — active.** M-A, M-B **and M-C1**
-  done: the real data-dependent `iter Nat fibStep` (`0022-fib.thse`) runs on the
-  CPU end-to-end, and values spill to scratch up to a 14-leaf ceiling (ADR-0044).
-  **Next: M-C2** — the Option-B memory bus (ADR-0044 §3 / ADR-0029): `step`
-  becomes `(CpuState, BusMsg) ↔ …`, memory a separately-compiled Fredkin-tree iso
-  through the ring, for values exceeding the register+scratch file. Then M-D (heap
+- **Surface → TISC-1 compiler (the #1 goal) — active.** M-A, M-B, M-C1 **and
+  M-C2 Layer 1** done: the real data-dependent `iter Nat fibStep` runs on the CPU
+  end-to-end, and values spill to scratch *and* resident memory via a reversible
+  `MEXCH` exchange + 1-of-N Fredkin tree (ceiling `14 + N`, **C1 discharged**,
+  ADR-0046). **Next: M-C2 Stage 1** — externalize memory into the **composite ring**
+  (`step` gains a resident `BusMsg` port; the closure certificate is proven for the
+  composite, [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md)
+  Thm 3.5), where memory stops bloating the step body (the Layer-1 area cost that
+  `#[ignore]`d the heavy ring tests). Then Stage 2 (two-body separation) → M-D (heap
   value rep, `Fold`/`Unfold`/`Trace` = arbitrary `.thse`) → M-E (energy).
 - **Energy-price a compiled loop** — now that `iter`/`fold`/`unfold` (and
   compiled ROMs) lower to cells, run one through `theseus-spice::annotate` for a

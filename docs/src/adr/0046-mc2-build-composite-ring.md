@@ -1,13 +1,33 @@
 # ADR-0046: M-C2 build — the composite-ring memory bus
 
-**Status:** Proposed (build design). Advisor-authored from the resolved scoping
+**Status:** Accepted — **Layer 1 implemented** (`theseus-tisc`, merged `f5db17d`);
+Stages 1–2 proposed. Advisor-authored from the resolved scoping
 ([ADR-0045](0045-mc2-memory-bus.md) §0.5) and the formal proofs
 ([theory/reversible-memory-closure.md](../theory/reversible-memory-closure.md)).
-This is the **delegatable design-of-record** for building the external memory bus.
-Implementation is staged and each stage is gated by its differential oracle **and**
-its closure certificate; the whole touches the ring and `step`'s phase order, so it
-carries the CLAUDE.md orchestration bar (adversarial review + real integration
-tests, per stage).
+The delegatable design-of-record for the external memory bus. Implementation is
+staged and each stage is gated by its differential oracle **and** its closure
+certificate; the whole touches the ring and `step`'s phase order, so it carries the
+CLAUDE.md orchestration bar (adversarial review + real integration tests, per stage).
+
+**Layer 1 implementation note (what shipped, `MEM_WORDS = 4`).** The addressed-
+exchange substrate landed exactly per §3.1: `State` gains 4 resident memory words
+(→ 24 fields / 192 bits); a self-inverse **`MEXCH rd, addr`** instruction
+(`reg[rd] ↔ mem[addr]`, R-format opcode `0b1001`) whose decode is the **1-of-N
+Fredkin exchange tree**; and `compile.rs` targets `Location::Mem(addr)` homes with
+the transient-squat zero-parking (§3.1). **Conjecture C1 is DISCHARGED** — the tree
+is whole-domain ancilla-clean at `N ∈ {2,4,8}` (`mem_exchange` 4/4). Verified by the
+run-on-CPU oracle: `run_on_cpu` (real `step`) `== eval` on the sampled inputs for a
+15-leaf spill-to-memory program, the max-ceiling program, and a store→reload
+round-trip; fast-sim green whole-domain; over-ceiling programs reject cleanly. The
+honest ceiling holds: **14 + N straight-line, 12 + N branching**.
+
+**The area cost, made concrete (validates Stage 1).** Resident memory widens `State`,
+which inflates the ring-lowering cost — the heavy integration tests (`ring_fib` 778s,
+`feistel` 379s, `fib_cpu` ~400s at N=4) blew the full-suite gate timeout and are now
+`#[ignore]`d (green pre-merge via `--ignored`, same discipline as the real-CPU
+oracle tests). This is **Theorem 6.1's area cost in practice**: Option-A resident
+memory does not scale in `N` because it bloats the step body the ring materializes —
+exactly why **Stage 1 externalizes** memory into a shallow loop.
 
 ## 1. Decision and honest framing
 
