@@ -77,11 +77,6 @@ pub fn route_to_head_n(indices: &[usize], n_fields: usize) -> Iso {
     }
 }
 
-/// Build the routing iso over the global `NUM_FIELDS`-field State product.
-fn route_to_head(indices: &[usize]) -> Iso {
-    route_to_head_n(indices, NUM_FIELDS)
-}
-
 /// `fields(k+r) <-> fields(k) x fields(r)`: split the first k fields
 /// out of the right-nested product as a separate group.
 ///
