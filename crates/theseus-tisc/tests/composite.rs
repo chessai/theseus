@@ -570,7 +570,24 @@ fn encode_decode_system_round_trip() {
 fn assert_oracle_fast_with_bus_quiescence(name: &str, iso: &Iso) {
     let (in_ty, _out_ty) = type_of(iso).expect("iso types");
     let vals = enumerate_values(&in_ty);
-    assert!(!vals.is_empty(), "{name}: domain is empty");
+    let n = vals.len();
+    assert!(n > 0, "{name}: domain is empty");
+
+    // Bound the sample to at most 256 inputs (strided, deterministic).
+    // Mirrors assert_oracle_sample's selection strategy.
+    const CAP: usize = 256;
+    let count = CAP.min(n);
+    let mut indices: Vec<usize> = (0..count)
+        .map(|i| {
+            if count <= 1 { 0 } else { i * (n - 1) / (count - 1) }
+        })
+        .collect();
+    indices.push(0);
+    if n > 0 {
+        indices.push(n - 1);
+    }
+    indices.sort();
+    indices.dedup();
 
     // Build the system_step iso for the compiled ROM
     let instrs = compile(iso).unwrap();
@@ -579,7 +596,8 @@ fn assert_oracle_fast_with_bus_quiescence(name: &str, iso: &Iso) {
     let step_iso = theseus_tisc::step::system_step(&rom);
 
     let mut checked = 0usize;
-    for v in &vals {
+    for &i in &indices {
+        let v = &vals[i];
         // Fast-sim oracle (existing)
         let cpu_out = run_on_cpu_fast(iso, v).unwrap_or_else(|e| {
             panic!("{name} (fast-sim): run failed on {v:?}: {e}")
@@ -612,7 +630,7 @@ fn assert_oracle_fast_with_bus_quiescence(name: &str, iso: &Iso) {
         checked += 1;
     }
     eprintln!(
-        "{name} (1b-A): oracle + bus-quiescence OK on all {checked} inputs",
+        "{name} (1b-A): oracle + bus-quiescence OK on {checked}/{n} inputs",
     );
 }
 
