@@ -17,7 +17,7 @@ use theseus_core::{adjoint, Iso, Type, Value};
 
 use crate::asm::{assemble, Instr};
 use crate::types::{
-    decode_composite, decode_system, encode_composite, encode_system,
+    decode_system, encode_system,
     StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH,
 };
 
