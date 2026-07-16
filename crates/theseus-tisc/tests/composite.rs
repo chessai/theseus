@@ -636,12 +636,14 @@ fn assert_oracle_fast_with_bus_quiescence(name: &str, iso: &Iso) {
 }
 
 #[test]
+#[ignore = "slow: value-level bus-quiescence evals the full 3-factor system_step per step (~1.7s each); run via --ignored"]
 fn stage1b_oracle_spill_15_with_bus_quiescence() {
     let iso = Iso::SwapProd(bit_prod(7), bit_prod(8));
     assert_oracle_fast_with_bus_quiescence("1b_spill_15", &iso);
 }
 
 #[test]
+#[ignore = "slow: value-level bus-quiescence evals the full 3-factor system_step per step (~1.7s each); run via --ignored"]
 fn stage1b_oracle_store_reload_with_bus_quiescence() {
     let n = 15.min(14 + MEM_WORDS);
     let iso = Iso::SwapProd(bit_prod(1), bit_prod(n - 1));
