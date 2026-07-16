@@ -49,8 +49,11 @@ use theseus_netlist::{
     balance_compact, bits_of, lower_iso_bennett, value_from_bits, CompactBalanced,
 };
 
-use crate::step::step;
-use crate::types::{state_ty, StateVals};
+use crate::step::{step, system_step};
+use crate::types::{
+    decode_system, encode_system, state_ty, system_state_ty, StateVals, COMPOSITE_BITS,
+    SYSTEM_BITS,
+};
 
 /// A compact-balanced TISC-1 step ready for ring recirculation.
 pub struct StepRing {
@@ -340,5 +343,163 @@ impl ClosedStepRing {
     /// The compact-balanced body.
     pub fn compact(&self) -> &CompactBalanced {
         &self.compact
+    }
+}
+
+// ── System ring (system_step carrier, Stage 1b-B) ─────────────────
+
+/// A compact-balanced TISC-1 `system_step` ready for ring recirculation.
+///
+/// Like [`StepRing`] but over the 3-factor `((CpuState, MemState), BusMsg)`
+/// carrier, using [`encode_system`]/[`decode_system`] for I/O.
+/// The bus-quiescence boundary condition is checked via
+/// [`SystemRing::bus_quiescent`].
+pub struct SystemRing {
+    compact: CompactBalanced,
+    ancilla_init: Vec<bool>,
+    n_data: usize,
+}
+
+/// Build a ring-ready compact-balanced system_step from a ROM image.
+///
+/// Calls `system_step(rom)`, lowers with ancillas, and compact-balances —
+/// O(active cells) memory, no K0 materialization.
+pub fn system_ring(rom: &[u16]) -> SystemRing {
+    let iso = system_step(rom);
+    let (net, ancilla_init) =
+        lower_iso_with_ancillas(&iso).expect("system_step lowers");
+    assert_eq!(
+        net.inputs.len(),
+        net.outputs.len(),
+        "system_step netlist must have equal input/output port counts"
+    );
+    let n_data = net.inputs.len() - ancilla_init.len();
+    let compact = balance_compact(&net).expect("balance_compact");
+    SystemRing {
+        compact,
+        ancilla_init,
+        n_data,
+    }
+}
+
+impl SystemRing {
+    /// Recirculate the system_step `revolutions` times starting from
+    /// `start`, with the ring CLOSED (zero-garbage).
+    ///
+    /// Each revolution feeds the ancilla *outputs* back as the next
+    /// revolution's ancilla *inputs* (TRUE recirculation). This is
+    /// valid because `system_step` lowers ancilla-clean by construction.
+    ///
+    /// Unlike [`StepRing::run`], this method does NOT contain a
+    /// `debug_assert!(ancillas_restored)` — the certificate test
+    /// asserts restoration explicitly, and the internal assert would
+    /// panic before the certificate can observe `run==run_open` /
+    /// `bus_quiescent`, and it doubles per-call cost.
+    pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
+        let ty = system_state_ty();
+        let mut data_bits =
+            bits_of(&encode_system(start), &ty).expect("bits_of");
+        let mut ancilla_bits = self.ancilla_init.clone();
+
+        for _ in 0..revolutions {
+            let mut input = data_bits.clone();
+            input.extend_from_slice(&ancilla_bits);
+            let sim =
+                self.compact.simulate(&input).expect("simulate");
+            data_bits = sim.outputs[..self.n_data].to_vec();
+            ancilla_bits = sim.outputs[self.n_data..].to_vec();
+        }
+
+        let val =
+            value_from_bits(&ty, &data_bits).expect("value_from_bits");
+        decode_system(&val)
+    }
+
+    /// Recirculate with the ring OPEN: each revolution discards the
+    /// ancilla outputs and re-supplies fresh `ancilla_init`.
+    ///
+    /// Always correct (independent of ancilla cleanliness); equals
+    /// [`Self::run`] exactly when the lowering is ancilla-clean, which
+    /// is the equivalence that certifies the zero-garbage closure.
+    pub fn run_open(
+        &self,
+        start: &StateVals,
+        revolutions: u32,
+    ) -> StateVals {
+        let ty = system_state_ty();
+        let mut data_bits =
+            bits_of(&encode_system(start), &ty).expect("bits_of");
+        assert_eq!(data_bits.len(), self.n_data);
+
+        for _ in 0..revolutions {
+            let mut input = data_bits.clone();
+            input.extend_from_slice(&self.ancilla_init);
+            let sim =
+                self.compact.simulate(&input).expect("simulate");
+            data_bits = sim.outputs[..self.n_data].to_vec();
+        }
+
+        let val =
+            value_from_bits(&ty, &data_bits).expect("value_from_bits");
+        decode_system(&val)
+    }
+
+    /// Indices of ancilla lines whose output differs from their init
+    /// after one revolution from `start`.
+    pub fn ancilla_mismatches(&self, start: &StateVals) -> Vec<usize> {
+        let ty = system_state_ty();
+        let data_bits =
+            bits_of(&encode_system(start), &ty).expect("bits_of");
+        let mut input = data_bits;
+        input.extend_from_slice(&self.ancilla_init);
+        let sim = self.compact.simulate(&input).expect("simulate");
+        let ancilla_out = &sim.outputs[self.n_data..];
+
+        ancilla_out
+            .iter()
+            .zip(&self.ancilla_init)
+            .enumerate()
+            .filter(|(_, (got, expected))| got != expected)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// True if ancillas are fully restored after one revolution from
+    /// `start` — the ring machine genuinely closes.
+    pub fn ancillas_restored(&self, start: &StateVals) -> bool {
+        self.ancilla_mismatches(start).is_empty()
+    }
+
+    /// True if the BusMsg data lines are all zero after one revolution
+    /// from `start` — the bus-quiescence boundary condition.
+    ///
+    /// Computes the bus range symbolically as
+    /// `COMPOSITE_BITS..SYSTEM_BITS` and asserts `n_data == SYSTEM_BITS`
+    /// first (catches lowering-order regressions loudly).
+    pub fn bus_quiescent(&self, start: &StateVals) -> bool {
+        assert_eq!(
+            self.n_data, SYSTEM_BITS,
+            "SystemRing::bus_quiescent: n_data ({}) != SYSTEM_BITS ({}) — \
+             lowering-order regression",
+            self.n_data, SYSTEM_BITS,
+        );
+        let ty = system_state_ty();
+        let data_bits =
+            bits_of(&encode_system(start), &ty).expect("bits_of");
+        let mut input = data_bits;
+        input.extend_from_slice(&self.ancilla_init);
+        let sim = self.compact.simulate(&input).expect("simulate");
+        let bus_out = &sim.outputs[COMPOSITE_BITS..SYSTEM_BITS];
+        bus_out.iter().all(|&b| !b)
+    }
+
+    /// The compact-balanced body.
+    pub fn compact(&self) -> &CompactBalanced {
+        &self.compact
+    }
+
+    /// Number of ancilla lines.
+    pub fn ancilla_count(&self) -> usize {
+        self.ancilla_init.len()
     }
 }
