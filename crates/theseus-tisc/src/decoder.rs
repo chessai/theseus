@@ -73,8 +73,8 @@ use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_balanced, seq_list,
 };
 use crate::types::{
-    flat, mem_field, reg_field, scratch_field, word8, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD,
-    MEM_WORDS, NUM_FIELDS, W,
+    flat, reg_field, scratch_field, word8, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD,
+    MEM_WORDS, NUM_CPU_FIELDS, NUM_FIELDS, W,
 };
 
 // ── Aux-field conventions ──────────────────────────────────────────
@@ -263,39 +263,51 @@ pub fn select_scratch(sel: RegSel) -> Iso {
     select_fields(sel, scratch_field)
 }
 
-/// The 1-of-N select tree over the memory bank fields `mem_field(0)..mem_field(N-1)`.
-/// Parameterized by `MEM_WORDS`; supports N ∈ {2, 4, 8}.
-/// THIS IS THE C1 TREE (ADR-0046 §3.1, §4.3): it MUST be ancilla-clean
-/// (Bennett-sandwiched controls, self-inverse routing brackets).
-pub fn select_mem(sel: RegSel) -> Iso {
-    let n = MEM_WORDS;
-    let n_bits = match n {
+/// The 1-of-N select tree over a right factor of `n_mem` Word8 fields,
+/// controlled by IR bits in a left factor of `n_cpu` Word8 fields.
+///
+/// Carrier: `(fields(n_cpu), fields(n_mem))`.
+/// Routes `RightFactor[addr] → RightFactor head`, where `addr` bits
+/// come from `sel` in the left factor. Each level uses
+/// [`cross_ctrl_fredkin`]: control in left, swap targets in right.
+///
+/// THIS IS THE C1 TREE re-targeted onto the composite carrier (Stage 1a-B,
+/// ADR-0046 §4.5.0 Decision 3). It MUST be ancilla-clean.
+pub fn select_mem_composite_n(sel: RegSel, n_cpu: usize, n_mem: usize) -> Iso {
+    let n_bits = match n_mem {
         1 => 0,
         2 => 1,
         4 => 2,
         8 => 3,
-        _ => panic!("select_mem: MEM_WORDS={n} not in {{2,4,8}}"),
+        _ => panic!("select_mem_composite_n: n_mem={n_mem} not in {{1,2,4,8}}"),
     };
     let mut steps = Vec::new();
-    // Tree levels from MSB down to LSB (same pattern as select_fields for 8).
     for level in (0..n_bits).rev() {
         let stride = 1usize << level;
         for i in 0..stride {
-            if i + stride < n {
-                steps.push(ctrl_word_swap(
+            if i + stride < n_mem {
+                steps.push(cross_ctrl_fredkin(
                     sel.ir_field,
                     sel.bits[level],
-                    mem_field(i),
-                    mem_field(i + stride),
+                    i,
+                    i + stride,
+                    n_cpu,
+                    n_mem,
                 ));
             }
         }
     }
     if steps.is_empty() {
-        Iso::Id(crate::types::state_ty())
+        use crate::addressing::fields;
+        Iso::Id(Type::prod(fields(n_cpu), fields(n_mem)))
     } else {
         seq_balanced(steps)
     }
+}
+
+/// `select_mem_composite` at the shipped `(NUM_CPU_FIELDS, MEM_WORDS)`.
+pub fn select_mem_composite(sel: RegSel) -> Iso {
+    select_mem_composite_n(sel, NUM_CPU_FIELDS, MEM_WORDS)
 }
 
 /// Reference model of the crossbar's register permutation (for tests):
@@ -596,20 +608,78 @@ fn xchg_instr() -> Iso {
     predicated(&r_pred(0b0111), body)
 }
 
-/// MEXCH rd, addr: gated swap of r[rd] ↔ mem[addr] (M-C2 Layer 1,
-/// ADR-0046 §3.1). The register crossbar routes r[rd] to r0; the
-/// memory crossbar (the C1 tree) routes mem[addr] to m0; a predicated
-/// swap exchanges r0 ↔ m0; both crossbars undo. Self-inverse.
-fn mexch_instr() -> Iso {
-    let selr = select_reg(R_RD);
-    let selm = select_mem(R_RT);
-    // Gated swap between reg_field(0) and mem_field(0), controlled on pred.
-    let gsw = on_fields(
-        &[reg_field(0), mem_field(0), AUX_PRED_FIELD],
-        (0..W)
-            .map(|i| gate_at(3 * W, &[2 * W, i, W + i], fredkin_prim()))
-            .collect(),
+/// Controlled swap of one CpuState field with one MemState field,
+/// gated on a bit in a CpuState control field.
+///
+/// Carrier: `(fields(n_left), fields(n_right))` = composite.
+/// Flattens the composite to `fields(n_left + n_right)`, routes the
+/// 3 fields (ctrl, left_word, right_word) to the head, applies the
+/// gated Fredkin swap, and un-routes.
+fn cross_factor_gated_swap(
+    ctrl_field: usize,
+    ctrl_bit: usize,
+    left_word: usize,
+    right_word: usize,
+    n_left: usize,
+    n_right: usize,
+) -> Iso {
+    use crate::addressing::split_fields;
+    assert!(ctrl_field < n_left, "ctrl_field out of range");
+    assert!(left_word < n_left, "left_word out of range");
+    assert!(ctrl_bit < W, "ctrl_bit out of range");
+    assert!(right_word < n_right, "right_word out of range");
+    assert_ne!(ctrl_field, left_word, "ctrl_field == left_word");
+
+    let n_total = n_left + n_right;
+    let ctrl_flat = ctrl_field;
+    let lw_flat = left_word;
+    let rw_flat = n_left + right_word;
+
+    let n3 = 3 * W;
+    let gates: Vec<Iso> = (0..W)
+        .map(|i| gate_at(n3, &[ctrl_bit, W + i, 2 * W + i], fredkin_prim()))
+        .collect();
+    let core = on_fields_n(&[ctrl_flat, lw_flat, rw_flat], gates, n_total);
+
+    let split = split_fields(n_left, n_right);
+    Iso::seq(Iso::sym(split.clone()), Iso::seq(core, split))
+}
+
+/// MEXCH on the composite carrier `(CpuState, MemState)`:
+/// predicated swap of `reg[rd] ↔ mem[addr]` across the factor boundary.
+///
+/// Body = select_reg(rd) ⊗ id_Mem ;
+///        select_mem_composite(addr) ;
+///        cross_factor_gated_swap(pred, reg_head, mem_head) ;
+///        sym(select_mem_composite) ;
+///        sym(select_reg) ⊗ id_Mem
+///
+/// Self-inverse. The predicate is computed/uncomputed in CpuState
+/// (AUX_PRED_FIELD bit 0), then lifted to the composite by `⊗ id_Mem`.
+fn mexch_composite() -> Iso {
+    let mem_id = Iso::Id(crate::types::mem_state_ty());
+
+    // Predicate on CpuState, lifted to composite.
+    let pred_cpu = pred_compute(&r_pred(0b1001));
+    let pred = Iso::times(pred_cpu.clone(), mem_id.clone());
+
+    // Select reg[rd] to CpuState head (CpuState-only, lifted to composite).
+    let selr_cpu = select_reg(R_RD);
+    let selr = Iso::times(selr_cpu.clone(), mem_id.clone());
+
+    // Select mem[addr] to MemState head (cross-factor, on composite).
+    let selm = select_mem_composite(R_RT);
+
+    // Gated swap: CpuState[0] ↔ MemState[0], controlled on AUX_PRED_FIELD bit 0.
+    let gsw = cross_factor_gated_swap(
+        AUX_PRED_FIELD,
+        0, // PRED_WIRE within the AUX_PRED_FIELD byte = bit 0
+        reg_field(0),
+        0, // MemState head = field 0
+        NUM_CPU_FIELDS,
+        MEM_WORDS,
     );
+
     let body = Iso::seq(
         selr.clone(),
         Iso::seq(
@@ -617,7 +687,7 @@ fn mexch_instr() -> Iso {
             Iso::seq(gsw, Iso::seq(Iso::sym(selm), Iso::sym(selr))),
         ),
     );
-    predicated(&r_pred(0b1001), body)
+    Iso::seq(pred.clone(), Iso::seq(body, Iso::sym(pred)))
 }
 
 /// SWAPBR rd: gated swap of BR ↔ r[rd] (ADR-0034 D1, Pendulum
@@ -731,7 +801,9 @@ pub enum Op {
 }
 
 impl Op {
-    pub const ALL: [Op; 15] = [
+    /// The 14 CpuState-only instructions (all except MEXCH).
+    /// Used by `decode_execute` (the ring step's decoder).
+    pub const ALL: [Op; 14] = [
         Op::Add,
         Op::Sub,
         Op::Xor,
@@ -741,7 +813,6 @@ impl Op {
         Op::Cswap,
         Op::Xchg,
         Op::Swapbr,
-        Op::Mexch,
         Op::Addi,
         Op::Subi,
         Op::Xori,
@@ -750,9 +821,12 @@ impl Op {
     ];
 }
 
-/// The predicated State-level iso for one instruction: identity unless
+/// The predicated CpuState-level iso for one instruction: identity unless
 /// IR's format/opcode bits match `op`, in which case the instruction is
 /// applied to the registers IR names.
+///
+/// Panics on `Op::Mexch` — MEXCH operates on the composite carrier; use
+/// [`system_decode_execute`] for the oracle path.
 pub fn instruction(op: Op) -> Iso {
     match op {
         Op::Add => add_instr(),
@@ -764,7 +838,9 @@ pub fn instruction(op: Op) -> Iso {
         Op::Cswap => cswap_instr(),
         Op::Xchg => xchg_instr(),
         Op::Swapbr => swapbr_instr(),
-        Op::Mexch => mexch_instr(),
+        Op::Mexch => panic!(
+            "Op::Mexch operates on (CpuState, MemState); use system_decode_execute"
+        ),
         Op::Addi => addi_instr(),
         Op::Subi => subi_instr(),
         Op::Xori => xori_instr(),
@@ -780,11 +856,27 @@ pub fn decode_execute_ops(ops: &[Op]) -> Iso {
     seq_balanced(ops.iter().map(|&o| instruction(o)).collect())
 }
 
-/// `decode_execute : State <-> State` — the full TISC-1 decoder.
+/// `decode_execute : CpuState <-> CpuState` — the ring decoder
+/// (decode_execute′, Stage 1a-B).
 ///
-/// Applies the instruction encoded in IR to the registers it names,
-/// preserving IR. Reserved opcodes are the identity. See the module
-/// docs for the s0/s1/pad-bit conventions and the aliasing caveat.
+/// All 14 non-MEXCH instructions. MEXCH is handled by the composite
+/// [`system_decode_execute`]. Reserved opcodes (including the MEXCH
+/// opcode 0b1001, which is now reserved at this level) are the identity.
 pub fn decode_execute() -> Iso {
     decode_execute_ops(&Op::ALL)
+}
+
+/// `system_decode_execute : (CpuState, MemState) <-> (CpuState, MemState)`
+/// — the full decoder including MEXCH on the composite carrier.
+///
+/// Non-MEXCH ops are `(instruction(op) ⊗ id_MemState)`; MEXCH is the
+/// cross-factor exchange via [`cross_ctrl_fredkin`].
+pub fn system_decode_execute() -> Iso {
+    let mem_id = Iso::Id(crate::types::mem_state_ty());
+    let mut steps: Vec<Iso> = Op::ALL
+        .iter()
+        .map(|&op| Iso::times(instruction(op), mem_id.clone()))
+        .collect();
+    steps.push(mexch_composite());
+    seq_balanced(steps)
 }

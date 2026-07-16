@@ -13,7 +13,7 @@ use crate::addressing::{at_fields, at_reg1, at_reg2, at_reg3};
 use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_list, swap_adj,
 };
-use crate::types::{bit, flat, word8, reg_field, scratch_field, mem_field, BR_FIELD, W};
+use crate::types::{bit, flat, word8, reg_field, scratch_field, BR_FIELD, W};
 
 // ══════════════════════════════════════════════════════════════════════
 // Operand-level iso builders (lifted from verified test files)
@@ -398,6 +398,42 @@ pub fn rotri(rd: usize, imm: u8) -> Iso {
 
 /// `MEXCH rd, addr` : swap register `rd` with memory word `mem[addr]`.
 /// Self-inverse (M-C2 Layer 1, ADR-0046 §3.1).
+///
+/// Operates on `composite_state_ty() = (CpuState, MemState)` — the
+/// carrier split (Stage 1a-B) means reg and mem fields live in different
+/// factors. Routes `reg_field(rd)` in CpuState and field `addr` in
+/// MemState to the heads of their respective factors, applies a
+/// cross-factor swap, then un-routes.
 pub fn mexch(rd: usize, addr: usize) -> Iso {
-    at_fields(swap_words_iso(), &[reg_field(rd), mem_field(addr)])
+    use crate::addressing::{route_to_head_n, split_fields};
+    use crate::types::{MEM_WORDS, NUM_CPU_FIELDS};
+
+    let n_left = NUM_CPU_FIELDS;
+    let n_right = MEM_WORDS;
+    let n_total = n_left + n_right;
+
+    // Route reg_field(rd) to CpuState head and mem field addr to MemState head.
+    // In the flat fields(n_total), reg_field(rd) is at index rd,
+    // and the mem field is at index n_left + addr.
+    let route = route_to_head_n(&[reg_field(rd), n_left + addr], n_total);
+
+    // After routing: field 0 = reg[rd], field 1 = mem[addr], rest untouched.
+    // Swap the two head fields.
+    let swap = swap_words_iso(); // SwapProd(Word8, Word8)
+    let rest_count = n_total - 2;
+    let lifted = if rest_count == 0 {
+        swap
+    } else {
+        use crate::addressing::fields;
+        Iso::times(swap, Iso::Id(fields(rest_count)))
+    };
+
+    // Apply the reshape if needed (route produces fields(n_total), we need
+    // the swap at the head then route back).
+    let inner = Iso::seq(Iso::seq(route.clone(), lifted), Iso::sym(route));
+
+    // Bracket with the composite ↔ flat iso.
+    let split = split_fields(n_left, n_right);
+    // split : fields(n_total) ↔ fields(n_left) × fields(n_right)
+    Iso::seq(Iso::sym(split.clone()), Iso::seq(inner, split))
 }

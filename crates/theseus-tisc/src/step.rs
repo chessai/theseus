@@ -231,11 +231,28 @@ pub fn step_ops(rom: &[u16], ops: &[Op]) -> Iso {
     seq_balanced(phases)
 }
 
-/// `step(rom) : State <-> State` — the full TISC-1 machine cycle:
-/// fetch, decode+execute, unfetch, PC += BR, PC += 1. Total bijection
-/// on the full State space (ADR-0034 D4); SWAPBR is functional
-/// (swaps BR ↔ r[rd]), branching works via the uniform end-of-step
-/// PC update `PC += BR + 1`.
+/// `step(rom) : CpuState <-> CpuState` — the ring machine cycle
+/// (decode_execute′, 14 non-MEXCH ops). Total bijection on CpuState;
+/// SWAPBR is functional, branching works via `PC += BR + 1`.
 pub fn step(rom: &[u16]) -> Iso {
     step_ops(rom, &Op::ALL)
+}
+
+/// `system_step(rom) : (CpuState, MemState) <-> (CpuState, MemState)` —
+/// the full machine cycle including MEXCH on the composite carrier.
+///
+/// Non-MEXCH phases are `(phase ⊗ id_MemState)`; the decode+execute
+/// phase uses [`decoder::system_decode_execute`] which includes the
+/// cross-factor MEXCH exchange. Used by `run_on_cpu` / `run_on_cpu_fast`.
+pub fn system_step(rom: &[u16]) -> Iso {
+    let mem_id = Iso::Id(crate::types::mem_state_ty());
+    let f = fetch(rom);
+    let phases = vec![
+        Iso::times(f.clone(), mem_id.clone()),           // fetch ⊗ id_Mem
+        decoder::system_decode_execute(),                 // composite decode+execute
+        Iso::times(f, mem_id.clone()),                    // unfetch ⊗ id_Mem
+        Iso::times(pc_add_br(), mem_id.clone()),          // PC += BR ⊗ id_Mem
+        Iso::times(pc_inc(), mem_id),                     // PC += 1 ⊗ id_Mem
+    ];
+    seq_balanced(phases)
 }

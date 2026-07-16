@@ -65,7 +65,8 @@ fn reference(s: &StateVals) -> StateVals {
             }
             0b0111 => std::mem::swap(&mut out.regs[rd], &mut out.scratch[rt]),
             0b1000 => std::mem::swap(&mut out.regs[rd], &mut out.br),
-            0b1001 if rt < MEM_WORDS => std::mem::swap(&mut out.regs[rd], &mut out.mem[rt]),
+            // 0b1001 = MEXCH: removed from CpuState decode_execute (Stage 1a-B);
+            // now a reserved opcode at this level (identity).
             _ => {} // reserved: identity
         }
     } else {
@@ -95,18 +96,15 @@ fn regs_b() -> [u8; 8] {
 }
 
 fn st(regs: [u8; 8], ir: u16) -> StateVals {
-    let mut mem = [0u8; MEM_WORDS];
-    // Fill memory with non-zero test values so exchange is visible.
-    for (i, m) in mem.iter_mut().enumerate() {
-        *m = 0xA0 + i as u8;
-    }
+    // mem is zero: CpuState (state_ty()) doesn't include memory fields;
+    // encode/decode drops mem. MEXCH tests are on the composite carrier.
     StateVals {
         regs,
         pc: 0x42,
         br: 0x99,
         ir,
         scratch: [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
-        mem,
+        mem: [0; MEM_WORDS],
     }
 }
 
@@ -155,16 +153,7 @@ fn op_samples(op: Op) -> Vec<StateVals> {
             st(regs_b(), r_ins(8, 3, 0, 0)), // SWAPBR r3
             st(regs_a(), r_ins(8, 7, 0, 0)), // SWAPBR r7
         ],
-        Op::Mexch => {
-            let mut samples = vec![
-                st(regs_a(), r_ins(9, 0, 0, 0)), // MEXCH r0, m0
-                st(regs_b(), r_ins(9, 5, 0, 1)), // MEXCH r5, m1
-            ];
-            if MEM_WORDS > 2 {
-                samples.push(st(regs_a(), r_ins(9, 3, 0, 3))); // MEXCH r3, m3
-            }
-            samples
-        }
+        Op::Mexch => panic!("MEXCH operates on composite carrier; not in CpuState decoder"),
         Op::Addi => vec![
             st(regs_a(), i_ins(0, 0, 0xFF)),
             st(regs_b(), i_ins(0, 7, 0x01)),
@@ -192,7 +181,8 @@ fn op_samples(op: Op) -> Vec<StateVals> {
 
 fn reserved_samples() -> Vec<StateVals> {
     vec![
-        st(regs_a(), r_ins(10, 1, 2, 3)), // opcode 9 is now MEXCH
+        st(regs_a(), r_ins(9, 0, 0, 0)),  // MEXCH opcode (reserved at CpuState level)
+        st(regs_a(), r_ins(10, 1, 2, 3)),
         st(regs_b(), r_ins(15, 7, 6, 5)),
         st(regs_a(), i_ins(5, 3, 0x7C)),
         st(regs_b(), i_ins(7, 0, 0xFF)),

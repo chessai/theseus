@@ -16,7 +16,7 @@ use theseus_core::typing::is_numeral_ty;
 use theseus_core::{adjoint, Iso, Type, Value};
 
 use crate::asm::{assemble, Instr};
-use crate::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use crate::types::{decode_composite, encode_composite, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
 // ── Errors ────────────────────────────────────────────────────────────
 
@@ -1507,7 +1507,10 @@ pub fn unmarshal(s: &StateVals, ty: &Type) -> Value {
 /// (`theseus_eval::eval`), passed in because theseus-eval is a
 /// dev-dependency.
 ///
-/// This is the M-A end-to-end pipeline: surface → ROM → CPU → result.
+/// Uses `system_step` on the composite `(CpuState, MemState)` carrier
+/// so that programs with memory-spill (MEXCH) are evaluated correctly.
+/// MemState is initialized to zero at program entry and projected away
+/// at the final comparison (Prop 5.1 degeneracy — never per-step).
 pub fn run_on_cpu<E: std::fmt::Debug>(
     iso: &Iso,
     input: &Value,
@@ -1523,16 +1526,17 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
 
     let state = marshal(input, &in_ty);
 
-    // Run the CPU for exactly `budget` steps using eval(step).
-    let step_iso = crate::step::step(&rom);
-    let mut cur = state.encode();
+    // Run the CPU for exactly `budget` steps using eval(system_step)
+    // on the composite (CpuState, MemState) carrier.
+    let step_iso = crate::step::system_step(&rom);
+    let mut cur = encode_composite(&state);
     let mut fuel = 8_000_000_000u64;
     for _ in 0..budget {
         cur = eval_fn(&step_iso, cur, &mut fuel).map_err(|e| {
             CompileError::Deferred(format!("CPU eval failed: {e:?}"))
         })?;
     }
-    let final_state = StateVals::decode(&cur);
+    let final_state = decode_composite(&cur);
 
     Ok(unmarshal(&final_state, &out_ty))
 }

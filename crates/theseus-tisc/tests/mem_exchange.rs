@@ -200,7 +200,8 @@ fn c1_mexch_tree_ancilla_clean_n8() {
 
 #[test]
 fn mexch_instr_iso_is_garbage_free() {
-    // The instr.rs mexch(rd, addr) is a plain SwapProd lifted to State.
+    // The instr.rs mexch(rd, addr) is a SwapProd lifted to the composite
+    // (CpuState, MemState) carrier via routing plumbing (Stage 1a-B).
     // It should lower with zero ancillas (pure wire permutation).
     let iso = theseus_tisc::instr::mexch(0, 0);
     let (net, inits) = lower_iso_with_ancillas(&iso).expect("mexch lowers");
