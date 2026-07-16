@@ -3,8 +3,29 @@
 **Status:** Accepted — **Layer 1 implemented** (`theseus-tisc`, merged `f5db17d`);
 **Stage 1a IMPLEMENTED** (carrier split + `system_step` + composite oracle, merged
 `8f27ba0`); **Stage 1b-A IMPLEMENTED** (BusMsg + emit/mem/absorb non-degenerate seam
-+ line-audit, value-level, merged `1f59744`); **Stage 1b-B (the SystemRing closure
-certificate) is next** (design-resolved §4.5.8); Stage 2 proposed.
++ line-audit, value-level, merged `1f59744`); **Stage 1b-B IMPLEMENTED** (SystemRing
+closure certificate, merged `75c5a13`) — **Stage 1b COMPLETE**; Stage 2 proposed.
+
+> **Stage 1b-B — DONE (merged `75c5a13`) — Stage 1b COMPLETE.** `system_step` now
+> runs through a recirculating **`SystemRing`** (`ring_run.rs`, a sibling of
+> `StepRing` carrying `system_state_ty()` via `encode_system`/`decode_system`), and
+> the **composite closure certificate holds** (`tests/ring_system.rs`, at the
+> compiled `MEM_WORDS`): `ancillas_restored` (`system_step` lowers **ancilla-clean** —
+> the crux, forced by construction: only ancilla source is the CCC-NOT chain `step`
+> already lowers clean; emit/absorb CNOTs are R1, gated Fredkins K2, reshapes
+> zero-cell permutes; no `Branch`/`Trace`/`Reg`), `run == eval(system_step)^R`,
+> `run == run_open` (zero-garbage closure), and **bus-quiescence** (`BusMsg = 0` at
+> the boundary, a lowering-fidelity cross-check over `COMPOSITE_BITS..SYSTEM_BITS`).
+> `SystemRing::run` deliberately omits the `debug_assert(ancillas_restored)` so the
+> certificate observes closure explicitly. `N = MEM_WORDS` is compile-time-fixed (=4);
+> the closure is **N-independent** (ancilla-cleanliness is per-instance), and the
+> memory-select tree's cleanliness across widths `N∈{2,4,8}` was separately discharged
+> in Stage 1a/1b-A — so the N=4 ring certificate + the tree's N∈{2,4,8} C1 together
+> establish closure at all supported widths. **This realizes Theorem 3.5 (composite
+> closure ZG-2) in code — the composite ring `CPU⊗bus⊗memory` closes zero-garbage.**
+> Design of record: [docs/scratch/stage1b-B-design.md](../../scratch/stage1b-B-design.md).
+> Next: **Stage 2** (two-body `SystemRing` — physical mem/CPU separation, the area
+> payoff, §5).
 
 > **Stage 1b-A — DONE (merged `1f59744`).** The memory exchange is now
 > **non-degenerate** (a real Option-B seam, not Stage-1a's degenerate splice). A
