@@ -74,7 +74,8 @@ use crate::plumbing::{
 };
 use crate::types::{
     flat, reg_field, scratch_field, word8, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD,
-    MEM_WORDS, NUM_CPU_FIELDS, NUM_FIELDS, W,
+    MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_FIELDS, W,
+    BUS_ADDR_FIELD, BUS_ENABLE_FIELD, BUS_WORD_FIELD,
 };
 
 // ── Aux-field conventions ──────────────────────────────────────────
@@ -645,51 +646,6 @@ fn cross_factor_gated_swap(
     Iso::seq(Iso::sym(split.clone()), Iso::seq(core, split))
 }
 
-/// MEXCH on the composite carrier `(CpuState, MemState)`:
-/// predicated swap of `reg[rd] ↔ mem[addr]` across the factor boundary.
-///
-/// Body = select_reg(rd) ⊗ id_Mem ;
-///        select_mem_composite(addr) ;
-///        cross_factor_gated_swap(pred, reg_head, mem_head) ;
-///        sym(select_mem_composite) ;
-///        sym(select_reg) ⊗ id_Mem
-///
-/// Self-inverse. The predicate is computed/uncomputed in CpuState
-/// (AUX_PRED_FIELD bit 0), then lifted to the composite by `⊗ id_Mem`.
-fn mexch_composite() -> Iso {
-    let mem_id = Iso::Id(crate::types::mem_state_ty());
-
-    // Predicate on CpuState, lifted to composite.
-    let pred_cpu = pred_compute(&r_pred(0b1001));
-    let pred = Iso::times(pred_cpu.clone(), mem_id.clone());
-
-    // Select reg[rd] to CpuState head (CpuState-only, lifted to composite).
-    let selr_cpu = select_reg(R_RD);
-    let selr = Iso::times(selr_cpu.clone(), mem_id.clone());
-
-    // Select mem[addr] to MemState head (cross-factor, on composite).
-    let selm = select_mem_composite(R_RT);
-
-    // Gated swap: CpuState[0] ↔ MemState[0], controlled on AUX_PRED_FIELD bit 0.
-    let gsw = cross_factor_gated_swap(
-        AUX_PRED_FIELD,
-        0, // PRED_WIRE within the AUX_PRED_FIELD byte = bit 0
-        reg_field(0),
-        0, // MemState head = field 0
-        NUM_CPU_FIELDS,
-        MEM_WORDS,
-    );
-
-    let body = Iso::seq(
-        selr.clone(),
-        Iso::seq(
-            selm.clone(),
-            Iso::seq(gsw, Iso::seq(Iso::sym(selm), Iso::sym(selr))),
-        ),
-    );
-    Iso::seq(pred.clone(), Iso::seq(body, Iso::sym(pred)))
-}
-
 /// SWAPBR rd: gated swap of BR ↔ r[rd] (ADR-0034 D1, Pendulum
 /// semantics). EXCH-shaped: route r[rd] to the r0 slot via the R_RD
 /// crossbar, perform a predicated swap of r0-slot and BR, route back.
@@ -867,16 +823,280 @@ pub fn decode_execute() -> Iso {
 }
 
 /// `system_decode_execute : (CpuState, MemState) <-> (CpuState, MemState)`
-/// — the full decoder including MEXCH on the composite carrier.
+/// — the composite decoder, non-MEXCH instructions only (Stage 1b-A).
 ///
-/// Non-MEXCH ops are `(instruction(op) ⊗ id_MemState)`; MEXCH is the
-/// cross-factor exchange via [`cross_ctrl_fredkin`].
+/// All 14 non-MEXCH ops are `(instruction(op) ⊗ id_MemState)`. MEXCH is
+/// handled by the emit/mem/absorb 3-cycle in `system_step` (Stage 1b-A).
 pub fn system_decode_execute() -> Iso {
     let mem_id = Iso::Id(crate::types::mem_state_ty());
-    let mut steps: Vec<Iso> = Op::ALL
+    let steps: Vec<Iso> = Op::ALL
         .iter()
         .map(|&op| Iso::times(instruction(op), mem_id.clone()))
         .collect();
-    steps.push(mexch_composite());
     seq_balanced(steps)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 3-factor reshape views (Stage 1b-A, Decision 2)
+// ══════════════════════════════════════════════════════════════════════
+//
+// The 3-factor carrier is `((CpuState, MemState), BusMsg)`.
+// Two views expose the 2-factor sub-products needed by mem and emit/absorb:
+//
+//   view_mem_bus:  ((Cpu,Mem),Bus) <-> (Cpu, (Mem,Bus))
+//   view_cpu_bus:  ((Cpu,Mem),Bus) <-> ((Cpu,Bus), Mem)
+
+/// `((Cpu,Mem),Bus) ↔ (Cpu, (Mem,Bus))` — expose the (Mem,Bus) sub-product
+/// for the mem phase, with Cpu as identity.
+pub fn view_mem_bus() -> Iso {
+    let cpu_ty = crate::types::state_ty();
+    let mem_ty = crate::types::mem_state_ty();
+    let bus_ty = crate::types::bus_state_ty();
+    Iso::AssocRProd(cpu_ty, mem_ty, bus_ty)
+}
+
+/// `((Cpu,Mem),Bus) ↔ ((Cpu,Bus), Mem)` — expose the (Cpu,Bus) sub-product
+/// for emit/absorb, with Mem as identity.
+///
+/// Constructed as: `AssocR(Cpu,Mem,Bus) ; (Id(Cpu) × Swap(Mem,Bus)) ; AssocL(Cpu,Bus,Mem)`.
+pub fn view_cpu_bus() -> Iso {
+    let cpu_ty = crate::types::state_ty();
+    let mem_ty = crate::types::mem_state_ty();
+    let bus_ty = crate::types::bus_state_ty();
+    Iso::seq(
+        Iso::AssocRProd(cpu_ty.clone(), mem_ty.clone(), bus_ty.clone()),
+        Iso::seq(
+            Iso::times(
+                Iso::Id(cpu_ty.clone()),
+                Iso::SwapProd(mem_ty.clone(), bus_ty.clone()),
+            ),
+            Iso::AssocLProd(cpu_ty, bus_ty, mem_ty),
+        ),
+    )
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Cross-factor CNOT (Stage 1b-A helper)
+// ══════════════════════════════════════════════════════════════════════
+
+/// CNOT across a 2-factor product boundary: `target_bit ^= source_bit`.
+///
+/// Carrier: `(fields(n_left), fields(n_right))`.
+/// Source is bit `src_bit` of field `src_field` in the left factor;
+/// target is bit `tgt_bit` of field `tgt_field` in the right factor.
+fn cross_cnot(
+    src_field: usize,
+    src_bit: usize,
+    tgt_field: usize,
+    tgt_bit: usize,
+    n_left: usize,
+    n_right: usize,
+) -> Iso {
+    use crate::addressing::split_fields;
+    assert!(src_field < n_left, "src_field out of range in left factor");
+    assert!(src_bit < W, "src_bit out of range");
+    assert!(tgt_field < n_right, "tgt_field out of range in right factor");
+    assert!(tgt_bit < W, "tgt_bit out of range");
+
+    let n_total = n_left + n_right;
+    let src_flat = src_field;
+    let tgt_flat = n_left + tgt_field;
+
+    let n2 = 2 * W;
+    let gate = gate_at(n2, &[src_bit, W + tgt_bit], cnot_prim());
+    let core = on_fields_n(&[src_flat, tgt_flat], vec![gate], n_total);
+
+    let split = split_fields(n_left, n_right);
+    Iso::seq(Iso::sym(split.clone()), Iso::seq(core, split))
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// select_mem_on_bus (Stage 1b-A, Decision 4)
+// ══════════════════════════════════════════════════════════════════════
+
+/// Number of address bits needed for `n_mem` memory words.
+fn mem_addr_bits(n_mem: usize) -> usize {
+    match n_mem {
+        1 => 0,
+        2 => 1,
+        4 => 2,
+        8 => 3,
+        _ => panic!("mem_addr_bits: n_mem={n_mem} not in {{1,2,4,8}}"),
+    }
+}
+
+/// The 1-of-N select tree over memory words, keyed on `BusMsg.addr`.
+///
+/// Carrier: `(fields(n_bus), fields(n_mem))` = `(Bus, Mem)`.
+/// Routes `Mem[addr] → Mem head`, where `addr` bits come from the
+/// `BUS_ADDR_FIELD` byte (bits 0..ceil(log2 N)) in the Bus (left) factor.
+/// Each level uses [`cross_ctrl_fredkin`]: control in left, swap targets in right.
+///
+/// This is the C1 tree re-keyed from IR onto BusMsg.addr (Stage 1b-A,
+/// Decision 4). Gate-level cleanliness transfers because the Fredkin
+/// control is pass-through regardless of source.
+pub fn select_mem_on_bus_n(n_bus: usize, n_mem: usize) -> Iso {
+    let n_bits = mem_addr_bits(n_mem);
+    let mut steps = Vec::new();
+    for level in (0..n_bits).rev() {
+        let stride = 1usize << level;
+        for i in 0..stride {
+            if i + stride < n_mem {
+                steps.push(cross_ctrl_fredkin(
+                    BUS_ADDR_FIELD,
+                    level,
+                    i,
+                    i + stride,
+                    n_bus,
+                    n_mem,
+                ));
+            }
+        }
+    }
+    if steps.is_empty() {
+        use crate::addressing::fields;
+        Iso::Id(Type::prod(fields(n_bus), fields(n_mem)))
+    } else {
+        seq_balanced(steps)
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// emit / mem / absorb (Stage 1b-A, Decision 3)
+// ══════════════════════════════════════════════════════════════════════
+
+/// `emit : system_state_ty <-> system_state_ty` — the first phase of the
+/// MEXCH 3-cycle (Stage 1b-A).
+///
+/// A self-contained bracket `pred ; selr ; [enable^=p ; addr^=IR.rt ;
+/// gated_swap(reg-head ↔ BusMsg.word)] ; sym(selr) ; sym(pred)`, built
+/// over `view_cpu_bus`. The swap is predicate-gated: only fires on MEXCH.
+/// `selr` is internal so `sym(emit)` re-selects the same `rd`.
+pub fn emit() -> Iso {
+    let mem_ty = crate::types::mem_state_ty();
+    let view = view_cpu_bus();
+
+    // Build emit_sub on (Cpu, Bus) = (fields(NUM_CPU_FIELDS), fields(NUM_BUS_FIELDS))
+    let emit_sub = emit_on_cpu_bus();
+
+    // Lift to system: view ; (emit_sub × Id(Mem)) ; sym(view)
+    let lifted = Iso::times(emit_sub, Iso::Id(mem_ty));
+    Iso::seq(view.clone(), Iso::seq(lifted, Iso::sym(view)))
+}
+
+/// The emit sub-iso on `(CpuState, BusMsg)` = `(fields(n_cpu), fields(n_bus))`.
+///
+/// pred ; selr ; [enable^=p ; addr^=IR.rt(ceil(log2 N) bits) ;
+/// gated_swap(reg[0] ↔ BusMsg.word)] ; sym(selr) ; sym(pred)
+fn emit_on_cpu_bus() -> Iso {
+    let bus_ty = crate::types::bus_state_ty();
+    let bus_id = Iso::Id(bus_ty);
+    let n_cpu = NUM_CPU_FIELDS;
+    let n_bus = NUM_BUS_FIELDS;
+
+    // Predicate (CpuState-only, lifted to (Cpu, Bus))
+    let pred_cpu = pred_compute(&r_pred(0b1001));
+    let pred = Iso::times(pred_cpu.clone(), bus_id.clone());
+
+    // Select reg[rd] to r0 slot (CpuState-only, lifted to (Cpu, Bus))
+    let selr_cpu = select_reg(R_RD);
+    let selr = Iso::times(selr_cpu.clone(), bus_id.clone());
+
+    // --- Cross-factor operations ---
+
+    // 1. enable ^= predicate bit (AUX_PRED_FIELD bit 0 → BUS_ENABLE bit 0)
+    let enable_cnot = cross_cnot(AUX_PRED_FIELD, 0, BUS_ENABLE_FIELD, 0, n_cpu, n_bus);
+
+    // 2. addr ^= IR.rt bits (ceil(log2 N) bits copied to BUS_ADDR)
+    let n_addr = mem_addr_bits(MEM_WORDS);
+    let mut addr_cnots: Vec<Iso> = Vec::new();
+    for i in 0..n_addr {
+        addr_cnots.push(cross_cnot(
+            R_RT.ir_field,
+            R_RT.bits[i],
+            BUS_ADDR_FIELD,
+            i,
+            n_cpu,
+            n_bus,
+        ));
+    }
+
+    // 3. Predicate-gated swap: reg[0] ↔ BusMsg.word
+    let gsw = cross_factor_gated_swap(
+        AUX_PRED_FIELD,
+        0,
+        reg_field(0),
+        BUS_WORD_FIELD,
+        n_cpu,
+        n_bus,
+    );
+
+    // Inner: enable_cnot ; addr_cnots ; gated_swap
+    let mut inner_steps = vec![enable_cnot];
+    inner_steps.extend(addr_cnots);
+    inner_steps.push(gsw);
+    let inner = seq_balanced(inner_steps);
+
+    // Full: pred ; selr ; inner ; sym(selr) ; sym(pred)
+    Iso::seq(
+        pred.clone(),
+        Iso::seq(
+            selr.clone(),
+            Iso::seq(inner, Iso::seq(Iso::sym(selr), Iso::sym(pred))),
+        ),
+    )
+}
+
+/// `absorb : system_state_ty <-> system_state_ty` — the third phase of the
+/// MEXCH 3-cycle (Stage 1b-A). Defined as `Iso::sym(emit())`.
+///
+/// Because emit's swap is predicate-gated and selr is internal, the
+/// adjoint correctly re-selects reg[rd], un-swaps, and zeros the bus fields.
+pub fn absorb() -> Iso {
+    Iso::sym(emit())
+}
+
+/// `mem_phase : system_state_ty <-> system_state_ty` — the second phase
+/// of the MEXCH 3-cycle (Stage 1b-A).
+///
+/// Built over `view_mem_bus`: routes `MemState[addr]→head` keyed on
+/// `BusMsg.addr`, then gated-swaps `BusMsg.word ↔ MemState[0]` on
+/// `BusMsg.enable`, then un-routes. Controls = BusMsg, targets = Mem+Bus
+/// → zero CpuState fields (the line-audit witness).
+pub fn mem_phase() -> Iso {
+    let cpu_ty = crate::types::state_ty();
+    let mem_ty = crate::types::mem_state_ty();
+    let bus_ty = crate::types::bus_state_ty();
+
+    // view: ((Cpu,Mem),Bus) -> (Cpu, (Mem,Bus))
+    let view = view_mem_bus();
+
+    // swap inside (Mem,Bus) to get (Bus,Mem) for 2-factor helpers
+    let swap_mb = Iso::SwapProd(mem_ty.clone(), bus_ty.clone());
+
+    // select_mem_on_bus on (Bus, Mem)
+    let select = select_mem_on_bus_n(NUM_BUS_FIELDS, MEM_WORDS);
+
+    // gated_swap on (Bus, Mem): Bus.word ↔ Mem[0] gated on Bus.enable
+    let gsw = cross_factor_gated_swap(
+        BUS_ENABLE_FIELD,
+        0,
+        BUS_WORD_FIELD,
+        0, // MemState head = field 0
+        NUM_BUS_FIELDS,
+        MEM_WORDS,
+    );
+
+    // mem_sub on (Bus, Mem): select ; gated_swap ; sym(select)
+    let mem_sub_bm = Iso::seq(select.clone(), Iso::seq(gsw, Iso::sym(select)));
+
+    // mem_sub on (Mem, Bus): swap ; mem_sub_bm ; swap^{-1}
+    let mem_sub = Iso::seq(
+        swap_mb.clone(),
+        Iso::seq(mem_sub_bm, Iso::sym(swap_mb)),
+    );
+
+    // Full: view ; (Id(Cpu) × mem_sub) ; sym(view)
+    let lifted = Iso::times(Iso::Id(cpu_ty), mem_sub);
+    Iso::seq(view.clone(), Iso::seq(lifted, Iso::sym(view)))
 }

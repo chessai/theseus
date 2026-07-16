@@ -49,6 +49,19 @@ pub const STATE_BITS: usize = NUM_FIELDS * W;
 /// Total bits in the composite (CpuState, MemState) carrier.
 pub const COMPOSITE_BITS: usize = (NUM_CPU_FIELDS + MEM_WORDS) * W;
 
+/// Number of Word8-sized fields in BusMsg: [enable, addr, word].
+pub const NUM_BUS_FIELDS: usize = 3;
+
+/// BusMsg field index: enable (bit 0 = bus active).
+pub const BUS_ENABLE_FIELD: usize = 0;
+/// BusMsg field index: addr (ceil(log2 N) low bits = memory address).
+pub const BUS_ADDR_FIELD: usize = 1;
+/// BusMsg field index: word (data being transferred).
+pub const BUS_WORD_FIELD: usize = 2;
+
+/// Total bits in the system ((CpuState, MemState), BusMsg) carrier.
+pub const SYSTEM_BITS: usize = (NUM_CPU_FIELDS + MEM_WORDS + NUM_BUS_FIELDS) * W;
+
 // ── Type helpers ────────────────────────────────────────────────────
 
 /// A single Bit type: `1 + 1`.
@@ -113,6 +126,23 @@ pub fn mem_state_ty() -> Type {
 /// Composite state type: `(CpuState, MemState)` — carrier for `system_step`.
 pub fn composite_state_ty() -> Type {
     Type::prod(state_ty(), mem_state_ty())
+}
+
+/// BusMsg type: right-nested product of 3 Word8 fields [enable, addr, word].
+///
+/// The bus is a transient factor in `system_state_ty()`; it carries data
+/// between the emit/mem/absorb phases and is zero at every step boundary.
+pub fn bus_state_ty() -> Type {
+    crate::addressing::fields(NUM_BUS_FIELDS)
+}
+
+/// System state type: `((CpuState, MemState), BusMsg)` — the 3-factor
+/// carrier for `system_step` (Stage 1b-A).
+///
+/// The inner `(CpuState, MemState)` sub-product is `composite_state_ty()`;
+/// BusMsg is the outermost factor, initialized to zero by `encode_system`.
+pub fn system_state_ty() -> Type {
+    Type::prod(composite_state_ty(), bus_state_ty())
 }
 
 // ── Field index constants ──────────────────────────────────────────
@@ -271,6 +301,49 @@ pub fn decode_composite(val: &Value) -> StateVals {
     }
 
     StateVals { regs, pc, br, ir, scratch, mem }
+}
+
+// ── System encode / decode (3-factor carrier, Stage 1b-A) ─────────
+
+/// Encode a `StateVals` as a system `Value` inhabiting
+/// `system_state_ty()` = `((CpuState, MemState), BusMsg)`.
+///
+/// BusMsg is initialized to all-zero (the bus is quiescent between steps).
+/// `StateVals` stays flat — BusMsg is a transient factor, not byte-carrier state.
+pub fn encode_system(s: &StateVals) -> Value {
+    let composite = encode_composite(s);
+    let bus_ty = bus_state_ty();
+    let bus_bits = vec![false; NUM_BUS_FIELDS * W];
+    let bus_val = value_from_bits(&bus_ty, &bus_bits).expect("encode_system: bus");
+    Value::pair(composite, bus_val)
+}
+
+/// Decode a system `Value` of `system_state_ty()` back to `StateVals`.
+///
+/// Projects the BusMsg factor away (it should be zero at step boundaries;
+/// the caller is responsible for asserting quiescence if needed).
+pub fn decode_system(val: &Value) -> StateVals {
+    let Value::Pair(composite_val, _bus_val) = val else {
+        panic!("decode_system: expected Pair((composite, bus)), got {val:?}");
+    };
+    decode_composite(composite_val)
+}
+
+/// Decode the BusMsg factor from a system `Value` as `[enable, addr, word]`.
+///
+/// Returns three bytes; for quiescence checks all three must be zero.
+pub fn decode_bus(val: &Value) -> [u8; NUM_BUS_FIELDS] {
+    let Value::Pair(_composite_val, bus_val) = val else {
+        panic!("decode_bus: expected Pair((composite, bus)), got {val:?}");
+    };
+    let bus_ty = bus_state_ty();
+    let bus_bits = bits_of(bus_val, &bus_ty).expect("decode_bus: bits");
+    assert_eq!(bus_bits.len(), NUM_BUS_FIELDS * W);
+    let mut result = [0u8; NUM_BUS_FIELDS];
+    for (i, r) in result.iter_mut().enumerate() {
+        *r = read_u8_bits(&bus_bits, i * W);
+    }
+    result
 }
 
 fn push_u8_bits(bits: &mut Vec<bool>, val: u8) {

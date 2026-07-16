@@ -238,21 +238,45 @@ pub fn step(rom: &[u16]) -> Iso {
     step_ops(rom, &Op::ALL)
 }
 
-/// `system_step(rom) : (CpuState, MemState) <-> (CpuState, MemState)` —
-/// the full machine cycle including MEXCH on the composite carrier.
+/// `system_step(rom) : ((CpuState, MemState), BusMsg) <-> ((CpuState, MemState), BusMsg)` —
+/// the full machine cycle including MEXCH on the 3-factor carrier
+/// (Stage 1b-A, ADR-0046 §4.5.8).
 ///
-/// Non-MEXCH phases are `(phase ⊗ id_MemState)`; the decode+execute
-/// phase uses [`decoder::system_decode_execute`] which includes the
-/// cross-factor MEXCH exchange. Used by `run_on_cpu` / `run_on_cpu_fast`.
+/// Eight phases in the in-revolution order:
+/// 1. fetch         — IR ^= rom[PC]
+/// 2. decode_execute — non-MEXCH instructions (MEXCH handled by emit/mem/absorb)
+/// 3. emit          — copy predicate → BusMsg.enable, IR.rt → BusMsg.addr,
+///                    gated-swap reg[rd] ↔ BusMsg.word
+/// 4. mem           — route MemState[addr]→head keyed on BusMsg.addr,
+///                    gated-swap BusMsg.word ↔ MemState[0]
+/// 5. absorb        — sym(emit): un-swap, zero BusMsg
+/// 6. unfetch       — re-zero IR (same ROM word, P4)
+/// 7. pc_add_br     — PC += BR
+/// 8. pc_inc        — PC += 1
+///
+/// CpuState-only phases are lifted to the 3-factor carrier via
+/// `(cpu_phase ⊗ id_Mem) ⊗ id_Bus`. The decode+execute phase (composite,
+/// non-MEXCH only) is lifted via `composite_phase ⊗ id_Bus`.
+/// emit/mem/absorb operate natively on system_state_ty.
 pub fn system_step(rom: &[u16]) -> Iso {
     let mem_id = Iso::Id(crate::types::mem_state_ty());
+    let bus_id = Iso::Id(crate::types::bus_state_ty());
+
+    // Helper: lift CpuState iso to system = ((Cpu,Mem),Bus)
+    let lift_cpu = |iso: Iso| -> Iso {
+        Iso::times(Iso::times(iso, mem_id.clone()), bus_id.clone())
+    };
+
     let f = fetch(rom);
     let phases = vec![
-        Iso::times(f.clone(), mem_id.clone()),           // fetch ⊗ id_Mem
-        decoder::system_decode_execute(),                 // composite decode+execute
-        Iso::times(f, mem_id.clone()),                    // unfetch ⊗ id_Mem
-        Iso::times(pc_add_br(), mem_id.clone()),          // PC += BR ⊗ id_Mem
-        Iso::times(pc_inc(), mem_id),                     // PC += 1 ⊗ id_Mem
+        lift_cpu(f.clone()),                                              // 1. fetch
+        Iso::times(decoder::system_decode_execute(), bus_id.clone()),     // 2. decode_execute (non-MEXCH)
+        decoder::emit(),                                                  // 3. emit
+        decoder::mem_phase(),                                             // 4. mem
+        decoder::absorb(),                                                // 5. absorb
+        lift_cpu(f),                                                      // 6. unfetch
+        lift_cpu(pc_add_br()),                                            // 7. PC += BR
+        lift_cpu(pc_inc()),                                               // 8. PC += 1
     ];
     seq_balanced(phases)
 }
