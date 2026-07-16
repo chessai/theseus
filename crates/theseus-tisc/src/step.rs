@@ -245,10 +245,8 @@ pub fn step(rom: &[u16]) -> Iso {
 /// Eight phases in the in-revolution order:
 /// 1. fetch         — IR ^= rom[PC]
 /// 2. decode_execute — non-MEXCH instructions (MEXCH handled by emit/mem/absorb)
-/// 3. emit          — copy predicate → BusMsg.enable, IR.rt → BusMsg.addr,
-///    gated-swap reg[rd] ↔ BusMsg.word
-/// 4. mem           — route MemState[addr]→head keyed on BusMsg.addr,
-///    gated-swap BusMsg.word ↔ MemState[0]
+/// 3. emit — copy predicate → BusMsg.enable, IR.rt → BusMsg.addr, gated-swap reg[rd] ↔ BusMsg.word
+/// 4. mem — route MemState[addr]→head keyed on BusMsg.addr, gated-swap BusMsg.word ↔ MemState[0]
 /// 5. absorb        — sym(emit): un-swap, zero BusMsg
 /// 6. unfetch       — re-zero IR (same ROM word, P4)
 /// 7. pc_add_br     — PC += BR
