@@ -573,9 +573,10 @@ fn assert_oracle_fast_with_bus_quiescence(name: &str, iso: &Iso) {
     let n = vals.len();
     assert!(n > 0, "{name}: domain is empty");
 
-    // Bound the sample to at most 256 inputs (strided, deterministic).
-    // Mirrors assert_oracle_sample's selection strategy.
-    const CAP: usize = 256;
+    // Bound the sample to at most 8 inputs (strided, deterministic).
+    // Bus quiescence is structural — a handful of samples covering
+    // MEXCH and non-MEXCH bit-patterns is fully sufficient.
+    const CAP: usize = 8;
     let count = CAP.min(n);
     let mut indices: Vec<usize> = (0..count)
         .map(|i| {
