@@ -3,9 +3,9 @@
 > **Current status (2026-07-16):** M1, M3a, M3b, **M4-v1**, the **M4-v2
 > ring-machine core** (recirculating CPU + reversible branching, Fibonacci on the
 > ring at 20× area saving, zero-garbage closure), and the **v0.2 software dialect**
-> are all done and merged on `chessai/theseus-v2` (`8f27ba0`). The **headline
+> are all done and merged on `chessai/theseus-v2` (`1f59744`). The **headline
 > thread** is the **surface → TISC-1 ROM compiler** (the #1 goal), now at **M-A +
-> M-B + M-C1 + M-C2 Layer 1 + M-C2 Stage 1a done**: non-recursive, branching,
+> M-B + M-C1 + M-C2 Layer 1 + Stage 1a + Stage 1b-A done**: non-recursive, branching,
 > data-dependent `iter` (the real `fib`), register↔scratch spill, resident memory via
 > a reversible `MEXCH` exchange + 1-of-N Fredkin tree, *and* — Stage 1a —
 > **`MemState` externalized** into the `(CpuState,MemState)` composite carrier with a
@@ -16,9 +16,12 @@
 > 2-agent formal spike + proofs
 > ([theory/reversible-memory-closure.md](theory/reversible-memory-closure.md)),
 > ADR-0046 §4.5.8) — energy-equivalent to Option A (it buys area + a CPU body
-> invariant in N + the Option-C seam, not joules). **Next: Stage 1b** (the composite
-> ring — emit/mem/absorb, bus-quiescence, closure certificate). See [Project
-> status](status.md). The post-v1
+> invariant in N + the Option-C seam, not joules). **Stage 1b-A done** (merged
+> `1f59744`): the exchange is now **non-degenerate** — a `BusMsg` factor + the
+> emit/mem/absorb 3-cycle, mem tree re-keyed on `BusMsg.addr` so it touches zero
+> CpuState fields (**§6 line-audit passes**), value-level. **Next: Stage 1b-B** (the
+> SystemRing closure certificate: `run==run_open==eval^R` + revolution-boundary
+> bus-quiescence at N∈{2,4,8}). See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
 > shows machine-level adiabatic slope −0.997 crossing below the CMOS floor);

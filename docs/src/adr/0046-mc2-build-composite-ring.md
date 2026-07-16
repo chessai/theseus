@@ -2,7 +2,28 @@
 
 **Status:** Accepted — **Layer 1 implemented** (`theseus-tisc`, merged `f5db17d`);
 **Stage 1a IMPLEMENTED** (carrier split + `system_step` + composite oracle, merged
-`8f27ba0`); **Stage 1b design-resolved, buildable** (§4.5.8); Stage 2 proposed.
+`8f27ba0`); **Stage 1b-A IMPLEMENTED** (BusMsg + emit/mem/absorb non-degenerate seam
++ line-audit, value-level, merged `1f59744`); **Stage 1b-B (the SystemRing closure
+certificate) is next** (design-resolved §4.5.8); Stage 2 proposed.
+
+> **Stage 1b-A — DONE (merged `1f59744`).** The memory exchange is now
+> **non-degenerate** (a real Option-B seam, not Stage-1a's degenerate splice). A
+> `BusMsg = (enable, addr, word)` resident factor was added (carrier
+> `((CpuState, MemState), BusMsg)`), and `mexch_composite` was replaced by the
+> **emit / mem / absorb** 3-cycle: `emit` (predicated on the MEXCH opcode) copies
+> `IR.rt→BusMsg.addr` and swaps `reg[rd]↔BusMsg.word`; `mem` is the C1 tree
+> **re-keyed on `BusMsg.addr`** (so it touches **zero CpuState fields**); `absorb =
+> sym(emit)`. Built as one iso term in the in-revolution order
+> `fetch;decode_execute′;emit;mem;absorb;unfetch;pc_add_br;pc_inc` (no seam rotation,
+> IR is the decode latch). **The §6 line-audit passes** (mechanical netlist check:
+> mem-phase cells touch no CpuState field) — the non-degeneracy witness. 3-factor
+> reshape via `view_mem_bus`/`view_cpu_bus` (Assoc/Swap); new `encode_system`/
+> `decode_system`; **C1 re-verified on the re-keyed `select_mem_on_bus` at N∈{2,4,8}**.
+> Verified: `run_on_cpu(system_step)==eval` (spill-15, store→reload), emit/mem/absorb
+> self-inverse + correct, value-level bus-quiescence (BusMsg=0 every step boundary,
+> the whole-program version `#[ignore]`d for speed — `system_step` eval is ~1.7 s/step),
+> zero regression. Design of record: [docs/scratch/stage1b-design.md](../../scratch/stage1b-design.md).
+> **Still value-level (no ring); the closure certificate is Stage 1b-B.**
 
 > **Stage 1a — DONE (merged `8f27ba0`, two increments).** `MemState` is externalized
 > from `State` into a separate iso factor; the carrier is `(CpuState, MemState)`
