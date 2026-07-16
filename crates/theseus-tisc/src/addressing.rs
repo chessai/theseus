@@ -18,7 +18,7 @@ use crate::types::{word8, NUM_FIELDS};
 // ── Right-nested product helpers (field-level, not bit-level) ──────
 
 /// Right-nested product of `n` Word8 fields.
-fn fields(n: usize) -> Type {
+pub fn fields(n: usize) -> Type {
     assert!(n >= 1);
     let w = word8();
     if n == 1 {
@@ -53,10 +53,11 @@ fn swap_field_adj(n: usize, k: usize) -> Iso {
 }
 
 /// Build the routing iso that moves fields at `indices` (in order) to
-/// positions 0, 1, 2, ... at the head of the product, using adjacent swaps.
+/// positions 0, 1, 2, ... at the head of a product of `n_fields` Word8
+/// fields, using adjacent swaps.
 /// Returns the routing iso and the inverse is just `Iso::sym(route)`.
-fn route_to_head(indices: &[usize]) -> Iso {
-    let n = NUM_FIELDS;
+pub fn route_to_head_n(indices: &[usize], n_fields: usize) -> Iso {
+    let n = n_fields;
     let mut arr: Vec<usize> = (0..n).collect();
     let mut swaps: Vec<Iso> = Vec::new();
 
@@ -76,13 +77,18 @@ fn route_to_head(indices: &[usize]) -> Iso {
     }
 }
 
+/// Build the routing iso over the global `NUM_FIELDS`-field State product.
+fn route_to_head(indices: &[usize]) -> Iso {
+    route_to_head_n(indices, NUM_FIELDS)
+}
+
 /// `fields(k+r) <-> fields(k) x fields(r)`: split the first k fields
 /// out of the right-nested product as a separate group.
 ///
 /// fields(n) is right-nested: `W x (W x (... x W))`. To apply an
 /// operand iso on the first k fields, we need them grouped as `fields(k)`
 /// on the left of a product with `fields(r)` on the right.
-fn split_fields(k: usize, r: usize) -> Iso {
+pub fn split_fields(k: usize, r: usize) -> Iso {
     assert!(k >= 1 && r >= 1);
     let w = word8();
     if k == 1 {
@@ -100,10 +106,11 @@ fn split_fields(k: usize, r: usize) -> Iso {
     }
 }
 
-/// Lift an operand-level iso to State level at given field indices.
+/// Lift an operand-level iso at given field indices within a product of
+/// `n_fields` Word8 fields.
 ///
 /// `op` operates on a right-nested product of `indices.len()` Word8 fields.
-/// The result is a State-level iso that:
+/// The result is an iso on `fields(n_fields)` that:
 /// - routes the addressed fields to the head,
 /// - reshapes to `fields(k) x fields(rest)`,
 /// - applies `op x Id(rest)`,
@@ -111,8 +118,8 @@ fn split_fields(k: usize, r: usize) -> Iso {
 /// - routes back.
 ///
 /// All unaddressed fields pass through as identity.
-pub fn at_fields(op: Iso, indices: &[usize]) -> Iso {
-    let n = NUM_FIELDS;
+pub fn at_fields_n(op: Iso, indices: &[usize], n_fields: usize) -> Iso {
+    let n = n_fields;
     let k = indices.len();
     assert!(k >= 1 && k <= n);
 
@@ -126,7 +133,7 @@ pub fn at_fields(op: Iso, indices: &[usize]) -> Iso {
         }
     }
 
-    let route = route_to_head(indices);
+    let route = route_to_head_n(indices, n_fields);
     let rest_count = n - k;
 
     if rest_count == 0 {
@@ -146,6 +153,12 @@ pub fn at_fields(op: Iso, indices: &[usize]) -> Iso {
         );
         Iso::seq(Iso::seq(route.clone(), inner), Iso::sym(route))
     }
+}
+
+/// Lift an operand-level iso to State level at given field indices.
+/// Equivalent to `at_fields_n(op, indices, NUM_FIELDS)`.
+pub fn at_fields(op: Iso, indices: &[usize]) -> Iso {
+    at_fields_n(op, indices, NUM_FIELDS)
 }
 
 // ── Convenience wrappers ───────────────────────────────────────────

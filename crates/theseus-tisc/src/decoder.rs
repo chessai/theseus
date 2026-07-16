@@ -74,7 +74,7 @@ use crate::plumbing::{
 };
 use crate::types::{
     flat, mem_field, reg_field, scratch_field, word8, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD,
-    MEM_WORDS, W,
+    MEM_WORDS, NUM_FIELDS, W,
 };
 
 // ── Aux-field conventions ──────────────────────────────────────────
@@ -142,14 +142,23 @@ fn fields_ty(k: usize) -> Type {
     }
 }
 
-/// Lift a list of flat-wire gates over the given State fields: within
-/// the core, field-list slot `j`, bit `i` is wire `8*j + i`.
-pub(crate) fn on_fields(field_idxs: &[usize], gates: Vec<Iso>) -> Iso {
+/// Lift a list of flat-wire gates over the given fields within a product
+/// of `n_fields` Word8 fields: within the core, field-list slot `j`,
+/// bit `i` is wire `8*j + i`.
+pub fn on_fields_n(field_idxs: &[usize], gates: Vec<Iso>, n_fields: usize) -> Iso {
+    use crate::addressing::at_fields_n;
     let k = field_idxs.len();
     let n = k * W;
     let fl = flatten(&fields_ty(k));
     let core = Iso::seq(fl.clone(), Iso::seq(seq_list(n, gates), Iso::sym(fl)));
-    at_fields(core, field_idxs)
+    at_fields_n(core, field_idxs, n_fields)
+}
+
+/// Lift a list of flat-wire gates over the given State fields: within
+/// the core, field-list slot `j`, bit `i` is wire `8*j + i`.
+/// Equivalent to `on_fields_n(field_idxs, gates, NUM_FIELDS)`.
+pub(crate) fn on_fields(field_idxs: &[usize], gates: Vec<Iso>) -> Iso {
+    on_fields_n(field_idxs, gates, NUM_FIELDS)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -182,6 +191,51 @@ fn ctrl_word_swap(ir_field: usize, ctrl_bit: usize, fa: usize, fb: usize) -> Iso
         .map(|i| gate_at(n, &[ctrl_bit, W + i, 2 * W + i], fredkin_prim()))
         .collect();
     on_fields(&[ir_field, fa, fb], gates)
+}
+
+/// Controlled swap of two W-bit words across a 2-factor product boundary.
+///
+/// Carrier: `fields(n_left) × fields(n_right)`.
+/// Swaps `word_a` and `word_b` (field indices within the right factor)
+/// iff bit `ctrl_bit` of `ctrl_field` (a field index within the left
+/// factor) is set.
+///
+/// Internally: flatten the composite to `fields(n_left + n_right)`,
+/// apply the 3-field controlled swap via `on_fields_n`, then re-split.
+/// The routing unit is the field (8 wires), not the bit.
+pub fn cross_ctrl_fredkin(
+    ctrl_field: usize,
+    ctrl_bit: usize,
+    word_a: usize,
+    word_b: usize,
+    n_left: usize,
+    n_right: usize,
+) -> Iso {
+    use crate::addressing::split_fields;
+    assert!(ctrl_field < n_left, "ctrl_field out of range in left factor");
+    assert!(ctrl_bit < W, "ctrl_bit out of range");
+    assert!(word_a < n_right, "word_a out of range in right factor");
+    assert!(word_b < n_right, "word_b out of range in right factor");
+    assert_ne!(word_a, word_b, "word_a == word_b");
+
+    let n_total = n_left + n_right;
+    // Map indices into the flat fields(n_total) product.
+    let ctrl_flat = ctrl_field;
+    let wa_flat = n_left + word_a;
+    let wb_flat = n_left + word_b;
+
+    // Build the 3-field controlled swap on fields(n_total).
+    let n3 = 3 * W;
+    let gates: Vec<Iso> = (0..W)
+        .map(|i| gate_at(n3, &[ctrl_bit, W + i, 2 * W + i], fredkin_prim()))
+        .collect();
+    let core = on_fields_n(&[ctrl_flat, wa_flat, wb_flat], gates, n_total);
+
+    // Bracket with the composite ↔ flat iso.
+    let split = split_fields(n_left, n_right);
+    // split : fields(n_total) ↔ fields(n_left) × fields(n_right)
+    // We want: composite → flat → core → flat → composite
+    Iso::seq(Iso::sym(split.clone()), Iso::seq(core, split))
 }
 
 /// The 1-of-8 select tree over the fields `base(0)..base(7)`.
