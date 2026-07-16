@@ -401,36 +401,24 @@ pub fn rotri(rd: usize, imm: u8) -> Iso {
 ///
 /// Operates on `composite_state_ty() = (CpuState, MemState)` — the
 /// carrier split (Stage 1a-B) means reg and mem fields live in different
-/// factors. Routes `reg_field(rd)` in CpuState and field `addr` in
-/// MemState to the heads of their respective factors, applies a
-/// cross-factor swap, then un-routes.
+/// factors. Uses `at_fields_n` (the same machinery as the decoder) to
+/// route, reshape, apply the swap, and restore field order over the
+/// flat `fields(n_total)`, then brackets with the composite split.
 pub fn mexch(rd: usize, addr: usize) -> Iso {
-    use crate::addressing::{route_to_head_n, split_fields};
+    use crate::addressing::{at_fields_n, split_fields};
     use crate::types::{MEM_WORDS, NUM_CPU_FIELDS};
 
     let n_left = NUM_CPU_FIELDS;
     let n_right = MEM_WORDS;
     let n_total = n_left + n_right;
 
-    // Route reg_field(rd) to CpuState head and mem field addr to MemState head.
-    // In the flat fields(n_total), reg_field(rd) is at index rd,
-    // and the mem field is at index n_left + addr.
-    let route = route_to_head_n(&[reg_field(rd), n_left + addr], n_total);
-
-    // After routing: field 0 = reg[rd], field 1 = mem[addr], rest untouched.
-    // Swap the two head fields.
-    let swap = swap_words_iso(); // SwapProd(Word8, Word8)
-    let rest_count = n_total - 2;
-    let lifted = if rest_count == 0 {
-        swap
-    } else {
-        use crate::addressing::fields;
-        Iso::times(swap, Iso::Id(fields(rest_count)))
-    };
-
-    // Apply the reshape if needed (route produces fields(n_total), we need
-    // the swap at the head then route back).
-    let inner = Iso::seq(Iso::seq(route.clone(), lifted), Iso::sym(route));
+    // at_fields_n handles routing + split_fields reshape + apply + undo,
+    // so the associativity is correct (fields(2) × fields(rest)).
+    let inner = at_fields_n(
+        swap_words_iso(),
+        &[reg_field(rd), n_left + addr],
+        n_total,
+    );
 
     // Bracket with the composite ↔ flat iso.
     let split = split_fields(n_left, n_right);
