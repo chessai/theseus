@@ -1,8 +1,26 @@
 # ADR-0046: M-C2 build — the composite-ring memory bus
 
 **Status:** Accepted — **Layer 1 implemented** (`theseus-tisc`, merged `f5db17d`);
-**Stage 1 split into 1a (delegatable) + 1b (design-resolved, buildable)**; Stage 2
-proposed. Advisor-authored from the resolved scoping
+**Stage 1a IMPLEMENTED** (carrier split + `system_step` + composite oracle, merged
+`8f27ba0`); **Stage 1b design-resolved, buildable** (§4.5.8); Stage 2 proposed.
+
+> **Stage 1a — DONE (merged `8f27ba0`, two increments).** `MemState` is externalized
+> from `State` into a separate iso factor; the carrier is `(CpuState, MemState)`
+> (`CpuState` = 20 fields, `State` narrowed 24→20). **Two step isos** (Decision 1 of
+> [docs/scratch/stage1a-design.md](../../scratch/stage1a-design.md)): the ring keeps
+> `step:CpuState↔CpuState` (`Op::Mexch` removed → `decode_execute′`); the oracle uses
+> `system_step:(CpuState,MemState)↔(CpuState,MemState)`. FIX-3 was done as
+> **width-parameterized flat routing** (`route_to_head_n`/`at_fields_n`/`on_fields_n`
+> at `n=20` for CpuState, `n=MEM_WORDS` for MemState) — *not* a generic `at_composite`
+> — plus one isolated cross-factor primitive **`cross_ctrl_fredkin`** (1a-A, proven
+> self-inverse in isolation). `StateVals` stays flat (iso-level-only split, bridged by
+> `encode_composite`/`decode_composite`). **Key result: Conjecture C1 is now discharged
+> on the *real* re-targeted `select_mem` lowering at N∈{2,4,8}** (Layer 1 had only the
+> standalone `build_mexch_prim` proxy — the reviewer's D3 risk is retired). Verified:
+> composite oracle `run_on_cpu(system_step) == eval` (spill-15, store→reload), a
+> shared-ISA divergence guard (`decode_execute′` == `proj_CpuState(system_step)` on the
+> non-MEXCH domain), ceiling `14+N / 12+N` unchanged, zero M-A/M-B/M-C1 regression.
+> Honestly **degenerate** (Prop 5.1); the §6 line-audit / non-degeneracy is Stage 1b. Advisor-authored from the resolved scoping
 ([ADR-0045](0045-mc2-memory-bus.md) §0.5) and the formal proofs
 ([theory/reversible-memory-closure.md](../theory/reversible-memory-closure.md)),
 then corrected by two adversarial reviews (§4.5.0) and a **2-agent H3 design spike
@@ -269,7 +287,9 @@ three are corrected here.
 
 **The split.**
 
-- **Stage 1a — value-level externalization (delegatable now).** Move `MemState` out
+- **Stage 1a — value-level externalization (DONE, merged `8f27ba0`; see the boxed
+  summary at the top of this ADR and [docs/scratch/stage1a-design.md](../../scratch/stage1a-design.md)).**
+  Move `MemState` out
   of `State` into a separate factor; make the addressing layer composite-aware;
   re-target `MEXCH` to swap `reg[rd] ↔ MemState[addr]` (external), composed into
   `step` at the **value level** — **no `BusMsg`, no seam-rotation, no ring.** Prove

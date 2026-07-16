@@ -34,7 +34,7 @@ and [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md).
 | **M4-v1** TISC-1 CPU | ✅ **done** | the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** — ADR-0030's milestone, met |
 | **M4-v2** ring machine | ✅ **done + zero-garbage** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving**; reversible branching works (ADR-0034). **Physical closure achieved**: the R1 rail-role-swap cell (ADR-0040, real ngspice, adiabatic slope −1) makes lowering garbage-free — the step is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so the default runner `run == eval^R` closes with **zero** re-supplied boundary. The machine-level **money plot** confirms it: energy/step falls at adiabatic slope **−0.997**, crossing below the flat CMOS ½CV² floor at t_ramp ≈ 2.1e-8 s (active logic below CMOS across the whole clock range). |
 | **v0.2 dialect** software | ✅ **done** | μ-types + `iter`/`fold`/`unfold`: core + eval + surface syntax + **netlist lowering** + diagnostics; writable `.thse` programs run source→cells (ADRs 0035–0039) |
-| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **M-A + M-B + M-C1 + M-C2/L1 done** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive), **M-B** (reversible branching + **data-dependent iter** + general controlled ops + bare sums, ADR-0043), **M-C1** (register↔scratch **spill**, ADR-0044), and **M-C2 Layer 1** (resident **memory** + a reversible `MEXCH` exchange instruction + 1-of-N Fredkin tree, ADR-0046) all compile → ROM → run on the CPU → `run_on_cpu == eval` (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. Leaf ceiling now **14 + N** (straight-line) / **12 + N** (branching), N=4 resident memory words. **Conjecture C1 discharged** (the addressed-exchange tree is whole-domain ancilla-clean). Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience. Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042). **M-C2 Stage 1** (externalize memory into the composite ring) is designed + **proven buildable** by a 2-agent H3 spike (ADR-0046 §4.5.8; [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md)); **next: Stage 1a** (composite-aware addressing + externalize MemState), then Stage 1b (the composite ring itself) |
+| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **M-A + M-B + M-C1 + M-C2/L1 + M-C2/Stage-1a done** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive), **M-B** (reversible branching + **data-dependent iter** + general controlled ops + bare sums, ADR-0043), **M-C1** (register↔scratch **spill**, ADR-0044), and **M-C2 Layer 1** (resident **memory** + a reversible `MEXCH` exchange instruction + 1-of-N Fredkin tree, ADR-0046) all compile → ROM → run on the CPU → `run_on_cpu == eval` (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. Leaf ceiling now **14 + N** (straight-line) / **12 + N** (branching), N=4 resident memory words. **Conjecture C1 discharged** (the addressed-exchange tree is whole-domain ancilla-clean). Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience. Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042). **M-C2 Stage 1a** (externalize `MemState` into the `(CpuState,MemState)` composite carrier + `system_step` + composite oracle) is **done** (merged `8f27ba0`) — **C1 now discharged on the *real* re-targeted `select_mem` tree at N∈{2,4,8}**, State narrowed 24→20 fields, width-parameterized routing + one `cross_ctrl_fredkin` primitive. **Next: Stage 1b** (the composite ring itself — emit/mem/absorb, bus-quiescence, closure certificate), designed + **proven buildable** by the 2-agent H3 spike (ADR-0046 §4.5.8) |
 | **stdlib** | ✅ increment 1–2 | implicit prelude (`Bit`, `Nat`, `notb`, `swapBit`, `cnot`, `toffoli`) via structural-dedup merge — no imports needed; a compositional reversible adder demonstrates arithmetic composes (ADR-0038 constraint respected) |
 | **M2** FPGA / Verilator | ⏸ parked | still stubs; a demo, not a phase |
 
@@ -251,17 +251,22 @@ depth-tracking bug) that unit tests missed.
 
 ## Open items & next steps
 
-- **Surface → TISC-1 compiler (the #1 goal) — active.** M-A, M-B, M-C1 **and
-  M-C2 Layer 1** done: the real data-dependent `iter Nat fibStep` runs on the CPU
-  end-to-end, and values spill to scratch *and* resident memory via a reversible
-  `MEXCH` exchange + 1-of-N Fredkin tree (ceiling `14 + N`, **C1 discharged**,
-  ADR-0046). M-C2 Stage 1 (the composite ring) is designed + **proven buildable**
-  (2-agent H3 spike, ADR-0046 §4.5.8). **Next: Stage 1a** — the composite-aware
-  addressing refactor + externalize `MemState` + value-level oracle (the delegatable
-  prerequisite); then **Stage 1b** — the composite ring itself (emit/mem/absorb,
-  re-keyed C1 tree, bus-quiescence check, certificate). Then Stage 2 (two-body
-  separation) → M-D (heap value rep, `Fold`/`Unfold`/`Trace` = arbitrary `.thse`) →
-  M-E (energy).
+- **Surface → TISC-1 compiler (the #1 goal) — active.** M-A, M-B, M-C1, M-C2 Layer 1
+  **and M-C2 Stage 1a** done: the real data-dependent `iter Nat fibStep` runs on the
+  CPU end-to-end, values spill to scratch *and* resident memory, and **`MemState` is
+  now externalized** into the `(CpuState,MemState)` composite carrier — a
+  `system_step:(CpuState,MemState)↔(CpuState,MemState)` whose oracle equals `eval`
+  (spill-15, store→reload), with the memory exchange re-targeted through a
+  width-parameterized addressing layer + a `cross_ctrl_fredkin` cross-factor
+  primitive (merged `8f27ba0`, ADR-0046 §4.5.0). **Conjecture C1 is now discharged on
+  the *real* re-targeted `select_mem` lowering at N∈{2,4,8}** (Layer 1 had only the
+  standalone proxy). `State` narrowed 24→20 fields (ring keeps `step:CpuState↔CpuState`);
+  a shared-ISA guard pins `decode_execute′ == proj_CpuState(system_step)` on the
+  non-MEXCH domain. Stage 1a is honestly *degenerate* (Prop 5.1); the line-audit is
+  Stage 1b. **Next: Stage 1b** — the composite ring itself (emit/mem/absorb, re-keyed
+  C1 tree, bus-quiescence check, closure certificate), designed + **proven buildable**
+  (2-agent H3 spike, ADR-0046 §4.5.8). Then Stage 2 (two-body separation) → M-D (heap
+  value rep, `Fold`/`Unfold`/`Trace` = arbitrary `.thse`) → M-E (energy).
 - **Energy-price a compiled loop** — now that `iter`/`fold`/`unfold` (and
   compiled ROMs) lower to cells, run one through `theseus-spice::annotate` for a
   joules figure. Natural M-E artifact.
