@@ -1,11 +1,44 @@
 //! SystemRing closure certificate (M-C2 Stage 1b-B).
 //!
 //! Recirculates `system_step` through a [`SystemRing`] and proves the
-//! composite closure certificate at N=MEM_WORDS:
+//! composite closure certificate at N = `MEM_WORDS`:
 //!   `restored_ok ∧ run == run_open ∧ run == eval(system_step)^R ∧ bus_quiescent`
 //!
 //! Uses a ROM that exercises both MEXCH (mem path recirculates) and
 //! non-MEXCH instructions. Domain is BOUNDED: 4 sample states, R ≤ 4.
+//!
+//! # Compile-time N and closure scope
+//!
+//! `MEM_WORDS` is a compile-time `const usize` (defined in `types.rs`,
+//! currently 4 — the shipped configuration).  The entire carrier
+//! (`system_state_ty`, `mem_state_ty`, `system_step`) is built from it, so
+//! this certificate runs at N = 4.  Runtime N-parameterization would require
+//! a pervasive refactor that is not warranted.
+//!
+//! The composite-ring **closure** property proved here — `run == run_open ==
+//! eval(system_step)^R`, system_step ancilla-cleanliness, and
+//! bus-quiescence — is **N-independent**.  Ancilla-cleanliness is
+//! per-instance: the only ancilla source is the CCC-NOT chain inside `step`,
+//! whose structure does not depend on N.  Therefore N = 4 is representative
+//! for closure.
+//!
+//! The memory-select tree's ancilla-cleanliness **across** widths
+//! N ∈ {2, 4, 8} (where tree depth = ⌈log₂ N⌉ varies) is separately
+//! discharged in Stage 1b-A — see the tests in
+//! `crates/theseus-tisc/tests/composite.rs`:
+//!   - `c1_real_select_mem_composite_ancilla_clean_n2`
+//!   - `c1_real_select_mem_composite_ancilla_clean_n4`
+//!   - `c1_real_select_mem_composite_ancilla_clean_n8`
+//!   - `c1_select_mem_on_bus_ancilla_clean_n2`
+//!   - `c1_select_mem_on_bus_ancilla_clean_n4`
+//!   - `c1_select_mem_on_bus_ancilla_clean_n8`
+//!
+//! **Conclusion:** The N = 4 ring closure certificate here, combined with
+//! Stage 1b-A's N ∈ {2, 4, 8} tree cleanliness, together establish the
+//! composite closure at all supported memory widths.
+//!
+//! To re-run this certificate at a different N, change `MEM_WORDS` in
+//! `types.rs` and recompile.
 
 use std::sync::OnceLock;
 
