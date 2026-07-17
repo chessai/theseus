@@ -1,4 +1,4 @@
-# Project status — where theseus is (2026-07-14)
+# Project status — where theseus is (2026-07-16)
 
 One-paragraph orientation for anyone (human or agent) picking this up. theseus
 is a **reversible-computing compiler + adiabatic-silicon backend**: a total,
@@ -10,18 +10,22 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`2424f7c`. Everything below is merged there. Since M4-v1 this branch landed the
+`9932ddc`. Everything below is merged there. Since M4-v1 this branch landed the
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
 thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU
 that fetches and executes ROMs compiled from arbitrary `.thse` code). Milestones
-**M-A, M-B, M-C1, and M-C2 Layer 1** are done: non-recursive *and* branching /
-data-dependent `.thse` compiles to a TISC-1 ROM that runs on the CPU, provably
-equal to the interpreter — including the real data-dependent `fib` (`iter Nat
-fibStep`), which now computes Fibonacci on the simulated CPU — and values that
-spill into scratch *and* **resident memory** (a reversible `MEXCH` exchange +
-1-of-N Fredkin tree, ceiling `14 + N`). See the sections below and ADRs 0033–0046,
-and [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md).
+**M-A, M-B, M-C1, M-C2 Layer 1, Stage 1a, and Stage 1b (the composite memory
+ring)** are done: non-recursive *and* branching / data-dependent `.thse` compiles
+to a TISC-1 ROM that runs on the CPU, provably equal to the interpreter —
+including the real data-dependent `fib` (`iter Nat fibStep`) — values spill into
+scratch *and* **resident memory** (a reversible `MEXCH` exchange + 1-of-N Fredkin
+tree), *and* **`MemState` is externalized into a composite `(CpuState, MemState,
+BusMsg)` carrier whose recirculating `SystemRing` closes zero-garbage** (the
+`emit/mem/absorb` exchange touches no CpuState fields — §6 line-audit — and
+`run == run_open == eval^R` + bus-quiescence hold, realizing Theorem 3.5). Next:
+**Stage 2** (two-body separation, the area payoff). See the sections below and
+ADRs 0033–0046, and [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md).
 
 ## Status at a glance
 

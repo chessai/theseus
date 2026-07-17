@@ -3,7 +3,7 @@
 > **Current status (2026-07-16):** M1, M3a, M3b, **M4-v1**, the **M4-v2
 > ring-machine core** (recirculating CPU + reversible branching, Fibonacci on the
 > ring at 20× area saving, zero-garbage closure), and the **v0.2 software dialect**
-> are all done and merged on `chessai/theseus-v2` (`75c5a13`). The **headline
+> are all done and merged on `chessai/theseus-v2` (`9932ddc`). The **headline
 > thread** is the **surface → TISC-1 ROM compiler** (the #1 goal), now at **M-A +
 > M-B + M-C1 + M-C2 Layer 1 + Stage 1a + Stage 1b (composite ring) done**: non-recursive, branching,
 > data-dependent `iter` (the real `fib`), register↔scratch spill, resident memory via
