@@ -1085,6 +1085,41 @@ fn is_swap_on_target_times_id(g: &Iso, _tgt_ty: &Type) -> bool {
     false
 }
 
+// ── Spine helpers (M-D.a: list-spine fold/unfold) ───────────────────
+
+/// Analyze a list-spine type: return `(depth, element_type)` if `l` is
+/// `list_spine_ty(b, d)` with at least one cons layer (depth ≥ 1).
+/// Returns `None` if not a list-spine shape (caller keeps `Deferred`).
+///
+/// Walks the `Sum(One, Prod(b, rest))` nesting, verifying every layer
+/// has the same element type `b`. Analogous to `numeral_count` for Nat.
+fn spine_info(l: &Type) -> Option<(usize, Type)> {
+    let mut depth = 0usize;
+    let mut elem: Option<Type> = None;
+    let mut cur = l;
+    loop {
+        match cur {
+            Type::Zero => {
+                // Bottom of the spine. Return if we saw ≥ 1 cons layer.
+                return elem.map(|e| (depth, e));
+            }
+            Type::Sum(one, rest) if one.as_ref() == &Type::One => match rest.as_ref() {
+                Type::Prod(b, tail) => {
+                    match &elem {
+                        Some(e) if *e != **b => return None,
+                        None => elem = Some(b.as_ref().clone()),
+                        _ => {}
+                    }
+                    depth += 1;
+                    cur = tail;
+                }
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+}
+
 // ── Numeral helpers ──────────────────────────────────────────────────
 
 /// Count the number of inhabitants of a numeral type.
@@ -1253,9 +1288,8 @@ fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
         // ── Still deferred to M-C/M-D ──────────────────────────────
         Iso::Trace(_, _) => Err(CompileError::Deferred("Trace (M-C/M-D)".into())),
 
-        Iso::Fold(_, _) | Iso::Unfold(_, _) => {
-            Err(CompileError::Deferred("Fold/Unfold (M-D)".into()))
-        }
+        Iso::Fold(l, body) => lower_fold_unfold(l, body, ctx, true),
+        Iso::Unfold(l, body) => lower_fold_unfold(l, body, ctx, false),
     }
 }
 
@@ -1305,6 +1339,117 @@ fn lower_data_dependent_iter(
         // skip_when_set=false: skip body iff ctrl=0 (tag=0 means k ≤ i)
         instrs.extend(emit_skip_block(ctrl_reg, &body_instrs, rb, temp, false));
         instrs.extend(ctrl_po);
+    }
+
+    instrs.extend(aux_po);
+    Ok((instrs, ctx.clone()))
+}
+
+// ── M-D.a: fold/unfold over list-spine (guarded static unroll) ──────
+
+/// Lower `fold l body` or `unfold l body` by guarded static unroll
+/// (ADR-0042 M-D.a). Each cons layer `j` of the finite list spine gets
+/// its own copy of the body, guarded on the cons-tag leaf (tag=1 ⇒
+/// element present ⇒ run; tag=0 ⇒ shorter list ⇒ skip). The body is
+/// lowered per-copy under a displaced `Ctx` targeting element `j`'s
+/// leaves + the accumulator leaves.
+///
+/// `ascending = true` for fold (head-to-tail), `false` for unfold
+/// (tail-to-head).
+fn lower_fold_unfold(
+    l: &Type,
+    body: &Iso,
+    ctx: &Ctx,
+    ascending: bool,
+) -> Result<(Vec<Instr>, Ctx), CompileError> {
+    let (depth, elem_ty) = spine_info(l).ok_or_else(|| {
+        CompileError::Deferred("Fold/Unfold with non-list-spine type".into())
+    })?;
+
+    let m = num_leaves(&elem_ty)?;
+    let n_spine = num_leaves(l)?;
+    let stride = 1 + m; // leaves per cons layer: 1 tag + m element
+
+    // Extract accumulator type from body: body : b × c ↔ b × c.
+    let (body_in, _) = theseus_core::type_of(body).map_err(|e| {
+        CompileError::Deferred(format!("type error in Fold/Unfold body: {e:?}"))
+    })?;
+    let n_acc = match &body_in {
+        Type::Prod(_, c) => num_leaves(c)?,
+        _ => {
+            return Err(CompileError::Deferred(
+                "Fold/Unfold body input not a product".into(),
+            ))
+        }
+    };
+
+    let total = n_spine + n_acc;
+    if total > MAX_LEAVES {
+        return Err(CompileError::TooManyLeaves {
+            needed: total,
+            max: MAX_LEAVES,
+        });
+    }
+
+    // depth ≤ 1 ⇒ spine can only hold nil (length 0) ⇒ no elements ⇒ no-op.
+    if depth <= 1 {
+        return Ok((vec![], ctx.clone()));
+    }
+
+    // Exclude tag leaves we guard on from aux displacement so they stay
+    // in registers and ensure_reg returns them directly.
+    let used_tag_leaves: Vec<usize> = (0..depth - 1).map(|j| j * stride).collect();
+    let (aux, aux_pi, aux_po, dctx) = allocate_aux(ctx, 2, &used_tag_leaves)?;
+    let rb = aux[0];
+    let temp = aux[1];
+
+    let acc_start = n_spine; // accumulator leaves start after spine
+
+    let mut instrs = Vec::new();
+    instrs.extend(aux_pi);
+
+    // Layer indices: ascending (1..depth) for fold, descending for unfold.
+    let layers: Vec<usize> = if ascending {
+        (1..depth).collect()
+    } else {
+        (1..depth).rev().collect()
+    };
+
+    for j in layers {
+        let tag_leaf = (j - 1) * stride;
+        let elem_start = tag_leaf + 1;
+
+        // Build per-copy body sub-context: [element_j, accumulator].
+        let mut body_homes = Vec::with_capacity(m + n_acc);
+        for k in 0..m {
+            body_homes.push(dctx.homes[elem_start + k]);
+        }
+        for k in 0..n_acc {
+            body_homes.push(dctx.homes[acc_start + k]);
+        }
+        let body_ctx = Ctx { homes: body_homes };
+
+        // Lower the body against this per-copy context.
+        let (body_instrs, body_ctx_out) = lower(body, &body_ctx)?;
+
+        // Home-preservation invariant: the body must return every leaf
+        // to its entry home (the existing canonical-layout requirement).
+        debug_assert_eq!(
+            body_ctx.homes, body_ctx_out.homes,
+            "M-D.a: Ctx residence changed during fold/unfold body lowering (layer {j})"
+        );
+
+        if body_instrs.is_empty() {
+            continue;
+        }
+
+        // Ensure tag register is accessible.
+        let (tag_reg, tag_pi, tag_po) = ensure_reg(&dctx, tag_leaf, &[rb, temp]);
+
+        instrs.extend(tag_pi);
+        // skip_when_set=false: skip body iff tag=0 (nil / shorter list).
+        instrs.extend(emit_skip_block(tag_reg, &body_instrs, rb, temp, false));
+        instrs.extend(tag_po);
     }
 
     instrs.extend(aux_po);

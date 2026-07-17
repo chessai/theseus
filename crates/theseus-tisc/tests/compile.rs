@@ -35,6 +35,8 @@ const CNOT_SRC: &str = include_str!("../../../conformance/programs/0004-cnot.ths
 const FIB_SRC: &str = include_str!("../../../conformance/programs/0022-fib.thse");
 const FIB3_SRC: &str = include_str!("../../../conformance/programs/0023-fib3.thse");
 const SWAPMAY_SRC: &str = include_str!("../../../conformance/programs/0025-swapmaybe.thse");
+const PARITY_SRC: &str = include_str!("../../../conformance/programs/0019-fold-parity.thse");
+const SHIFT_SRC: &str = include_str!("../../../conformance/programs/0020-unfold-shift.thse");
 
 // ── Surface → core Iso (same pattern as fib_lowering.rs) ─────────────
 
@@ -194,12 +196,23 @@ fn bare_trace_rejected() {
 }
 
 #[test]
-fn bare_fold_rejected() {
+fn bare_fold_compiles() {
     let bit = Type::sum(Type::One, Type::One);
     let body = Iso::SwapProd(bit.clone(), bit.clone());
     let iso = Iso::fold(Type::list_spine_ty(bit.clone(), 3), body);
-    let result = compile(&iso);
-    assert!(result.is_err(), "Fold must be rejected in M-B");
+    let instrs = compile(&iso).expect("Fold over list-spine should compile in M-D.a");
+    eprintln!("bare fold instructions ({} total): {instrs:?}", instrs.len());
+    assert_oracle_fast("bare_fold", &iso);
+}
+
+#[test]
+fn bare_unfold_compiles() {
+    let bit = Type::sum(Type::One, Type::One);
+    let body = Iso::SwapProd(bit.clone(), bit.clone());
+    let iso = Iso::unfold(Type::list_spine_ty(bit.clone(), 3), body);
+    let instrs = compile(&iso).expect("Unfold over list-spine should compile in M-D.a");
+    eprintln!("bare unfold instructions ({} total): {instrs:?}", instrs.len());
+    assert_oracle_fast("bare_unfold", &iso);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -663,4 +676,47 @@ fn mem_over_ceiling_branching_rejected() {
         result.unwrap_err(),
         theseus_tisc::compile::CompileError::TooManyLeaves { .. }
     ));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// M-D.a: Fold/Unfold over list-spine (guarded static unroll)
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn parity_fold_compiles_and_oracle_agrees() {
+    let iso = elaborate(PARITY_SRC, "parity");
+    let instrs = compile(&iso).expect("parity (fold) should compile in M-D.a");
+    eprintln!("parity instructions ({} total): {instrs:?}", instrs.len());
+    // BitList@4 * Bit = 8 spine + 1 acc = 9 leaves → 2^9 = 512 inputs (whole-domain).
+    assert_oracle_fast("parity", &iso);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow); run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn parity_fold_real_cpu() {
+    assert_oracle("parity", &elaborate(PARITY_SRC, "parity"));
+}
+
+#[test]
+fn shift_unfold_compiles_and_oracle_agrees() {
+    let iso = elaborate(SHIFT_SRC, "shl");
+    let instrs = compile(&iso).expect("shl (unfold) should compile in M-D.a");
+    eprintln!("shl instructions ({} total): {instrs:?}", instrs.len());
+    // BitList@4 * Bit = 9 leaves → 512 inputs (whole-domain).
+    assert_oracle_fast("shl", &iso);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow); run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn shift_unfold_real_cpu() {
+    assert_oracle("shl", &elaborate(SHIFT_SRC, "shl"));
+}
+
+#[test]
+fn fold_sym_agrees_with_unfold_eval() {
+    // Adjoint check: compile(Sym(fold l f)) → lower invokes adjoint → Unfold(l, f†).
+    // Verify the compiled adjoint agrees with eval over the whole domain.
+    let parity = elaborate(PARITY_SRC, "parity");
+    let sym_parity = Iso::sym(parity);
+    assert_oracle_fast("sym_parity", &sym_parity);
 }
