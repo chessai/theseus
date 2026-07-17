@@ -90,7 +90,37 @@ fn sample_state(pc: u8) -> StateVals {
 // 1. Differential oracle: ring.run(s, R) == eval(step)^R
 // ══════════════════════════════════════════════════════════════════════
 
+/// Fast bounded companion: MAX_R=2, pc∈{0,4}, asserting
+/// ring.run == eval^R AND run == run_open.
 #[test]
+fn ring_matches_eval_oracle_fast() {
+    let c = ctx();
+    const MAX_R: u32 = 2;
+
+    for &pc in &[0u8, 4] {
+        let start = sample_state(pc);
+        let mut oracle = start.clone();
+
+        for r in 0..=MAX_R {
+            let ring_result = c.ring.run(&start, r);
+            assert_eq!(
+                ring_result, oracle,
+                "ring.run(s, {r}) != eval^{r} at pc={pc}"
+            );
+            // Also verify run == run_open
+            let open_result = c.ring.run_open(&start, r);
+            assert_eq!(
+                open_result, ring_result,
+                "run_open(s, {r}) != run(s, {r}) at pc={pc}"
+            );
+            oracle =
+                eval_state(&format!("fast_oracle/pc={pc}/r={r}"), &c.iso, &oracle);
+        }
+    }
+}
+
+#[test]
+#[ignore = "authoritative recirculation oracle; run via --ignored"]
 fn ring_matches_eval_oracle() {
     let c = ctx();
     const MAX_R: u32 = 5;
@@ -182,6 +212,7 @@ fn ancillas_restored_after_one_revolution() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "authoritative recirculation oracle; run via --ignored"]
 fn true_recirculation_matches_eval_oracle() {
     let c = ctx();
     const MAX_R: u32 = 5;
@@ -219,6 +250,7 @@ fn true_recirculation_matches_eval_oracle() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "authoritative recirculation oracle; run via --ignored"]
 fn run_true_equals_run_when_ancillas_restored() {
     let c = ctx();
     const MAX_R: u32 = 5;
@@ -303,6 +335,7 @@ fn zero_boundary_vs_bennett_boundary() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "authoritative recirculation oracle; run via --ignored"]
 fn closed_ring_matches_eval_oracle() {
     let closed = closed_ctx();
     let iso = &ctx().iso;
@@ -332,6 +365,7 @@ fn closed_ring_matches_eval_oracle() {
 }
 
 #[test]
+#[ignore = "authoritative recirculation oracle; run via --ignored"]
 fn closed_ring_forward_ancillas_clean_and_boundary_fixed() {
     let closed = closed_ctx();
     let plain = &ctx().ring;

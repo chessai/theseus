@@ -90,31 +90,6 @@ fn num_leaves(ty: &Type) -> Result<usize, CompileError> {
     }
 }
 
-/// Collect the leaf types in left-to-right order.
-/// For Sum(a,b): tag (Bit) followed by max(|a|,|b|) payload leaves.
-#[allow(dead_code)]
-fn leaf_types(ty: &Type) -> Vec<Type> {
-    match ty {
-        Type::Zero | Type::One => vec![],
-        Type::Sum(a, b) => {
-            let la = num_leaves(a).unwrap_or(0);
-            let lb = num_leaves(b).unwrap_or(0);
-            let max_payload = la.max(lb);
-            let bit = Type::sum(Type::One, Type::One);
-            let mut types = vec![bit.clone()]; // tag register
-            for _ in 0..max_payload {
-                types.push(bit.clone()); // payload registers
-            }
-            types
-        }
-        Type::Prod(a, b) => {
-            let mut v = leaf_types(a);
-            v.extend(leaf_types(b));
-            v
-        }
-    }
-}
-
 /// Encode a value inhabiting a sum-chain leaf type as a u8.
 /// Counts the number of `Right` wrappers before reaching a terminal.
 /// For `1 + (1 + (... + 0))`: Left(Unit) = 0, Right(Left(Unit)) = 1, etc.
@@ -133,17 +108,6 @@ fn leaf_value_to_u8(v: &Value) -> u8 {
             _ => return count,
         }
     }
-}
-
-/// Decode a u8 back to a value inhabiting a sum-chain leaf type.
-/// Uses `enumerate_values` to get the canonical value ordering, then
-/// indexes by k. This handles Bit, Nat, and any sum-chain type correctly.
-#[allow(dead_code)]
-fn u8_to_leaf_value(k: u8, ty: &Type) -> Value {
-    let vals = enumerate_values(ty);
-    vals.into_iter()
-        .nth(k as usize)
-        .unwrap_or_else(|| panic!("u8_to_leaf_value: k={k} exceeds type cardinality for {ty}"))
 }
 
 /// Reconstruct a Value from flat leaf bytes + the type structure.
@@ -666,29 +630,6 @@ fn emit_skip_block(
     }
 
     out
-}
-
-// ── Instruction inversion (ADR-0042 §4.1 table) ──────────────────────
-
-#[allow(dead_code)]
-fn invert_instr(instr: Instr) -> Instr {
-    match instr {
-        Instr::Add { rd, rs } => Instr::Sub { rd, rs },
-        Instr::Sub { rd, rs } => Instr::Add { rd, rs },
-        Instr::Xor { rd, rs } => Instr::Xor { rd, rs },
-        Instr::Exch { rd, rs } => Instr::Exch { rd, rs },
-        Instr::Rotl { rd, rs } => Instr::Rotr { rd, rs },
-        Instr::Rotr { rd, rs } => Instr::Rotl { rd, rs },
-        Instr::Cswap { rd, rs, rt } => Instr::Cswap { rd, rs, rt },
-        Instr::Xchg { rd, sx } => Instr::Xchg { rd, sx },
-        Instr::Mexch { rd, addr } => Instr::Mexch { rd, addr },
-        Instr::Swapbr { rd } => Instr::Swapbr { rd },
-        Instr::Addi { rd, imm } => Instr::Subi { rd, imm },
-        Instr::Subi { rd, imm } => Instr::Addi { rd, imm },
-        Instr::Xori { rd, imm } => Instr::Xori { rd, imm },
-        Instr::Rotli { rd, imm } => Instr::Rotri { rd, imm },
-        Instr::Rotri { rd, imm } => Instr::Rotli { rd, imm },
-    }
 }
 
 // ── Prim recognition ─────────────────────────────────────────────────

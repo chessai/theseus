@@ -156,7 +156,46 @@ fn ancillas_restored_after_one_revolution() {
 // 2. Differential oracle: ring.run(s, R) == eval(system_step)^R
 // ══════════════════════════════════════════════════════════════════════
 
+/// Fast bounded companion: MAX_R=2, pc∈{0,4}, asserting
+/// run == run_open == eval(system_step)^R AND bus_quiescent.
 #[test]
+fn system_ring_matches_eval_oracle_fast() {
+    let c = ctx();
+    const MAX_R: u32 = 2;
+
+    for &pc in &[0u8, 4] {
+        let start = sample_state(pc);
+        let mut oracle = start.clone();
+
+        for r in 0..=MAX_R {
+            let ring_result = c.ring.run(&start, r);
+            assert_eq!(
+                ring_result, oracle,
+                "SystemRing.run(s, {r}) != eval^{r} at pc={pc}"
+            );
+            // run == run_open
+            let open_result = c.ring.run_open(&start, r);
+            assert_eq!(
+                open_result, ring_result,
+                "SystemRing: run_open(s, {r}) != run(s, {r}) at pc={pc}"
+            );
+            oracle = eval_system_state(
+                &format!("fast_oracle/pc={pc}/r={r}"),
+                &c.iso,
+                &oracle,
+            );
+        }
+
+        // bus_quiescent
+        assert!(
+            c.ring.bus_quiescent(&start),
+            "SystemRing: bus NOT quiescent at pc={pc}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "authoritative recirculation oracle; run via --ignored"]
 fn ring_matches_eval_oracle() {
     let c = ctx();
     const MAX_R: u32 = 4;
@@ -185,6 +224,7 @@ fn ring_matches_eval_oracle() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "authoritative recirculation oracle; run via --ignored"]
 fn true_recirculation_matches_eval_oracle() {
     let c = ctx();
     const MAX_R: u32 = 4;
@@ -214,6 +254,7 @@ fn true_recirculation_matches_eval_oracle() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "authoritative recirculation oracle; run via --ignored"]
 fn open_vs_closed_equivalence() {
     let c = ctx();
     const MAX_R: u32 = 4;

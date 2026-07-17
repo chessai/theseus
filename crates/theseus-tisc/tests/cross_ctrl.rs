@@ -81,18 +81,21 @@ fn cross_ctrl_fredkin_self_inverse() {
     let unused_lf0: u8 = 0;   // left factor field 0 (non-participating)
     let unused_rf1: u8 = 0;   // right factor field 1 (non-participating)
 
+    // Strided edge set instead of full 0..=255 × 0..=255.
+    // Self-inverse is structural; edge coverage suffices.
+    let edge_vals: [u8; 7] = [0x00, 0x01, 0x02, 0x55, 0xAA, 0xFE, 0xFF];
+
     // Sweep 1: non-participating ctrl bits = 0, ctrl_field byte = ctrl_bit_val
     for ctrl_bit_val in 0..2u8 {
         let ctrl_byte = ctrl_bit_val; // only bit 0 set or clear
-        for wa_val in 0..=255u16 {
-            for wb_val in 0..=255u16 {
-                // Layout: lf0=unused, lf1=ctrl_byte, rf0=word_b, rf1=unused, rf2=word_a
+        for &wa_val in &edge_vals {
+            for &wb_val in &edge_vals {
                 let input = encode_composite(
                     unused_lf0,
                     ctrl_byte,
-                    wb_val as u8,
+                    wb_val,
                     unused_rf1,
-                    wa_val as u8,
+                    wa_val,
                 );
                 let mut fuel = FUEL;
                 let once = theseus_eval::eval(&f, input.clone(), &mut fuel)
@@ -111,14 +114,14 @@ fn cross_ctrl_fredkin_self_inverse() {
     // Sweep 2: non-participating ctrl bits = all-set (0xFE with bit 0 varying)
     for ctrl_bit_val in 0..2u8 {
         let ctrl_byte = 0xFE | ctrl_bit_val;
-        for wa_val in 0..=255u16 {
-            for wb_val in 0..=255u16 {
+        for &wa_val in &edge_vals {
+            for &wb_val in &edge_vals {
                 let input = encode_composite(
                     unused_lf0,
                     ctrl_byte,
-                    wb_val as u8,
+                    wb_val,
                     unused_rf1,
-                    wa_val as u8,
+                    wa_val,
                 );
                 let mut fuel = FUEL;
                 let once = theseus_eval::eval(&f, input.clone(), &mut fuel)

@@ -229,8 +229,19 @@ fn pc_add_br_isolated() {
 }
 
 #[test]
+fn pc_add_br_sampled_br0_is_identity() {
+    // With BR = 0, pc_add_br must be the identity. Sampled at carry boundaries.
+    let iso = pc_add_br();
+    for pc in [0u8, 1, 7, 8, 0x7F, 0x80, 0xFE, 0xFF] {
+        let s = st(regs_b(), pc);
+        let got = eval_state("pc_add_br/br0", &iso, &s);
+        assert_eq!(got, s, "pc_add_br with BR=0 must be identity (pc={pc})");
+    }
+}
+
+#[test]
+#[ignore = "authoritative exhaustive pc_add_br; run via --ignored"]
 fn pc_add_br_exhaustive_br0_is_identity() {
-    // With BR = 0, pc_add_br must be the identity (fall-through).
     let iso = pc_add_br();
     for pc in 0..=255u8 {
         let s = st(regs_b(), pc);
@@ -265,6 +276,20 @@ fn pc_inc_isolated() {
 }
 
 #[test]
+fn pc_inc_sampled() {
+    // Sampled at carry boundaries.
+    let iso = pc_inc();
+    for pc in [0u8, 1, 7, 8, 0x7F, 0x80, 0xFE, 0xFF] {
+        let s = st(regs_b(), pc);
+        let got = eval_state("pc_inc/sampled", &iso, &s);
+        let mut expected = s.clone();
+        expected.pc = pc.wrapping_add(1);
+        assert_eq!(got, expected, "pc_inc: pc={pc} (carry scratch must restore)");
+    }
+}
+
+#[test]
+#[ignore = "authoritative exhaustive pc_inc; run via --ignored"]
 fn pc_inc_exhaustive_all_256() {
     let iso = pc_inc();
     for pc in 0..=255u8 {

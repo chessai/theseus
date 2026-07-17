@@ -352,6 +352,23 @@ fn ctx() -> &'static Ctx {
     })
 }
 
+/// Semantics-only check: core eval vs the Rust reference.
+fn check_semantics(name: &str, s: &StateVals) {
+    let c = ctx();
+    let val = s.encode();
+    let mut fuel = EVAL_FUEL;
+    let ev = theseus_eval::eval(&c.iso, val.clone(), &mut fuel)
+        .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
+
+    let got = StateVals::decode(&ev);
+    let expected = reference(s);
+    assert_eq!(
+        got, expected,
+        "{name}: decoder semantics mismatch\n  got:      {got:?}\n  expected: {expected:?}"
+    );
+    assert_eq!(got.ir, s.ir, "{name}: IR must be preserved");
+}
+
 /// Full three-way check on one sample: core eval vs the Rust reference
 /// (semantics), and balanced-net simulate vs core eval (faithfulness).
 fn check_full(name: &str, s: &StateVals) {
@@ -387,40 +404,60 @@ fn check_full(name: &str, s: &StateVals) {
     );
 }
 
-fn check_ops(ops: &[Op]) {
+fn check_ops_semantics(ops: &[Op]) {
     for &op in ops {
         for (i, s) in op_samples(op).iter().enumerate() {
-            check_full(&format!("full/{op:?}[{i}]"), s);
+            check_semantics(&format!("full/{op:?}[{i}]"), s);
         }
     }
 }
 
 #[test]
 fn full_decoder_arithmetic() {
-    check_ops(&[Op::Add, Op::Sub, Op::Addi, Op::Subi]);
+    check_ops_semantics(&[Op::Add, Op::Sub, Op::Addi, Op::Subi]);
 }
 
 #[test]
 fn full_decoder_logic() {
-    check_ops(&[Op::Xor, Op::Xori]);
+    check_ops_semantics(&[Op::Xor, Op::Xori]);
 }
 
 #[test]
 fn full_decoder_rotates() {
-    check_ops(&[Op::Rotl, Op::Rotr, Op::Rotli, Op::Rotri]);
+    check_ops_semantics(&[Op::Rotl, Op::Rotr, Op::Rotli, Op::Rotri]);
 }
 
 #[test]
 fn full_decoder_moves() {
-    check_ops(&[Op::Exch, Op::Cswap, Op::Xchg, Op::Swapbr]);
+    check_ops_semantics(&[Op::Exch, Op::Cswap, Op::Xchg, Op::Swapbr]);
 }
 
 #[test]
 fn full_decoder_reserved_opcodes_are_identity() {
     for (i, s) in reserved_samples().iter().enumerate() {
-        // reference() is the identity on reserved opcodes, so
-        // check_full both asserts identity and sim-faithfulness.
         assert_eq!(reference(s), *s, "reserved sample {i} sanity");
+        check_semantics(&format!("reserved[{i}]"), s);
+    }
+}
+
+/// Smoke faithfulness: one sample per opcode class to keep balance
+/// path exercised in the gate.
+#[test]
+fn full_decoder_faithfulness_smoke() {
+    // Op::Add[0] + one reserved — covers the balance path.
+    check_full("faithfulness_smoke/Add[0]", &op_samples(Op::Add)[0]);
+    check_full("faithfulness_smoke/reserved[0]", &reserved_samples()[0]);
+}
+
+#[test]
+#[ignore = "authoritative balanced-simulate faithfulness; run via --ignored"]
+fn full_decoder_faithfulness_all() {
+    for &op in &Op::ALL {
+        for (i, s) in op_samples(op).iter().enumerate() {
+            check_full(&format!("full/{op:?}[{i}]"), s);
+        }
+    }
+    for (i, s) in reserved_samples().iter().enumerate() {
         check_full(&format!("reserved[{i}]"), s);
     }
 }

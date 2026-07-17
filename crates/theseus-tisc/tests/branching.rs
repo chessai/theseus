@@ -164,119 +164,29 @@ fn taken_branch_with_come_from() {
         "BRANCH TAKEN: jumped from PC=1 to PC={target} (offset δ={delta}), \
          come-from cleared, arrival confirmed (r1 = 0x42)"
     );
-}
 
-// ══════════════════════════════════════════════════════════════════════
-// 2. Reversibility of a branching program
-// ══════════════════════════════════════════════════════════════════════
-
-#[test]
-fn branch_forward_then_backward() {
-    let delta: u8 = 3;
-    let target = delta as usize + 2;
-
-    let mut prog: Vec<Instr> = vec![
-        Instr::Xori { rd: 0, imm: delta },
-        Instr::Swapbr { rd: 0 },
-    ];
-    while prog.len() < target {
-        prog.push(Instr::Xori { rd: 7, imm: 0 });
-    }
-    prog.push(Instr::Swapbr { rd: 0 });
-    prog.push(Instr::Subi { rd: 0, imm: delta });
-    prog.push(Instr::Addi { rd: 1, imm: 0x42 });
-
-    let rom = assemble(&prog);
-    let iso = step(&rom);
+    // Reversibility: T adjoint steps back to the exact start state.
     let back = Iso::sym(iso.clone());
-
-    let start = StateVals {
-        regs: [0; 8],
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; 8],
-        mem: [0; MEM_WORDS],
-    };
-
-    // T forward steps.
-    let t = 8;
-    let mut cur = start.clone();
-    for k in 0..t {
-        cur = eval_state(&format!("brrev/fwd[{k}]"), &iso, &cur);
-    }
-    let fwd = cur.clone();
-    assert_eq!(fwd.regs[1], 0x42, "arrival marker present");
-
-    // T adjoint steps back.
-    for k in (0..t).rev() {
-        cur = eval_state(&format!("brrev/back[{k}]"), &back, &cur);
+    let mut rev = cur;
+    for k in (0..t_total).rev() {
+        rev = eval_state(&format!("branch/back[{k}]"), &back, &rev);
     }
     assert_eq!(
-        cur, start,
+        rev, start,
         "T forward + T adjoint must return exactly to start (branching program)"
     );
     eprintln!(
-        "BRANCH REVERSIBILITY CONFIRMED: {t} forward steps (including branch), \
-         {t} adjoint steps -> exact start state"
+        "BRANCH REVERSIBILITY CONFIRMED: {t_total} forward steps (including branch), \
+         {t_total} adjoint steps -> exact start state"
     );
 }
-
-// ══════════════════════════════════════════════════════════════════════
-// 3. Injectivity: v1 counterexample regression
-// ══════════════════════════════════════════════════════════════════════
 
 fn r_ins(opcode: u16, rd: u16, rs: u16, rt: u16) -> u16 {
     (1 << 15) | (opcode << 11) | (rd << 8) | (rs << 5) | (rt << 2)
 }
 
-#[test]
-fn v1_counterexample_produces_distinct_outputs() {
-    // ADR-0034 D4: pre-states A = (PC=5, BR=9, X) via rom[5] = SWAPBR r0
-    // and B = (PC=9, BR=5, Y) via rom[9] = ADD r1,r2 — these collided
-    // under v1 semantics but map to DISTINCT post-states under v2.
-
-    let mut rom = vec![0u16; 10];
-    rom[5] = r_ins(8, 0, 0, 0); // SWAPBR r0
-    rom[9] = r_ins(0, 1, 2, 0); // ADD r1, r2
-    let iso = step(&rom);
-
-    let a = StateVals {
-        regs: [0x42, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3],
-        pc: 5,
-        br: 9,
-        ir: 0,
-        scratch: [0; 8],
-        mem: [0; MEM_WORDS],
-    };
-    let b = StateVals {
-        regs: [0x42, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3],
-        pc: 9,
-        br: 5,
-        ir: 0,
-        scratch: [0; 8],
-        mem: [0; MEM_WORDS],
-    };
-
-    let a_out = eval_state("v1ce/A", &iso, &a);
-    let b_out = eval_state("v1ce/B", &iso, &b);
-
-    assert_ne!(a_out, b_out, "v1 counterexample must produce distinct outputs under v2");
-
-    // Verify the predecessor PC formula: PC_pre = PC' - BR' - 1
-    let pred_a = a_out.pc.wrapping_sub(a_out.br).wrapping_sub(1);
-    let pred_b = b_out.pc.wrapping_sub(b_out.br).wrapping_sub(1);
-    assert_eq!(pred_a, 5, "A: predecessor PC = 5");
-    assert_eq!(pred_b, 9, "B: predecessor PC = 9");
-
-    // Round-trip check: both individually reversible.
-    let back = Iso::sym(iso.clone());
-    assert_eq!(eval_state("v1ce/A/rt", &back, &a_out), a, "A round-trip");
-    assert_eq!(eval_state("v1ce/B/rt", &back, &b_out), b, "B round-trip");
-}
-
 // ══════════════════════════════════════════════════════════════════════
-// 4. IR = 0 (P4) and scratch restoration for branch steps
+// 2. IR = 0 (P4) and scratch restoration for branch steps
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]

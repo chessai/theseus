@@ -306,11 +306,6 @@ pub fn select_mem_composite_n(sel: RegSel, n_cpu: usize, n_mem: usize) -> Iso {
     }
 }
 
-/// `select_mem_composite` at the shipped `(NUM_CPU_FIELDS, MEM_WORDS)`.
-pub fn select_mem_composite(sel: RegSel) -> Iso {
-    select_mem_composite_n(sel, NUM_CPU_FIELDS, MEM_WORDS)
-}
-
 /// Reference model of the crossbar's register permutation (for tests):
 /// the exact permutation `select_reg` applies for a given field value.
 pub fn crossbar_model(field: usize, regs: &mut [u8; 8]) {

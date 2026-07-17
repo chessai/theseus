@@ -98,6 +98,45 @@ fn assert_oracle_sample(name: &str, iso: &Iso, count: usize) {
     );
 }
 
+/// Bounded fast oracle: strided ≤256-input sample of run_on_cpu_fast == eval.
+fn assert_oracle_fast_bounded(name: &str, iso: &Iso, cap: usize) {
+    let (in_ty, _) = type_of(iso).expect("iso types");
+    let vals = enumerate_values(&in_ty);
+    let n = vals.len();
+    let count = cap.min(n);
+    let mut indices: Vec<usize> = (0..count)
+        .map(|i| {
+            if count <= 1 { 0 } else { i * (n - 1) / (count - 1) }
+        })
+        .collect();
+    indices.push(0);
+    if n > 0 {
+        indices.push(n - 1);
+    }
+    indices.sort();
+    indices.dedup();
+
+    let mut checked = 0usize;
+    for &i in &indices {
+        let v = &vals[i];
+        let cpu_out = run_on_cpu_fast(iso, v).unwrap_or_else(|e| {
+            panic!("{name} (fast-bounded): run failed on #{i}: {e}")
+        });
+        let mut fuel = 100_000u64;
+        let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
+            .unwrap_or_else(|e| panic!("{name}: eval failed on #{i}: {e:?}"));
+        assert_eq!(
+            cpu_out, eval_out,
+            "{name} (fast-bounded): CPU disagrees with eval on input #{i} {v:?}"
+        );
+        checked += 1;
+    }
+    eprintln!(
+        "{name} (fast-bounded): oracle agrees on {checked}/{n} inputs ({} instructions)",
+        compile(iso).unwrap().len()
+    );
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // (a) COMPOSITE ORACLE — spill-to-memory programs via system_step
 // ══════════════════════════════════════════════════════════════════════
@@ -106,6 +145,13 @@ fn assert_oracle_sample(name: &str, iso: &Iso, count: usize) {
 fn composite_oracle_spill_15_leaves() {
     // 15 leaves = 8 reg + 6 scratch + 1 mem. Exercises MEXCH through
     // system_step on the composite (CpuState, MemState) carrier.
+    let iso = Iso::SwapProd(bit_prod(7), bit_prod(8));
+    assert_oracle_fast_bounded("composite_spill_15", &iso, 256);
+}
+
+#[test]
+#[ignore = "authoritative whole-domain oracle; run via --ignored"]
+fn composite_oracle_spill_15_leaves_whole_domain() {
     let iso = Iso::SwapProd(bit_prod(7), bit_prod(8));
     assert_oracle_fast("composite_spill_15", &iso);
 }
@@ -122,9 +168,14 @@ fn composite_oracle_spill_15_leaves_real_cpu() {
 
 #[test]
 fn composite_oracle_store_reload_round_trip() {
-    // Swap first bit with last in a 15-leaf product: forces data through
-    // memory and back (reg → mem → reg), exercising MEXCH in both
-    // directions via system_step.
+    let n = 15.min(14 + MEM_WORDS);
+    let iso = Iso::SwapProd(bit_prod(1), bit_prod(n - 1));
+    assert_oracle_fast_bounded("composite_store_reload", &iso, 256);
+}
+
+#[test]
+#[ignore = "authoritative whole-domain oracle; run via --ignored"]
+fn composite_oracle_store_reload_whole_domain() {
     let n = 15.min(14 + MEM_WORDS);
     let iso = Iso::SwapProd(bit_prod(1), bit_prod(n - 1));
     assert_oracle_fast("composite_store_reload", &iso);
@@ -144,6 +195,15 @@ fn composite_oracle_store_reload_real_cpu() {
 #[test]
 fn composite_oracle_max_ceiling() {
     // 14 + MEM_WORDS leaves: the straight-line ceiling.
+    let n = 14 + MEM_WORDS;
+    let half = n / 2;
+    let iso = Iso::SwapProd(bit_prod(half), bit_prod(n - half));
+    assert_oracle_fast_bounded("composite_max_ceiling", &iso, 256);
+}
+
+#[test]
+#[ignore = "authoritative whole-domain oracle; run via --ignored"]
+fn composite_oracle_max_ceiling_whole_domain() {
     let n = 14 + MEM_WORDS;
     let half = n / 2;
     let iso = Iso::SwapProd(bit_prod(half), bit_prod(n - half));

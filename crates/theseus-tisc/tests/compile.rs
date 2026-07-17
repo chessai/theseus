@@ -92,6 +92,46 @@ fn assert_oracle_with(
     );
 }
 
+/// Bounded fast oracle: strided ≤256-input sample of run_on_cpu_fast == eval.
+/// Mirrors `assert_oracle_sample` index-striding but uses `run_on_cpu_fast`.
+fn assert_oracle_fast_bounded(name: &str, iso: &Iso, cap: usize) {
+    let (in_ty, _) = type_of(iso).expect("iso types");
+    let vals = enumerate_values(&in_ty);
+    let n = vals.len();
+    let count = cap.min(n);
+    let mut indices: Vec<usize> = (0..count)
+        .map(|i| {
+            if count <= 1 { 0 } else { i * (n - 1) / (count - 1) }
+        })
+        .collect();
+    indices.push(0);
+    if n > 0 {
+        indices.push(n - 1);
+    }
+    indices.sort();
+    indices.dedup();
+
+    let mut checked = 0usize;
+    for &i in &indices {
+        let v = &vals[i];
+        let cpu_out = run_on_cpu_fast(iso, v).unwrap_or_else(|e| {
+            panic!("{name} (fast-bounded): run failed on #{i}: {e}")
+        });
+        let mut fuel = 100_000u64;
+        let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
+            .unwrap_or_else(|e| panic!("{name}: eval failed on #{i}: {e:?}"));
+        assert_eq!(
+            cpu_out, eval_out,
+            "{name} (fast-bounded): CPU disagrees with eval on input #{i} {v:?}"
+        );
+        checked += 1;
+    }
+    eprintln!(
+        "{name} (fast-bounded): oracle agrees on {checked}/{n} inputs ({} instructions)",
+        compile(iso).unwrap().len()
+    );
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // M-A tests (must remain green — no regression)
 // ══════════════════════════════════════════════════════════════════════
@@ -330,6 +370,13 @@ fn spill_14_leaves_ceiling_oracle_agrees() {
     let iso = Iso::SwapProd(bit_prod(7), bit_prod(7));
     let instrs = compile(&iso).expect("14-leaf SwapProd should compile");
     eprintln!("14-leaf SwapProd: {} instructions", instrs.len());
+    assert_oracle_fast_bounded("spill_14_ceiling", &iso, 256);
+}
+
+#[test]
+#[ignore = "authoritative whole-domain oracle; run via --ignored"]
+fn spill_14_leaves_ceiling_oracle_whole_domain() {
+    let iso = Iso::SwapProd(bit_prod(7), bit_prod(7));
     assert_oracle_fast("spill_14_ceiling", &iso);
 }
 
@@ -472,10 +519,16 @@ fn spill_13_leaves_branching_now_compiles() {
 #[test]
 fn mem_spill_15_leaves_swap_oracle_agrees() {
     // 15 leaves = 8 reg + 6 scratch + 1 mem: exercises memory spill.
-    // Previously would have been rejected as TooManyLeaves.
     let iso = Iso::SwapProd(bit_prod(7), bit_prod(8));
     let instrs = compile(&iso).expect("15-leaf SwapProd should compile with memory");
     eprintln!("15-leaf SwapProd (mem spill): {} instructions", instrs.len());
+    assert_oracle_fast_bounded("mem_spill_15_swap", &iso, 256);
+}
+
+#[test]
+#[ignore = "authoritative whole-domain oracle; run via --ignored"]
+fn mem_spill_15_leaves_swap_oracle_whole_domain() {
+    let iso = Iso::SwapProd(bit_prod(7), bit_prod(8));
     assert_oracle_fast("mem_spill_15_swap", &iso);
 }
 
@@ -497,6 +550,15 @@ fn mem_spill_max_leaves_swap_oracle_agrees() {
     let iso = Iso::SwapProd(bit_prod(half), bit_prod(n - half));
     let instrs = compile(&iso).unwrap_or_else(|_| panic!("{n}-leaf SwapProd should compile"));
     eprintln!("{n}-leaf SwapProd (max mem): {} instructions", instrs.len());
+    assert_oracle_fast_bounded("mem_spill_max_ceiling", &iso, 256);
+}
+
+#[test]
+#[ignore = "authoritative whole-domain oracle; run via --ignored"]
+fn mem_spill_max_leaves_swap_oracle_whole_domain() {
+    let n = 14 + MEM_WORDS;
+    let half = n / 2;
+    let iso = Iso::SwapProd(bit_prod(half), bit_prod(n - half));
     assert_oracle_fast("mem_spill_max_ceiling", &iso);
 }
 
@@ -519,14 +581,19 @@ fn mem_spill_max_leaves_swap_real_cpu() {
 #[test]
 fn mem_store_reload_round_trip_oracle_agrees() {
     // A product of 15 Bits with a swap that forces data through memory
-    // and back. The compiler's marshal puts leaf 14 in mem[0], and any
-    // op that touches it must MEXCH it in and out.
-    // SwapProd of the last bit with the first exercises the full
-    // reg → mem → reg path.
+    // and back.
     let n = 15.min(14 + MEM_WORDS);
     let iso = Iso::SwapProd(bit_prod(1), bit_prod(n - 1));
     let instrs = compile(&iso).expect("store-reload should compile");
     eprintln!("store-reload round-trip: {} instructions on {n} leaves", instrs.len());
+    assert_oracle_fast_bounded("mem_store_reload", &iso, 256);
+}
+
+#[test]
+#[ignore = "authoritative whole-domain oracle; run via --ignored"]
+fn mem_store_reload_round_trip_oracle_whole_domain() {
+    let n = 15.min(14 + MEM_WORDS);
+    let iso = Iso::SwapProd(bit_prod(1), bit_prod(n - 1));
     assert_oracle_fast("mem_store_reload", &iso);
 }
 
