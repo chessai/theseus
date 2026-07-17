@@ -1054,15 +1054,21 @@ fn is_not_on_target_times_id(g: &Iso, _tgt_ty: &Type) -> bool {
     false
 }
 
-/// Check if an iso is NOT on Bit (SwapSum(1,1) or Seq(Plus(Id,Id),SwapSum(1,1))).
+/// Check if an iso is NOT on Bit (SwapSum(1,1) or Seq(Plus(Id,Id),SwapSum(1,1))
+/// or the adjoint form Seq(SwapSum(1,1),Plus(Id,Id))).
 fn is_not_iso(iso: &Iso) -> bool {
     if is_bit_not(iso) {
         return true;
     }
-    if let Iso::Seq(plus_part, swap_part) = iso {
-        if let Iso::SwapSum(a, b) = swap_part.as_ref() {
-            if *a == Type::One && *b == Type::One {
-                if let Iso::Plus(pf, pg) = plus_part.as_ref() {
+    if let Iso::Seq(a, b) = iso {
+        let (swap, plus) = if matches!(b.as_ref(), Iso::SwapSum(_, _)) {
+            (b.as_ref(), a.as_ref())
+        } else {
+            (a.as_ref(), b.as_ref())
+        };
+        if let Iso::SwapSum(sa, sb) = swap {
+            if *sa == Type::One && *sb == Type::One {
+                if let Iso::Plus(pf, pg) = plus {
                     if is_structural_identity(pf) && is_structural_identity(pg) {
                         return true;
                     }
@@ -1162,6 +1168,27 @@ pub fn compile(iso: &Iso) -> Result<Vec<Instr>, CompileError> {
     Ok(instrs)
 }
 
+/// Right-associate a left-nested `Seq` chain so that idiom recognizers
+/// (e.g. `match_controlled_idiom`) see the canonical right-nested shape.
+///
+/// `Seq(Seq(a, b), c)` → `Seq(a, Seq(b, c))`, applied recursively until
+/// the spine is fully right-associated. Leaves non-`Seq` nodes unchanged.
+/// This is needed because `adjoint(Seq(f, g)) = Seq(adj(g), adj(f))`
+/// turns a right-nested chain into a left-nested one.
+fn right_assoc_seq(iso: Iso) -> Iso {
+    match iso {
+        Iso::Seq(f, g) => {
+            let f = right_assoc_seq(*f);
+            let g = right_assoc_seq(*g);
+            match f {
+                Iso::Seq(a, b) => right_assoc_seq(Iso::seq(*a, Iso::seq(*b, g))),
+                other => Iso::seq(other, g),
+            }
+        }
+        other => other,
+    }
+}
+
 /// Recursive lowering: iso + register context → (instructions, updated context).
 fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
     // First, try matching the controlled-op idiom (before decomposing Seq).
@@ -1221,7 +1248,10 @@ fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
         Iso::Sym(f) => {
             // Adjoint: lower the original, then reverse + invert.
             // We use the core adjoint to get f†, then lower that directly.
-            let adj = adjoint(f);
+            // Right-associate Seq chains: adjoint reverses nesting
+            // (right-nested → left-nested), which prevents the
+            // controlled-op idiom recognizer from matching.
+            let adj = right_assoc_seq(adjoint(f));
             lower(&adj, ctx)
         }
 
@@ -1395,6 +1425,13 @@ fn lower_fold_unfold(
     if depth <= 1 {
         return Ok((vec![], ctx.clone()));
     }
+
+    // Right-associate the body Seq chain: adjoint(Fold(l, f)) = Unfold(l, adj(f)),
+    // and adj(f) is left-nested when f was right-nested. The per-copy body is
+    // lowered against a SMALL sub-context, so the controlled-op idiom must fire
+    // to avoid aux-register conflicts with the outer spine context.
+    let body_norm = right_assoc_seq(body.clone());
+    let body = &body_norm;
 
     // Exclude tag leaves we guard on from aux displacement so they stay
     // in registers and ensure_reg returns them directly.
