@@ -2,19 +2,20 @@
 //!
 //! Proves the two-body value decomposition:
 //!   `TwoBodyRing::run == SystemRing::run == eval(system_step)^R`
-//! at N = MEM_WORDS = 4, R ∈ {1,2}, over a strided ≤256-state sample
-//! that satisfies F5's mandatory coverage (see below).
+//! at N = MEM_WORDS = 4, R ∈ {1,2} (fast) / R ∈ {1,2,3} (wide), over
+//! strided ≤16/≤256-state samples that satisfy F5's mandatory coverage.
 //!
 //! Also certifies:
 //! - per-body ancilla restoration (run == run_open per body)
+//! - direct per-body ancilla check (body_ancilla_mismatches == empty)
 //! - structural line-audit (cpu bodies have zero MemState ports,
 //!   mem body has zero CpuState ports)
 //!
 //! # Bounding
 //!
-//! Every loop over states is strided/capped to ≤256 iterations in the
-//! default (non-#[ignore]d) tests. R stays in {1,2}. N = MEM_WORDS = 4.
-//! Whole-domain twins are #[ignore]d.
+//! Default (non-#[ignore]d) tests: ≤16 states, R ≤ 3, N = MEM_WORDS = 4.
+//! Wide-strided twins are #[ignore]d (authoritative tier, run via --ignored):
+//! ≤256 states, R ≤ 3.
 
 use std::sync::OnceLock;
 
@@ -68,6 +69,7 @@ fn eval_system_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 //   3: MEXCH r5, rt=3 (addr=3)                — F5: addr=3
 //   4: ADDI r1, 5                             — F5: non-MEXCH (enable off)
 //   5: ADD r0, r1, rt=3                       — F5: non-MEXCH with nonzero IR.rt
+//   6: SWAPBR r1                              — F5: exercises BR↔reg swap + pc_add_br
 
 fn f5_rom() -> Vec<u16> {
     vec![
@@ -77,6 +79,55 @@ fn f5_rom() -> Vec<u16> {
         r_ins(0b1001, 5, 0, 3), // 3: MEXCH r5, rt=3 (addr=3)
         i_ins(0, 1, 0x05),      // 4: ADDI r1, 5 (I-format, non-MEXCH)
         r_ins(0b0000, 0, 1, 3), // 5: ADD r0, r1, rt=3 (non-MEXCH, nonzero rt)
+        r_ins(0b1000, 1, 0, 0), // 6: SWAPBR r1 (swap BR ↔ r[1])
+    ]
+}
+
+// ── Wide ROM (authoritative tier) ─────────────────────────────────
+//
+// Covers ALL 14 non-MEXCH ops at dedicated PCs + MEXCH at every addr
+// 0..3 + SWAPBR. Used by the #[ignore]d wide-strided twins.
+//
+// ROM layout:
+//   0:  ADD   r0, r1, rt=3          (R-type opcode 0b0000)
+//   1:  SUB   r2, r3, rt=0          (R-type opcode 0b0001)
+//   2:  XOR   r4, r5, rt=0          (R-type opcode 0b0010)
+//   3:  EXCH  r0, r1                (R-type opcode 0b0011)
+//   4:  ROTL  r2, r3, rt=0          (R-type opcode 0b0100)
+//   5:  ROTR  r4, r5, rt=0          (R-type opcode 0b0101)
+//   6:  CSWAP r0, r1, rt=2          (R-type opcode 0b0110)
+//   7:  XCHG  r2, r3, rt=0          (R-type opcode 0b0111)
+//   8:  SWAPBR r1                   (R-type opcode 0b1000)
+//   9:  MEXCH r2, rt=2 (addr=2)     (R-type opcode 0b1001)
+//  10:  MEXCH r3, rt=1 (addr=1)
+//  11:  MEXCH r4, rt=0 (addr=0)
+//  12:  MEXCH r5, rt=3 (addr=3)
+//  13:  ADDI  r1, 5                 (I-type opc 0b000)
+//  14:  SUBI  r2, 3                 (I-type opc 0b001)
+//  15:  XORI  r3, 0x0F              (I-type opc 0b010)
+//  16:  ROTLI r4, 2                 (I-type opc 0b011)
+//  17:  ROTRI r5, 1                 (I-type opc 0b100)
+
+fn wide_rom() -> Vec<u16> {
+    vec![
+        r_ins(0b0000, 0, 1, 3), //  0: ADD r0, r1, rt=3
+        r_ins(0b0001, 2, 3, 0), //  1: SUB r2, r3
+        r_ins(0b0010, 4, 5, 0), //  2: XOR r4, r5
+        r_ins(0b0011, 0, 1, 0), //  3: EXCH r0, r1
+        r_ins(0b0100, 2, 3, 0), //  4: ROTL r2, r3
+        r_ins(0b0101, 4, 5, 0), //  5: ROTR r4, r5
+        r_ins(0b0110, 0, 1, 2), //  6: CSWAP r0, r1, rt=2
+        r_ins(0b0111, 2, 3, 0), //  7: XCHG r2, r3
+        r_ins(0b1000, 1, 0, 0), //  8: SWAPBR r1
+        r_ins(0b1001, 2, 0, 2), //  9: MEXCH r2, rt=2 (addr=2)
+        r_ins(0b1001, 3, 0, 1), // 10: MEXCH r3, rt=1 (addr=1)
+        r_ins(0b1001, 4, 0, 0), // 11: MEXCH r4, rt=0 (addr=0)
+        r_ins(0b1001, 5, 0, 3), // 12: MEXCH r5, rt=3 (addr=3)
+        i_ins(0, 1, 0x05),      // 13: ADDI r1, 5
+        i_ins(1, 2, 0x03),      // 14: SUBI r2, 3
+        i_ins(2, 3, 0x0F),      // 15: XORI r3, 0x0F
+        i_ins(3, 4, 0x02),      // 16: ROTLI r4, 2
+        i_ins(4, 5, 0x01),      // 17: ROTRI r5, 1
     ]
 }
 
@@ -99,6 +150,17 @@ fn ctx() -> &'static Ctx {
     })
 }
 
+fn wide_ctx() -> &'static Ctx {
+    static WIDE_CTX: OnceLock<Ctx> = OnceLock::new();
+    WIDE_CTX.get_or_init(|| {
+        let rom = wide_rom();
+        let two = two_body_ring(&rom);
+        let sys = system_ring(&rom);
+        let iso = system_step(&rom);
+        Ctx { two, sys, iso }
+    })
+}
+
 // ── F5 sample states ─────────────────────────────────────────────
 //
 // Coverage (cross-product of ROM entries × initial state patterns):
@@ -114,7 +176,7 @@ fn ctx() -> &'static Ctx {
 fn f5_sample_states() -> Vec<StateVals> {
     let mut states = Vec::new();
     // Strided across PCs that exercise all ROM entries + one out-of-ROM
-    for &pc in &[0u8, 1, 2, 3, 4, 5, 7] {
+    for &pc in &[0u8, 1, 2, 3, 4, 5, 6, 7] {
         let mut mem = [0u8; MEM_WORDS];
         for (i, m) in mem.iter_mut().enumerate() {
             *m = 0x42u8.wrapping_add((i as u8).wrapping_mul(0x31));
@@ -151,7 +213,139 @@ fn f5_sample_states() -> Vec<StateVals> {
         scratch: [0; 8],
         mem: mem2,
     });
-    assert!(states.len() <= 256, "F5 sample exceeds 256 states");
+    // BR != 0 at SWAPBR entry: exercises BR↔r[1] swap + pc_add_br path
+    // BR=3, r[1]=0x05 → after SWAPBR: BR=5, r[1]=3; pc_add_br adds 5
+    states.push(StateVals {
+        regs: [0x00, 0x05, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3],
+        pc: 6,
+        br: 3,
+        ir: 0,
+        scratch: [0; 8],
+        mem: [0x42, 0x73, 0xA4, 0xD5],
+    });
+    // BR != 0 at a non-SWAPBR (MEXCH) entry: exercises pc_add_br with BR preserved
+    states.push(StateVals {
+        regs: [0x00, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3],
+        pc: 0,
+        br: 2,
+        ir: 0,
+        scratch: [0; 8],
+        mem: [0x11, 0x22, 0x33, 0x44],
+    });
+    assert!(states.len() <= 16, "F5 fast sample exceeds 16 states");
+    states
+}
+
+// ── Wide-strided sample states (authoritative tier) ──────────────
+//
+// Genuinely wider than the fast companion: all 18 ROM PCs + out-of-ROM,
+// multiple register/mem patterns, BR!=0 with SWAPBR, enable on/off.
+// Count is in [64, 256].
+
+fn wide_strided_sample_states() -> Vec<StateVals> {
+    let mut states = Vec::new();
+
+    // Base register patterns (4 distinct patterns)
+    let reg_patterns: [[u8; 8]; 4] = [
+        [0x00, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3],
+        [0x10, 0x20, 0xCC, 0xDD, 0x40, 0x50, 0x60, 0x70],
+        [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        [0xFF, 0x37, 0x91, 0xB2, 0xE4, 0x1C, 0x6A, 0xD8],
+    ];
+
+    // Memory patterns (4 distinct nonzero word-vectors + 1 zero)
+    let mem_patterns: [[u8; MEM_WORDS]; 5] = [
+        [0x42, 0x73, 0xA4, 0xD5],
+        [0x11, 0x22, 0x33, 0x44],
+        [0xBB, 0xCC, 0xDD, 0xEE],
+        [0x01, 0x80, 0xFF, 0x55],
+        [0x00, 0x00, 0x00, 0x00],
+    ];
+
+    // All 18 ROM PCs + 2 out-of-ROM PCs
+    let pcs: Vec<u8> = (0..=17).chain([19u8, 23]).collect();
+
+    // Cross: each PC × first reg pattern × first mem pattern (20 states)
+    for &pc in &pcs {
+        states.push(StateVals {
+            regs: reg_patterns[0],
+            pc,
+            br: 0,
+            ir: 0,
+            scratch: [0; 8],
+            mem: mem_patterns[0],
+        });
+    }
+
+    // Cross: MEXCH PCs (9,10,11,12) × all 4 reg patterns × all 5 mem patterns
+    // = 4×4×5 = 80 states (some overlap with above, but ≤256 total is fine)
+    for &pc in &[9u8, 10, 11, 12] {
+        for rp in &reg_patterns {
+            for mp in &mem_patterns {
+                states.push(StateVals {
+                    regs: *rp,
+                    pc,
+                    br: 0,
+                    ir: 0,
+                    scratch: [0; 8],
+                    mem: *mp,
+                });
+            }
+        }
+    }
+
+    // Non-MEXCH PCs with varied regs/mem (enable on: pc<9; enable off: pc≥13)
+    for &pc in &[0u8, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16, 17] {
+        for (ri, rp) in reg_patterns[1..].iter().enumerate() {
+            states.push(StateVals {
+                regs: *rp,
+                pc,
+                br: 0,
+                ir: 0,
+                scratch: [0; 8],
+                mem: mem_patterns[(ri + 1) % mem_patterns.len()],
+            });
+        }
+    }
+
+    // BR != 0 at SWAPBR (pc=8): exercises BR↔r[1] + pc_add_br
+    for &br_val in &[1u8, 3, 7] {
+        states.push(StateVals {
+            regs: [0x00, 0x05, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3],
+            pc: 8,
+            br: br_val,
+            ir: 0,
+            scratch: [0; 8],
+            mem: mem_patterns[0],
+        });
+    }
+
+    // BR != 0 at non-SWAPBR PCs: exercises pc_add_br with BR preserved
+    for &pc in &[0u8, 5, 13] {
+        states.push(StateVals {
+            regs: reg_patterns[0],
+            pc,
+            br: 2,
+            ir: 0,
+            scratch: [0; 8],
+            mem: mem_patterns[1],
+        });
+    }
+
+    // Deduplicate (some cross-products overlap)
+    states.sort_by(|a, b| {
+        a.pc.cmp(&b.pc)
+            .then(a.br.cmp(&b.br))
+            .then(a.regs.cmp(&b.regs))
+            .then(a.mem.cmp(&b.mem))
+    });
+    states.dedup();
+
+    let n = states.len();
+    assert!(
+        (64..=256).contains(&n),
+        "wide_strided_sample_states: count {n} not in [64, 256]"
+    );
     states
 }
 
@@ -195,23 +389,27 @@ fn two_body_matches_system_ring_and_eval_oracle() {
 }
 
 #[test]
-#[ignore = "authoritative whole-domain oracle; run via --ignored"]
-fn two_body_matches_eval_oracle_whole_domain() {
-    let c = ctx();
-    // Strided over a wider set — still bounded by the ignore gate
-    let samples = f5_sample_states();
+#[ignore = "authoritative wide-strided oracle; run via --ignored"]
+fn two_body_matches_eval_oracle_wide_strided() {
+    let c = wide_ctx();
+    let samples = wide_strided_sample_states();
     for (si, start) in samples.iter().enumerate() {
         let mut oracle = start.clone();
-        for r in 1..=2u32 {
+        for r in 1..=3u32 {
             oracle = eval_system_state(
-                &format!("whole/si={si}/r={r}"),
+                &format!("wide/si={si}/r={r}"),
                 &c.iso,
                 &oracle,
             );
             let two_result = c.two.run(start, r);
+            let sys_result = c.sys.run(start, r);
             assert_eq!(
                 two_result, oracle,
-                "TwoBodyRing.run(s, {r}) != eval^{r} at sample {si} (whole domain)"
+                "TwoBodyRing.run(s, {r}) != eval^{r} at sample {si} (wide strided)"
+            );
+            assert_eq!(
+                sys_result, oracle,
+                "SystemRing.run(s, {r}) != eval^{r} at sample {si} (wide strided)"
             );
         }
     }
@@ -252,17 +450,48 @@ fn per_body_ancilla_restoration() {
 }
 
 #[test]
-#[ignore = "authoritative per-body ancilla restoration; run via --ignored"]
-fn per_body_ancilla_restoration_whole_domain() {
-    let c = ctx();
-    let samples = f5_sample_states();
+#[ignore = "authoritative wide-strided per-body ancilla restoration; run via --ignored"]
+fn per_body_ancilla_restoration_wide_strided() {
+    let c = wide_ctx();
+    let samples = wide_strided_sample_states();
     for (si, start) in samples.iter().enumerate() {
-        for r in 1..=2u32 {
+        for r in 1..=3u32 {
             let closed = c.two.run(start, r);
             let open = c.two.run_open(start, r);
             assert_eq!(
                 closed, open,
-                "TwoBodyRing (whole): run != run_open at sample {si}, r={r}"
+                "TwoBodyRing (wide): run != run_open at sample {si}, r={r}"
+            );
+        }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 2b. Direct per-body ancilla check: body_ancilla_mismatches == empty
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn direct_per_body_ancilla_check() {
+    let c = ctx();
+    let samples = f5_sample_states();
+    for (si, start) in samples.iter().enumerate() {
+        for r in 1..=3u32 {
+            let (pre_mm, mem_mm, post_mm) =
+                c.two.body_ancilla_mismatches(start, r);
+            assert!(
+                pre_mm.is_empty(),
+                "cpu_pre ancilla mismatch at sample {si} (pc={}), r={r}: {:?}",
+                start.pc, pre_mm
+            );
+            assert!(
+                mem_mm.is_empty(),
+                "mem_body ancilla mismatch at sample {si} (pc={}), r={r}: {:?}",
+                start.pc, mem_mm
+            );
+            assert!(
+                post_mm.is_empty(),
+                "cpu_post ancilla mismatch at sample {si} (pc={}), r={r}: {:?}",
+                start.pc, post_mm
             );
         }
     }

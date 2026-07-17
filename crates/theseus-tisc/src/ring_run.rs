@@ -763,6 +763,94 @@ impl TwoBodyRing {
         self.post_ancilla.len()
     }
 
+    /// Per-body ancilla mismatch indices accumulated across `revolutions`.
+    ///
+    /// Threads the ring exactly as [`Self::run`] does (closed ancilla
+    /// feedback), but at EACH revolution compares each body's ancilla
+    /// OUTPUT bits to that body's ancilla inits and records any index
+    /// that differs. Returns `(pre_mismatches, mem_mismatches,
+    /// post_mismatches)`. All three empty ⇔ every body's ancillas
+    /// restore every revolution — the per-body zero-garbage certificate.
+    pub fn body_ancilla_mismatches(
+        &self,
+        start: &StateVals,
+        revolutions: u32,
+    ) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+        let cpu_ty = state_ty();
+
+        let mut cpu_bits = bits_of(&start.encode(), &cpu_ty).expect("cpu bits_of");
+        let mut mem_bits = Self::encode_mem_bits(start);
+
+        let mut pre_anc = self.pre_ancilla.clone();
+        let mut mem_anc = self.mem_ancilla.clone();
+        let mut post_anc = self.post_ancilla.clone();
+
+        let mut pre_mm = Vec::new();
+        let mut mem_mm = Vec::new();
+        let mut post_mm = Vec::new();
+
+        for _ in 0..revolutions {
+            // (a) cpu_pre
+            let mut pre_input = cpu_bits.clone();
+            pre_input.extend(std::iter::repeat_n(false, BUS_BITS));
+            pre_input.extend_from_slice(&pre_anc);
+            let pre_sim = self.pre.simulate(&pre_input).expect("simulate cpu_pre");
+            cpu_bits = pre_sim.outputs[..STATE_BITS].to_vec();
+            let bus_from_pre =
+                pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
+            pre_anc = pre_sim.outputs[self.pre_n_data..].to_vec();
+
+            // Check cpu_pre ancillas
+            for (i, (got, expected)) in pre_anc.iter().zip(&self.pre_ancilla).enumerate() {
+                if got != expected && !pre_mm.contains(&i) {
+                    pre_mm.push(i);
+                }
+            }
+
+            // (b) mem_body
+            let mut mem_input = mem_bits.clone();
+            mem_input.extend_from_slice(&bus_from_pre);
+            mem_input.extend_from_slice(&mem_anc);
+            let mem_sim = self.mem.simulate(&mem_input).expect("simulate mem_body");
+            mem_bits = mem_sim.outputs[..MEM_WORDS * W].to_vec();
+            let bus_from_mem =
+                mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
+            mem_anc = mem_sim.outputs[self.mem_n_data..].to_vec();
+
+            // Check mem_body ancillas
+            for (i, (got, expected)) in mem_anc.iter().zip(&self.mem_ancilla).enumerate() {
+                if got != expected && !mem_mm.contains(&i) {
+                    mem_mm.push(i);
+                }
+            }
+
+            // (c) cpu_post
+            let mut post_input = cpu_bits.clone();
+            post_input.extend_from_slice(&bus_from_mem);
+            post_input.extend_from_slice(&post_anc);
+            let post_sim = self.post.simulate(&post_input).expect("simulate cpu_post");
+            cpu_bits = post_sim.outputs[..STATE_BITS].to_vec();
+            post_anc = post_sim.outputs[self.post_n_data..].to_vec();
+
+            // Check cpu_post ancillas
+            for (i, (got, expected)) in post_anc.iter().zip(&self.post_ancilla).enumerate() {
+                if got != expected && !post_mm.contains(&i) {
+                    post_mm.push(i);
+                }
+            }
+
+            // (d) F3: bus quiescence
+            let bus_out =
+                &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
+            assert!(
+                bus_out.iter().all(|&b| !b),
+                "TwoBodyRing (ancilla check): bus NOT quiescent after cpu_post"
+            );
+        }
+
+        (pre_mm, mem_mm, post_mm)
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────
 
     fn encode_mem_bits(s: &StateVals) -> Vec<bool> {
