@@ -232,6 +232,106 @@ equations force lockstep (no pipeline skew). 2a = *what* it computes; 2b = *that
 concurrent clocking realizes exactly that, with no revolution skew*. Together =
 ADR-0046 §8 Stage-2 acceptance.
 
+## 4b. Stage 2b-lite — the finalized static realizability certificate (SCOPED)
+
+Stage 2a is merged (`theseus-v2` 2810bab + cert-hardening 24ae386). Per the user's
+scope decision, **Stage 2b is delivered as 2b-lite**: a *static realizability
+certificate* in `theseus-tisc` ONLY. It computes the two loops' real depths (from the
+already-public `PhasedCellNetlist::line_arrivals`, which equals the balanced arrival —
+so it sidesteps the F2 stale-`compact.net()` trap WITHOUT touching the central
+balancer) and proves the F1 lockstep arrival equations have a consistent solution.
+This meets ADR-0046 §8's Stage-2 acceptance ("arrival equations and period lock
+*validated*"). The compact output **padder** (F2) and a *materialized* padded two-body
+netlist are deferred to the memory energy-ledger work (§9, M-E territory) — NOT built
+here.
+
+**Grounding (measured on `theseus-v2` 24ae386, 1-entry MEXCH ROM):** `D_pre =
+depth(cpu_pre) = 2839`, `D_mem = depth(mem_body) = 35` (Fredkin-only, 0 ancillas),
+`D_post = depth(cpu_post) = 152`. `P = PHASE_COUNT = 4`. A consistent lockstep solution
+exists: δ₁=1, δ₂=1, δ_hold=37, `D_cpu = D_mem_loop = 3028 ≡ 0 (mod 4)`. The certificate
+must recompute these from the live depths (they are NOT hard-coded — a body-depth
+regression must flow through), and assert the equations below hold.
+
+**Physical model (two concurrent lockstep loops, same-revolution servicing).** The CPU
+loop circulates CpuState through `cpu_pre` (depth `D_pre`) then, after a hold of
+`δ_hold` ticks, `cpu_post` (depth `D_post`); the bus exits `cpu_pre` (flushed to
+`D_pre`), transits δ₁ to `mem_body` (depth `D_mem`), exits, transits δ₂ back to
+`cpu_post`'s bus input. The mem loop circulates MemState through `mem_body`, idle the
+rest of the period. Bus is a constant-0 boundary (2a/F6), quiescent outside the round
+trip.
+
+**The certificate algorithm (all compile-time-constant integer arithmetic):**
+1. Lower `cpu_pre(rom)`, `mem_body()`, `cpu_post(rom)`; `D_pre/D_mem/D_post` = each
+   body's max **data-output** arrival via `line_arrivals` (NOT `net.depth()` on a
+   stale clone; NOT cell.depth fields).
+2. `δ₁` = least ≥0 with `(D_pre + δ₁) ≡ 0 (mod P)` — phase-align the mem-body window.
+3. `δ₂` = least ≥0 with `(D_pre + δ₁ + D_mem + δ₂) ≡ 0 (mod P)` — phase-align cpu_post.
+4. `δ_hold = δ₁ + D_mem + δ₂` (the held CpuState pad, F1 co-arrival).
+5. `D_cpu = D_pre + δ_hold + D_post`; `pad = (P − D_cpu % P) % P`; `D_locked = D_cpu + pad`.
+6. `D_mem_loop = D_locked` (period lock — mem body padded to fill; assert equality).
+
+**CRITICAL — the certificate must have TEETH (Fable review of this spec).** A naive
+version that *solves* for δ₁/δ₂/δ_hold and then asserts the equations those very solves
+satisfy is **self-fulfilling theater** — every timing assertion passes by construction,
+so it detects no regression and "validated" is vacuous. The fixes below (F-teeth-1/2/3)
+are MANDATORY; without them 2b-lite does not meet §8.
+
+- **F-teeth-1 — golden pinning in the TEST (the real regression detector).** The
+  *library* computes `d_pre/d_mem/d_post` live from `line_arrivals` (no hard-coding
+  there). The *test* pins the full solved tuple against the measured snapshot for the
+  MEXCH ROM: `d_pre==2839, d_mem==35, d_post==152, delta1==1, delta2==1,
+  delta_hold==37, d_locked==3028`. A lowering/depth regression then FAILS LOUDLY and
+  forces a human to re-review the timing before bumping the golden. (This is why the
+  numbers live in the test, not the library.)
+- **F-teeth-2 — `validate()` is an INDEPENDENT recomputation, not a restatement.**
+  `validate()` re-derives `δ₁, δ₂, pad` from `(d_pre, d_mem, d_post, P)` by a *different*
+  implementation than the solver — a brute scan `(0..P).find(|k| (base+k)%P==0)` — and
+  compares against the stored fields. Now A/C/E are equations between two computations,
+  not `x == x`; this catches solver bugs and struct-field tampering.
+- **F-teeth-3 — one genuinely netlist-derived falsifiable check + minimality +
+  mem-merge.** From each body's `line_arrivals`, record the per-bus-line arrival spread
+  and expose the implied per-line flush pads (`D_body − arrival_i`) in `TwoBodyTiming`;
+  assert every pad `≥ 0` (the contract the deferred F2 padder must satisfy — turns the
+  "outputs flushed to D" premise from prose into checked data). Assert minimality
+  `δ₁ < P && δ₂ < P && pad < P` (fails if a non-minimal solve is swapped in). Restore
+  the **mem-merge clause** (F1 clause 3): the mem-loop places the wrapped MemState to
+  co-arrive with the incoming bus at `mem_body`'s input — reduces to `D_mem_loop ==
+  D_locked` placing the window at `[D_pre+δ₁ .. D_pre+δ₁+D_mem]`; assert that window
+  start `≡ 0 (mod P)` and `< D_locked`.
+
+**The certificate assertions (which have teeth, post-fix):**
+- **A. co-arrival (F1):** `δ_hold == δ₁ + D_mem + δ₂`. Given F-teeth-2, the RHS is the
+  independent re-derivation, so this is a real equation. (State next to A the premise it
+  relies on: both the held CpuState and the bus leave `cpu_pre` flushed at `D_pre` —
+  same origin — which F-teeth-3's per-line pads make checkable.)
+- **B. no revolution skew (F1 same-revolution clause):** `0 < δ₁+D_mem+δ₂ < D_locked`.
+  (Guards a future relaxation of the minimal solve; documents intent.)
+- **C. phase closure (D2.3):** `D_locked ≡ 0 (mod P)`, `pad ≤ P−1`, `(D_pre+δ₁) ≡ 0`,
+  `(D_pre+δ₁+D_mem+δ₂) ≡ 0 (mod P)` — checked via F-teeth-2's independent δ's.
+- **D. period lock (F6):** `D_mem_loop == D_locked`.
+- **E. non-negativity + minimality:** `δ₁,δ₂,δ_hold,pad ≥ 0` and `δ₁,δ₂,pad < P`.
+- **F. line-audit (from 2a):** reuse `input_ty`/`n_data` asserts — the bus is the ONLY
+  cross-loop signal; MemState absent from the CPU bodies.
+- **G. per-line flush pads ≥ 0** (F-teeth-3) — the one assertion derived from the raw
+  `line_arrivals` the solver does not manufacture.
+
+**Deliverable shape:**
+- `ring_run::two_body_timing_certificate(rom) -> TwoBodyTiming` — struct exposing
+  `d_pre, d_mem, d_post, delta1, delta2, delta_hold, d_locked, period` (`u32`) PLUS the
+  per-body per-bus-line flush pads (`Vec<u32>` each). Performs steps 1–6 over live
+  `line_arrivals`. NO lowering mutation, NO machine-semantics change, NO padder
+  materialization.
+- `TwoBodyTiming::validate() -> Result<(), String>` — the INDEPENDENT re-derivation
+  (F-teeth-2) enforcing A–G; returns a descriptive error, never silently self-passes.
+- `tests/ring_two_body_timing.rs` — (i) golden-tuple pin for the MEXCH ROM (F-teeth-1);
+  (ii) `validate()` Ok for a handful of ROMs (MEXCH, non-MEXCH, branch); (iii) the §F
+  line-audit. Bounded (a few ROMs, one lowering each — fast; no domain enumeration).
+
+**Honesty note in the certificate docs:** δ₁/δ₂ are the *minimal phase-aligning
+transits* (a specific realizable placement); 2b-lite proves a consistent lockstep
+clocking EXISTS and pins it to measured depths — the physical padded netlist (2b-full)
+is deferred to the energy-ledger work. Do not overclaim a built machine.
+
 ## 5. Risks the adversarial review MUST probe
 
 - **R1 — decomposition faithfulness.** Is dropping `id_Mem`/`id_Cpu` and threading Bus
