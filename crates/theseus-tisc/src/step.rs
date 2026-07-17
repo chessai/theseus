@@ -278,3 +278,47 @@ pub fn system_step(rom: &[u16]) -> Iso {
     ];
     seq_balanced(phases)
 }
+
+// ── Two-body decomposition (Stage 2a) ─────────────────────────────
+
+/// `cpu_pre(rom) : (CpuState, BusMsg) <-> (CpuState, BusMsg)` — the first
+/// body of the two-body ring (Stage 2a).
+///
+/// Three phases on the reduced `(Cpu, Bus)` carrier:
+///   1. `fetch ⊗ id_Bus`
+///   2. `decode_execute ⊗ id_Bus`  (non-MEXCH only)
+///   3. `emit_on_cpu_bus`
+///
+/// No MemState lines exist in this iso's netlist.
+pub fn cpu_pre(rom: &[u16]) -> Iso {
+    let bus_id = Iso::Id(crate::types::bus_state_ty());
+    let f = fetch(rom);
+    let phases = vec![
+        Iso::times(f, bus_id.clone()),                     // fetch ⊗ id_Bus
+        Iso::times(decoder::decode_execute(), bus_id),     // decode_execute ⊗ id_Bus
+        decoder::emit_on_cpu_bus(),                        // emit on (Cpu,Bus)
+    ];
+    seq_balanced(phases)
+}
+
+/// `cpu_post(rom) : (CpuState, BusMsg) <-> (CpuState, BusMsg)` — the third
+/// body of the two-body ring (Stage 2a).
+///
+/// Four phases on the reduced `(Cpu, Bus)` carrier:
+///   1. `sym(emit_on_cpu_bus)`  = absorb on (Cpu,Bus)
+///   2. `unfetch ⊗ id_Bus`
+///   3. `pc_add_br ⊗ id_Bus`
+///   4. `pc_inc ⊗ id_Bus`
+///
+/// No MemState lines exist in this iso's netlist.
+pub fn cpu_post(rom: &[u16]) -> Iso {
+    let bus_id = Iso::Id(crate::types::bus_state_ty());
+    let f = fetch(rom); // unfetch == fetch (self-inverse XOR mask)
+    let phases = vec![
+        Iso::sym(decoder::emit_on_cpu_bus()),              // absorb on (Cpu,Bus)
+        Iso::times(f, bus_id.clone()),                     // unfetch ⊗ id_Bus
+        Iso::times(pc_add_br(), bus_id.clone()),           // pc_add_br ⊗ id_Bus
+        Iso::times(pc_inc(), bus_id),                      // pc_inc ⊗ id_Bus
+    ];
+    seq_balanced(phases)
+}

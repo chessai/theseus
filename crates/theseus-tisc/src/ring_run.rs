@@ -51,8 +51,8 @@ use theseus_netlist::{
 
 use crate::step::{step, system_step};
 use crate::types::{
-    decode_system, encode_system, state_ty, system_state_ty, StateVals, COMPOSITE_BITS,
-    SYSTEM_BITS,
+    decode_system, encode_system, mem_state_ty, state_ty, system_state_ty, StateVals,
+    COMPOSITE_BITS, MEM_WORDS, NUM_BUS_FIELDS, STATE_BITS, SYSTEM_BITS, W,
 };
 
 /// A compact-balanced TISC-1 step ready for ring recirculation.
@@ -501,5 +501,290 @@ impl SystemRing {
     /// Number of ancilla lines.
     pub fn ancilla_count(&self) -> usize {
         self.ancilla_init.len()
+    }
+}
+
+// ── Two-body ring (Stage 2a) ─────────────────────────────────────
+
+// F4: named constants for bus-slice offsets — a transposed splice is
+// silent corruption otherwise.
+
+/// CPU body `(CpuState, BusMsg)` data width: 160 + 24 = 184 bits.
+pub const CPU_BODY_N_DATA: usize = STATE_BITS + NUM_BUS_FIELDS * W;
+/// Bus bits start at offset 160 in the CPU body data vector.
+pub const CPU_BUS_OFFSET: usize = STATE_BITS;
+/// Number of bus bits (24).
+pub const BUS_BITS: usize = NUM_BUS_FIELDS * W;
+
+/// Mem body `(MemState, BusMsg)` data width: 32 + 24 = 56 bits.
+pub const MEM_BODY_N_DATA: usize = MEM_WORDS * W + NUM_BUS_FIELDS * W;
+/// Bus bits start at offset 32 in the mem body data vector.
+pub const MEM_BUS_OFFSET: usize = MEM_WORDS * W;
+
+/// A two-body ring: three separate `CompactBalanced` bodies (`cpu_pre`,
+/// `mem_body`, `cpu_post`), each with its own ancilla vector, recirculated
+/// sequentially with the bus threaded across (Stage 2a).
+///
+/// Proven equal to the single-body [`SystemRing`] and to `eval(system_step)^R`.
+pub struct TwoBodyRing {
+    pre: CompactBalanced,
+    pre_ancilla: Vec<bool>,
+    pre_n_data: usize,
+
+    mem: CompactBalanced,
+    mem_ancilla: Vec<bool>,
+    mem_n_data: usize,
+
+    post: CompactBalanced,
+    post_ancilla: Vec<bool>,
+    post_n_data: usize,
+}
+
+/// Build a two-body ring from a ROM image.
+///
+/// Lowers and compact-balances `cpu_pre`, `mem_body`, and `cpu_post` as
+/// three separate bodies. Asserts data widths and input types loudly (F4).
+pub fn two_body_ring(rom: &[u16]) -> TwoBodyRing {
+    use crate::types::bus_state_ty;
+    use theseus_core::Type;
+
+    let cpu_bus_ty = Type::prod(state_ty(), bus_state_ty());
+    let mem_bus_ty = Type::prod(mem_state_ty(), bus_state_ty());
+
+    // --- cpu_pre ---
+    let iso_pre = crate::step::cpu_pre(rom);
+    let (net_pre, anc_pre) =
+        lower_iso_with_ancillas(&iso_pre).expect("cpu_pre lowers");
+    let n_data_pre = net_pre.inputs.len() - anc_pre.len();
+    assert_eq!(
+        n_data_pre, CPU_BODY_N_DATA,
+        "cpu_pre n_data ({n_data_pre}) != CPU_BODY_N_DATA ({CPU_BODY_N_DATA})"
+    );
+    assert_eq!(
+        net_pre.input_ty, cpu_bus_ty,
+        "cpu_pre input_ty mismatch: expected (CpuState, BusMsg)"
+    );
+    let compact_pre = balance_compact(&net_pre).expect("balance_compact cpu_pre");
+
+    // --- mem_body ---
+    let iso_mem = crate::decoder::mem_body();
+    let (net_mem, anc_mem) =
+        lower_iso_with_ancillas(&iso_mem).expect("mem_body lowers");
+    let n_data_mem = net_mem.inputs.len() - anc_mem.len();
+    assert_eq!(
+        n_data_mem, MEM_BODY_N_DATA,
+        "mem_body n_data ({n_data_mem}) != MEM_BODY_N_DATA ({MEM_BODY_N_DATA})"
+    );
+    assert_eq!(
+        net_mem.input_ty, mem_bus_ty,
+        "mem_body input_ty mismatch: expected (MemState, BusMsg)"
+    );
+    let compact_mem = balance_compact(&net_mem).expect("balance_compact mem_body");
+
+    // --- cpu_post ---
+    let iso_post = crate::step::cpu_post(rom);
+    let (net_post, anc_post) =
+        lower_iso_with_ancillas(&iso_post).expect("cpu_post lowers");
+    let n_data_post = net_post.inputs.len() - anc_post.len();
+    assert_eq!(
+        n_data_post, CPU_BODY_N_DATA,
+        "cpu_post n_data ({n_data_post}) != CPU_BODY_N_DATA ({CPU_BODY_N_DATA})"
+    );
+    assert_eq!(
+        net_post.input_ty, cpu_bus_ty,
+        "cpu_post input_ty mismatch: expected (CpuState, BusMsg)"
+    );
+    let compact_post = balance_compact(&net_post).expect("balance_compact cpu_post");
+
+    TwoBodyRing {
+        pre: compact_pre,
+        pre_ancilla: anc_pre,
+        pre_n_data: n_data_pre,
+        mem: compact_mem,
+        mem_ancilla: anc_mem,
+        mem_n_data: n_data_mem,
+        post: compact_post,
+        post_ancilla: anc_post,
+        post_n_data: n_data_post,
+    }
+}
+
+impl TwoBodyRing {
+    /// Recirculate `revolutions` times starting from `start`, with each
+    /// body's ancilla outputs fed back independently (closed ring).
+    ///
+    /// Per revolution:
+    ///   (a) sim cpu_pre on Cpu[0..160)+Bus[160..184) with Bus=0
+    ///   (b) relocate 24 Bus bits to offset 32, sim mem_body on Mem[0..32)+Bus[32..56)
+    ///   (c) relocate Bus back to offset 160, sim cpu_post on Cpu+Bus
+    ///   (d) F3: assert the 24 Bus output bits of cpu_post are ALL ZERO
+    pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
+        let cpu_ty = state_ty();
+
+        // Encode CPU and Mem bits separately
+        let mut cpu_bits = bits_of(&start.encode(), &cpu_ty).expect("cpu bits_of");
+        let mut mem_bits = Self::encode_mem_bits(start);
+
+        let mut pre_anc = self.pre_ancilla.clone();
+        let mut mem_anc = self.mem_ancilla.clone();
+        let mut post_anc = self.post_ancilla.clone();
+
+        for _ in 0..revolutions {
+            // (a) cpu_pre: Cpu[0..160) + Bus[160..184)=0
+            let mut pre_input = cpu_bits.clone();
+            pre_input.extend(std::iter::repeat(false).take(BUS_BITS)); // Bus = 0
+            pre_input.extend_from_slice(&pre_anc);
+            let pre_sim = self.pre.simulate(&pre_input).expect("simulate cpu_pre");
+            cpu_bits = pre_sim.outputs[..STATE_BITS].to_vec();
+            let bus_from_pre =
+                pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
+            pre_anc = pre_sim.outputs[self.pre_n_data..].to_vec();
+
+            // (b) mem_body: Mem[0..32) + Bus[32..56) (relocate bus)
+            let mut mem_input = mem_bits.clone();
+            mem_input.extend_from_slice(&bus_from_pre);
+            mem_input.extend_from_slice(&mem_anc);
+            let mem_sim = self.mem.simulate(&mem_input).expect("simulate mem_body");
+            mem_bits = mem_sim.outputs[..MEM_WORDS * W].to_vec();
+            let bus_from_mem =
+                mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
+            mem_anc = mem_sim.outputs[self.mem_n_data..].to_vec();
+
+            // (c) cpu_post: Cpu[0..160) + Bus[160..184) (relocate bus back)
+            let mut post_input = cpu_bits.clone();
+            post_input.extend_from_slice(&bus_from_mem);
+            post_input.extend_from_slice(&post_anc);
+            let post_sim = self.post.simulate(&post_input).expect("simulate cpu_post");
+            cpu_bits = post_sim.outputs[..STATE_BITS].to_vec();
+            post_anc = post_sim.outputs[self.post_n_data..].to_vec();
+
+            // (d) F3: assert bus quiescence — the §3 lemma made runtime
+            let bus_out =
+                &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
+            assert!(
+                bus_out.iter().all(|&b| !b),
+                "TwoBodyRing: bus NOT quiescent after cpu_post — \
+                 §3 quiescence lemma violated (nonzero bus bits: {:?})",
+                bus_out
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &b)| b)
+                    .map(|(i, _)| i)
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // Decode back to StateVals
+        let cpu_val =
+            value_from_bits(&cpu_ty, &cpu_bits).expect("cpu value_from_bits");
+        let mut result = StateVals::decode(&cpu_val);
+        Self::decode_mem_bits(&mem_bits, &mut result);
+        result
+    }
+
+    /// Recirculate with each body's ring OPEN: each revolution re-supplies
+    /// fresh ancilla inits per body. Equals [`Self::run`] when each body
+    /// is ancilla-clean.
+    pub fn run_open(&self, start: &StateVals, revolutions: u32) -> StateVals {
+        let cpu_ty = state_ty();
+
+        let mut cpu_bits = bits_of(&start.encode(), &cpu_ty).expect("cpu bits_of");
+        let mut mem_bits = Self::encode_mem_bits(start);
+
+        for _ in 0..revolutions {
+            // (a) cpu_pre
+            let mut pre_input = cpu_bits.clone();
+            pre_input.extend(std::iter::repeat(false).take(BUS_BITS));
+            pre_input.extend_from_slice(&self.pre_ancilla);
+            let pre_sim = self.pre.simulate(&pre_input).expect("simulate cpu_pre");
+            cpu_bits = pre_sim.outputs[..STATE_BITS].to_vec();
+            let bus_from_pre =
+                pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
+
+            // (b) mem_body
+            let mut mem_input = mem_bits.clone();
+            mem_input.extend_from_slice(&bus_from_pre);
+            mem_input.extend_from_slice(&self.mem_ancilla);
+            let mem_sim = self.mem.simulate(&mem_input).expect("simulate mem_body");
+            mem_bits = mem_sim.outputs[..MEM_WORDS * W].to_vec();
+            let bus_from_mem =
+                mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
+
+            // (c) cpu_post
+            let mut post_input = cpu_bits.clone();
+            post_input.extend_from_slice(&bus_from_mem);
+            post_input.extend_from_slice(&self.post_ancilla);
+            let post_sim = self.post.simulate(&post_input).expect("simulate cpu_post");
+            cpu_bits = post_sim.outputs[..STATE_BITS].to_vec();
+
+            // (d) F3: assert bus quiescence
+            let bus_out =
+                &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
+            assert!(
+                bus_out.iter().all(|&b| !b),
+                "TwoBodyRing (open): bus NOT quiescent after cpu_post"
+            );
+        }
+
+        let cpu_val =
+            value_from_bits(&cpu_ty, &cpu_bits).expect("cpu value_from_bits");
+        let mut result = StateVals::decode(&cpu_val);
+        Self::decode_mem_bits(&mem_bits, &mut result);
+        result
+    }
+
+    /// The cpu_pre compact-balanced body.
+    pub fn pre(&self) -> &CompactBalanced {
+        &self.pre
+    }
+
+    /// The mem_body compact-balanced body.
+    pub fn mem(&self) -> &CompactBalanced {
+        &self.mem
+    }
+
+    /// The cpu_post compact-balanced body.
+    pub fn post(&self) -> &CompactBalanced {
+        &self.post
+    }
+
+    /// Number of ancilla lines in cpu_pre.
+    pub fn pre_ancilla_count(&self) -> usize {
+        self.pre_ancilla.len()
+    }
+
+    /// Number of ancilla lines in mem_body.
+    pub fn mem_ancilla_count(&self) -> usize {
+        self.mem_ancilla.len()
+    }
+
+    /// Number of ancilla lines in cpu_post.
+    pub fn post_ancilla_count(&self) -> usize {
+        self.post_ancilla.len()
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────
+
+    fn encode_mem_bits(s: &StateVals) -> Vec<bool> {
+        let mut bits = Vec::with_capacity(MEM_WORDS * W);
+        for &m in &s.mem {
+            for i in 0..W {
+                bits.push((m >> i) & 1 == 1);
+            }
+        }
+        bits
+    }
+
+    fn decode_mem_bits(mem_bits: &[bool], s: &mut StateVals) {
+        assert_eq!(mem_bits.len(), MEM_WORDS * W);
+        for (i, m) in s.mem.iter_mut().enumerate() {
+            let mut v = 0u8;
+            for b in 0..W {
+                if mem_bits[i * W + b] {
+                    v |= 1 << b;
+                }
+            }
+            *m = v;
+        }
     }
 }

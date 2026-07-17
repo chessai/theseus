@@ -983,7 +983,10 @@ pub fn emit() -> Iso {
 ///
 /// pred ; selr ; [enable^=p ; addr^=IR.rt(ceil(log2 N) bits) ;
 /// gated_swap(reg[0] ↔ BusMsg.word)] ; sym(selr) ; sym(pred)
-fn emit_on_cpu_bus() -> Iso {
+///
+/// Public for Stage 2a: `cpu_pre`/`cpu_post` compose this directly on the
+/// `(Cpu, Bus)` carrier without the `view_cpu_bus` lift.
+pub fn emit_on_cpu_bus() -> Iso {
     let bus_ty = crate::types::bus_state_ty();
     let bus_id = Iso::Id(bus_ty);
     let n_cpu = NUM_CPU_FIELDS;
@@ -1051,23 +1054,20 @@ pub fn absorb() -> Iso {
     Iso::sym(emit())
 }
 
-/// `mem_phase : system_state_ty <-> system_state_ty` — the second phase
-/// of the MEXCH 3-cycle (Stage 1b-A).
+/// `mem_body : (MemState, BusMsg) <-> (MemState, BusMsg)` — the standalone
+/// memory exchange sub-iso (Stage 2a).
 ///
-/// Built over `view_mem_bus`: routes `MemState[addr]→head` keyed on
-/// `BusMsg.addr`, then gated-swaps `BusMsg.word ↔ MemState[0]` on
-/// `BusMsg.enable`, then un-routes. Controls = BusMsg, targets = Mem+Bus
-/// → zero CpuState fields (the line-audit witness).
-pub fn mem_phase() -> Iso {
-    let cpu_ty = crate::types::state_ty();
+/// Routes `MemState[addr]→head` keyed on `BusMsg.addr`, gated-swaps
+/// `BusMsg.word ↔ MemState[0]` on `BusMsg.enable`, then un-routes.
+/// Extracted from `mem_phase` so it can be lowered as a separate body
+/// in the two-body ring; `mem_phase` is re-expressed as
+/// `view_mem_bus ; (Id(Cpu) × mem_body()) ; sym(view_mem_bus)`.
+pub fn mem_body() -> Iso {
     let mem_ty = crate::types::mem_state_ty();
     let bus_ty = crate::types::bus_state_ty();
 
-    // view: ((Cpu,Mem),Bus) -> (Cpu, (Mem,Bus))
-    let view = view_mem_bus();
-
     // swap inside (Mem,Bus) to get (Bus,Mem) for 2-factor helpers
-    let swap_mb = Iso::SwapProd(mem_ty.clone(), bus_ty.clone());
+    let swap_mb = Iso::SwapProd(mem_ty, bus_ty);
 
     // select_mem_on_bus on (Bus, Mem)
     let select = select_mem_on_bus_n(NUM_BUS_FIELDS, MEM_WORDS);
@@ -1086,12 +1086,25 @@ pub fn mem_phase() -> Iso {
     let mem_sub_bm = Iso::seq(select.clone(), Iso::seq(gsw, Iso::sym(select)));
 
     // mem_sub on (Mem, Bus): swap ; mem_sub_bm ; swap^{-1}
-    let mem_sub = Iso::seq(
+    Iso::seq(
         swap_mb.clone(),
         Iso::seq(mem_sub_bm, Iso::sym(swap_mb)),
-    );
+    )
+}
 
-    // Full: view ; (Id(Cpu) × mem_sub) ; sym(view)
-    let lifted = Iso::times(Iso::Id(cpu_ty), mem_sub);
+/// `mem_phase : system_state_ty <-> system_state_ty` — the second phase
+/// of the MEXCH 3-cycle (Stage 1b-A).
+///
+/// Built over `view_mem_bus`: routes `MemState[addr]→head` keyed on
+/// `BusMsg.addr`, then gated-swaps `BusMsg.word ↔ MemState[0]` on
+/// `BusMsg.enable`, then un-routes. Controls = BusMsg, targets = Mem+Bus
+/// → zero CpuState fields (the line-audit witness).
+///
+/// Re-expressed as `view_mem_bus ; (Id(Cpu) × mem_body()) ; sym(view_mem_bus)`
+/// (Stage 2a refactor — bit-identical to the original).
+pub fn mem_phase() -> Iso {
+    let cpu_ty = crate::types::state_ty();
+    let view = view_mem_bus();
+    let lifted = Iso::times(Iso::Id(cpu_ty), mem_body());
     Iso::seq(view.clone(), Iso::seq(lifted, Iso::sym(view)))
 }
