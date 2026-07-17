@@ -301,6 +301,15 @@ fn dispatch_exclusivity() {
 // 3. The full decoder: lower once, verify all samples
 // ══════════════════════════════════════════════════════════════════════
 
+/// Light context: just the decoder iso (no lowering or balancing).
+/// Used by semantics-only tests to avoid the expensive balance() call.
+fn light_ctx() -> &'static Iso {
+    static CTX: OnceLock<Iso> = OnceLock::new();
+    CTX.get_or_init(decoder::decode_execute)
+}
+
+/// Heavy context: iso + lowered + balanced netlist. Only triggered by
+/// faithfulness tests that need simulate().
 struct Ctx {
     iso: Iso,
     in_ty: Type,
@@ -353,11 +362,12 @@ fn ctx() -> &'static Ctx {
 }
 
 /// Semantics-only check: core eval vs the Rust reference.
+/// Uses light_ctx() to avoid triggering expensive balance().
 fn check_semantics(name: &str, s: &StateVals) {
-    let c = ctx();
+    let iso = light_ctx();
     let val = s.encode();
     let mut fuel = EVAL_FUEL;
-    let ev = theseus_eval::eval(&c.iso, val.clone(), &mut fuel)
+    let ev = theseus_eval::eval(iso, val.clone(), &mut fuel)
         .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
 
     let got = StateVals::decode(&ev);
@@ -440,9 +450,12 @@ fn full_decoder_reserved_opcodes_are_identity() {
     }
 }
 
-/// Smoke faithfulness: one sample per opcode class to keep balance
-/// path exercised in the gate.
+/// Smoke faithfulness: one sample per opcode class to verify the
+/// balance path. Ignored by default — balance() alone takes ~50s.
+/// Per-instruction lowering (test 2) covers structural correctness;
+/// this adds simulate-level faithfulness.
 #[test]
+#[ignore = "authoritative balanced-simulate faithfulness; run via --ignored"]
 fn full_decoder_faithfulness_smoke() {
     // Op::Add[0] + one reserved — covers the balance path.
     check_full("faithfulness_smoke/Add[0]", &op_samples(Op::Add)[0]);

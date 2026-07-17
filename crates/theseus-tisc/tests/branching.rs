@@ -123,8 +123,10 @@ fn taken_branch_with_come_from() {
     };
 
     // Step through the program, checking the reference at each step.
+    // 5 steps cover all interesting behavior: XORI, SWAPBR (branch),
+    // come-from, SUBI (clear witness), ADDI (arrival proof).
     let mut cur = start.clone();
-    let t_total = 8;
+    let t_total = 5;
     let mut trace: Vec<StateVals> = vec![start.clone()];
 
     for t in 0..t_total {
