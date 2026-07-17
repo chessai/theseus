@@ -93,7 +93,7 @@ struct Ctx {
 fn ctx() -> &'static Ctx {
     static CTX: OnceLock<Ctx> = OnceLock::new();
     CTX.get_or_init(|| {
-        let rom = assemble(&fib_prog());
+        let rom = assemble(&fib_prog()).expect("valid program");
         let ring = step_ring(&rom);
         let iso = step(&rom);
         Ctx { ring, iso, rom }

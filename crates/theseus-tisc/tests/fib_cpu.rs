@@ -27,7 +27,7 @@
 //!      — the CPU is reversible end to end.
 
 use theseus_core::Iso;
-use theseus_tisc::asm::{assemble, decode, encode, Instr};
+use theseus_tisc::asm::{assemble, decode, encode, AsmError, Instr};
 use theseus_tisc::step::step;
 use theseus_tisc::types::{MEM_WORDS, StateVals};
 
@@ -119,13 +119,13 @@ fn fib_pairs() -> Vec<(u8, u8)> {
 fn assembler_encode_roundtrip() {
     // Exact bit patterns (spec §3).
     // ADD r1, r2: 1 | 0000 | 001 | 010 | 000 | 00 = 0x8140.
-    assert_eq!(encode(Instr::Add { rd: 1, rs: 2 }), 0x8140);
+    assert_eq!(encode(Instr::Add { rd: 1, rs: 2 }).unwrap(), 0x8140);
     // EXCH r1, r2: 1 | 0011 | 001 | 010 | 000 | 00 = 0x9940.
-    assert_eq!(encode(Instr::Exch { rd: 1, rs: 2 }), 0x9940);
+    assert_eq!(encode(Instr::Exch { rd: 1, rs: 2 }).unwrap(), 0x9940);
     // ADDI r3, 0x5A: 0 | 000 | 011 | 0101_1010 | 0 = 0x06B4.
-    assert_eq!(encode(Instr::Addi { rd: 3, imm: 0x5A }), 0x06B4);
+    assert_eq!(encode(Instr::Addi { rd: 3, imm: 0x5A }).unwrap(), 0x06B4);
     // SWAPBR r0: 1 | 1000 | 000 | 000 | 000 | 00 = 0xC000.
-    assert_eq!(encode(Instr::Swapbr { rd: 0 }), 0xC000);
+    assert_eq!(encode(Instr::Swapbr { rd: 0 }).unwrap(), 0xC000);
 
     // Round-trip across the whole instruction set.
     let samples = [
@@ -145,7 +145,7 @@ fn assembler_encode_roundtrip() {
         Instr::Rotri { rd: 4, imm: 7 },
     ];
     for ins in samples {
-        let word = encode(ins);
+        let word = encode(ins).unwrap();
         assert_eq!(decode(word), Some(ins), "round-trip failed for {ins:?}");
     }
 
@@ -159,23 +159,27 @@ fn assembler_encode_roundtrip() {
 
     // assemble = per-word encode.
     let prog = fib_prog();
-    let rom = assemble(&prog);
+    let rom = assemble(&prog).expect("valid program");
     assert_eq!(rom.len(), 2 * N);
     for (p, &ins) in prog.iter().enumerate() {
-        assert_eq!(rom[p], encode(ins));
+        assert_eq!(rom[p], encode(ins).unwrap());
     }
 }
 
 #[test]
-#[should_panic(expected = "aliased")]
 fn assembler_rejects_aliased_add() {
-    let _ = encode(Instr::Add { rd: 3, rs: 3 });
+    assert!(matches!(
+        encode(Instr::Add { rd: 3, rs: 3 }),
+        Err(AsmError::AliasedOperands { mnemonic: "ADD", rd: 3, rs: 3 })
+    ));
 }
 
 #[test]
-#[should_panic(expected = "decoder-reserved")]
 fn assembler_rejects_xchg_s0() {
-    let _ = encode(Instr::Xchg { rd: 3, sx: 0 });
+    assert!(matches!(
+        encode(Instr::Xchg { rd: 3, sx: 0 }),
+        Err(AsmError::XchgScratchReserved { sx: 0 })
+    ));
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -185,7 +189,7 @@ fn assembler_rejects_xchg_s0() {
 #[test]
 #[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn fib_forward() {
-    let rom = assemble(&fib_prog());
+    let rom = assemble(&fib_prog()).expect("valid program");
     let iso = step(&rom);
     let pairs = fib_pairs();
 
@@ -222,7 +226,7 @@ fn fib_forward() {
 #[test]
 #[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn fib_step_adjoint_identity() {
-    let rom = assemble(&fib_prog());
+    let rom = assemble(&fib_prog()).expect("valid program");
     let iso = step(&rom);
     let back = Iso::sym(iso.clone());
     let s = seed();
@@ -235,7 +239,7 @@ fn fib_step_adjoint_identity() {
 #[test]
 #[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn fib_forward_and_backward() {
-    let rom = assemble(&fib_prog());
+    let rom = assemble(&fib_prog()).expect("valid program");
     let start = seed();
     let t = 2 * N;
 

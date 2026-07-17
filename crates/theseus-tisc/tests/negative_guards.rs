@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use theseus_core::prim::PrimDef;
 use theseus_core::{Iso, Type, Value};
-use theseus_tisc::asm::decode;
+use theseus_tisc::asm::{decode, encode, assemble, AsmError, Instr};
 use theseus_tisc::compile::{compile, CompileError};
 
 // ── asm::decode: reserved opcodes → None ────────────────────────────
@@ -148,4 +148,147 @@ fn at_fields_n_out_of_range() {
     let op = Iso::Id(theseus_tisc::addressing::fields(1));
     // n_fields=4, so index 4 is out of range (valid: 0..3).
     theseus_tisc::addressing::at_fields_n(op, &[4], 4);
+}
+
+// ── asm::encode: AsmError negative tests ───────────────────────────
+
+#[test]
+fn encode_reg_out_of_range() {
+    // rd=9 is out of range (NUM_REGS=8, valid: 0..7).
+    assert!(matches!(
+        encode(Instr::Add { rd: 9, rs: 0 }),
+        Err(AsmError::RegOutOfRange { which: "rd", val: 9 })
+    ));
+    // rs=8 is out of range.
+    assert!(matches!(
+        encode(Instr::Sub { rd: 0, rs: 8 }),
+        Err(AsmError::RegOutOfRange { which: "rs", val: 8 })
+    ));
+    // I-format: rd out of range.
+    assert!(matches!(
+        encode(Instr::Addi { rd: 10, imm: 0 }),
+        Err(AsmError::RegOutOfRange { which: "rd", val: 10 })
+    ));
+}
+
+#[test]
+fn encode_aliased_operands() {
+    // All two-operand R-format instructions reject rd == rs.
+    assert!(matches!(
+        encode(Instr::Add { rd: 2, rs: 2 }),
+        Err(AsmError::AliasedOperands { mnemonic: "ADD", rd: 2, rs: 2 })
+    ));
+    assert!(matches!(
+        encode(Instr::Sub { rd: 5, rs: 5 }),
+        Err(AsmError::AliasedOperands { mnemonic: "SUB", .. })
+    ));
+    assert!(matches!(
+        encode(Instr::Xor { rd: 0, rs: 0 }),
+        Err(AsmError::AliasedOperands { mnemonic: "XOR", .. })
+    ));
+    assert!(matches!(
+        encode(Instr::Exch { rd: 1, rs: 1 }),
+        Err(AsmError::AliasedOperands { mnemonic: "EXCH", .. })
+    ));
+    assert!(matches!(
+        encode(Instr::Rotl { rd: 3, rs: 3 }),
+        Err(AsmError::AliasedOperands { mnemonic: "ROTL", .. })
+    ));
+    assert!(matches!(
+        encode(Instr::Rotr { rd: 7, rs: 7 }),
+        Err(AsmError::AliasedOperands { mnemonic: "ROTR", .. })
+    ));
+}
+
+#[test]
+fn encode_cswap_not_distinct() {
+    // rd == rs
+    assert!(matches!(
+        encode(Instr::Cswap { rd: 1, rs: 1, rt: 2 }),
+        Err(AsmError::CswapNotDistinct { rd: 1, rs: 1, rt: 2 })
+    ));
+    // rd == rt
+    assert!(matches!(
+        encode(Instr::Cswap { rd: 3, rs: 0, rt: 3 }),
+        Err(AsmError::CswapNotDistinct { rd: 3, rs: 0, rt: 3 })
+    ));
+    // rs == rt
+    assert!(matches!(
+        encode(Instr::Cswap { rd: 0, rs: 4, rt: 4 }),
+        Err(AsmError::CswapNotDistinct { rd: 0, rs: 4, rt: 4 })
+    ));
+}
+
+#[test]
+fn encode_xchg_scratch_out_of_range() {
+    // sx=9 is out of range (NUM_SCRATCH=8).
+    assert!(matches!(
+        encode(Instr::Xchg { rd: 0, sx: 9 }),
+        Err(AsmError::XchgScratchOutOfRange { sx: 9 })
+    ));
+}
+
+#[test]
+fn encode_xchg_scratch_reserved() {
+    // s0 and s1 are decoder-reserved.
+    assert!(matches!(
+        encode(Instr::Xchg { rd: 0, sx: 0 }),
+        Err(AsmError::XchgScratchReserved { sx: 0 })
+    ));
+    assert!(matches!(
+        encode(Instr::Xchg { rd: 0, sx: 1 }),
+        Err(AsmError::XchgScratchReserved { sx: 1 })
+    ));
+}
+
+#[test]
+fn encode_mexch_addr_out_of_range() {
+    // MEM_WORDS=4, so addr=200 is out of range.
+    assert!(matches!(
+        encode(Instr::Mexch { rd: 0, addr: 200 }),
+        Err(AsmError::MexchAddrOutOfRange { addr: 200 })
+    ));
+}
+
+#[test]
+fn encode_swapbr_reg_out_of_range() {
+    assert!(matches!(
+        encode(Instr::Swapbr { rd: 9 }),
+        Err(AsmError::SwapbrRegOutOfRange { rd: 9 })
+    ));
+}
+
+#[test]
+fn assemble_program_too_long() {
+    let prog = vec![Instr::Addi { rd: 0, imm: 0 }; 257];
+    assert!(matches!(
+        assemble(&prog),
+        Err(AsmError::ProgramTooLong { len: 257 })
+    ));
+}
+
+// ── decode_* guard tests: non-Pair panics ──────────────────────────
+
+#[test]
+#[should_panic(expected = "expected Pair")]
+fn decode_composite_rejects_non_pair() {
+    use theseus_tisc::types::decode_composite;
+    let non_pair = Value::Unit;
+    decode_composite(&non_pair);
+}
+
+#[test]
+#[should_panic(expected = "expected Pair")]
+fn decode_system_rejects_non_pair() {
+    use theseus_tisc::types::decode_system;
+    let non_pair = Value::Unit;
+    decode_system(&non_pair);
+}
+
+#[test]
+#[should_panic(expected = "expected Pair")]
+fn decode_bus_rejects_non_pair() {
+    use theseus_tisc::types::decode_bus;
+    let non_pair = Value::Unit;
+    decode_bus(&non_pair);
 }

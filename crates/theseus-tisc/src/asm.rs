@@ -26,7 +26,63 @@
 //! [`decode`] is the inverse (for round-trip checks and listings);
 //! reserved opcodes and set pad bits decode to `None`.
 
+use std::fmt;
+
 use crate::types::{MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+
+/// Assembler error: an instruction or program violates a legality rule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AsmError {
+    /// A register index is out of range (must be < NUM_REGS).
+    RegOutOfRange { which: &'static str, val: u8 },
+    /// A two-operand instruction has `rd == rs` (non-injective datapath).
+    AliasedOperands { mnemonic: &'static str, rd: u8, rs: u8 },
+    /// CSWAP operands are not pairwise distinct.
+    CswapNotDistinct { rd: u8, rs: u8, rt: u8 },
+    /// XCHG scratch index out of range (must be < NUM_SCRATCH).
+    XchgScratchOutOfRange { sx: u8 },
+    /// XCHG names decoder-reserved scratch s0 or s1.
+    XchgScratchReserved { sx: u8 },
+    /// MEXCH memory address out of range (must be < MEM_WORDS).
+    MexchAddrOutOfRange { addr: u8 },
+    /// SWAPBR register index out of range (must be < NUM_REGS).
+    SwapbrRegOutOfRange { rd: u8 },
+    /// Program exceeds the 8-bit PC address space (> 256 instructions).
+    ProgramTooLong { len: usize },
+}
+
+impl fmt::Display for AsmError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AsmError::RegOutOfRange { which, val } => {
+                write!(f, "register index out of range: {which}={val}")
+            }
+            AsmError::AliasedOperands { mnemonic, rd, rs } => {
+                write!(f, "{mnemonic} r{rd}, r{rs}: aliased operands are illegal (non-injective datapath)")
+            }
+            AsmError::CswapNotDistinct { rd, rs, rt } => {
+                write!(f, "CSWAP r{rd}, r{rs}, r{rt}: operands must be pairwise distinct")
+            }
+            AsmError::XchgScratchOutOfRange { sx } => {
+                write!(f, "XCHG scratch index out of range: s{sx}")
+            }
+            AsmError::XchgScratchReserved { sx } => {
+                write!(f, "XCHG s{sx}: s0/s1 are decoder-reserved (operand/predicate scratch)")
+            }
+            AsmError::MexchAddrOutOfRange { addr } => {
+                write!(f, "MEXCH memory address out of range: m{addr} (MEM_WORDS={MEM_WORDS})")
+            }
+            AsmError::SwapbrRegOutOfRange { rd } => {
+                write!(f, "SWAPBR r{rd}: register index out of range")
+            }
+            AsmError::ProgramTooLong { len } => {
+                write!(f, "program exceeds the 8-bit PC address space: {len} > 256")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AsmError {}
 
 /// One TISC-1 instruction with typed operands.
 ///
@@ -70,89 +126,89 @@ pub enum Instr {
     Rotri { rd: u8, imm: u8 },
 }
 
-fn r_word(opcode: u16, rd: u8, rs: u8, rt: u8) -> u16 {
-    assert!(
-        (rd as usize) < NUM_REGS && (rs as usize) < NUM_REGS && (rt as usize) < NUM_REGS,
-        "register index out of range: rd={rd} rs={rs} rt={rt}"
-    );
-    (1 << 15) | (opcode << 11) | (u16::from(rd) << 8) | (u16::from(rs) << 5) | (u16::from(rt) << 2)
+fn r_word(opcode: u16, rd: u8, rs: u8, rt: u8) -> Result<u16, AsmError> {
+    if (rd as usize) >= NUM_REGS {
+        return Err(AsmError::RegOutOfRange { which: "rd", val: rd });
+    }
+    if (rs as usize) >= NUM_REGS {
+        return Err(AsmError::RegOutOfRange { which: "rs", val: rs });
+    }
+    if (rt as usize) >= NUM_REGS {
+        return Err(AsmError::RegOutOfRange { which: "rt", val: rt });
+    }
+    Ok((1 << 15) | (opcode << 11) | (u16::from(rd) << 8) | (u16::from(rs) << 5) | (u16::from(rt) << 2))
 }
 
-fn i_word(opc: u16, rd: u8, imm: u8) -> u16 {
-    assert!((rd as usize) < NUM_REGS, "register index out of range: rd={rd}");
-    (opc << 12) | (u16::from(rd) << 9) | (u16::from(imm) << 1)
+fn i_word(opc: u16, rd: u8, imm: u8) -> Result<u16, AsmError> {
+    if (rd as usize) >= NUM_REGS {
+        return Err(AsmError::RegOutOfRange { which: "rd", val: rd });
+    }
+    Ok((opc << 12) | (u16::from(rd) << 9) | (u16::from(imm) << 1))
 }
 
-fn check_distinct(name: &str, rd: u8, rs: u8) {
-    assert!(
-        rd != rs,
-        "{name} r{rd}, r{rs}: aliased operands are illegal (non-injective datapath)"
-    );
+fn check_distinct(name: &'static str, rd: u8, rs: u8) -> Result<(), AsmError> {
+    if rd == rs {
+        return Err(AsmError::AliasedOperands { mnemonic: name, rd, rs });
+    }
+    Ok(())
 }
 
 /// Encode one instruction as its 16-bit ROM word (spec §3).
 ///
-/// # Panics
-///
-/// On out-of-range operands, aliased register operands, or XCHG naming
-/// the decoder-reserved scratch words s0/s1 — all programs the datapath
-/// isos do not implement faithfully.
-pub fn encode(instr: Instr) -> u16 {
+/// Returns `Err(AsmError)` on out-of-range operands, aliased register
+/// operands, or XCHG naming the decoder-reserved scratch words s0/s1 —
+/// all programs the datapath isos do not implement faithfully.
+pub fn encode(instr: Instr) -> Result<u16, AsmError> {
     match instr {
         Instr::Add { rd, rs } => {
-            check_distinct("ADD", rd, rs);
+            check_distinct("ADD", rd, rs)?;
             r_word(0b0000, rd, rs, 0)
         }
         Instr::Sub { rd, rs } => {
-            check_distinct("SUB", rd, rs);
+            check_distinct("SUB", rd, rs)?;
             r_word(0b0001, rd, rs, 0)
         }
         Instr::Xor { rd, rs } => {
-            check_distinct("XOR", rd, rs);
+            check_distinct("XOR", rd, rs)?;
             r_word(0b0010, rd, rs, 0)
         }
         Instr::Exch { rd, rs } => {
-            check_distinct("EXCH", rd, rs);
+            check_distinct("EXCH", rd, rs)?;
             r_word(0b0011, rd, rs, 0)
         }
         Instr::Rotl { rd, rs } => {
-            check_distinct("ROTL", rd, rs);
+            check_distinct("ROTL", rd, rs)?;
             r_word(0b0100, rd, rs, 0)
         }
         Instr::Rotr { rd, rs } => {
-            check_distinct("ROTR", rd, rs);
+            check_distinct("ROTR", rd, rs)?;
             r_word(0b0101, rd, rs, 0)
         }
         Instr::Cswap { rd, rs, rt } => {
-            assert!(
-                rd != rs && rd != rt && rs != rt,
-                "CSWAP r{rd}, r{rs}, r{rt}: operands must be pairwise distinct"
-            );
+            if rd == rs || rd == rt || rs == rt {
+                return Err(AsmError::CswapNotDistinct { rd, rs, rt });
+            }
             r_word(0b0110, rd, rs, rt)
         }
         Instr::Xchg { rd, sx } => {
-            assert!(
-                (sx as usize) < NUM_SCRATCH,
-                "XCHG r{rd}, s{sx}: scratch index out of range"
-            );
-            assert!(
-                sx >= 2,
-                "XCHG r{rd}, s{sx}: s0/s1 are decoder-reserved (operand/predicate scratch)"
-            );
+            if (sx as usize) >= NUM_SCRATCH {
+                return Err(AsmError::XchgScratchOutOfRange { sx });
+            }
+            if sx < 2 {
+                return Err(AsmError::XchgScratchReserved { sx });
+            }
             r_word(0b0111, rd, 0, sx)
         }
         Instr::Swapbr { rd } => {
-            assert!(
-                (rd as usize) < NUM_REGS,
-                "SWAPBR r{rd}: register index out of range"
-            );
+            if (rd as usize) >= NUM_REGS {
+                return Err(AsmError::SwapbrRegOutOfRange { rd });
+            }
             r_word(0b1000, rd, 0, 0)
         }
         Instr::Mexch { rd, addr } => {
-            assert!(
-                (addr as usize) < MEM_WORDS,
-                "MEXCH r{rd}, m{addr}: memory address out of range (MEM_WORDS={MEM_WORDS})"
-            );
+            if (addr as usize) >= MEM_WORDS {
+                return Err(AsmError::MexchAddrOutOfRange { addr });
+            }
             r_word(0b1001, rd, 0, addr)
         }
         Instr::Addi { rd, imm } => i_word(0b000, rd, imm),
@@ -211,11 +267,11 @@ pub fn decode(word: u16) -> Option<Instr> {
 ///
 /// The ROM must fit the 8-bit PC address space (≤ 256 words).
 ///
-/// # Panics
-///
-/// If the program exceeds 256 instructions, or any instruction fails
-/// [`encode`]'s legality checks.
-pub fn assemble(prog: &[Instr]) -> Vec<u16> {
-    assert!(prog.len() <= 256, "program exceeds the 8-bit PC address space");
+/// Returns `Err(AsmError)` if the program exceeds 256 instructions or
+/// any instruction fails [`encode`]'s legality checks.
+pub fn assemble(prog: &[Instr]) -> Result<Vec<u16>, AsmError> {
+    if prog.len() > 256 {
+        return Err(AsmError::ProgramTooLong { len: prog.len() });
+    }
     prog.iter().map(|&i| encode(i)).collect()
 }

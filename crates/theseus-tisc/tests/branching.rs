@@ -110,7 +110,7 @@ fn taken_branch_with_come_from() {
     prog.push(Instr::Subi { rd: 0, imm: delta }); // 6: clear witness
     prog.push(Instr::Addi { rd: 1, imm: 0x42 }); // 7: prove arrival
 
-    let rom = assemble(&prog);
+    let rom = assemble(&prog).expect("valid program");
     let iso = step(&rom);
 
     let start = StateVals {
@@ -234,9 +234,9 @@ fn br_zero_fall_through_is_pc_plus_one() {
     // With BR = 0 (never set), PC += 0 + 1 = PC + 1 — bit-identical
     // to v1 behavior.
     let rom = vec![
-        theseus_tisc::asm::encode(Instr::Addi { rd: 1, imm: 5 }),
-        theseus_tisc::asm::encode(Instr::Add { rd: 2, rs: 1 }),
-        theseus_tisc::asm::encode(Instr::Xor { rd: 3, rs: 2 }),
+        theseus_tisc::asm::encode(Instr::Addi { rd: 1, imm: 5 }).unwrap(),
+        theseus_tisc::asm::encode(Instr::Add { rd: 2, rs: 1 }).unwrap(),
+        theseus_tisc::asm::encode(Instr::Xor { rd: 3, rs: 2 }).unwrap(),
     ];
     let iso = step(&rom);
 

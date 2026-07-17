@@ -653,7 +653,7 @@ fn assert_oracle_fast_with_bus_quiescence(name: &str, iso: &Iso) {
 
     // Build the system_step iso for the compiled ROM
     let instrs = compile(iso).unwrap();
-    let rom = theseus_tisc::asm::assemble(&instrs);
+    let rom = theseus_tisc::asm::assemble(&instrs).expect("valid program");
     let budget = instrs.len();
     let step_iso = theseus_tisc::step::system_step(&rom);
 

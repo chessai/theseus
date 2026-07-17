@@ -174,7 +174,7 @@ const SAMPLES: [(u8, u8, u8); 3] = [(0xAB, 0xCD, 0x5E), (0x00, 0x00, 0x00), (0xF
 #[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn feistel_forward() {
     let prog = feistel_prog();
-    let rom = assemble(&prog);
+    let rom = assemble(&prog).expect("valid program");
     assert_eq!(rom.len(), ROUND_LEN * ROUNDS);
     let iso = step(&rom);
 
@@ -232,7 +232,7 @@ fn feistel_forward() {
 #[test]
 #[ignore = "M-C2 L1: slow at wider State (resident-memory area cost); green pre-merge via --ignored"]
 fn feistel_forward_and_backward() {
-    let rom = assemble(&feistel_prog());
+    let rom = assemble(&feistel_prog()).expect("valid program");
     let (l0, r0, key) = SAMPLES[0];
     let start = block_state(l0, r0, key);
     let t = ROUND_LEN * ROUNDS;
@@ -282,7 +282,7 @@ fn char_db() -> &'static CharDb {
 fn feistel_step_net() -> &'static PhasedCellNetlist {
     static NET: OnceLock<PhasedCellNetlist> = OnceLock::new();
     NET.get_or_init(|| {
-        let rom = assemble(&feistel_prog());
+        let rom = assemble(&feistel_prog()).expect("valid program");
         lower_iso(&step(&rom)).expect("lower_iso step(feistel rom)")
     })
 }
