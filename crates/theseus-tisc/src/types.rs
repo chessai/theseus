@@ -35,6 +35,62 @@ pub const NUM_SCRATCH: usize = 8;
 /// (the largest N that keeps all tests green without OOM/timeout).
 pub const MEM_WORDS: usize = 4;
 
+/// Type-safe memory width — makes illegal widths unrepresentable.
+///
+/// Replaces raw `n_mem: usize` parameters validated by runtime panics.
+/// Only powers of two in {1,2,4,8} are valid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MemWidth {
+    W1,
+    W2,
+    W4,
+    W8,
+}
+
+/// The shipped memory width as a `MemWidth` (must agree with `MEM_WORDS`).
+pub const MEM_WIDTH: MemWidth = MemWidth::W4;
+
+// Static assert: MEM_WIDTH.words() == MEM_WORDS.
+// (Rust const-eval doesn't allow trait methods in const context, so we
+// use a const array-index trick that fails to compile on mismatch.)
+const _: [(); MEM_WORDS] = [(); MEM_WIDTH.words()];
+
+impl MemWidth {
+    /// Total number of memory words: 1, 2, 4, or 8.
+    pub const fn words(self) -> usize {
+        match self {
+            MemWidth::W1 => 1,
+            MemWidth::W2 => 2,
+            MemWidth::W4 => 4,
+            MemWidth::W8 => 8,
+        }
+    }
+
+    /// Number of address bits needed: 0, 1, 2, or 3.
+    pub const fn addr_bits(self) -> usize {
+        match self {
+            MemWidth::W1 => 0,
+            MemWidth::W2 => 1,
+            MemWidth::W4 => 2,
+            MemWidth::W8 => 3,
+        }
+    }
+}
+
+impl TryFrom<usize> for MemWidth {
+    type Error = String;
+
+    fn try_from(n: usize) -> Result<Self, Self::Error> {
+        match n {
+            1 => Ok(MemWidth::W1),
+            2 => Ok(MemWidth::W2),
+            4 => Ok(MemWidth::W4),
+            8 => Ok(MemWidth::W8),
+            _ => Err(format!("MemWidth: {n} not in {{1,2,4,8}}")),
+        }
+    }
+}
+
 /// Number of Word8-sized fields in CpuState:
 /// 8 regs + PC + BR + IR_lo + IR_hi + 8 scratch = 20.
 pub const NUM_CPU_FIELDS: usize = 20;

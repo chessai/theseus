@@ -74,7 +74,7 @@ use crate::plumbing::{
 };
 use crate::types::{
     flat, reg_field, scratch_field, word8, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD,
-    MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_FIELDS, W,
+    MemWidth, MEM_WIDTH, MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_FIELDS, W,
     BUS_ADDR_FIELD, BUS_ENABLE_FIELD, BUS_WORD_FIELD,
 };
 
@@ -274,14 +274,14 @@ pub fn select_scratch(sel: RegSel) -> Iso {
 ///
 /// THIS IS THE C1 TREE re-targeted onto the composite carrier (Stage 1a-B,
 /// ADR-0046 §4.5.0 Decision 3). It MUST be ancilla-clean.
-pub fn select_mem_composite_n(sel: RegSel, n_cpu: usize, n_mem: usize) -> Iso {
-    let n_bits = match n_mem {
-        1 => 0,
-        2 => 1,
-        4 => 2,
-        8 => 3,
-        _ => panic!("select_mem_composite_n: n_mem={n_mem} not in {{1,2,4,8}}"),
-    };
+pub fn select_mem_composite_n(sel: RegSel, n_cpu: usize, mem: MemWidth) -> Iso {
+    select_mem_composite_n_inner(sel, n_cpu, mem.words())
+}
+
+/// Inner helper: operates on raw word count. The recursion structure and
+/// gate construction are VERBATIM from the original `select_mem_composite_n`.
+fn select_mem_composite_n_inner(sel: RegSel, n_cpu: usize, n_mem: usize) -> Iso {
+    let n_bits = n_mem.trailing_zeros() as usize; // addr_bits for powers of two
     let mut steps = Vec::new();
     for level in (0..n_bits).rev() {
         let stride = 1usize << level;
@@ -909,17 +909,6 @@ fn cross_cnot(
 // select_mem_on_bus (Stage 1b-A, Decision 4)
 // ══════════════════════════════════════════════════════════════════════
 
-/// Number of address bits needed for `n_mem` memory words.
-fn mem_addr_bits(n_mem: usize) -> usize {
-    match n_mem {
-        1 => 0,
-        2 => 1,
-        4 => 2,
-        8 => 3,
-        _ => panic!("mem_addr_bits: n_mem={n_mem} not in {{1,2,4,8}}"),
-    }
-}
-
 /// The 1-of-N select tree over memory words, keyed on `BusMsg.addr`.
 ///
 /// Carrier: `(fields(n_bus), fields(n_mem))` = `(Bus, Mem)`.
@@ -930,8 +919,14 @@ fn mem_addr_bits(n_mem: usize) -> usize {
 /// This is the C1 tree re-keyed from IR onto BusMsg.addr (Stage 1b-A,
 /// Decision 4). Gate-level cleanliness transfers because the Fredkin
 /// control is pass-through regardless of source.
-pub fn select_mem_on_bus_n(n_bus: usize, n_mem: usize) -> Iso {
-    let n_bits = mem_addr_bits(n_mem);
+pub fn select_mem_on_bus_n(n_bus: usize, mem: MemWidth) -> Iso {
+    select_mem_on_bus_n_inner(n_bus, mem.words())
+}
+
+/// Inner helper: operates on raw word count. The recursion structure and
+/// gate construction are VERBATIM from the original `select_mem_on_bus_n`.
+fn select_mem_on_bus_n_inner(n_bus: usize, n_mem: usize) -> Iso {
+    let n_bits = n_mem.trailing_zeros() as usize; // addr_bits for powers of two
     let mut steps = Vec::new();
     for level in (0..n_bits).rev() {
         let stride = 1usize << level;
@@ -1006,7 +1001,7 @@ pub fn emit_on_cpu_bus() -> Iso {
     let enable_cnot = cross_cnot(AUX_PRED_FIELD, 0, BUS_ENABLE_FIELD, 0, n_cpu, n_bus);
 
     // 2. addr ^= IR.rt bits (ceil(log2 N) bits copied to BUS_ADDR)
-    let n_addr = mem_addr_bits(MEM_WORDS);
+    let n_addr = MEM_WIDTH.addr_bits();
     let mut addr_cnots: Vec<Iso> = Vec::new();
     for i in 0..n_addr {
         addr_cnots.push(cross_cnot(
@@ -1070,7 +1065,7 @@ pub fn mem_body() -> Iso {
     let swap_mb = Iso::SwapProd(mem_ty, bus_ty);
 
     // select_mem_on_bus on (Bus, Mem)
-    let select = select_mem_on_bus_n(NUM_BUS_FIELDS, MEM_WORDS);
+    let select = select_mem_on_bus_n(NUM_BUS_FIELDS, MEM_WIDTH);
 
     // gated_swap on (Bus, Mem): Bus.word ↔ Mem[0] gated on Bus.enable
     let gsw = cross_factor_gated_swap(

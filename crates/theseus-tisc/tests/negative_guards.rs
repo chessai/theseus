@@ -94,6 +94,45 @@ fn compile_unrecognized_prim() {
     );
 }
 
+// ── MemWidth: illegal widths rejected by TryFrom ────────────────────
+
+#[test]
+fn mem_width_try_from_rejects_illegal() {
+    use theseus_tisc::types::MemWidth;
+
+    // Illegal widths must be Err.
+    for bad in [0, 3, 5, 6, 7, 9] {
+        assert!(
+            MemWidth::try_from(bad).is_err(),
+            "MemWidth::try_from({bad}) should be Err"
+        );
+    }
+}
+
+#[test]
+fn mem_width_try_from_accepts_legal() {
+    use theseus_tisc::types::MemWidth;
+
+    assert_eq!(MemWidth::try_from(1), Ok(MemWidth::W1));
+    assert_eq!(MemWidth::try_from(2), Ok(MemWidth::W2));
+    assert_eq!(MemWidth::try_from(4), Ok(MemWidth::W4));
+    assert_eq!(MemWidth::try_from(8), Ok(MemWidth::W8));
+}
+
+#[test]
+fn mem_width_words_and_addr_bits() {
+    use theseus_tisc::types::MemWidth;
+
+    assert_eq!(MemWidth::W1.words(), 1);
+    assert_eq!(MemWidth::W1.addr_bits(), 0);
+    assert_eq!(MemWidth::W2.words(), 2);
+    assert_eq!(MemWidth::W2.addr_bits(), 1);
+    assert_eq!(MemWidth::W4.words(), 4);
+    assert_eq!(MemWidth::W4.addr_bits(), 2);
+    assert_eq!(MemWidth::W8.words(), 8);
+    assert_eq!(MemWidth::W8.addr_bits(), 3);
+}
+
 // ── addressing::at_fields_n: precondition panics ────────────────────
 
 #[test]

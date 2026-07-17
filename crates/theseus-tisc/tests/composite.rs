@@ -15,7 +15,7 @@ use theseus_tisc::compile::{compile, marshal, run_on_cpu, run_on_cpu_fast};
 use theseus_tisc::decoder;
 use theseus_tisc::types::{
     decode_bus, decode_composite, decode_system, encode_composite, encode_system,
-    MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, StateVals, W,
+    MEM_WORDS, MemWidth, NUM_BUS_FIELDS, NUM_CPU_FIELDS, StateVals, W,
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -379,7 +379,8 @@ fn c1_re_verify_at_n(n_mem: usize) {
         8 => 3,
         _ => panic!("unsupported N={n_mem}"),
     };
-    let iso = decoder::select_mem_composite_n(decoder::R_RT, NUM_CPU_FIELDS, n_mem);
+    let mem_w = MemWidth::try_from(n_mem).unwrap();
+    let iso = decoder::select_mem_composite_n(decoder::R_RT, NUM_CPU_FIELDS, mem_w);
     let samples = select_mem_samples(n_mem);
     assert!(!samples.is_empty());
     let n_anc = assert_ancilla_clean_on_samples(
@@ -991,7 +992,8 @@ fn c1_re_verify_select_mem_on_bus_at_n(n_mem: usize) {
         8 => 3,
         _ => panic!("unsupported N={n_mem}"),
     };
-    let iso = decoder::select_mem_on_bus_n(NUM_BUS_FIELDS, n_mem);
+    let mem_w = MemWidth::try_from(n_mem).unwrap();
+    let iso = decoder::select_mem_on_bus_n(NUM_BUS_FIELDS, mem_w);
     let samples = select_mem_on_bus_samples(n_mem);
     assert!(!samples.is_empty());
     let n_anc = assert_ancilla_clean_on_samples(
