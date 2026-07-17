@@ -632,7 +632,7 @@ impl TwoBodyRing {
         for _ in 0..revolutions {
             // (a) cpu_pre: Cpu[0..160) + Bus[160..184)=0
             let mut pre_input = cpu_bits.clone();
-            pre_input.extend(std::iter::repeat(false).take(BUS_BITS)); // Bus = 0
+            pre_input.extend(std::iter::repeat_n(false, BUS_BITS)); // Bus = 0
             pre_input.extend_from_slice(&pre_anc);
             let pre_sim = self.pre.simulate(&pre_input).expect("simulate cpu_pre");
             cpu_bits = pre_sim.outputs[..STATE_BITS].to_vec();
@@ -694,7 +694,7 @@ impl TwoBodyRing {
         for _ in 0..revolutions {
             // (a) cpu_pre
             let mut pre_input = cpu_bits.clone();
-            pre_input.extend(std::iter::repeat(false).take(BUS_BITS));
+            pre_input.extend(std::iter::repeat_n(false, BUS_BITS));
             pre_input.extend_from_slice(&self.pre_ancilla);
             let pre_sim = self.pre.simulate(&pre_input).expect("simulate cpu_pre");
             cpu_bits = pre_sim.outputs[..STATE_BITS].to_vec();
