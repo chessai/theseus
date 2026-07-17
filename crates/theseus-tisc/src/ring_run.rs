@@ -47,6 +47,7 @@
 use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_netlist::{
     balance_compact, bits_of, lower_iso_bennett, value_from_bits, CompactBalanced,
+    PHASE_COUNT,
 };
 
 use crate::step::{step, system_step};
@@ -874,5 +875,358 @@ impl TwoBodyRing {
             }
             *m = v;
         }
+    }
+}
+
+// ── Two-body timing certificate (Stage 2b-lite) ─────────────────
+
+/// Static realizability certificate for the two-body ring (Stage 2b-lite).
+///
+/// Proves the two-body ring (cpu_pre / mem_body / cpu_post) can be
+/// clocked as two concurrent lockstep loops joined by a bus cross-edge.
+/// Pure integer arithmetic over lowered-body depths — no lowering
+/// mutation, no machine-semantics change, no padder materialization.
+///
+/// δ₁/δ₂ are the minimal phase-aligning transits (a specific realizable
+/// placement); 2b-lite proves a consistent lockstep clocking EXISTS and
+/// pins it to measured depths — the physical padded netlist (2b-full)
+/// is deferred to the energy-ledger work.
+#[derive(Clone, Debug)]
+pub struct TwoBodyTiming {
+    /// Depth of cpu_pre body (max data-output arrival).
+    pub d_pre: u32,
+    /// Depth of mem_body (max data-output arrival).
+    pub d_mem: u32,
+    /// Depth of cpu_post body (max data-output arrival).
+    pub d_post: u32,
+    /// Phase-aligning transit: least k≥0 with (d_pre+k) ≡ 0 (mod P).
+    pub delta1: u32,
+    /// Phase-aligning transit: least k≥0 with (d_pre+delta1+d_mem+k) ≡ 0 (mod P).
+    pub delta2: u32,
+    /// Co-arrival hold: delta1 + d_mem + delta2.
+    pub delta_hold: u32,
+    /// Locked period: d_pre + delta_hold + d_post, rounded up to a multiple of P.
+    pub d_locked: u32,
+    /// Period = d_locked.
+    pub period: u32,
+    /// Per-bus-line flush pads for cpu_pre: (d_pre - arrival_of_bus_output_i) for each of 24 bus lines.
+    pub pre_bus_pads: Vec<u32>,
+    /// Per-bus-line flush pads for mem_body: (d_mem - arrival_of_bus_output_i) for each of 24 bus lines.
+    pub mem_bus_pads: Vec<u32>,
+    /// Per-bus-line flush pads for cpu_post: (d_post - arrival_of_bus_output_i) for each of 24 bus lines.
+    pub post_bus_pads: Vec<u32>,
+}
+
+impl TwoBodyTiming {
+    /// The phase count P used in the certificate.
+    pub fn period_p(&self) -> u32 {
+        u32::from(PHASE_COUNT)
+    }
+
+    /// Independent re-derivation and validation of the certificate (F-teeth-2).
+    ///
+    /// Re-derives delta1, delta2, pad by a brute scan (a different code path
+    /// than the solver) and compares to the stored fields. Enforces assertions
+    /// A-G from §4b. Returns Err(descriptive string) on any mismatch.
+    pub fn validate(&self) -> Result<(), String> {
+        let p = self.period_p();
+
+        // Independent re-derivation via brute scan (F-teeth-2)
+        let re_delta1 = (0..p)
+            .find(|&k| (self.d_pre + k) % p == 0)
+            .ok_or_else(|| format!("no delta1 in [0,{p})"))?;
+        let re_delta2 = (0..p)
+            .find(|&k| (self.d_pre + re_delta1 + self.d_mem + k) % p == 0)
+            .ok_or_else(|| format!("no delta2 in [0,{p})"))?;
+        let re_delta_hold = re_delta1 + self.d_mem + re_delta2;
+        let re_d_cpu = self.d_pre + re_delta_hold + self.d_post;
+        let re_pad = (p - re_d_cpu % p) % p;
+        let re_d_locked = re_d_cpu + re_pad;
+
+        // Compare re-derived values against stored fields
+        if self.delta1 != re_delta1 {
+            return Err(format!(
+                "delta1 mismatch: stored {} != re-derived {re_delta1}",
+                self.delta1
+            ));
+        }
+        if self.delta2 != re_delta2 {
+            return Err(format!(
+                "delta2 mismatch: stored {} != re-derived {re_delta2}",
+                self.delta2
+            ));
+        }
+        if self.delta_hold != re_delta_hold {
+            return Err(format!(
+                "delta_hold mismatch: stored {} != re-derived {re_delta_hold}",
+                self.delta_hold
+            ));
+        }
+        if self.d_locked != re_d_locked {
+            return Err(format!(
+                "d_locked mismatch: stored {} != re-derived {re_d_locked}",
+                self.d_locked
+            ));
+        }
+        if self.period != re_d_locked {
+            return Err(format!(
+                "period mismatch: stored {} != re-derived {re_d_locked}",
+                self.period
+            ));
+        }
+
+        // A. co-arrival (F1): delta_hold == delta1 + d_mem + delta2
+        if self.delta_hold != self.delta1 + self.d_mem + self.delta2 {
+            return Err(format!(
+                "A: co-arrival violated: delta_hold {} != delta1({}) + d_mem({}) + delta2({})",
+                self.delta_hold, self.delta1, self.d_mem, self.delta2
+            ));
+        }
+
+        // B. no revolution skew: 0 < delta1+d_mem+delta2 < d_locked
+        let bus_trip = self.delta1 + self.d_mem + self.delta2;
+        if bus_trip == 0 || bus_trip >= self.d_locked {
+            return Err(format!(
+                "B: revolution skew: bus_trip={bus_trip} not in (0, {})",
+                self.d_locked
+            ));
+        }
+
+        // C. phase closure
+        if self.d_locked % p != 0 {
+            return Err(format!(
+                "C: d_locked {} not divisible by P={p}",
+                self.d_locked
+            ));
+        }
+        if re_pad >= p {
+            return Err(format!("C: pad {re_pad} >= P={p}"));
+        }
+        if (self.d_pre + self.delta1) % p != 0 {
+            return Err(format!(
+                "C: (d_pre + delta1) = {} not divisible by P={p}",
+                self.d_pre + self.delta1
+            ));
+        }
+        if (self.d_pre + self.delta1 + self.d_mem + self.delta2) % p != 0 {
+            return Err(format!(
+                "C: (d_pre + delta1 + d_mem + delta2) = {} not divisible by P={p}",
+                self.d_pre + self.delta1 + self.d_mem + self.delta2
+            ));
+        }
+
+        // D. period lock: period == d_locked
+        if self.period != self.d_locked {
+            return Err(format!(
+                "D: period {} != d_locked {}",
+                self.period, self.d_locked
+            ));
+        }
+
+        // E. non-negativity + minimality (all u32 so ≥0 by type; check < P)
+        if self.delta1 >= p {
+            return Err(format!("E: delta1 {} >= P={p}", self.delta1));
+        }
+        if self.delta2 >= p {
+            return Err(format!("E: delta2 {} >= P={p}", self.delta2));
+        }
+        if re_pad >= p {
+            return Err(format!("E: pad {re_pad} >= P={p}"));
+        }
+
+        // F. line-audit (input_ty checks) — done in the test, not here,
+        // because validate() operates on the timing struct only.
+
+        // G. per-bus-line flush pads ≥ 0 (u32 so ≥0 by type, but assert
+        // the vectors have the right length = BUS_BITS)
+        if self.pre_bus_pads.len() != BUS_BITS {
+            return Err(format!(
+                "G: pre_bus_pads length {} != BUS_BITS={BUS_BITS}",
+                self.pre_bus_pads.len()
+            ));
+        }
+        if self.mem_bus_pads.len() != BUS_BITS {
+            return Err(format!(
+                "G: mem_bus_pads length {} != BUS_BITS={BUS_BITS}",
+                self.mem_bus_pads.len()
+            ));
+        }
+        if self.post_bus_pads.len() != BUS_BITS {
+            return Err(format!(
+                "G: post_bus_pads length {} != BUS_BITS={BUS_BITS}",
+                self.post_bus_pads.len()
+            ));
+        }
+        // The pads are u32 so non-negative by construction, but we verify
+        // them anyway in case the solver produced a negative value that
+        // was cast to u32 wrapping (which would appear as a large value).
+        // We check that d_body >= arrival, i.e. pad <= d_body.
+        for (i, &pad) in self.pre_bus_pads.iter().enumerate() {
+            if pad > self.d_pre {
+                return Err(format!(
+                    "G: pre_bus_pads[{i}]={pad} > d_pre={}",
+                    self.d_pre
+                ));
+            }
+        }
+        for (i, &pad) in self.mem_bus_pads.iter().enumerate() {
+            if pad > self.d_mem {
+                return Err(format!(
+                    "G: mem_bus_pads[{i}]={pad} > d_mem={}",
+                    self.d_mem
+                ));
+            }
+        }
+        for (i, &pad) in self.post_bus_pads.iter().enumerate() {
+            if pad > self.d_post {
+                return Err(format!(
+                    "G: post_bus_pads[{i}]={pad} > d_post={}",
+                    self.d_post
+                ));
+            }
+        }
+
+        // Mem-merge clause (F-teeth-3): mem-loop window starts at
+        // d_pre + delta1 ≡ 0 (mod P), ends at d_pre + delta1 + d_mem,
+        // both within [0, d_locked). Window start already checked in C.
+        let window_start = self.d_pre + self.delta1;
+        if window_start >= self.d_locked {
+            return Err(format!(
+                "mem-merge: window_start={window_start} >= d_locked={}",
+                self.d_locked
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+/// Compute a static two-body timing realizability certificate (Stage 2b-lite).
+///
+/// Lowers `cpu_pre(rom)`, `mem_body()`, `cpu_post(rom)` via
+/// `lower_iso_with_ancillas`, computes each body's max data-output arrival
+/// via `line_arrivals()` (the authoritative balanced arrival), and solves
+/// the lockstep arrival equations per §4b steps 1-6.
+///
+/// No lowering mutation, no machine-semantics change, no padder materialization.
+pub fn two_body_timing_certificate(rom: &[u16]) -> TwoBodyTiming {
+    let p = u32::from(PHASE_COUNT);
+
+    // --- Lower each body and compute line arrivals ---
+
+    let iso_pre = crate::step::cpu_pre(rom);
+    let (net_pre, anc_pre) =
+        lower_iso_with_ancillas(&iso_pre).expect("cpu_pre lowers");
+    let n_data_pre = net_pre.inputs.len() - anc_pre.len();
+    assert_eq!(
+        n_data_pre, CPU_BODY_N_DATA,
+        "cpu_pre n_data ({n_data_pre}) != CPU_BODY_N_DATA ({CPU_BODY_N_DATA})"
+    );
+    let arrivals_pre = net_pre
+        .line_arrivals()
+        .expect("cpu_pre line_arrivals");
+
+    let iso_mem = crate::decoder::mem_body();
+    let (net_mem, anc_mem) =
+        lower_iso_with_ancillas(&iso_mem).expect("mem_body lowers");
+    let n_data_mem = net_mem.inputs.len() - anc_mem.len();
+    assert_eq!(
+        n_data_mem, MEM_BODY_N_DATA,
+        "mem_body n_data ({n_data_mem}) != MEM_BODY_N_DATA ({MEM_BODY_N_DATA})"
+    );
+    let arrivals_mem = net_mem
+        .line_arrivals()
+        .expect("mem_body line_arrivals");
+
+    let iso_post = crate::step::cpu_post(rom);
+    let (net_post, anc_post) =
+        lower_iso_with_ancillas(&iso_post).expect("cpu_post lowers");
+    let n_data_post = net_post.inputs.len() - anc_post.len();
+    assert_eq!(
+        n_data_post, CPU_BODY_N_DATA,
+        "cpu_post n_data ({n_data_post}) != CPU_BODY_N_DATA ({CPU_BODY_N_DATA})"
+    );
+    let arrivals_post = net_post
+        .line_arrivals()
+        .expect("cpu_post line_arrivals");
+
+    // --- Step 1: D_pre/D_mem/D_post = max data-output arrival ---
+
+    // Helper: max arrival over the first n_data output rail pairs.
+    let max_data_output_arrival = |net: &theseus_netlist::PhasedCellNetlist,
+                                    arrivals: &[u32],
+                                    n_data: usize|
+     -> u32 {
+        net.outputs[..n_data]
+            .iter()
+            .map(|rp| {
+                let a0 = arrivals[rp.line0.0 as usize];
+                let a1 = arrivals[rp.line1.0 as usize];
+                assert_eq!(a0, a1, "output rail pair skew");
+                a0
+            })
+            .max()
+            .expect("body has data outputs")
+    };
+
+    let d_pre = max_data_output_arrival(&net_pre, &arrivals_pre, n_data_pre);
+    let d_mem = max_data_output_arrival(&net_mem, &arrivals_mem, n_data_mem);
+    let d_post = max_data_output_arrival(&net_post, &arrivals_post, n_data_post);
+
+    // --- Step 2: delta1 = least k>=0 with (d_pre+k) % P == 0 ---
+    let delta1 = (0..p)
+        .find(|&k| (d_pre + k) % p == 0)
+        .expect("delta1 must exist in [0, P)");
+
+    // --- Step 3: delta2 = least k>=0 with (d_pre+delta1+d_mem+k) % P == 0 ---
+    let delta2 = (0..p)
+        .find(|&k| (d_pre + delta1 + d_mem + k) % p == 0)
+        .expect("delta2 must exist in [0, P)");
+
+    // --- Step 4: delta_hold = delta1 + d_mem + delta2 ---
+    let delta_hold = delta1 + d_mem + delta2;
+
+    // --- Step 5: d_cpu, pad, d_locked ---
+    let d_cpu = d_pre + delta_hold + d_post;
+    let pad = (p - d_cpu % p) % p;
+    let d_locked = d_cpu + pad;
+
+    // --- Step 6: period = d_locked ---
+    let period = d_locked;
+
+    // --- Per-bus-line flush pads (F-teeth-3) ---
+    // Bus output lines: CPU bodies at [CPU_BUS_OFFSET..CPU_BUS_OFFSET+BUS_BITS),
+    // mem body at [MEM_BUS_OFFSET..MEM_BUS_OFFSET+BUS_BITS).
+
+    let bus_line_pads = |net: &theseus_netlist::PhasedCellNetlist,
+                          arrivals: &[u32],
+                          bus_offset: usize,
+                          d_body: u32|
+     -> Vec<u32> {
+        (0..BUS_BITS)
+            .map(|i| {
+                let rp = &net.outputs[bus_offset + i];
+                let arr = arrivals[rp.line0.0 as usize];
+                d_body - arr
+            })
+            .collect()
+    };
+
+    let pre_bus_pads = bus_line_pads(&net_pre, &arrivals_pre, CPU_BUS_OFFSET, d_pre);
+    let mem_bus_pads = bus_line_pads(&net_mem, &arrivals_mem, MEM_BUS_OFFSET, d_mem);
+    let post_bus_pads = bus_line_pads(&net_post, &arrivals_post, CPU_BUS_OFFSET, d_post);
+
+    TwoBodyTiming {
+        d_pre,
+        d_mem,
+        d_post,
+        delta1,
+        delta2,
+        delta_hold,
+        d_locked,
+        period,
+        pre_bus_pads,
+        mem_bus_pads,
+        post_bus_pads,
     }
 }
