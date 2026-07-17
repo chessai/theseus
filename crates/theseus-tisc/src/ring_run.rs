@@ -45,6 +45,7 @@
 //! control chains — genuine fan-outs that still emit K-only garbage).
 
 use theseus_netlist::lower::lower_iso_with_ancillas;
+use theseus_netlist::ir::cell::CellNetError;
 use theseus_netlist::{
     balance_compact, bits_of, lower_iso_bennett, value_from_bits, CompactBalanced,
     PHASE_COUNT,
@@ -1109,10 +1110,10 @@ impl TwoBodyTiming {
 /// the lockstep arrival equations per §4b steps 1-6.
 ///
 /// No lowering mutation, no machine-semantics change, no padder materialization.
-pub fn two_body_timing_certificate(rom: &[u16]) -> TwoBodyTiming {
+pub fn two_body_timing_certificate(rom: &[u16]) -> Result<TwoBodyTiming, CellNetError> {
     let p = u32::from(PHASE_COUNT);
 
-    // --- Lower each body and compute line arrivals ---
+    // --- Lower each body and compute checked output arrivals ---
 
     let iso_pre = crate::step::cpu_pre(rom);
     let (net_pre, anc_pre) =
@@ -1122,9 +1123,7 @@ pub fn two_body_timing_certificate(rom: &[u16]) -> TwoBodyTiming {
         n_data_pre, CPU_BODY_N_DATA,
         "cpu_pre n_data ({n_data_pre}) != CPU_BODY_N_DATA ({CPU_BODY_N_DATA})"
     );
-    let arrivals_pre = net_pre
-        .line_arrivals()
-        .expect("cpu_pre line_arrivals");
+    let checked_pre = net_pre.checked_output_arrivals()?;
 
     let iso_mem = crate::decoder::mem_body();
     let (net_mem, anc_mem) =
@@ -1134,9 +1133,7 @@ pub fn two_body_timing_certificate(rom: &[u16]) -> TwoBodyTiming {
         n_data_mem, MEM_BODY_N_DATA,
         "mem_body n_data ({n_data_mem}) != MEM_BODY_N_DATA ({MEM_BODY_N_DATA})"
     );
-    let arrivals_mem = net_mem
-        .line_arrivals()
-        .expect("mem_body line_arrivals");
+    let checked_mem = net_mem.checked_output_arrivals()?;
 
     let iso_post = crate::step::cpu_post(rom);
     let (net_post, anc_post) =
@@ -1146,32 +1143,16 @@ pub fn two_body_timing_certificate(rom: &[u16]) -> TwoBodyTiming {
         n_data_post, CPU_BODY_N_DATA,
         "cpu_post n_data ({n_data_post}) != CPU_BODY_N_DATA ({CPU_BODY_N_DATA})"
     );
-    let arrivals_post = net_post
-        .line_arrivals()
-        .expect("cpu_post line_arrivals");
+    let checked_post = net_post.checked_output_arrivals()?;
 
     // --- Step 1: D_pre/D_mem/D_post = max data-output arrival ---
 
-    // Helper: max arrival over the first n_data output rail pairs.
-    let max_data_output_arrival = |net: &theseus_netlist::PhasedCellNetlist,
-                                    arrivals: &[u32],
-                                    n_data: usize|
-     -> u32 {
-        net.outputs[..n_data]
-            .iter()
-            .map(|rp| {
-                let a0 = arrivals[rp.line0.0 as usize];
-                let a1 = arrivals[rp.line1.0 as usize];
-                assert_eq!(a0, a1, "output rail pair skew");
-                a0
-            })
-            .max()
-            .expect("body has data outputs")
-    };
-
-    let d_pre = max_data_output_arrival(&net_pre, &arrivals_pre, n_data_pre);
-    let d_mem = max_data_output_arrival(&net_mem, &arrivals_mem, n_data_mem);
-    let d_post = max_data_output_arrival(&net_post, &arrivals_post, n_data_post);
+    let d_pre = checked_pre[..n_data_pre].iter().copied().max()
+        .expect("body has data outputs");
+    let d_mem = checked_mem[..n_data_mem].iter().copied().max()
+        .expect("body has data outputs");
+    let d_post = checked_post[..n_data_post].iter().copied().max()
+        .expect("body has data outputs");
 
     // --- Step 2: delta1 = least k>=0 with (d_pre+k) % P == 0 ---
     let delta1 = (0..p)
@@ -1197,26 +1178,19 @@ pub fn two_body_timing_certificate(rom: &[u16]) -> TwoBodyTiming {
     // --- Per-bus-line flush pads (F-teeth-3) ---
     // Bus output lines: CPU bodies at [CPU_BUS_OFFSET..CPU_BUS_OFFSET+BUS_BITS),
     // mem body at [MEM_BUS_OFFSET..MEM_BUS_OFFSET+BUS_BITS).
+    // Fed from the SAME checked arrivals vec — bus range is a subset of data range.
 
-    let bus_line_pads = |net: &theseus_netlist::PhasedCellNetlist,
-                          arrivals: &[u32],
-                          bus_offset: usize,
-                          d_body: u32|
-     -> Vec<u32> {
-        (0..BUS_BITS)
-            .map(|i| {
-                let rp = &net.outputs[bus_offset + i];
-                let arr = arrivals[rp.line0.0 as usize];
-                d_body - arr
-            })
-            .collect()
-    };
+    let pre_bus_pads: Vec<u32> = (0..BUS_BITS)
+        .map(|i| d_pre - checked_pre[CPU_BUS_OFFSET + i])
+        .collect();
+    let mem_bus_pads: Vec<u32> = (0..BUS_BITS)
+        .map(|i| d_mem - checked_mem[MEM_BUS_OFFSET + i])
+        .collect();
+    let post_bus_pads: Vec<u32> = (0..BUS_BITS)
+        .map(|i| d_post - checked_post[CPU_BUS_OFFSET + i])
+        .collect();
 
-    let pre_bus_pads = bus_line_pads(&net_pre, &arrivals_pre, CPU_BUS_OFFSET, d_pre);
-    let mem_bus_pads = bus_line_pads(&net_mem, &arrivals_mem, MEM_BUS_OFFSET, d_mem);
-    let post_bus_pads = bus_line_pads(&net_post, &arrivals_post, CPU_BUS_OFFSET, d_post);
-
-    TwoBodyTiming {
+    Ok(TwoBodyTiming {
         d_pre,
         d_mem,
         d_post,
@@ -1228,5 +1202,5 @@ pub fn two_body_timing_certificate(rom: &[u16]) -> TwoBodyTiming {
         pre_bus_pads,
         mem_bus_pads,
         post_bus_pads,
-    }
+    })
 }

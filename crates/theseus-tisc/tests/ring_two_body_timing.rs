@@ -37,7 +37,7 @@ fn r_ins(opcode: u16, rd: u16, rs: u16, rt: u16) -> u16 {
 fn golden_pin_mexch_rom() {
     // Single-entry MEXCH ROM: MEXCH r2, rt=2 (rd==rt, addr=2)
     let rom = vec![r_ins(0b1001, 2, 0, 2)];
-    let t = two_body_timing_certificate(&rom);
+    let t = two_body_timing_certificate(&rom).expect("no rail skew");
 
     // F-teeth-1: assert the EXACT tuple from measured grounding (§4b).
     // If these fail, STOP and report the real measured values.
@@ -68,6 +68,7 @@ fn validate_add_rom() {
     // Non-MEXCH ROM: single ADD r0, r1, rt=3
     let rom = vec![r_ins(0b0000, 0, 1, 3)];
     two_body_timing_certificate(&rom)
+        .expect("no rail skew")
         .validate()
         .expect("validate() failed on ADD ROM");
 }
@@ -76,6 +77,7 @@ fn validate_swapbr_rom() {
     // Branch ROM: SWAPBR r1
     let rom = vec![r_ins(0b1000, 1, 0, 0)];
     two_body_timing_certificate(&rom)
+        .expect("no rail skew")
         .validate()
         .expect("validate() failed on SWAPBR ROM");
 }
@@ -152,7 +154,7 @@ fn validate_rejects_mutations() {
     const P: u32 = 4;
 
     let rom = vec![r_ins(0b1001, 2, 0, 2)]; // MEXCH
-    let valid = two_body_timing_certificate(&rom);
+    let valid = two_body_timing_certificate(&rom).expect("no rail skew");
     valid
         .validate()
         .expect("pristine certificate must validate");

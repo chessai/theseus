@@ -325,6 +325,18 @@ pub struct TickImbalance {
     pub arrivals: Vec<u32>,
 }
 
+/// Shared pair-arrival check: both rails must arrive on the same tick.
+/// Used by [`PhasedCellNetlist::validate`] and
+/// [`PhasedCellNetlist::checked_output_arrivals`].
+fn check_pair_arrival(arrivals: &[u32], p: &RailPair) -> Result<u32, CellNetError> {
+    let d0 = arrivals[p.line0.0 as usize];
+    let d1 = arrivals[p.line1.0 as usize];
+    if d0 != d1 {
+        return Err(CellNetError::PairSkew { line0_depth: d0, line1_depth: d1 });
+    }
+    Ok(d1)
+}
+
 impl PhasedCellNetlist {
     /// Per-(kind, phase) cell counts — the occupancy table the phased-sim
     /// and the energy annotation index by.
@@ -411,6 +423,32 @@ impl PhasedCellNetlist {
             .map(|(i, d)| {
                 d.ok_or(CellNetError::LineDrivers { line: LineId(i as u32), drivers: 0 })
             })
+            .collect()
+    }
+
+    /// Arrival tick of each output port, verified that both rails of
+    /// every output pair co-arrive.
+    ///
+    /// Returns `Err(CellNetError::PairSkew{..})` if any output pair's
+    /// two rails arrive on different ticks. This checks ALL output
+    /// ports (intentionally stronger than the old first-`n_data` check
+    /// in the timing certificate).
+    ///
+    /// Does NOT call [`Self::validate`] — the check is scoped to
+    /// output-pair co-arrival only, so it can be applied to nets that
+    /// fail `validate`'s other structural checks.
+    ///
+    /// **Reachability:** the skew `Err` is structurally unreachable on
+    /// every crate-produced net — every `RailPair` construction site
+    /// allocates a pair whole from one driver, so both rails always
+    /// co-arrive by construction. This accessor is a formalized
+    /// tripwire (+ negative test) for a future optimization that
+    /// remixes lines across pairs, or for catching IR corruption.
+    pub fn checked_output_arrivals(&self) -> Result<Vec<u32>, CellNetError> {
+        let arrivals = self.line_arrivals()?;
+        self.outputs
+            .iter()
+            .map(|p| check_pair_arrival(&arrivals, p))
             .collect()
     }
 
@@ -524,12 +562,7 @@ impl PhasedCellNetlist {
         // Depth discipline against graph arrival times.
         let arrival = self.line_arrivals()?;
         let pair_arrival = |p: &RailPair| -> Result<u32, CellNetError> {
-            let d0 = arrival[p.line0.0 as usize];
-            let d1 = arrival[p.line1.0 as usize];
-            if d0 != d1 {
-                return Err(CellNetError::PairSkew { line0_depth: d0, line1_depth: d1 });
-            }
-            Ok(d1)
+            check_pair_arrival(&arrival, p)
         };
         for (i, cell) in self.cells.iter().enumerate() {
             let mut latest = 0u32;
@@ -653,6 +686,51 @@ mod tests {
                 assert_eq!(kind.eval(&bits), want, "kind {kind:?}, token {t:?}");
             }
         }
+    }
+
+    #[test]
+    fn checked_output_arrivals_positive() {
+        let net = one_buffer();
+        // Both rails of the single output pair arrive at tick 1.
+        assert_eq!(net.checked_output_arrivals(), Ok(vec![1]));
+    }
+
+    #[test]
+    fn checked_output_arrivals_rejects_skewed_pair() {
+        // Hand-build a net whose output pair mixes lines from two
+        // different drivers so the rails arrive on different ticks.
+        // inputs [{0,1}], one K0 cell {0,1}->{2,3},
+        // output pair {line0: 2, line1: 0} → arrivals 1 vs 0.
+        //
+        // NOTE: this net deliberately fails validate() (LineConsumers:
+        // line 0 is consumed by both the cell input and the output port).
+        // That is WHY checked_output_arrivals must not call validate().
+        let inp = RailPair { line0: LineId(0), line1: LineId(1) };
+        let cell_out = RailPair { line0: LineId(2), line1: LineId(3) };
+        let skewed_output = RailPair { line0: LineId(2), line1: LineId(0) };
+        let net = PhasedCellNetlist {
+            input_ty: bit(),
+            output_ty: bit(),
+            inputs: vec![inp],
+            outputs: vec![skewed_output],
+            output_depths: vec![0], // irrelevant for this test
+            cells: vec![Cell {
+                kind: CellKind::K0,
+                depth: 0,
+                phase: 0,
+                inputs: vec![inp],
+                outputs: vec![cell_out],
+            }],
+            num_lines: 4,
+        };
+        // Confirm this net fails validate() (so checked_output_arrivals
+        // must NOT call validate internally).
+        assert!(net.validate().is_err());
+        // checked_output_arrivals should detect the skew.
+        assert!(matches!(
+            net.checked_output_arrivals(),
+            Err(CellNetError::PairSkew { line0_depth: 1, line1_depth: 0 })
+        ));
     }
 
     #[test]
