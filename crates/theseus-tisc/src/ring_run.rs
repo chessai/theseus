@@ -933,10 +933,10 @@ impl TwoBodyTiming {
 
         // Independent re-derivation via brute scan (F-teeth-2)
         let re_delta1 = (0..p)
-            .find(|&k| (self.d_pre + k) % p == 0)
+            .find(|&k| (self.d_pre + k).is_multiple_of(p))
             .ok_or_else(|| format!("no delta1 in [0,{p})"))?;
         let re_delta2 = (0..p)
-            .find(|&k| (self.d_pre + re_delta1 + self.d_mem + k) % p == 0)
+            .find(|&k| (self.d_pre + re_delta1 + self.d_mem + k).is_multiple_of(p))
             .ok_or_else(|| format!("no delta2 in [0,{p})"))?;
         let re_delta_hold = re_delta1 + self.d_mem + re_delta2;
         let re_d_cpu = self.d_pre + re_delta_hold + self.d_post;
@@ -993,7 +993,7 @@ impl TwoBodyTiming {
         }
 
         // C. phase closure
-        if self.d_locked % p != 0 {
+        if !self.d_locked.is_multiple_of(p) {
             return Err(format!(
                 "C: d_locked {} not divisible by P={p}",
                 self.d_locked
@@ -1002,13 +1002,13 @@ impl TwoBodyTiming {
         if re_pad >= p {
             return Err(format!("C: pad {re_pad} >= P={p}"));
         }
-        if (self.d_pre + self.delta1) % p != 0 {
+        if !(self.d_pre + self.delta1).is_multiple_of(p) {
             return Err(format!(
                 "C: (d_pre + delta1) = {} not divisible by P={p}",
                 self.d_pre + self.delta1
             ));
         }
-        if (self.d_pre + self.delta1 + self.d_mem + self.delta2) % p != 0 {
+        if !(self.d_pre + self.delta1 + self.d_mem + self.delta2).is_multiple_of(p) {
             return Err(format!(
                 "C: (d_pre + delta1 + d_mem + delta2) = {} not divisible by P={p}",
                 self.d_pre + self.delta1 + self.d_mem + self.delta2
