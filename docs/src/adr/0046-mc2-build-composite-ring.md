@@ -4,7 +4,36 @@
 **Stage 1a IMPLEMENTED** (carrier split + `system_step` + composite oracle, merged
 `8f27ba0`); **Stage 1b-A IMPLEMENTED** (BusMsg + emit/mem/absorb non-degenerate seam
 + line-audit, value-level, merged `1f59744`); **Stage 1b-B IMPLEMENTED** (SystemRing
-closure certificate, merged `75c5a13`) — **Stage 1b COMPLETE**; Stage 2 proposed.
+closure certificate, merged `75c5a13`) — **Stage 1b COMPLETE**; **Stage 2
+IMPLEMENTED** (2a two-body value decomposition merged `2810bab` + cert-hardening
+`24ae386`; 2b-lite static timing certificate merged `2741a39`) — **Stage 2 COMPLETE**
+(2b-full compact output padder / materialized two-body netlist deferred to the memory
+energy-ledger, §9).
+
+> **Stage 2 — DONE (2a `2810bab`+`24ae386`, 2b-lite `2741a39`) — Stage 2 COMPLETE.**
+> The single-body `system_step` is physically separated into **two loops**. **2a**
+> (value decomposition): `system_step` splits into `cpu_pre`/`mem_body`/`cpu_post`
+> (`step.rs`, `decoder::mem_body`) on **reduced carriers** — `cpu_pre`/`cpu_post` on
+> `(CpuState,BusMsg)` (no MemState lines at all), `mem_body` on `(MemState,BusMsg)` —
+> and a `TwoBodyRing` (`ring_run.rs`) recirculates the three bodies, threading the
+> 24-bit bus across them, proving `two_body_run == SystemRing::run == eval(system_step)^R`
+> (`tests/ring_two_body.rs`: authoritative wide-strided tier at R∈{1,2,3} over all 14
+> non-MEXCH ops + MEXCH + BR≠0/SWAPBR, a direct per-body ancilla certificate, and a
+> **structural** line-audit — MemState is *absent* from the CPU bodies' netlists, so
+> §6 is a physical fact, not a scan). **2b-lite** (static realizability certificate):
+> `TwoBodyTiming` (`ring_run.rs`, `tests/ring_two_body_timing.rs`) reads the three
+> bodies' real depths via `line_arrivals` and proves the two loops clock in **lockstep**
+> — the F1 absolute-tick arrival equations (`δ_hold == δ₁+D_mem+δ₂`, both cross-edges
+> phase-aligned), equal period (`D_cpu==D_mem==3028≡0 mod P`), phase closure, and the
+> same-revolution-servicing clause (no pipeline skew) — with `validate()` an
+> *independent* re-derivation (not the solver restated) and a golden-tuple pin so a
+> depth regression fails loudly. This satisfies §8's Stage-2 acceptance ("arrival
+> equations and period lock validated"). **Deferred to the memory energy-ledger (§9):**
+> **2b-full** — the compact **output padder** in `theseus-netlist` and a *materialized*
+> padded two-body netlist (only needed when the memory block gets its own energy line;
+> 2b-lite proves the clocking EXISTS without touching the central balancer). Design of
+> record: [docs/scratch/stage2-design.md](../../scratch/stage2-design.md). Next: **M-D**
+> (heap / recursion / calling convention = arbitrary `.thse`).
 
 > **Stage 1b-B — DONE (merged `75c5a13`) — Stage 1b COMPLETE.** `system_step` now
 > runs through a recirculating **`SystemRing`** (`ring_run.rs`, a sibling of
@@ -24,8 +53,7 @@ closure certificate, merged `75c5a13`) — **Stage 1b COMPLETE**; Stage 2 propos
 > establish closure at all supported widths. **This realizes Theorem 3.5 (composite
 > closure ZG-2) in code — the composite ring `CPU⊗bus⊗memory` closes zero-garbage.**
 > Design of record: [docs/scratch/stage1b-B-design.md](../../scratch/stage1b-B-design.md).
-> Next: **Stage 2** (two-body `SystemRing` — physical mem/CPU separation, the area
-> payoff, §5).
+> (Stage 2 — physical two-body separation — is now DONE; see the box above.)
 
 > **Stage 1b-A — DONE (merged `1f59744`).** The memory exchange is now
 > **non-degenerate** (a real Option-B seam, not Stage-1a's degenerate splice). A

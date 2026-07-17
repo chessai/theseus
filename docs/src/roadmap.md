@@ -3,9 +3,9 @@
 > **Current status (2026-07-16):** M1, M3a, M3b, **M4-v1**, the **M4-v2
 > ring-machine core** (recirculating CPU + reversible branching, Fibonacci on the
 > ring at 20× area saving, zero-garbage closure), and the **v0.2 software dialect**
-> are all done and merged on `chessai/theseus-v2` (`9932ddc`). The **headline
+> are all done and merged on `chessai/theseus-v2` (`2741a39`). The **headline
 > thread** is the **surface → TISC-1 ROM compiler** (the #1 goal), now at **M-A +
-> M-B + M-C1 + M-C2 Layer 1 + Stage 1a + Stage 1b (composite ring) done**: non-recursive, branching,
+> M-B + M-C1 + M-C2 Layer 1 + Stage 1a + Stage 1b + Stage 2 (two-body) done**: non-recursive, branching,
 > data-dependent `iter` (the real `fib`), register↔scratch spill, resident memory via
 > a reversible `MEXCH` exchange + 1-of-N Fredkin tree, *and* — Stage 1a —
 > **`MemState` externalized** into the `(CpuState,MemState)` composite carrier with a
@@ -21,9 +21,15 @@
 > emit/mem/absorb, §6 line-audit passes), and Stage 1b-B ran `system_step` through a
 > recirculating **`SystemRing`** whose **closure certificate holds** (`system_step`
 > ancilla-clean, `run==run_open==eval^R`, bus-quiescent) — **realizing Theorem 3.5:
-> the composite ring `CPU⊗bus⊗memory` closes zero-garbage.** **Next: Stage 2**
-> (two-body `SystemRing` — physical mem/CPU separation, the area payoff). See [Project
-> status](status.md). The post-v1
+> the composite ring `CPU⊗bus⊗memory` closes zero-garbage.** **Stage 2 DONE**: 2a
+> (merged `2810bab`/`24ae386`) physically separates memory — `system_step` splits into
+> `cpu_pre`/`mem_body`/`cpu_post` on reduced carriers (MemState absent from the CPU
+> bodies), a `TwoBodyRing` proves the split `== SystemRing == eval^R`; 2b-lite (merged
+> `2741a39`) is a static timing certificate validating the two loops clock in lockstep
+> (absolute-tick arrival equations + equal period + phase closure). The compact
+> output-padder / materialized two-body netlist (2b-full) is deferred to the memory
+> energy-ledger (ADR-0046 §9). **Next: M-D** (heap / recursion / calling convention =
+> arbitrary `.thse`). See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
 > shows machine-level adiabatic slope −0.997 crossing below the CMOS floor);

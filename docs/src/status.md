@@ -10,21 +10,27 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`9932ddc`. Everything below is merged there. Since M4-v1 this branch landed the
+`2741a39`. Everything below is merged there. Since M4-v1 this branch landed the
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
 thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU
 that fetches and executes ROMs compiled from arbitrary `.thse` code). Milestones
-**M-A, M-B, M-C1, M-C2 Layer 1, Stage 1a, and Stage 1b (the composite memory
-ring)** are done: non-recursive *and* branching / data-dependent `.thse` compiles
-to a TISC-1 ROM that runs on the CPU, provably equal to the interpreter —
-including the real data-dependent `fib` (`iter Nat fibStep`) — values spill into
-scratch *and* **resident memory** (a reversible `MEXCH` exchange + 1-of-N Fredkin
-tree), *and* **`MemState` is externalized into a composite `(CpuState, MemState,
-BusMsg)` carrier whose recirculating `SystemRing` closes zero-garbage** (the
-`emit/mem/absorb` exchange touches no CpuState fields — §6 line-audit — and
-`run == run_open == eval^R` + bus-quiescence hold, realizing Theorem 3.5). Next:
-**Stage 2** (two-body separation, the area payoff). See the sections below and
+**M-A, M-B, M-C1, M-C2 Layer 1, Stage 1a, Stage 1b (the composite memory ring),
+and Stage 2 (two-body separation)** are done: non-recursive *and* branching /
+data-dependent `.thse` compiles to a TISC-1 ROM that runs on the CPU, provably
+equal to the interpreter — including the real data-dependent `fib`
+(`iter Nat fibStep`) — values spill into scratch *and* **resident memory** (a
+reversible `MEXCH` exchange + 1-of-N Fredkin tree), *and* **`MemState` is
+externalized into a composite `(CpuState, MemState, BusMsg)` carrier whose
+recirculating `SystemRing` closes zero-garbage** (the `emit/mem/absorb` exchange
+touches no CpuState fields — §6 line-audit — and `run == run_open == eval^R` +
+bus-quiescence hold, realizing Theorem 3.5), *and* **the memory is physically
+separated into its own body** — `system_step` splits into `cpu_pre`/`mem_body`/
+`cpu_post` on reduced carriers (MemState absent from the CPU bodies), a
+`TwoBodyRing` proves the split `== SystemRing == eval^R`, and a static timing
+certificate (Stage 2b-lite) validates the two loops clock in lockstep (absolute-
+tick arrival equations + equal period + phase closure). Next: **M-D** (heap /
+recursion / calling convention = arbitrary `.thse`). See the sections below and
 ADRs 0033–0046, and [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md).
 
 ## Status at a glance
@@ -38,7 +44,7 @@ ADRs 0033–0046, and [theory/reversible-memory-closure.md](theory/reversible-me
 | **M4-v1** TISC-1 CPU | ✅ **done** | the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** — ADR-0030's milestone, met |
 | **M4-v2** ring machine | ✅ **done + zero-garbage** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving**; reversible branching works (ADR-0034). **Physical closure achieved**: the R1 rail-role-swap cell (ADR-0040, real ngspice, adiabatic slope −1) makes lowering garbage-free — the step is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so the default runner `run == eval^R` closes with **zero** re-supplied boundary. The machine-level **money plot** confirms it: energy/step falls at adiabatic slope **−0.997**, crossing below the flat CMOS ½CV² floor at t_ramp ≈ 2.1e-8 s (active logic below CMOS across the whole clock range). |
 | **v0.2 dialect** software | ✅ **done** | μ-types + `iter`/`fold`/`unfold`: core + eval + surface syntax + **netlist lowering** + diagnostics; writable `.thse` programs run source→cells (ADRs 0035–0039) |
-| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **M-A + M-B + M-C1 + M-C2/L1 + Stage-1a + Stage-1b (composite ring) done** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive), **M-B** (reversible branching + **data-dependent iter** + general controlled ops + bare sums, ADR-0043), **M-C1** (register↔scratch **spill**, ADR-0044), and **M-C2 Layer 1** (resident **memory** + a reversible `MEXCH` exchange instruction + 1-of-N Fredkin tree, ADR-0046) all compile → ROM → run on the CPU → `run_on_cpu == eval` (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. Leaf ceiling now **14 + N** (straight-line) / **12 + N** (branching), N=4 resident memory words. **Conjecture C1 discharged** (the addressed-exchange tree is whole-domain ancilla-clean). Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience. Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042). **M-C2 Stage 1a** (externalize `MemState` into the `(CpuState,MemState)` composite carrier + `system_step` + composite oracle) is **done** (merged `8f27ba0`) — **C1 now discharged on the *real* re-targeted `select_mem` tree at N∈{2,4,8}**, State narrowed 24→20 fields, width-parameterized routing + one `cross_ctrl_fredkin` primitive. **M-C2 Stage 1b-A** (merged `1f59744`) makes the memory exchange **non-degenerate**: a `BusMsg` factor + the **emit/mem/absorb** 3-cycle (mem tree re-keyed on `BusMsg.addr` → touches **zero CpuState fields**, **§6 line-audit passes**), value-level `system_step == eval`, C1 re-verified on `select_mem_on_bus` at N∈{2,4,8}. **M-C2 Stage 1b-B** (merged `75c5a13`) closes it: `system_step` runs through a recirculating **`SystemRing`** and the **composite closure certificate holds** — `system_step` lowers **ancilla-clean**, `run == run_open == eval(system_step)^R`, bus-quiescent — **realizing Theorem 3.5 (the composite ring `CPU⊗bus⊗memory` closes zero-garbage)**. **Stage 1b COMPLETE.** **Next: Stage 2** (two-body `SystemRing` — physical mem/CPU separation, the area payoff) |
+| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **M-A + M-B + M-C1 + M-C2/L1 + Stage-1a + Stage-1b + Stage-2 (two-body) done** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive), **M-B** (reversible branching + **data-dependent iter** + general controlled ops + bare sums, ADR-0043), **M-C1** (register↔scratch **spill**, ADR-0044), and **M-C2 Layer 1** (resident **memory** + a reversible `MEXCH` exchange instruction + 1-of-N Fredkin tree, ADR-0046) all compile → ROM → run on the CPU → `run_on_cpu == eval` (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. Leaf ceiling now **14 + N** (straight-line) / **12 + N** (branching), N=4 resident memory words. **Conjecture C1 discharged** (the addressed-exchange tree is whole-domain ancilla-clean). Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience. Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042). **M-C2 Stage 1a** (externalize `MemState` into the `(CpuState,MemState)` composite carrier + `system_step` + composite oracle) is **done** (merged `8f27ba0`) — **C1 now discharged on the *real* re-targeted `select_mem` tree at N∈{2,4,8}**, State narrowed 24→20 fields, width-parameterized routing + one `cross_ctrl_fredkin` primitive. **M-C2 Stage 1b-A** (merged `1f59744`) makes the memory exchange **non-degenerate**: a `BusMsg` factor + the **emit/mem/absorb** 3-cycle (mem tree re-keyed on `BusMsg.addr` → touches **zero CpuState fields**, **§6 line-audit passes**), value-level `system_step == eval`, C1 re-verified on `select_mem_on_bus` at N∈{2,4,8}. **M-C2 Stage 1b-B** (merged `75c5a13`) closes it: `system_step` runs through a recirculating **`SystemRing`** and the **composite closure certificate holds** — `system_step` lowers **ancilla-clean**, `run == run_open == eval(system_step)^R`, bus-quiescent — **realizing Theorem 3.5 (the composite ring `CPU⊗bus⊗memory` closes zero-garbage)**. **Stage 1b COMPLETE.** **M-C2 Stage 2** (physical two-body separation) is **done**: **2a** (merged `2810bab` + cert-hardening `24ae386`) splits `system_step` into `cpu_pre`/`mem_body`/`cpu_post` on **reduced carriers** (MemState physically absent from the CPU bodies — the line-audit is now a *structural* fact, not a scan), a `TwoBodyRing` recirculates the three bodies and proves `two_body == SystemRing == eval^R` (authoritative wide-strided tier + direct per-body ancilla certificate); **2b-lite** (merged `2741a39`) adds a static realizability certificate — `TwoBodyTiming` validates the absolute-tick arrival equations + equal period (`D_cpu=D_mem=3028≡0 mod 4`) + phase closure, proving the two loops clock in lockstep (F1 same-revolution servicing, no pipeline skew). **Stage 2 COMPLETE** (2b-full compact-output-padder / materialized netlist deferred to the memory energy-ledger, ADR-0046 §9). **Next: M-D** (heap / recursion / calling convention = arbitrary `.thse`) |
 | **stdlib** | ✅ increment 1–2 | implicit prelude (`Bit`, `Nat`, `notb`, `swapBit`, `cnot`, `toffoli`) via structural-dedup merge — no imports needed; a compositional reversible adder demonstrates arithmetic composes (ADR-0038 constraint respected) |
 | **M2** FPGA / Verilator | ⏸ parked | still stubs; a demo, not a phase |
 
