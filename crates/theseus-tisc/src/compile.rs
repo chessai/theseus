@@ -28,16 +28,10 @@ use crate::types::{
 pub enum CompileError {
     /// The program requires more leaves than the compiler supports.
     TooManyLeaves { needed: usize, max: usize },
-    /// A sum-type constructor outside the controlled-op idiom.
-    UnsupportedSum(String),
     /// A constructor deferred to a later milestone.
     Deferred(String),
     /// A `Prim` whose clause table doesn't match any recognized pattern.
     UnrecognizedPrim(String),
-    /// Data-dependent `Iter` (count varies per input).
-    DataDependentIter,
-    /// The value type contains `Type::Zero` (empty, no inhabitants).
-    EmptyType,
     /// Instruction would alias registers (rd == rs).
     AliasedRegisters { instr: String },
 }
@@ -48,13 +42,8 @@ impl fmt::Display for CompileError {
             CompileError::TooManyLeaves { needed, max } => {
                 write!(f, "program needs {needed} leaves but maximum is {max}")
             }
-            CompileError::UnsupportedSum(msg) => write!(f, "unsupported sum: {msg}"),
             CompileError::Deferred(msg) => write!(f, "deferred to later milestone: {msg}"),
             CompileError::UnrecognizedPrim(msg) => write!(f, "unrecognized prim: {msg}"),
-            CompileError::DataDependentIter => {
-                write!(f, "data-dependent iter count (deferred to M-B)")
-            }
-            CompileError::EmptyType => write!(f, "empty type (Type::Zero)"),
             CompileError::AliasedRegisters { instr } => {
                 write!(f, "aliased registers in {instr}")
             }
@@ -1584,4 +1573,49 @@ pub fn run_on_cpu_fast(
     }
 
     Ok(unmarshal(&state, &out_ty))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use theseus_core::prim::PrimDef;
+    use theseus_core::{Type, Value};
+
+    /// Build a swap PrimDef on Bit×Bit: (a,b)↦(b,a).
+    fn swap_prim_def() -> PrimDef {
+        let bit = Type::sum(Type::One, Type::One);
+        let ty = Type::prod(bit.clone(), bit.clone());
+        let vals = theseus_core::prim::enumerate_values(&ty);
+        let mut forward = BTreeMap::new();
+        let mut backward = BTreeMap::new();
+        for v in &vals {
+            let Value::Pair(a, b) = v else { panic!() };
+            let swapped = Value::pair(b.as_ref().clone(), a.as_ref().clone());
+            forward.insert(v.clone(), swapped.clone());
+            backward.insert(swapped, v.clone());
+        }
+        PrimDef {
+            forward_name: "swap".into(),
+            backward_name: "swap".into(),
+            input_ty: ty.clone(),
+            output_ty: ty,
+            forward,
+            backward,
+        }
+    }
+
+    #[test]
+    fn recognize_prim_aliased_registers() {
+        let def = swap_prim_def();
+        // Craft a context where two leaves alias the same register.
+        let ctx = Ctx {
+            homes: vec![Location::Reg(0), Location::Reg(0)],
+        };
+        let result = recognize_prim(&def, &ctx);
+        assert!(
+            matches!(result, Err(CompileError::AliasedRegisters { .. })),
+            "expected AliasedRegisters, got {result:?}"
+        );
+    }
 }
