@@ -1454,7 +1454,9 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
     })?;
 
     let instrs = compile(iso)?;
-    let rom = assemble(&instrs);
+    let rom = assemble(&instrs).map_err(|e| {
+        CompileError::Deferred(format!("assemble failed: {e}"))
+    })?;
     let budget = instrs.len();
 
     let state = marshal(input, &in_ty);
@@ -1555,7 +1557,9 @@ pub fn run_on_cpu_fast(
     })?;
 
     let instrs = compile(iso)?;
-    let rom = assemble(&instrs);
+    let rom = assemble(&instrs).map_err(|e| {
+        CompileError::Deferred(format!("assemble failed: {e}"))
+    })?;
     let budget = instrs.len();
 
     let mut state = marshal(input, &in_ty);
