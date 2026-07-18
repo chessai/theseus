@@ -21,6 +21,7 @@ different model from the implementer). "Verdict" is the reviewer's, not the advi
 | M-E (energy-price a compiled ROM) | design | SHIP-WITH-FIXES | [me-design-review.md](me-design-review.md) |
 | M-E | implementation | SHIP-WITH-FIXES | [me-impl-review.md](me-impl-review.md) |
 | TP-1 (reversible GCD formulation) | design | OVERTURNED-IN-PART | [tp1-gcd-review.md](tp1-gcd-review.md) |
+| M-D.b2 (compiler-side MEXCHR emission) | design | DO-NOT-SHIP-as-drawn → revised (route i, n=2) | [mdb2-design-review.md](mdb2-design-review.md) |
 
 > **Recovered retroactively.** These reviews predate L21; they were folded into the
 > design docs + tests at the time but not committed as records. Captured here from the
@@ -63,6 +64,23 @@ Test names are in `crates/theseus-tisc/tests/compile.rs` unless noted.
 | F-5 | missing leaf-count guard | `mdd_reject_leaf_count_mismatch` |
 | F-7 | Swapbr-body reject guard untested | `mdd_reject_swapbr_body` |
 | F-6, F-8 | comment/docstring nits | *not-tested* — non-behavioral |
+
+### M-D.b2 DESIGN review (compiler-side MEXCHR emission, F-1…F-10)
+Findings folded into `docs/scratch/mdb2-design.md`; tests land with the f1 implementation
+(§7 T1–T7). Route (i) chosen (n=2). Tests in `crates/theseus-tisc/tests/` (new file, e.g.
+`memexch.rs`).
+| # | Finding | Test (planned) |
+|---|---|---|
+| F-1 | **BLOCKER** no single-leaf type holds value>1 (thermometer tags) → n=4 index unbuildable as "one addr reg" | route (i) n=2; `T1` (emit MexchReg), `T2` fast oracle incl. max addr `a=1`, `T3` real-CPU |
+| F-2 | **BLOCKER** recognizer must verify arr leaves home at `[Mem(0..n)]` in order or `Times(memexch,g)` silently corrupts | `T5-F2a` (`Times(memexch,id)`→`ResidentMisplaced`), `T5-F2b` (`Times(id,memexch)` positive) |
+| F-3 | MAJOR name-keyed emission is a forgery hole; verify the table semantically (cheap, O(\|table\|)) | `T5-F3` (forged "memexch" table → `UnrecognizedPrim`) |
+| F-4 | MAJOR real coherence rule: every representable index `< n` OR `n==MEM_WORDS` (not "n==MEM_WORDS by construction") | `T5-F4` (over-wide index type → `Err`) |
+| F-5 | MAJOR marshal/unmarshal/Ctx triplicate layout → drift (L15 class); one `home_of` | `T6` (marshal↔Ctx home property + round-trip) |
+| F-6 | confirmed-closed: occ machinery prevents spill/resident collision *iff* `Ctx::new_resident` seeds occ | `T5-F6a` (spill exhaustion→`TooManyLeaves`), `T5-F6b` (displacement addr ≥ resident) |
+| F-7 | MINOR flat f1 carrier never exercises `with_registers` paging | `T5-F7` (junk-padded carrier → `Xchg` bracket) |
+| F-8 | MINOR `Sym(memexch)` needs `backward_name="memexch"` | `T5-F8` (`Sym(memexch)` → same `MexchReg`) |
+| F-9 | MINOR need `compile_with_metadata_resident`; assert `resident>0 ⇒ in_leaves==out_leaves` | covered by `T1` (compile entry) + wrapper assert |
+| F-10 | MINOR "constant addr → immediate Mexch" is N/A for f1 (no constant-folding of inputs) | *not-tested* — no such behavior in f1 |
 
 ### Not-tested-by-design exceptions (justified)
 - **Layout-invariant guard** (`homes_in≠homes_out`, compile.rs) — a `debug_assert` in
