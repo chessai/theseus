@@ -343,7 +343,7 @@ pub fn rom_trace(rom: &[u16], init: StateVals, budget: usize) -> RomTrace {
     let mut state = init;
     for step_idx in 0..budget {
         // Check PC BEFORE this step executes: if PC is already in the
-        // dead zone at the start of step `step_idx`, the first T-1 steps
+        // dead zone at the start of step `step_idx`, the first T steps (indices 0..T)
         // were productive.
         let pc = state.pc as usize;
         if pc >= rom_len && pc < 256 {

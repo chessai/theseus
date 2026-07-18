@@ -273,7 +273,7 @@ fn me_a2_b_vs_t() {
     // T < B (there IS a park phase for this input)
     assert!(
         pe.steps_t < pe.steps_b,
-        "fib(3) must halt before WCET: T={}, B={}",
+        "fib(1) must halt before WCET (guarded static unroll skips 2 of 3 iters): T={}, B={}",
         pe.steps_t,
         pe.steps_b
     );
@@ -356,7 +356,6 @@ fn me_a3_golden() {
 // ── me_a4: honest crossing ──────────────────────────────────────────
 
 #[test]
-#[ignore] // sweeps the ramp range
 fn me_a4_honest_crossing() {
     let iso = fib_iso();
     let db = char_db();
@@ -419,9 +418,18 @@ fn me_a4_honest_crossing() {
     let per_step_crossing =
         cmos_crossing_t_ramp(&per_step_curve, cmos_step_j)
             .expect("per-step crossing must exist");
+    // The program crossing must be the per-step crossing shifted right by
+    // EXACTLY B/T (cmos_crossing_t_ramp is linear in the energy ratio; F3:
+    // reversible pays B steps, CMOS pays only T). This FALSIFIES a B-vs-B
+    // regression — if CMOS were charged B steps, the B would cancel and
+    // tc == per_step_crossing (no shift), which this assertion rejects.
+    let expected = per_step_crossing * (b as f64 / t as f64);
+    let rel_err = ((tc - expected) / expected).abs();
     assert!(
-        tc >= per_step_crossing * 0.999, // tiny float tolerance
-        "program crossing ({tc:.3e}) must be >= per-step crossing ({per_step_crossing:.3e})"
+        rel_err < 1e-3,
+        "program crossing ({tc:.3e}) must equal per-step ({per_step_crossing:.3e}) × B/T ({:.3}) \
+         = {expected:.3e}; rel_err={rel_err:.2e} — a B-vs-B regression gives no shift and fails here",
+        b as f64 / t as f64
     );
 
     eprintln!(

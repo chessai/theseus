@@ -2,7 +2,7 @@
 //! in joules from the committed rung-0 characterization.
 //!
 //! Compiles the real `iter Nat fibStep` (0022-fib.thse) to its 24-instr
-//! ROM, runs fib(3), prices it at a chosen t_ramp, and sweeps the ramp.
+//! ROM, runs fib(1), prices it at a chosen t_ramp, and sweeps the ramp.
 //! Prints the thesis headline: WCET park tax + honest crossing.
 //!
 //! Run: `cargo run -p theseus-tisc --example rom_energy --release`
