@@ -167,6 +167,105 @@ fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
     }
 }
 
+// ── F7: structural-renaming identity guard ──────────────────────────
+
+/// Apply AssocRSum semantics: (a+b)+c → a+(b+c).
+fn apply_assoc_r_sum(v: &Value) -> Value {
+    match v {
+        Value::Left(inner) => match inner.as_ref() {
+            Value::Left(x) => Value::left(x.as_ref().clone()),
+            Value::Right(y) => Value::right(Value::left(y.as_ref().clone())),
+            _ => panic!("apply_assoc_r_sum: expected Left/Right inside Left"),
+        },
+        Value::Right(z) => Value::right(Value::right(z.as_ref().clone())),
+        _ => panic!("apply_assoc_r_sum: expected Left/Right"),
+    }
+}
+
+/// Apply AssocLSum semantics: a+(b+c) → (a+b)+c.
+fn apply_assoc_l_sum(v: &Value) -> Value {
+    match v {
+        Value::Left(x) => Value::left(Value::left(x.as_ref().clone())),
+        Value::Right(inner) => match inner.as_ref() {
+            Value::Left(y) => Value::left(Value::right(y.as_ref().clone())),
+            Value::Right(z) => Value::right(z.as_ref().clone()),
+            _ => panic!("apply_assoc_l_sum: expected Left/Right inside Right"),
+        },
+        _ => panic!("apply_assoc_l_sum: expected Left/Right"),
+    }
+}
+
+/// Apply UniteSum semantics: 0+a → a.
+fn apply_unite_sum(v: &Value) -> Value {
+    match v {
+        Value::Right(x) => x.as_ref().clone(),
+        // Left branch is uninhabited (Zero), so unreachable.
+        _ => panic!("apply_unite_sum: expected Right (Zero+a, Left is uninhabited)"),
+    }
+}
+
+/// Apply UnitiSum semantics: a → 0+a.
+fn apply_uniti_sum(v: &Value) -> Value {
+    Value::right(v.clone())
+}
+
+/// Apply Distrib semantics: a × (b+c) → (a×b) + (a×c).
+fn apply_distrib(v: &Value) -> Value {
+    let Value::Pair(a, bc) = v else {
+        panic!("apply_distrib: expected Pair");
+    };
+    match bc.as_ref() {
+        Value::Left(b) => Value::left(Value::pair(a.as_ref().clone(), b.as_ref().clone())),
+        Value::Right(c) => Value::right(Value::pair(a.as_ref().clone(), c.as_ref().clone())),
+        _ => panic!("apply_distrib: expected Left/Right in sum component"),
+    }
+}
+
+/// Apply Factor semantics: (a×b) + (a×c) → a × (b+c).
+fn apply_factor(v: &Value) -> Value {
+    match v {
+        Value::Left(ab) => {
+            let Value::Pair(a, b) = ab.as_ref() else {
+                panic!("apply_factor: expected Pair in Left");
+            };
+            Value::pair(a.as_ref().clone(), Value::left(b.as_ref().clone()))
+        }
+        Value::Right(ac) => {
+            let Value::Pair(a, c) = ac.as_ref() else {
+                panic!("apply_factor: expected Pair in Right");
+            };
+            Value::pair(a.as_ref().clone(), Value::right(c.as_ref().clone()))
+        }
+        _ => panic!("apply_factor: expected Left/Right"),
+    }
+}
+
+/// Check whether a structural iso is the identity on the M-B leaf-byte
+/// encoding. Returns `true` if every inhabitant maps to the same byte
+/// vector (i.e. the no-op lowering is correct), `false` otherwise.
+fn structural_iso_is_identity(
+    in_ty: &Type,
+    out_ty: &Type,
+    transform: fn(&Value) -> Value,
+) -> bool {
+    let vals = enumerate_values(in_ty);
+    for v_in in &vals {
+        let v_out = transform(v_in);
+        let bytes_in = value_to_leaf_bytes(v_in, in_ty);
+        let bytes_out = value_to_leaf_bytes(&v_out, out_ty);
+        // Zero-pad to the same length for comparison.
+        let len = bytes_in.len().max(bytes_out.len());
+        let mut padded_in = bytes_in;
+        let mut padded_out = bytes_out;
+        padded_in.resize(len, 0);
+        padded_out.resize(len, 0);
+        if padded_in != padded_out {
+            return false;
+        }
+    }
+    true
+}
+
 // ── Location and constants (M-C1, ADR-0044 §2) ─────────────────────
 
 /// Where a leaf value resides: register, scratch word, or memory word.
@@ -1519,15 +1618,49 @@ fn lower_dispatch(iso: &Iso, ctx: &Ctx, meta: &mut LowerMeta) -> Result<(Vec<Ins
         | Iso::AssocRSum(_, _, _)
         | Iso::UniteSum(_)
         | Iso::UnitiSum(_) => {
-            // Structural sum renamings — no register moves in the
-            // tag+payload representation for the cases M-B encounters.
-            Ok((vec![], ctx.clone()))
+            // F7 guard: verify the structural sum-renaming is identity
+            // on the M-B leaf-byte encoding. If not, reject rather than
+            // silently miscompile.
+            let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
+                CompileError::Deferred(format!("type error: {e:?}"))
+            })?;
+            let transform: fn(&Value) -> Value = match iso {
+                Iso::AssocRSum(_, _, _) => apply_assoc_r_sum,
+                Iso::AssocLSum(_, _, _) => apply_assoc_l_sum,
+                Iso::UniteSum(_) => apply_unite_sum,
+                Iso::UnitiSum(_) => apply_uniti_sum,
+                _ => unreachable!(),
+            };
+            if structural_iso_is_identity(&in_ty, &out_ty, transform) {
+                Ok((vec![], ctx.clone()))
+            } else {
+                Err(CompileError::Deferred(
+                    "non-trivial structural sum-renaming (AssocSum/UniteSum) \
+                     — reversible-circuit lowering deferred (F7)"
+                        .to_string(),
+                ))
+            }
         }
 
         Iso::Distrib(_, _, _) | Iso::Factor(_, _, _) => {
-            // Structural (tag,payload)↔branched-form conversion — no-op
-            // in the tag+payload register model (ADR-0043 §3).
-            Ok((vec![], ctx.clone()))
+            // F7 guard: same identity check for distributivity isos.
+            let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
+                CompileError::Deferred(format!("type error: {e:?}"))
+            })?;
+            let transform: fn(&Value) -> Value = match iso {
+                Iso::Distrib(_, _, _) => apply_distrib,
+                Iso::Factor(_, _, _) => apply_factor,
+                _ => unreachable!(),
+            };
+            if structural_iso_is_identity(&in_ty, &out_ty, transform) {
+                Ok((vec![], ctx.clone()))
+            } else {
+                Err(CompileError::Deferred(
+                    "non-trivial structural distributivity (Distrib/Factor) \
+                     — reversible-circuit lowering deferred (F7)"
+                        .to_string(),
+                ))
+            }
         }
 
         // ── M-D.d: Trace (reversible while-loop) ────────────────────

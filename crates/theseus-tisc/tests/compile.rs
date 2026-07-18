@@ -1627,3 +1627,162 @@ fn mdd_reject_nested_trace() {
         "expected nested-Trace rejection, got: {msg}"
     );
 }
+
+// ── F7: reject-don't-corrupt for structural sum-renamings ───────────
+
+#[test]
+fn f7_assoc_rsum_nested_rejected() {
+    // AssocRSum((1+1)+1) i.e. (a+b)+c ↔ a+(b+c) with a=b=c=One
+    // is NOT identity on M-B leaf-byte encoding (sends [0,1]→[1,0],
+    // [1,0]→[1,1]). The compiler must reject it, not silently miscompile.
+    let one = Type::One;
+    let iso = Iso::AssocRSum(one.clone(), one.clone(), one.clone());
+    let result = compile(&iso);
+    assert!(result.is_err(), "AssocRSum(One,One,One) must be rejected (F7)");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("F7"),
+        "expected F7 deferred rejection, got: {msg}"
+    );
+}
+
+#[test]
+fn f7_assoc_lsum_nested_rejected() {
+    // AssocLSum(One,One,One): a+(b+c) → (a+b)+c — also non-identity.
+    let one = Type::One;
+    let iso = Iso::AssocLSum(one.clone(), one.clone(), one.clone());
+    let result = compile(&iso);
+    assert!(result.is_err(), "AssocLSum(One,One,One) must be rejected (F7)");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("F7"),
+        "expected F7 deferred rejection, got: {msg}"
+    );
+}
+
+#[test]
+fn f7_assoc_identity_still_compiles() {
+    // UniteSum(One): 0+One → One. The only inhabitant is Right(Unit),
+    // which maps to Unit. Input encoding: Sum(Zero,One) has
+    // num_leaves = 1 + max(0,0) = 1 → [tag=1]. Output encoding: One has
+    // num_leaves = 0 → []. After zero-padding to len=1: [1] vs [0...; pad to 1]
+    // — actually this IS non-identity because the tag byte 1 doesn't match 0.
+    //
+    // UnitiSum(One): One → 0+One. Input: [] (One). Output: Right(Unit)
+    // in Sum(Zero,One) → [1]. After padding to 1: [0] vs [1]. Non-identity.
+    //
+    // For truly degenerate cases: UniteSum(Zero) has input Sum(Zero,Zero)
+    // which is uninhabited → vacuously identity (no values to check).
+    // UnitiSum(Zero) has input Zero → also uninhabited → vacuously identity.
+    // These are the only cases that remain no-op.
+    let iso_unite_zero = Iso::UniteSum(Type::Zero);
+    let result = compile(&iso_unite_zero);
+    assert!(
+        result.is_ok(),
+        "UniteSum(Zero) should compile (vacuously identity): {:?}",
+        result.err()
+    );
+    let instrs = result.unwrap();
+    assert_eq!(instrs.len(), 0, "UniteSum(Zero) should emit no instructions");
+
+    let iso_uniti_zero = Iso::UnitiSum(Type::Zero);
+    let result = compile(&iso_uniti_zero);
+    assert!(
+        result.is_ok(),
+        "UnitiSum(Zero) should compile (vacuously identity): {:?}",
+        result.err()
+    );
+    let instrs = result.unwrap();
+    assert_eq!(instrs.len(), 0, "UnitiSum(Zero) should emit no instructions");
+}
+
+#[test]
+fn f7_unite_sum_one_rejected() {
+    // UniteSum(One): 0+One → One. The tag byte 1 (Right) doesn't match
+    // the empty encoding of One. Non-identity → rejected.
+    let iso = Iso::UniteSum(Type::One);
+    let result = compile(&iso);
+    assert!(result.is_err(), "UniteSum(One) must be rejected (F7)");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("F7"),
+        "expected F7 deferred rejection, got: {msg}"
+    );
+}
+
+#[test]
+fn f7_uniti_sum_one_rejected() {
+    // UnitiSum(One): One → 0+One. Non-identity (0 leaves → 1 leaf).
+    let iso = Iso::UnitiSum(Type::One);
+    let result = compile(&iso);
+    assert!(result.is_err(), "UnitiSum(One) must be rejected (F7)");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("F7"),
+        "expected F7 deferred rejection, got: {msg}"
+    );
+}
+
+#[test]
+fn f7_distrib_nested_rejected() {
+    // Distrib(Bit, One, One): Bit × Bit → Bit + Bit.
+    // Input Prod(Bit,Bit): [tag_a, tag_bc]. Output Sum(Bit,Bit):
+    // [tag_sum, tag_inner, pad]. Non-identity encoding.
+    let bit = Type::sum(Type::One, Type::One);
+    let iso = Iso::Distrib(bit, Type::One, Type::One);
+    let result = compile(&iso);
+    assert!(result.is_err(), "Distrib(Bit,One,One) must be rejected (F7)");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("F7"),
+        "expected F7 deferred rejection, got: {msg}"
+    );
+}
+
+#[test]
+fn f7_factor_nested_rejected() {
+    // Factor(Bit, One, One): Bit + Bit → Bit × Bit. Inverse of above.
+    let bit = Type::sum(Type::One, Type::One);
+    let iso = Iso::Factor(bit, Type::One, Type::One);
+    let result = compile(&iso);
+    assert!(result.is_err(), "Factor(Bit,One,One) must be rejected (F7)");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("F7"),
+        "expected F7 deferred rejection, got: {msg}"
+    );
+}
+
+#[test]
+fn f7_distrib_trivial_identity() {
+    // Distrib(One, One, One): One × (One+One) → (One×One) + (One×One).
+    // = One × Bit → Bit. Input: Prod(One, Bit) → [tag]. Output: Sum(One,One) → [tag].
+    // (Unit, Left(Unit)) → Left(Pair(Unit,Unit)) → [0]. Identity!
+    // (Unit, Right(Unit)) → Right(Pair(Unit,Unit)) → [1]. Identity!
+    let one = Type::One;
+    let iso = Iso::Distrib(one.clone(), one.clone(), one.clone());
+    let result = compile(&iso);
+    assert!(
+        result.is_ok(),
+        "Distrib(One,One,One) should compile (identity): {:?}",
+        result.err()
+    );
+    let instrs = result.unwrap();
+    assert_eq!(instrs.len(), 0, "Distrib(One,One,One) should be a no-op");
+}
+
+#[test]
+fn f7_factor_trivial_identity() {
+    // Factor(One, One, One): (One×One) + (One×One) → One × (One+One).
+    // = Bit → One × Bit. Inverse of above, also identity.
+    let one = Type::One;
+    let iso = Iso::Factor(one.clone(), one.clone(), one.clone());
+    let result = compile(&iso);
+    assert!(
+        result.is_ok(),
+        "Factor(One,One,One) should compile (identity): {:?}",
+        result.err()
+    );
+    let instrs = result.unwrap();
+    assert_eq!(instrs.len(), 0, "Factor(One,One,One) should be a no-op");
+}
