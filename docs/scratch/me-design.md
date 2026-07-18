@@ -109,6 +109,18 @@ CMOS ½CV² floor within the characterized clock range."*
 - If `clause_report` prints per-clause attribution, add the missing `pc_add_br` row and
   note the ~19% inter-phase composition residual (F6) — or don't print attribution.
 
+## 5b. Post-implementation correction (impl review F-3)
+
+The `iter Nat fibStep` (`0022-fib.thse`) lowers via **guarded static unroll**
+(`lower_data_dependent_iter`), **not** a `Trace` loop — so it pushes no `loop_terms` and
+`wcet() = instrs.len() = 24` (this §2 prediction of "`B ≈ |instrs| + (k_max−1)·iter_len ≈
+70–75`" was wrong for fib). `B = 24` is still the true WCET (the no-skip path executes all
+24 words), and the model `total_j = B × step_j` is exactly right. **fib's park tax
+(T=20, 16.67%) comes from the M-D.w forward-skip idle** — for this input the guarded unroll
+skips 2 of 3 iterations, reaching the dead zone 4 steps early — **not** from Trace-loop
+early-exit. A genuine *Trace-loop* park-tax program (with `loop_terms`) is gated on the
+M-D.e milestone cluster (see the test-program roadmap / ADR-0007 TH-1b).
+
 ## 6. Resolved by the design review
 Q-A (headline `B`) confirmed physical. Q-B (per-word) **inverted** → exact `B×step_energy`.
 Idle cost measured ~100% of a step → park tax is essential, not cosmetic. M-E demonstrates

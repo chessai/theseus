@@ -19,6 +19,7 @@ different model from the implementer). "Verdict" is the reviewer's, not the advi
 | M-D.d | implementation | DO-NOT-SHIP → fixed | [mdd-impl-review.md](mdd-impl-review.md) |
 | M-D.c1 (MEM_WORDS 4→8 widening) | design | *incomplete (ended mid-measurement)* | [mdc-design-review.md](mdc-design-review.md) |
 | M-E (energy-price a compiled ROM) | design | SHIP-WITH-FIXES | [me-design-review.md](me-design-review.md) |
+| M-E | implementation | SHIP-WITH-FIXES | [me-impl-review.md](me-impl-review.md) |
 | TP-1 (reversible GCD formulation) | design | OVERTURNED-IN-PART | [tp1-gcd-review.md](tp1-gcd-review.md) |
 
 > **Recovered retroactively.** These reviews predate L21; they were folded into the
@@ -90,6 +91,17 @@ Findings folded into `docs/scratch/me-design.md`; tests land with the implementa
 
 *Verdict on Q-A/B/(C)(D)(E): headline B is physical; per-word inverted; idle ≈ 100% of a
 step; M-E's real content is the WCET park tax + the honest program crossing.*
+
+### M-E IMPLEMENTATION review (tests in `crates/theseus-tisc/tests/energy.rs`)
+| # | Finding | Test / resolution |
+|---|---|---|
+| F-1 | honest-crossing test non-falsifying (passed on B-vs-B) | `me_a4_honest_crossing` now asserts crossing `== per-step × B/T` exactly (fails on a B-vs-B regression) |
+| F-2 | `me_a4` `#[ignore]`d → gate never exercised the honest crossing | un-ignored (lowering already memoized) |
+| F-3 | fib is guarded static-unroll (park tax = forward-skip idle), not a Trace loop — narrative | `me-design.md §5b`; `rom_energy.rs` comment; number unaffected (B=24 is the true WCET) |
+| F-4/F-5 | `me_a6`/`me_a2` near-tautological/circular | acceptable — `me_a3` pins B=24/T=20/6.62e-8 J as independent goldens (carries the teeth) |
+| F-6 | `rom_trace` doesn't check the "and stays" (br=0) half | fine for compiler ROMs; noted (debug_assert hardening deferred) |
+| F-7 | `fib(3)`/`T−1` comment nits | fixed |
+| solid | `total_j=B×step_j` right net, T=PC-in-dead-zone, memoization, F7 opcode-comment fix, scope clean | — |
 
 ### TP-1 GCD-formulation review (design-stage — no code, so findings → docs, not tests)
 A test-*program* formulation review (GCD isn't implemented; it's a Tier-3 customer). Its
