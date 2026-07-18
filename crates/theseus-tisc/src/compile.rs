@@ -1421,6 +1421,17 @@ fn lower_fold_unfold(
         });
     }
 
+    // Guard 1: Refuse when the incoming ctx is not the full canonical
+    // top-level layout. A displaced/sliced ctx (e.g. fold under Times or
+    // nested inside another fold body) means allocate_aux's zero assumption
+    // for free registers is violated → silent ROM corruption.
+    let canonical = Ctx::new(ctx.homes.len());
+    if ctx.homes != canonical.homes {
+        return Err(CompileError::Deferred(
+            "Fold/Unfold under a non-canonical context (M-D.alloc)".into(),
+        ));
+    }
+
     // depth ≤ 1 ⇒ spine can only hold nil (length 0) ⇒ no elements ⇒ no-op.
     if depth <= 1 {
         return Ok((vec![], ctx.clone()));
@@ -1469,15 +1480,33 @@ fn lower_fold_unfold(
         // Lower the body against this per-copy context.
         let (body_instrs, body_ctx_out) = lower(body, &body_ctx)?;
 
-        // Home-preservation invariant: the body must return every leaf
-        // to its entry home (the existing canonical-layout requirement).
-        debug_assert_eq!(
-            body_ctx.homes, body_ctx_out.homes,
-            "M-D.a: Ctx residence changed during fold/unfold body lowering (layer {j})"
-        );
+        // Guard 3: Home-preservation invariant — promoted from debug_assert
+        // to a hard error. A body that permutes homes would corrupt the
+        // outer context silently in release builds.
+        if body_ctx.homes != body_ctx_out.homes {
+            return Err(CompileError::Deferred(
+                "Fold/Unfold body permuted homes".into(),
+            ));
+        }
+
+        // Guard 2: Refuse when the body itself contains a Swapbr — that
+        // means the body needs an inner skip block, whose allocate_aux is
+        // likewise unsound under the narrow sub-context.
+        if body_instrs.iter().any(|i| matches!(i, Instr::Swapbr { .. })) {
+            return Err(CompileError::Deferred(
+                "Fold/Unfold body needs inner control (M-D.alloc)".into(),
+            ));
+        }
 
         if body_instrs.is_empty() {
             continue;
+        }
+
+        // Guard 4: body_len must fit in u8 for the skip-block immediate.
+        if body_instrs.len() > 255 {
+            return Err(CompileError::Deferred(
+                "Fold/Unfold body too long for skip-block (>255 instructions)".into(),
+            ));
         }
 
         // Ensure tag register is accessible.

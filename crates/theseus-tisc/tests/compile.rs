@@ -720,3 +720,114 @@ fn fold_sym_agrees_with_unfold_eval() {
     let sym_parity = Iso::sym(parity);
     assert_oracle_fast("sym_parity", &sym_parity);
 }
+
+// ── M-D.a soundness guards: counterexample rejection tests ──────────
+
+#[test]
+fn counterexample_times_unfold_rejected() {
+    // Times(Id(Bit), Unfold(list_spine_ty(Bit,4), swp)) — the unfold sits
+    // under a Times split so its ctx is displaced (non-canonical). Guard 1
+    // must reject this rather than silently corrupting the ROM.
+    let bit = Type::sum(Type::One, Type::One);
+    let swp = Iso::SwapProd(bit.clone(), bit.clone());
+    let iso = Iso::times(
+        Iso::Id(bit.clone()),
+        Iso::unfold(Type::list_spine_ty(bit.clone(), 4), swp),
+    );
+    let result = compile(&iso);
+    assert!(
+        result.is_err(),
+        "Times(Id(Bit), Unfold(..)) must be rejected (non-canonical ctx)"
+    );
+}
+
+#[test]
+fn counterexample_nested_fold_unfold_rejected() {
+    // Fold(list_spine_ty(Bit,2), Times(Id(Bit), Unfold(list_spine_ty(Bit,2), swp)))
+    // — the inner Unfold is nested inside a fold body's sub-context under Times.
+    // Guard 1 must reject this (the Unfold sees a non-canonical ctx).
+    let bit = Type::sum(Type::One, Type::One);
+    let swp = Iso::SwapProd(bit.clone(), bit.clone());
+    let inner_unfold = Iso::unfold(Type::list_spine_ty(bit.clone(), 2), swp);
+    let body = Iso::times(Iso::Id(bit.clone()), inner_unfold);
+    let iso = Iso::fold(Type::list_spine_ty(bit.clone(), 2), body);
+    let result = compile(&iso);
+    assert!(
+        result.is_err(),
+        "Fold(..Times(Id,Unfold(..))) must be rejected (nested non-canonical ctx)"
+    );
+}
+
+// ── M-D.a direction coverage: non-self-adjoint, order-sensitive body ─
+
+#[test]
+fn fold_non_self_adjoint_body_oracle() {
+    // Seq(cnot, swp) is NOT self-adjoint (adj = Seq(swp, cnot) ≠ Seq(cnot, swp))
+    // and is order-sensitive, so fold vs unfold actually differ. Verify the
+    // compiled fold agrees with eval over the whole domain.
+    let bit = Type::sum(Type::One, Type::One);
+    let cnot = elaborate(CNOT_SRC, "cnot");
+    let swp = Iso::SwapProd(bit.clone(), bit.clone());
+    let body = Iso::seq(cnot, swp);
+    let l = Type::list_spine_ty(bit.clone(), 4);
+    let iso = Iso::fold(l, body);
+    assert_oracle_fast("fold_seq_cnot_swp", &iso);
+}
+
+#[test]
+fn unfold_non_self_adjoint_body_oracle() {
+    // The adjoint direction: Sym(fold(l, Seq(cnot, swp))) = Unfold(l, Seq(swp, cnot)).
+    // Verify the compiled adjoint agrees with eval.
+    let bit = Type::sum(Type::One, Type::One);
+    let cnot = elaborate(CNOT_SRC, "cnot");
+    let swp = Iso::SwapProd(bit.clone(), bit.clone());
+    let body = Iso::seq(cnot, swp);
+    let l = Type::list_spine_ty(bit.clone(), 4);
+    let iso = Iso::sym(Iso::fold(l, body));
+    assert_oracle_fast("sym_fold_seq_cnot_swp", &iso);
+}
+
+#[test]
+fn sym_shl_oracle() {
+    // Sym(shl) = Fold(list_spine_ty(Bit,4), adj(swp)) = Fold(.., swp) since
+    // swp is self-adjoint. Verify compiled adjoint of the unfold agrees with eval.
+    let shl = elaborate(SHIFT_SRC, "shl");
+    let sym_shl = Iso::sym(shl);
+    assert_oracle_fast("sym_shl", &sym_shl);
+}
+
+// ── M-D.a deep spine: scratch-resident tags ─────────────────────────
+
+#[test]
+fn deep_spine_fold_oracle() {
+    // Fold over list_spine_ty(Bit, 6): 12 spine leaves + 1 acc = 13 total.
+    // Tags at leaves 0, 2, 4, 6, 8, 10 — leaves 8+ spill to scratch.
+    // Bounded fast oracle (2^13 = 8192 values → strided ≤256 sample).
+    let bit = Type::sum(Type::One, Type::One);
+    let swp = Iso::SwapProd(bit.clone(), bit.clone());
+    let l = Type::list_spine_ty(bit.clone(), 6);
+    let iso = Iso::fold(l, swp);
+    compile(&iso).expect("deep-spine fold should compile");
+    assert_oracle_fast_bounded("deep_spine_fold", &iso, 256);
+}
+
+#[test]
+fn deep_spine_unfold_oracle() {
+    // Unfold over list_spine_ty(Bit, 6): same as above but tail-to-head.
+    let bit = Type::sum(Type::One, Type::One);
+    let swp = Iso::SwapProd(bit.clone(), bit.clone());
+    let l = Type::list_spine_ty(bit.clone(), 6);
+    let iso = Iso::unfold(l, swp);
+    compile(&iso).expect("deep-spine unfold should compile");
+    assert_oracle_fast_bounded("deep_spine_unfold", &iso, 256);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow)"]
+fn deep_spine_fold_real_cpu() {
+    let bit = Type::sum(Type::One, Type::One);
+    let swp = Iso::SwapProd(bit.clone(), bit.clone());
+    let l = Type::list_spine_ty(bit.clone(), 6);
+    let iso = Iso::fold(l, swp);
+    assert_oracle("deep_spine_fold", &iso);
+}
