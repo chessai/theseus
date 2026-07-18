@@ -177,6 +177,55 @@ enum Location {
     Mem(u8),
 }
 
+/// Whole-machine occupancy bitmask: one bit per physical location.
+/// Used by `allocate_aux` to determine which locations are genuinely
+/// free (zero from marshalling) vs. occupied by a leaf outside the
+/// current sub-context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OccSet {
+    regs: u8,
+    scratch: u8,
+    mem: u32,
+}
+
+impl OccSet {
+    fn empty() -> Self {
+        OccSet { regs: 0, scratch: 0, mem: 0 }
+    }
+
+    fn from_locations(locs: &[Location]) -> Self {
+        let mut occ = Self::empty();
+        for loc in locs {
+            occ.set(*loc);
+        }
+        occ
+    }
+
+    fn is_free(&self, loc: Location) -> bool {
+        match loc {
+            Location::Reg(r) => self.regs & (1 << r) == 0,
+            Location::Scratch(s) => self.scratch & (1 << s) == 0,
+            Location::Mem(a) => self.mem & (1 << a) == 0,
+        }
+    }
+
+    fn set(&mut self, loc: Location) {
+        match loc {
+            Location::Reg(r) => self.regs |= 1 << r,
+            Location::Scratch(s) => self.scratch |= 1 << s,
+            Location::Mem(a) => self.mem |= 1 << a,
+        }
+    }
+
+    fn clear(&mut self, loc: Location) {
+        match loc {
+            Location::Reg(r) => self.regs &= !(1 << r),
+            Location::Scratch(s) => self.scratch &= !(1 << s),
+            Location::Mem(a) => self.mem &= !(1 << a),
+        }
+    }
+}
+
 /// Maximum leaves for straight-line programs (8 regs + s2..s7 + MEM_WORDS mem = 14+N).
 const MAX_LEAVES: usize = 14 + MEM_WORDS;
 
@@ -196,43 +245,52 @@ const SCRATCH_SPILL_BASE: u8 = 2;
 struct Ctx {
     /// `homes[i]` = canonical physical location for leaf `i`.
     homes: Vec<Location>,
+    /// Whole-machine occupancy: bits for every location holding live data.
+    /// Copied unchanged across split/merge; updated only by displacement.
+    occ: OccSet,
 }
 
 impl Ctx {
     /// Canonical home layout (ADR-0044 §2.1 + ADR-0046 §3.1):
     /// L < 8 → Reg(L); 8 ≤ L < 14 → Scratch(L − 6); 14 ≤ L < 14+N → Mem(L − 14).
     fn new(n_leaves: usize) -> Self {
-        Ctx {
-            homes: (0..n_leaves)
-                .map(|i| {
-                    if i < NUM_REGS {
-                        Location::Reg(i as u8)
-                    } else if i < 14 {
-                        Location::Scratch((i - 6) as u8)
-                    } else {
-                        Location::Mem((i - 14) as u8)
-                    }
-                })
-                .collect(),
-        }
+        let homes: Vec<Location> = (0..n_leaves)
+            .map(|i| {
+                if i < NUM_REGS {
+                    Location::Reg(i as u8)
+                } else if i < 14 {
+                    Location::Scratch((i - 6) as u8)
+                } else {
+                    Location::Mem((i - 14) as u8)
+                }
+            })
+            .collect();
+        let occ = OccSet::from_locations(&homes);
+        Ctx { homes, occ }
     }
 
     /// Split into two sub-contexts for `Times(f, g)`.
     fn split(&self, n_left: usize) -> (Ctx, Ctx) {
         let left = Ctx {
             homes: self.homes[..n_left].to_vec(),
+            occ: self.occ,
         };
         let right = Ctx {
             homes: self.homes[n_left..].to_vec(),
+            occ: self.occ,
         };
         (left, right)
     }
 
     /// Merge two sub-contexts back.
     fn merge(left: &Ctx, right: &Ctx) -> Ctx {
+        debug_assert_eq!(
+            left.occ, right.occ,
+            "merge: both halves must share the same occ"
+        );
         let mut homes = left.homes.clone();
         homes.extend_from_slice(&right.homes);
-        Ctx { homes }
+        Ctx { homes, occ: left.occ }
     }
 }
 
@@ -397,16 +455,10 @@ fn allocate_aux(
     count: usize,
     exclude_leaves: &[usize],
 ) -> Result<AuxAlloc, CompileError> {
-    let used_regs: std::collections::BTreeSet<u8> = ctx
-        .homes
-        .iter()
-        .filter_map(|h| match h {
-            Location::Reg(r) => Some(*r),
-            _ => None,
-        })
-        .collect();
+    // Use whole-machine occupancy to find genuinely free (zero) registers,
+    // not just what this sub-context's homes list says.
     let free_regs: Vec<u8> = (0..NUM_REGS as u8)
-        .filter(|r| !used_regs.contains(r))
+        .filter(|r| ctx.occ.is_free(Location::Reg(*r)))
         .collect();
 
     if free_regs.len() >= count {
@@ -415,36 +467,19 @@ fn allocate_aux(
 
     // Zero-source: displace register-home leaves into free scratch OR
     // free memory slots (ADR-0046 §3.1 — unused marshalling-zeroed words).
-    let used_scratch: std::collections::BTreeSet<u8> = ctx
-        .homes
-        .iter()
-        .filter_map(|h| match h {
-            Location::Scratch(s) => Some(*s),
-            _ => None,
-        })
-        .collect();
-    let used_mem: std::collections::BTreeSet<u8> = ctx
-        .homes
-        .iter()
-        .filter_map(|h| match h {
-            Location::Mem(a) => Some(*a),
-            _ => None,
-        })
-        .collect();
-
-    // Collect free zero-source slots: scratch s2..s7 first, then mem words.
+    // Use whole-machine occupancy for free-slot detection.
     enum ZeroSlot {
         Scratch(u8),
         Mem(u8),
     }
     let mut free_slots: Vec<ZeroSlot> = Vec::new();
     for s in (SCRATCH_SPILL_BASE..NUM_SCRATCH as u8).rev() {
-        if !used_scratch.contains(&s) {
+        if ctx.occ.is_free(Location::Scratch(s)) {
             free_slots.push(ZeroSlot::Scratch(s));
         }
     }
     for a in (0..MEM_WORDS as u8).rev() {
-        if !used_mem.contains(&a) {
+        if ctx.occ.is_free(Location::Mem(a)) {
             free_slots.push(ZeroSlot::Mem(a));
         }
     }
@@ -473,6 +508,7 @@ fn allocate_aux(
     let mut page_in = Vec::new();
     let mut page_out = Vec::new();
     let mut modified_homes = ctx.homes.clone();
+    let mut occ = ctx.occ;
 
     for i in 0..needed {
         let (leaf_idx, reg) = displaceable[displaceable.len() - 1 - i];
@@ -482,11 +518,15 @@ fn allocate_aux(
                 page_in.push(Instr::Xchg { rd: reg, sx });
                 page_out.push(Instr::Xchg { rd: reg, sx });
                 modified_homes[leaf_idx] = Location::Scratch(sx);
+                occ.clear(Location::Reg(reg));
+                occ.set(Location::Scratch(sx));
             }
             ZeroSlot::Mem(addr) => {
                 page_in.push(Instr::Mexch { rd: reg, addr });
                 page_out.push(Instr::Mexch { rd: reg, addr });
                 modified_homes[leaf_idx] = Location::Mem(addr);
+                occ.clear(Location::Reg(reg));
+                occ.set(Location::Mem(addr));
             }
         }
         aux_regs.push(reg);
@@ -499,6 +539,7 @@ fn allocate_aux(
         page_out,
         Ctx {
             homes: modified_homes,
+            occ,
         },
     ))
 }
@@ -549,10 +590,15 @@ fn emit_skip_block(
     rb: u8,
     temp: u8,
     skip_when_set: bool,
-) -> Vec<Instr> {
+) -> Result<Vec<Instr>, CompileError> {
+    if body_instrs.len() > 255 {
+        return Err(CompileError::Deferred(
+            "skip-block body too long (>255 instructions)".into(),
+        ));
+    }
     let body_len = body_instrs.len() as u8;
     if body_len == 0 {
-        return vec![];
+        return Ok(vec![]);
     }
     let mut out = Vec::new();
 
@@ -618,7 +664,7 @@ fn emit_skip_block(
         });
     }
 
-    out
+    Ok(out)
 }
 
 // ── Prim recognition ─────────────────────────────────────────────────
@@ -982,8 +1028,10 @@ fn lower_controlled_idiom(
     let (ctrl_reg, ctrl_pi, ctrl_po) = ensure_reg(&dctx, 0, &[rb, temp]);
 
     // Compile g's body with the displaced context's target sub-slice.
+    // occ from dctx (post-displacement), not the parent.
     let ctx_tgt = Ctx {
         homes: dctx.homes[n_ctrl..n_ctrl + n_tgt].to_vec(),
+        occ: dctx.occ,
     };
     let (instrs_g, _) = lower(g, &ctx_tgt)?;
 
@@ -996,7 +1044,7 @@ fn lower_controlled_idiom(
     let mut instrs = Vec::new();
     instrs.extend(aux_pi);
     instrs.extend(ctrl_pi);
-    instrs.extend(emit_skip_block(ctrl_reg, &instrs_g, rb, temp, false));
+    instrs.extend(emit_skip_block(ctrl_reg, &instrs_g, rb, temp, false)?);
     instrs.extend(ctrl_po);
     instrs.extend(aux_po);
     Ok((instrs, ctx.clone()))
@@ -1190,7 +1238,20 @@ fn right_assoc_seq(iso: Iso) -> Iso {
 }
 
 /// Recursive lowering: iso + register context → (instructions, updated context).
+/// INVARIANT: lower() returns with canonical layout restored (page-out
+/// bracketing). The shared-occ safety depends on this.
 fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
+    let result = lower_dispatch(iso, ctx);
+    if let Ok((_, ref out_ctx)) = result {
+        debug_assert_eq!(
+            out_ctx.homes, ctx.homes,
+            "lower() invariant: canonical layout must be restored"
+        );
+    }
+    result
+}
+
+fn lower_dispatch(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
     // First, try matching the controlled-op idiom (before decomposing Seq).
     if let Some((ctrl_ty, tgt_ty, ctrl_l, ctrl_r, f, g)) = match_controlled_idiom(iso) {
         return lower_controlled_idiom(ctrl_ty, tgt_ty, ctrl_l, ctrl_r, f, g, ctx);
@@ -1367,7 +1428,7 @@ fn lower_data_dependent_iter(
         let (ctrl_reg, ctrl_pi, ctrl_po) = ensure_reg(&dctx, i, &[rb, temp]);
         instrs.extend(ctrl_pi);
         // skip_when_set=false: skip body iff ctrl=0 (tag=0 means k ≤ i)
-        instrs.extend(emit_skip_block(ctrl_reg, &body_instrs, rb, temp, false));
+        instrs.extend(emit_skip_block(ctrl_reg, &body_instrs, rb, temp, false)?);
         instrs.extend(ctrl_po);
     }
 
@@ -1475,7 +1536,7 @@ fn lower_fold_unfold(
         for k in 0..n_acc {
             body_homes.push(dctx.homes[acc_start + k]);
         }
-        let body_ctx = Ctx { homes: body_homes };
+        let body_ctx = Ctx { homes: body_homes, occ: dctx.occ };
 
         // Lower the body against this per-copy context.
         let (body_instrs, body_ctx_out) = lower(body, &body_ctx)?;
@@ -1514,7 +1575,7 @@ fn lower_fold_unfold(
 
         instrs.extend(tag_pi);
         // skip_when_set=false: skip body iff tag=0 (nil / shorter list).
-        instrs.extend(emit_skip_block(tag_reg, &body_instrs, rb, temp, false));
+        instrs.extend(emit_skip_block(tag_reg, &body_instrs, rb, temp, false)?);
         instrs.extend(tag_po);
     }
 
@@ -1559,9 +1620,11 @@ fn lower_bare_plus(
     // from the displaced context.
     let ctx_f = Ctx {
         homes: dctx.homes[1..1 + n_f].to_vec(),
+        occ: dctx.occ,
     };
     let ctx_g = Ctx {
         homes: dctx.homes[1..1 + n_g].to_vec(),
+        occ: dctx.occ,
     };
 
     let (instrs_f, _) = lower(f, &ctx_f)?;
@@ -1580,12 +1643,12 @@ fn lower_bare_plus(
 
     // Phase 1: f runs iff tag=0 → skip f iff tag=1
     if !f_is_nop {
-        instrs.extend(emit_skip_block(tag_reg, &instrs_f, rb, temp, true));
+        instrs.extend(emit_skip_block(tag_reg, &instrs_f, rb, temp, true)?);
     }
 
     // Phase 2: g runs iff tag=1 → skip g iff tag=0
     if !g_is_nop {
-        instrs.extend(emit_skip_block(tag_reg, &instrs_g, rb, temp, false));
+        instrs.extend(emit_skip_block(tag_reg, &instrs_g, rb, temp, false)?);
     }
 
     instrs.extend(tag_po);
@@ -1826,6 +1889,7 @@ mod tests {
         // Craft a context where two leaves alias the same register.
         let ctx = Ctx {
             homes: vec![Location::Reg(0), Location::Reg(0)],
+            occ: OccSet::from_locations(&[Location::Reg(0)]),
         };
         let result = recognize_prim(&def, &ctx);
         assert!(

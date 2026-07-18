@@ -836,3 +836,38 @@ fn deep_spine_fold_real_cpu() {
     let iso = Iso::fold(l, swp);
     assert_oracle("deep_spine_fold", &iso);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// M-D.alloc1: L20 regression — occupancy-aware allocation fixes
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn times_id_plus_id_swapsum_l20_regression() {
+    // L20 regression: Times(Id(Bit), Plus(Id(Bit), SwapSum(One,One)))
+    // silently miscompiled before occupancy-aware allocation.
+    // ⟨1, inl 0⟩ → ⟨0, inl 0⟩ (sibling bit clobbered by aux reg overlap).
+    let bit = Type::sum(Type::One, Type::One);
+    let iso = Iso::times(
+        Iso::Id(bit.clone()),
+        Iso::Plus(
+            Box::new(Iso::Id(bit.clone())),
+            Box::new(Iso::SwapSum(Type::One, Type::One)),
+        ),
+    );
+    assert_oracle_fast("times_id_plus_id_swapsum", &iso);
+}
+
+#[test]
+fn times_id_iter_l20_regression() {
+    // L20 regression: Times(Id(Bit), Iter(Nat2, NOT)) — iter under Times
+    // with a sibling bit. Without occ-aware allocation, the sibling's
+    // register was treated as free and used as aux, corrupting data.
+    let bit = Type::sum(Type::One, Type::One);
+    let nat2 = Type::sum(Type::One, Type::sum(Type::One, Type::Zero));
+    let body = Iso::SwapSum(Type::One, Type::One);
+    let iso = Iso::times(
+        Iso::Id(bit.clone()),
+        Iso::Iter(nat2, Box::new(body)),
+    );
+    assert_oracle_fast("times_id_iter", &iso);
+}
