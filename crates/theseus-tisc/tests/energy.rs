@@ -15,7 +15,7 @@
 //! lowerings (2-word ROM + 24-word fib ROM), each ~GB; concurrent lowering
 //! exhausts memory.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use theseus_netlist::{balance, lower_iso, CellKind, PhasedCellNetlist};
 
@@ -30,6 +30,10 @@ use theseus_tisc::energy::{
 use theseus_tisc::money_plot::{cmos_crossing_t_ramp, CMOS_STATIC_E_PER_GATE_J};
 
 const T_RAMP: f64 = 1e-7;
+
+/// Gate to serialize expensive step-net lowerings — concurrent lowerings
+/// exhaust memory and trigger SIGKILL.
+static LOWER_GATE: Mutex<()> = Mutex::new(());
 
 fn char_db() -> &'static CharDb {
     static DB: OnceLock<CharDb> = OnceLock::new();
@@ -51,6 +55,7 @@ fn test_rom() -> Vec<u16> {
 fn step_net() -> &'static PhasedCellNetlist {
     static NET: OnceLock<PhasedCellNetlist> = OnceLock::new();
     NET.get_or_init(|| {
+        let _guard = LOWER_GATE.lock().unwrap();
         let rom = test_rom();
         let step_iso = theseus_tisc::step::step(&rom);
         lower_iso(&step_iso).expect("lower_iso step")
@@ -180,6 +185,7 @@ fn fib_iso() -> &'static theseus_core::Iso {
 fn fib_step_net() -> &'static PhasedCellNetlist {
     static NET: OnceLock<PhasedCellNetlist> = OnceLock::new();
     NET.get_or_init(|| {
+        let _guard = LOWER_GATE.lock().unwrap();
         let iso = fib_iso();
         let lowered = compile_with_metadata(iso).expect("compile fib");
         let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble fib");
