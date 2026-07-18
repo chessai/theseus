@@ -73,6 +73,21 @@ Test names are in `crates/theseus-tisc/tests/compile.rs` unless noted.
   existing skip-taking `*_real_cpu` tests), not standalone bugs.
 - **M-D.w findings 6/7** (fuel scaling, citation nits) — non-behavioral.
 
+## Earlier reviews — NOT recoverable (the exact gap L21 fixes)
+
+The pre-M-D milestones (Stage 2 two-body, the type-system pass, M-D.a fold/unfold,
+M-D.alloc1/alloc2, M-D.b MEXCHR) each had a design and/or implementation adversarial
+review, but they ran in **prior sessions** whose Agent-tool transcripts lived in
+now-wiped `/tmp` dirs — and those sessions' conversation transcripts are gone too. The
+review *texts* are unrecoverable. Their **findings**, however, were fixed-with-a-test at
+the time (documented in `~/.claude/.../memory/theseus-overnight-run.md`): e.g. Stage 2's
+mod-P timing flaw → the absolute-tick arrival-equation cert; 2b-lite's "self-fulfilling
+theater" → golden-pin + independent re-derivation; M-D.a's unsound `allocate_aux` →
+reject-guards + alloc1's *reproduced* corruption test; M-D.b's invisible bus-quiescence
+trap → `system_ring_mexchr_matches_eval_oracle`. Those tests are in the suite; the
+verbatim reviews are lost. This is exactly why L21 mandates committing each review *at
+the time it is produced*.
+
 ## Incomplete reviews (Fable ended before the final verdict)
 - **M-D.w impl** and **M-D.c1 design**: the reviewer ran long and returned a status line
   instead of the structured verdict (the known Fable reporting flake — L21 says instruct
