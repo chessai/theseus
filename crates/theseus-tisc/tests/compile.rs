@@ -1628,6 +1628,69 @@ fn mdd_reject_nested_trace() {
     );
 }
 
+#[test]
+fn mdd_reject_swapbr_body() {
+    // F6 safe policy: a Trace body containing a forward skip-block (Swapbr)
+    // is rejected in v1 (only Swapbr-free bodies supported). `Plus` lowers
+    // its arms via emit_skip_block → the SwapSum arm emits a Swapbr.
+    // Trace(Bit, Plus(SwapSum(1,1), Id(One))) : body Sum(Bit,One)↔Sum(Bit,One)
+    // (u=Bit, a=b=One), whose lowering contains a Swapbr.
+    let body = Iso::plus(Iso::SwapSum(Type::One, Type::One), Iso::Id(Type::One));
+    let iso = Iso::trace(Type::sum(Type::One, Type::One), body);
+    let result = compile(&iso);
+    assert!(
+        result.is_err(),
+        "Trace body with a skip-block (Swapbr) must be rejected (F6)"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("Swapbr") || msg.contains("F6"),
+        "expected F6 Swapbr-body rejection, got: {msg}"
+    );
+}
+
+#[test]
+fn mdd_reject_leaf_count_mismatch() {
+    // F-5: a Trace body u+a ↔ u+b whose a/b leaf counts differ is rejected
+    // (the carrier is sized for `a`; unmarshal of `b` would misread the tag
+    // as a payload leaf). u=One, a=Bit (1 leaf, 2 inhabitants),
+    // b=Sum(One,Sum(One,Zero)) (2 leaves, 2 inhabitants). in/out both have 3
+    // inhabitants → a valid bijective prim body, but |a|=1 ≠ |b|=2 leaves.
+    let one = Type::One;
+    let bit = Type::sum(one.clone(), one.clone());
+    let b = Type::sum(one.clone(), Type::sum(one.clone(), Type::Zero));
+    let in_ty = Type::sum(one.clone(), bit.clone()); // u+a, u=One, a=Bit
+    let out_ty = Type::sum(one.clone(), b.clone()); // u+b
+    let ins = enumerate_values(&in_ty);
+    let outs = enumerate_values(&out_ty);
+    assert_eq!(ins.len(), outs.len(), "need equal inhabitants for a bijection");
+    let mut forward = BTreeMap::new();
+    let mut backward = BTreeMap::new();
+    for (i, o) in ins.iter().zip(outs.iter()) {
+        forward.insert(i.clone(), o.clone());
+        backward.insert(o.clone(), i.clone());
+    }
+    let prim = PrimDef {
+        forward_name: "lc_mismatch".into(),
+        backward_name: "lc_mismatch_inv".into(),
+        input_ty: in_ty,
+        output_ty: out_ty,
+        forward,
+        backward,
+    };
+    let iso = Iso::trace(one, Iso::Prim(Box::new(prim)));
+    let result = compile(&iso);
+    assert!(
+        result.is_err(),
+        "Trace body with |a| != |b| leaves must be rejected (F-5)"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("F-5") || msg.contains("leaf-count"),
+        "expected F-5 leaf-count rejection, got: {msg}"
+    );
+}
+
 // ── F7: reject-don't-corrupt for structural sum-renamings ───────────
 
 #[test]
