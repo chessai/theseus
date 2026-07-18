@@ -12,9 +12,22 @@ applies throughout: forward totality does **not** imply backward totality
 ## Decision
 - **Finite fragment:** totality is free. `trace` over finite `u` cannot
   diverge: the body is injective, so trajectories through `u` cannot
-  repeat a state; iteration count ≤ |u|. Every synthesizable v0.1 program
-  is a total iso by construction, with a static WCET the compiler reports
-  (ledger entry TH-1: exact bound + two-direction proof still owed).
+  repeat a state. **Exact bound (corrected — TH-1):** an exiting trajectory
+  applies the body to `Right(a), Left(w₁), …, Left(w_{t−1})` (`t`
+  applications, incl. the exit); injectivity forces the `wᵢ` pairwise-
+  distinct in `u`, so `t − 1 ≤ |u|`, i.e. **iteration count `t ≤ |u| + 1`,
+  and this is attained** (witness: the 3-cycle `R()→L(L())→L(R())→R()` on
+  `u = Bool` gives `t = 3 > |u| = 2`). The earlier "≤ |u|" was off by one.
+  Every synthesizable v0.1 program is a total iso by construction, with a
+  static WCET the compiler reports. **TH-1 status:** the WCET *reporting
+  machinery* (a static budget the compiler emits, plus a reversible
+  park-at-end making over-running to the budget answer-preserving) is
+  **implemented for the straight-line fragment** by M-D.w (theseus-v2
+  `a2479b9`; `wcet()`/`run_rom_on_cpu`, `docs/scratch/mdw-design.md`;
+  monotone `B = rom.len()`, two-direction equal by construction). The
+  **loop term** `B = spine + (|u|+1)·|body|` and its two-direction bound
+  land with M-D.d (`Trace` as a reversible while-loop,
+  `docs/scratch/mdd-design.md`).
 - **μ-types (v0.2):** blessed total-by-construction combinators — bounded
   iteration (the count lives in the data, symmetric by construction) and
   reversible fold/unfold pairs. Raw unbounded trace stays expressible but

@@ -3,7 +3,7 @@
 > **Current status (2026-07-16):** M1, M3a, M3b, **M4-v1**, the **M4-v2
 > ring-machine core** (recirculating CPU + reversible branching, Fibonacci on the
 > ring at 20× area saving, zero-garbage closure), and the **v0.2 software dialect**
-> are all done and merged on `chessai/theseus-v2` (`c229920`). The **headline
+> are all done and merged on `chessai/theseus-v2` (`a2479b9`). The **headline
 > thread** is the **surface → TISC-1 ROM compiler** (the #1 goal), now at **M-A +
 > M-B + M-C1 + M-C2 (Stage 1 + Stage 2) done; M-D in progress**: non-recursive, branching,
 > data-dependent `iter` (the real `fib`), register↔scratch spill, resident memory via
@@ -34,9 +34,14 @@
 > allocator (`OccSet`, fixing a reproduced pre-existing M-B silent-corruption bug);
 > **M-D.alloc2** (`a8b8fcc`) safely rejects doubly-nested control; **M-D.b** (`c229920`)
 > data-dependent memory addressing (`MEXCHR rd,ra` = `reg[rd]↔mem[reg[ra]%N]`, preserving
-> the Stage-1b bus-quiescence closure via `ra≠rd`). Remaining: heap value rep (needs
-> MEM_WORDS widening), halting-model/WCET harness, `Trace`/labels + calling convention.
-> Design docs `docs/scratch/md*.md`. See [Project status](status.md). The post-v1
+> the Stage-1b bus-quiescence closure via `ra≠rd`). **M-D.w** (`a2479b9`) added the
+> **static-WCET / reversible-park-at-end halting harness** (ADR-0007 TH-1, straight-line
+> fragment): `run_on_cpu` runs a compiler-reported budget and idles reversibly to it —
+> a fresh-context review caught a latent parked-PC wrap bug (`B+S_max≤256` now enforced)
+> and corrected ADR-0007's iteration bound to `|u|+1`. Remaining: `Trace`/labels as a
+> reversible while-loop (M-D.d, designed) + calling convention (M-D.d2); heap value rep
+> (M-D.c, needs MEM_WORDS widening). Design docs `docs/scratch/md*.md`, `mdw-design.md`,
+> `mdd-design.md`. See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
 > shows machine-level adiabatic slope −0.997 crossing below the CMOS floor);

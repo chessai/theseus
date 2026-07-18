@@ -10,7 +10,7 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`c229920`. Everything below is merged there. Since M4-v1 this branch landed the
+`a2479b9`. Everything below is merged there. Since M4-v1 this branch landed the
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
 thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU
@@ -36,9 +36,17 @@ displaced `Ctx`), the register allocator is **occupancy-aware** (`OccSet` bitmas
 fixed a reproduced pre-existing M-B silent-corruption bug; nested control safely
 rejected), and **memory is data-dependently addressable** (`MEXCHR rd,ra` =
 `reg[rd] ↔ mem[reg[ra] % N]`, a register-sourced address that preserves the Stage-1b
-bus-quiescence closure — enforced by `ra≠rd`). Remaining for M-D: heap value rep
-(needs MEM_WORDS widening), the halting-model/WCET harness, and `Trace`/labels as a
-reversible while-loop + a reversible calling convention. See the sections below and
+bus-quiescence closure — enforced by `ra≠rd`). The **halting-model / static-WCET
+harness (M-D.w, `a2479b9`)** is now done — `run_on_cpu` runs a compiler-reported WCET
+budget and **parks reversibly at end** (forward-idle through identity-decoding zero
+cells, never a fixpoint), discharging ADR-0007 TH-1 for the straight-line fragment
+(preconditions: `BR=0`, `B + S_max ≤ 256` so the 8-bit PC can't wrap into live ROM,
+`s0=s1=0`; a fresh-context review caught a *latent* parked-PC wrap bug and the real-iso
+`s0`-idle condition, both now enforced). Remaining for M-D: `Trace`/labels as a
+reversible while-loop (M-D.d, designed — `docs/scratch/mdd-design.md`; a review found
+ADR-0007's `≤|u|` iteration bound is off by one — the exact bound is `|u|+1`) + a
+reversible calling convention (M-D.d2), and heap value rep (M-D.c, needs MEM_WORDS
+widening). See the sections below and
 ADRs 0033–0046, `docs/scratch/md*.md`, and
 [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md).
 
