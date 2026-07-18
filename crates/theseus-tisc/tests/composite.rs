@@ -442,7 +442,7 @@ fn non_mexch_ir_samples() -> Vec<u16> {
         i_ins(2, 2, 0xAA),  // XORI
         i_ins(3, 3, 0x03),  // ROTLI
         i_ins(4, 4, 0x05),  // ROTRI
-        r_ins(10, 1, 2, 3), // reserved R-format
+        r_ins(11, 1, 2, 3), // reserved R-format (opcode 10=MEXCHR since M-D.b; 11..15 reserved)
         i_ins(5, 3, 0x7C),  // reserved I-format
         0,                  // IR=0 (degenerates to ADDI r0, #0)
     ]
