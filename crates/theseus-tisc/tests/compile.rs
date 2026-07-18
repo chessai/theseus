@@ -1266,6 +1266,78 @@ fn build_3cycle_body() -> (Iso, Type) {
     (Iso::Prim(Box::new(prim)), bit)
 }
 
+/// Build an informative Trace body (F-4): the SAME recognized linear map
+/// `(a,b) ↦ (a⊕b⊕1, a)` as the 3-cycle, but on the carrier `Sum(Bit, Bit)`
+/// (a = b = Bit, so the trace OUTPUT carries a real Bit — unlike the
+/// One↔One 3-cycle whose unmarshal is always Unit and cannot witness a
+/// wrong payload). `Trace(Bit, body)` is the identity on Bit, but input 0
+/// takes t=3 (TWO backward re-entries) and MUST return exactly 0; a
+/// corrupted come-from would change the observed output. Input 1 exits at
+/// t=1 → 1. This gives the crown-jewel a genuine output-value check.
+fn build_informative_trace_body() -> (Iso, Type) {
+    let bit = Type::sum(Type::One, Type::One);
+    let carrier_ty = Type::sum(bit.clone(), bit.clone());
+    let vals = enumerate_values(&carrier_ty);
+
+    let mut forward = BTreeMap::new();
+    let mut backward = BTreeMap::new();
+    for v in &vals {
+        let in_bytes = theseus_tisc::compile::marshal(v, &carrier_ty);
+        let a = in_bytes.regs[0];
+        let b = in_bytes.regs[1];
+        let out_a = a ^ b ^ 1;
+        let out_b = a;
+        let out_state = StateVals {
+            regs: {
+                let mut r = [0u8; NUM_REGS];
+                r[0] = out_a;
+                r[1] = out_b;
+                r
+            },
+            pc: 0,
+            br: 0,
+            ir: 0,
+            scratch: [0; NUM_SCRATCH],
+            mem: [0; MEM_WORDS],
+        };
+        let out_val = theseus_tisc::compile::unmarshal(&out_state, &carrier_ty);
+        forward.insert(v.clone(), out_val.clone());
+        backward.insert(out_val, v.clone());
+    }
+
+    let prim = PrimDef {
+        forward_name: "trace_informative".into(),
+        backward_name: "trace_informative_inv".into(),
+        input_ty: carrier_ty.clone(),
+        output_ty: carrier_ty.clone(),
+        forward,
+        backward,
+    };
+
+    (Iso::Prim(Box::new(prim)), bit)
+}
+
+// ── F-4: informative-output Trace (genuine OUTPUT correctness) ──────
+// Unlike the One↔One 3-cycle (whose unmarshal is always Unit), this Trace
+// has an informative Bit output, so the oracle checks the computed VALUE.
+
+#[test]
+fn mdd_informative_trace_fast() {
+    let (body, u_ty) = build_informative_trace_body();
+    let iso = Iso::trace(u_ty, body);
+    let instrs = compile(&iso).expect("informative trace should compile");
+    eprintln!("informative trace ({} instrs)", instrs.len());
+    assert_oracle_fast("mdd_informative_trace", &iso);
+}
+
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow)"]
+fn mdd_informative_trace_real_cpu() {
+    let (body, u_ty) = build_informative_trace_body();
+    let iso = Iso::trace(u_ty, body);
+    assert_oracle("mdd_informative_trace", &iso);
+}
+
 // ── A1: bare_trace compiles (replaces bare_trace_rejected) ──────────
 
 #[test]
@@ -1513,64 +1585,45 @@ fn mdd_reject_wcet_overflow() {
 }
 
 #[test]
-fn mdd_reject_layout_invariant() {
-    // A Trace whose body violates homes_in != homes_out is rejected.
-    // SwapProd on the carrier permutes the leaf layout.
-    let bit = Type::sum(Type::One, Type::One);
-    let u_ty = bit.clone();
-    let _carrier = Type::sum(u_ty.clone(), bit.clone());
-    // SwapProd on the 2 payload leaves (but the carrier is a Sum, so
-    // SwapProd doesn't directly apply). Instead, construct a body that
-    // would permute homes by using SwapProd on the carrier's product parts.
-    // Actually, Sum types don't have SwapProd. Let's use a body that
-    // is a structural no-op but with different output type... no.
-    //
-    // The layout invariant violation happens when the body's lowered
-    // output context has different homes. For now, this is hard to
-    // trigger without an actual body that moves data around in the
-    // register file. The prim-based bodies preserve layout. Skip this
-    // sub-test if we can't construct a violating body.
-    //
-    // Instead, test nested Trace rejection:
-    let inner_carrier = Type::sum(Type::One, Type::One);
-    let inner_body = Iso::Id(inner_carrier.clone());
-    let nested = Iso::trace(Type::One, inner_body);
-    // Outer: Trace(One, nested) — nested Trace in the body.
-    // This should be rejected.
-    let outer = Iso::trace(Type::One, nested);
-    let result = compile(&outer);
+fn mdd_reject_trace_under_times() {
+    // F-1 regression: a Trace hand-assigns its tag/payload/aux registers
+    // WITHOUT consulting ctx.occ. Under `Times(Trace, g)`, `Ctx::split`
+    // copies the full parent occ into the Trace's (left) sub-context whose
+    // homes are still canonical (indistinguishable from a top-level ctx),
+    // so those aux registers alias g's live data and silently clobber it —
+    // a wrong output the BR/s0/s1 terminal check cannot see. Must be rejected.
+    let (body, u_ty) = build_3cycle_body(); // Trace(Bit, 3cycle) : One ↔ One
+    let trace = Iso::trace(u_ty, body);
+    let g = Iso::Id(Type::sum(Type::One, Type::One)); // Id(Bit) — the sibling factor
+    let iso = Iso::times(trace, g); // (One × Bit) ↔ (One × Bit)
+    let result = compile(&iso);
     assert!(
         result.is_err(),
-        "nested Trace must be rejected"
+        "Trace under a Times sibling must be rejected (F-1: aux regs would alias g's data)"
+    );
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("F-1") || msg.contains("alias") || msg.contains("occupied"),
+        "expected F-1 occ-guard rejection, got: {msg}"
     );
 }
 
 #[test]
 fn mdd_reject_nested_trace() {
-    // Nested Trace is rejected (come-from join doesn't compose).
-    let carrier = Type::sum(Type::One, Type::One);
-    let inner_body = Iso::Id(carrier.clone());
-    let _inner_trace = Iso::trace(Type::One, inner_body);
-    // Wrap in an outer Trace.
-    let _outer_carrier = Type::sum(Type::One, Type::sum(Type::One, Type::One));
-    // This won't type-check as a valid Trace body unless we're careful.
-    // Just verify that a Trace containing a Trace anywhere in its body is rejected.
-    // Use Seq to compose: body = Seq(Id, inner_trace) — but types must match.
-    // Simpler: Trace(One, Trace(One, Id(1+1)))
-    // Inner: Trace(One, Id(1+1)) : One ↔ One. Body type: 1+1 ↔ 1+1. u=One.
-    // Outer: Trace(One, Trace(One, Id(1+1))). Body=Trace(One,Id(1+1)) : One ↔ One.
-    // Outer body type must be u'+a ↔ u'+b where u'=One.
-    // Body type is One ↔ One. So u'+a = One, meaning Sum(One, a) = One which
-    // doesn't work. We need the body type to be Sum(u', a) ↔ Sum(u', b).
-    // This won't type-check. Let me try a different construction.
-    //
-    // Actually, the contains_trace check just walks the Iso tree.
-    // Any Iso with a Trace node inside a Trace body is rejected.
-    // But we need it to be well-typed too.
-    //
-    // The simplest approach: just verify that the contains_trace guard works.
-    // We already tested it indirectly in mdd_reject_layout_invariant.
-    // Add a direct test with proper typing:
-    // Skip if we can't construct a well-typed nested Trace.
-    eprintln!("nested Trace rejection is covered by mdd_reject_layout_invariant");
+    // Nested Trace is rejected (the come-from join does not compose).
+    // A WELL-TYPED nesting that reaches the contains_trace guard:
+    //   inner Trace(One, Id(1+1)) : One ↔ One
+    //   Plus(Id(One), inner)      : (1+1) ↔ (1+1)
+    //   outer Trace(One, Plus)    : One ↔ One, whose body CONTAINS a Trace.
+    let bit = Type::sum(Type::One, Type::One);
+    let inner = Iso::trace(Type::One, Iso::Id(bit.clone()));
+    let body = Iso::plus(Iso::Id(Type::One), inner);
+    let outer = Iso::trace(Type::One, body);
+    let result = compile(&outer);
+    assert!(result.is_err(), "nested Trace must be rejected");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(
+        msg.contains("nested Trace") || msg.contains("come-from"),
+        "expected nested-Trace rejection, got: {msg}"
+    );
 }

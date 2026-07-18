@@ -1662,6 +1662,17 @@ fn lower_trace(
     let n_carrier = num_leaves(&body_in_ty)?; // = 1 + max(n_u, n_a)
     let n_payload = n_carrier - 1; // payload leaves (tag excluded)
 
+    // Guard (F-5): the loop carrier is sized for `a` (n_carrier = 1+max(|u|,|a|)).
+    // If `b` has a different leaf count, the output unmarshal (which uses the
+    // Trace output type `b`) would misread the tag register as a payload leaf.
+    if num_leaves(&a_ty)? != num_leaves(&_b_ty)? {
+        return Err(CompileError::Deferred(format!(
+            "Trace body a/b payload leaf-count mismatch ({} vs {}) — deferred (M-D.d F-5)",
+            num_leaves(&a_ty)?,
+            num_leaves(&_b_ty)?
+        )));
+    }
+
     // |u| = number of inhabitants of u (for k_max).
     let u_inhabitants = enumerate_values(u).len();
     if u_inhabitants == 0 {
@@ -1680,11 +1691,21 @@ fn lower_trace(
         )));
     }
 
-    // Guard: require canonical top-level context (same as fold/unfold).
+    // Guard: require a canonical AND UNSHARED context. The homes must be
+    // canonical, AND the whole-machine occ must hold nothing beyond this
+    // Trace's own input leaves. lower_trace hand-assigns tag/payload/aux
+    // registers WITHOUT consulting occ, so under a `Times` split — where
+    // `split` copies the full parent occ into a left half whose homes are
+    // still Reg(0..n_left) (indistinguishable from canonical) — those aux
+    // registers would alias the sibling factor's live data and silently
+    // clobber it (F-1: `Times(Trace, g)` produced wrong outputs that the
+    // BR/s0/s1 terminal check could not see). occ ⊋ homes ⇒ reject.
     let canonical = Ctx::new(ctx.homes.len());
-    if ctx.homes != canonical.homes {
+    if ctx.homes != canonical.homes || ctx.occ != OccSet::from_locations(&ctx.homes) {
         return Err(CompileError::Deferred(
-            "Trace under a non-canonical context — deferred".into(),
+            "Trace under a non-canonical or occupied (e.g. Times sibling) context — \
+             its hand-assigned aux registers would alias live data (M-D.d F-1)"
+                .into(),
         ));
     }
 
