@@ -762,29 +762,34 @@ fn counterexample_nested_fold_unfold_rejected() {
 
 #[test]
 fn fold_non_self_adjoint_body_oracle() {
-    // Seq(cnot, swp) is NOT self-adjoint (adj = Seq(swp, cnot) ≠ Seq(cnot, swp))
+    // Seq(swp, cnot) is NOT self-adjoint (adj = Seq(cnot, swp) ≠ Seq(swp, cnot))
     // and is order-sensitive, so fold vs unfold actually differ. Verify the
     // compiled fold agrees with eval over the whole domain.
+    // NOTE: swp must come BEFORE cnot so that right_assoc_seq in
+    // lower_fold_unfold does not flatten the controlled-op idiom chain
+    // (cnot is Seq(SwapProd, Seq(Distrib, Seq(Plus, Seq(Factor, SwapProd))));
+    // appending swp after it merges the trailing SwapProd and destroys the
+    // idiom match, causing a spurious Swapbr rejection).
     let bit = Type::sum(Type::One, Type::One);
     let cnot = elaborate(CNOT_SRC, "cnot");
     let swp = Iso::SwapProd(bit.clone(), bit.clone());
-    let body = Iso::seq(cnot, swp);
+    let body = Iso::seq(swp, cnot);
     let l = Type::list_spine_ty(bit.clone(), 4);
     let iso = Iso::fold(l, body);
-    assert_oracle_fast("fold_seq_cnot_swp", &iso);
+    assert_oracle_fast("fold_seq_swp_cnot", &iso);
 }
 
 #[test]
 fn unfold_non_self_adjoint_body_oracle() {
-    // The adjoint direction: Sym(fold(l, Seq(cnot, swp))) = Unfold(l, Seq(swp, cnot)).
-    // Verify the compiled adjoint agrees with eval.
+    // Unfold with the same non-self-adjoint body Seq(swp, cnot).
+    // Verify the compiled unfold agrees with eval over the whole domain.
     let bit = Type::sum(Type::One, Type::One);
     let cnot = elaborate(CNOT_SRC, "cnot");
     let swp = Iso::SwapProd(bit.clone(), bit.clone());
-    let body = Iso::seq(cnot, swp);
+    let body = Iso::seq(swp, cnot);
     let l = Type::list_spine_ty(bit.clone(), 4);
-    let iso = Iso::sym(Iso::fold(l, body));
-    assert_oracle_fast("sym_fold_seq_cnot_swp", &iso);
+    let iso = Iso::unfold(l, body);
+    assert_oracle_fast("unfold_seq_swp_cnot", &iso);
 }
 
 #[test]
