@@ -21,8 +21,8 @@ fn main() {
     // lowered every step) dominates the step, so the exact program
     // barely moves the machine-level energy.
     let rom: Vec<u16> = vec![
-        (3u16 << 12) | (1 << 1),          // ADDI r0, #1
-        (5u16 << 12) | (1 << 9) | (0xFF << 1), // XORI r1, #0xFF
+        (3u16 << 12) | (1 << 1),          // ROTLI r0, #1 (opc 0b011 = ROTLI)
+        (5u16 << 12) | (1 << 9) | (0xFF << 1), // reserved I-format opc 0b101 (decodes None)
     ];
 
     eprintln!("lowering the TISC-1 step (~2 min, unbalanced)...");

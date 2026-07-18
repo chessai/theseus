@@ -28,6 +28,9 @@ use theseus_netlist::PhasedCellNetlist;
 use theseus_spice::annotate::{compiled_energy, KindEnergy};
 use theseus_spice::chardb::{CharDb, QueryError};
 
+use crate::compile::run_rom_fast;
+use crate::types::StateVals;
+
 /// Per-cell-kind energy breakdown for a balanced netlist, computed
 /// analytically (without materializing the balanced netlist).
 #[derive(Clone, Debug)]
@@ -310,3 +313,165 @@ pub fn clause_report(
         program_total_j,
     })
 }
+
+// ── M-E: ROM program energy (ADR-0042) ─────────────────────────────
+
+/// Trace result from executing a ROM for B steps.
+///
+/// `steps_b` = budget (WCET), the number of physical clock cycles.
+/// `steps_t` = productive trace length: the first step at which PC enters
+/// the dead zone `[rom.len(), 256)` (park by idle; M-D.w).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RomTrace {
+    /// Total physical steps (= budget = WCET).
+    pub steps_b: usize,
+    /// Productive trace length: first step PC enters `[rom_len, 256)`.
+    pub steps_t: usize,
+}
+
+/// Execute a ROM for `budget` steps (mirroring `run_rom_fast`) and identify
+/// the productive trace length T — the first step at which PC enters the
+/// dead zone `[rom.len(), 256)`.
+///
+/// T is defined by PC entering the dead zone, NOT by `decode() == None`
+/// (idle decodes to `Some(Addi r0, #0)` — F4).
+pub fn rom_trace(rom: &[u16], init: StateVals, budget: usize) -> RomTrace {
+    let rom_len = rom.len();
+    let mut steps_t = budget; // default: never entered dead zone
+
+    // We need to step manually to observe PC at each step boundary.
+    let mut state = init;
+    for step_idx in 0..budget {
+        // Check PC BEFORE this step executes: if PC is already in the
+        // dead zone at the start of step `step_idx`, the first T-1 steps
+        // were productive.
+        let pc = state.pc as usize;
+        if pc >= rom_len && pc < 256 {
+            steps_t = step_idx;
+            break;
+        }
+        // Execute one step (same logic as run_rom_fast).
+        state = run_rom_fast(rom, state, 1);
+    }
+
+    RomTrace {
+        steps_b: budget,
+        steps_t,
+    }
+}
+
+/// Program-level energy result (ADR-0042 M-E).
+///
+/// The committed energy model prices STATIC CELL INVENTORY and is
+/// DATA-INDEPENDENT: per-step energy is exactly constant across all steps
+/// (including idle/park steps). Headline: `total_j = B × step_j` (exact
+/// model value, not an approximation).
+///
+/// NOTE: prices the CPU-only `step(rom)` ring body; the composite
+/// `system_step` additionally clocks the memory body (a bounded increment).
+#[derive(Clone, Debug)]
+pub struct ProgramEnergy {
+    /// Total physical energy: `steps_b × step_j`, joules.
+    pub total_j: f64,
+    /// Productive energy: `steps_t × step_j`, joules.
+    pub productive_j: f64,
+    /// Physical step count B (= WCET).
+    pub steps_b: usize,
+    /// Productive step count T (first step PC enters dead zone).
+    pub steps_t: usize,
+    /// WCET park tax: `(B - T) / B` — fraction of energy spent idling.
+    pub park_tax: f64,
+    /// Per-step energy (from `balanced_energy` on the fib ROM's own step net).
+    pub step_j: f64,
+}
+
+/// Energy-price a compiled TISC-1 ROM's execution in joules (ADR-0042 M-E).
+///
+/// Computes:
+/// - `B` = `wcet(iso)` (physical step count, WCET park included)
+/// - `T` = productive trace length (first step PC enters dead zone)
+/// - `step_j` = `balanced_energy(step(rom), db, t_ramp)` — from THIS ROM's
+///   own step netlist (not the 2-word money-plot ROM; F2)
+/// - `total_j = B × step_j` (exact; the model is data-independent — F1)
+///
+/// The step net is lowered from `step(rom)` (CPU-only, consistent with
+/// `cpu_money_plot`). Callers should memoize the ~2min lowering externally
+/// (e.g. via `OnceLock`).
+pub fn rom_program_energy(
+    iso: &theseus_core::Iso,
+    input: &theseus_core::Value,
+    db: &CharDb,
+    t_ramp: f64,
+    step_net: &PhasedCellNetlist,
+) -> Result<ProgramEnergy, RomProgramEnergyError> {
+    // Compile the iso to get B = wcet and the ROM.
+    let lowered = crate::compile::compile_with_metadata(iso)?;
+    let budget = lowered.wcet();
+    let rom = crate::asm::assemble(&lowered.instrs)
+        .map_err(|e| RomProgramEnergyError::Asm(format!("{e}")))?;
+
+    // Marshal input to initial state.
+    let (in_ty, _out_ty) = theseus_core::type_of(iso)
+        .map_err(|e| RomProgramEnergyError::Type(format!("{e:?}")))?;
+    let init = crate::compile::marshal(input, &in_ty);
+
+    // Run trace to find T.
+    let trace = rom_trace(&rom, init, budget);
+
+    // Price one step via the pre-lowered step net.
+    let step_bd = balanced_energy(step_net, db, t_ramp)?;
+    let step_j = step_bd.total_j;
+
+    let steps_b = trace.steps_b;
+    let steps_t = trace.steps_t;
+    let total_j = steps_b as f64 * step_j;
+    let productive_j = steps_t as f64 * step_j;
+    let park_tax = if steps_b > 0 {
+        (steps_b - steps_t) as f64 / steps_b as f64
+    } else {
+        0.0
+    };
+
+    Ok(ProgramEnergy {
+        total_j,
+        productive_j,
+        steps_b,
+        steps_t,
+        park_tax,
+        step_j,
+    })
+}
+
+/// Error type for `rom_program_energy`.
+#[derive(Debug)]
+pub enum RomProgramEnergyError {
+    Compile(crate::compile::CompileError),
+    Asm(String),
+    Type(String),
+    CharDb(QueryError),
+}
+
+impl From<crate::compile::CompileError> for RomProgramEnergyError {
+    fn from(e: crate::compile::CompileError) -> Self {
+        Self::Compile(e)
+    }
+}
+
+impl From<QueryError> for RomProgramEnergyError {
+    fn from(e: QueryError) -> Self {
+        Self::CharDb(e)
+    }
+}
+
+impl fmt::Display for RomProgramEnergyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Compile(e) => write!(f, "compile: {e}"),
+            Self::Asm(e) => write!(f, "assemble: {e}"),
+            Self::Type(e) => write!(f, "type: {e}"),
+            Self::CharDb(e) => write!(f, "chardb: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for RomProgramEnergyError {}
