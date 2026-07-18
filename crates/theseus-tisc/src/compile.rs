@@ -584,6 +584,14 @@ fn ensure_reg(ctx: &Ctx, leaf: usize, exclude_regs: &[u8]) -> (u8, Vec<Instr>, V
 // Uses two auxiliary registers: `rb` (for SWAPBR offset) and `temp`
 // (for CSWAP routing). Both must be 0 on entry and are 0 on exit.
 
+/// Returns `true` when `instrs` contains a `Swapbr`, meaning the
+/// lowered body itself uses a skip-block — doubly-nested control that
+/// the current allocator cannot compile safely (reservation ordering
+/// deferred).
+fn has_inner_control(instrs: &[Instr]) -> bool {
+    instrs.iter().any(|i| matches!(i, Instr::Swapbr { .. }))
+}
+
 fn emit_skip_block(
     ctrl_reg: u8,
     body_instrs: &[Instr],
@@ -1035,6 +1043,14 @@ fn lower_controlled_idiom(
     };
     let (instrs_g, _) = lower(g, &ctx_tgt)?;
 
+    // Guard: reject doubly-nested skip-block control (reservation
+    // ordering deferred).
+    if has_inner_control(&instrs_g) {
+        return Err(CompileError::Deferred(
+            "nested skip-block control in controlled idiom — deferred".into(),
+        ));
+    }
+
     if instrs_g.is_empty() {
         return Ok((vec![], ctx.clone()));
     }
@@ -1412,6 +1428,14 @@ fn lower_data_dependent_iter(
     let (_, dctx_body) = dctx.split(n_counter);
     let (body_instrs, body_ctx_out) = lower(body, &dctx_body)?;
 
+    // Guard: reject doubly-nested skip-block control (reservation
+    // ordering deferred).
+    if has_inner_control(&body_instrs) {
+        return Err(CompileError::Deferred(
+            "nested skip-block control in iter body — deferred".into(),
+        ));
+    }
+
     // §2.6 guarded-unroll consistency: canonical layout at body boundary.
     debug_assert_eq!(
         dctx_body.homes, body_ctx_out.homes,
@@ -1553,7 +1577,7 @@ fn lower_fold_unfold(
         // Guard 2: Refuse when the body itself contains a Swapbr — that
         // means the body needs an inner skip block, whose allocate_aux is
         // likewise unsound under the narrow sub-context.
-        if body_instrs.iter().any(|i| matches!(i, Instr::Swapbr { .. })) {
+        if has_inner_control(&body_instrs) {
             return Err(CompileError::Deferred(
                 "Fold/Unfold body needs inner control (M-D.alloc)".into(),
             ));
@@ -1629,6 +1653,14 @@ fn lower_bare_plus(
 
     let (instrs_f, _) = lower(f, &ctx_f)?;
     let (instrs_g, _) = lower(g, &ctx_g)?;
+
+    // Guard: reject doubly-nested skip-block control (reservation
+    // ordering deferred).
+    if has_inner_control(&instrs_f) || has_inner_control(&instrs_g) {
+        return Err(CompileError::Deferred(
+            "nested skip-block control in Plus arm — reservation ordering deferred".into(),
+        ));
+    }
 
     let f_is_nop = instrs_f.is_empty();
     let g_is_nop = instrs_g.is_empty();

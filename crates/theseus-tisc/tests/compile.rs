@@ -871,3 +871,71 @@ fn times_id_iter_l20_regression() {
     );
     assert_oracle_fast("times_id_iter", &iso);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// M-D.alloc2: doubly-nested skip-block control — rejected not corrupted
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn reject_nested_plus_in_plus() {
+    // doubly-nested skip-block control deferred (reservation ordering);
+    // rejected not corrupted
+    let bit = Type::sum(Type::One, Type::One);
+    let iso = Iso::Plus(
+        Box::new(Iso::Id(bit.clone())),
+        Box::new(Iso::Plus(
+            Box::new(Iso::SwapSum(Type::One, Type::One)),
+            Box::new(Iso::SwapSum(Type::One, Type::One)),
+        )),
+    );
+    assert!(compile(&iso).is_err());
+}
+
+#[test]
+fn reject_nested_plus_with_trailing() {
+    // doubly-nested skip-block control deferred (reservation ordering);
+    // rejected not corrupted
+    let bit = Type::sum(Type::One, Type::One);
+    let iso = Iso::Seq(
+        Box::new(Iso::Plus(
+            Box::new(Iso::Id(bit.clone())),
+            Box::new(Iso::Plus(
+                Box::new(Iso::SwapSum(Type::One, Type::One)),
+                Box::new(Iso::Id(bit.clone())),
+            )),
+        )),
+        Box::new(Iso::SwapSum(Type::One, Type::One)),
+    );
+    assert!(compile(&iso).is_err());
+}
+
+#[test]
+fn reject_nested_plus_in_iter() {
+    // doubly-nested skip-block control deferred (reservation ordering);
+    // rejected not corrupted
+    let nat2 = Type::numeral_ty(2);
+    let iso = Iso::iter(
+        nat2,
+        Iso::Plus(
+            Box::new(Iso::SwapSum(Type::One, Type::One)),
+            Box::new(Iso::SwapSum(Type::One, Type::One)),
+        ),
+    );
+    assert!(compile(&iso).is_err());
+}
+
+#[test]
+fn reject_fold_containing_unfold() {
+    // doubly-nested skip-block control deferred (reservation ordering);
+    // rejected not corrupted (already rejected by fold Guard 2)
+    let bit = Type::sum(Type::One, Type::One);
+    let l = Type::list_spine_ty(bit.clone(), 2);
+    let iso = Iso::fold(
+        l.clone(),
+        Iso::times(
+            Iso::Id(bit.clone()),
+            Iso::unfold(l, Iso::SwapProd(bit.clone(), bit.clone())),
+        ),
+    );
+    assert!(compile(&iso).is_err());
+}
