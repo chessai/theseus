@@ -62,6 +62,29 @@ on a finite domain, so the target is finite.
   `Fold`/`Unfold`/`Trace`, reversible calling convention. Depends on M-B
   (sum dispatch) and M-C (heap storage).
 
+  **Status — IN PROGRESS (theseus-v2 `c229920`).** Key reframe (design
+  `docs/scratch/md-design.md`, adversarially reviewed): theseus finitizes
+  recursive types by bounded unrolling (ADR-0035, depth 4), so `Fold`/`Unfold`
+  are *bounded* and compile via M-B's guarded static unroll — the genuinely new
+  work is heap + data-dependent addressing; `Trace` is *not* unrollable
+  (carrier-cardinality bound; its guard is the exit tag the body flips) and
+  becomes a reversible while-loop. **Done + merged:** **M-D.a** (`cf0639a`) list
+  `Fold`/`Unfold` codegen (per-copy displaced `Ctx`, real-CPU oracle); **M-D.alloc1**
+  (`13ca492`) occupancy-aware register allocation (`OccSet` bitmask — fixed a
+  reproduced *pre-existing* M-B silent-corruption bug where a sub-context's "free"
+  register held live data); **M-D.alloc2** (`a8b8fcc`) doubly-nested skip-block
+  control safely *rejected* (reject-don't-corrupt; correct nested compilation is a
+  deferred reservation-ordering problem); **M-D.b** (`c229920`) data-dependent memory
+  addressing — a `MEXCHR rd,ra` instruction (`reg[rd] ↔ mem[reg[ra] % N]`) whose
+  address is a *register value*, preserving the Stage-1b bus-quiescence closure via
+  `absorb=sym(emit)` cancellation (requires `ra≠rd`; the correct emit is a *sequential*
+  `select_reg(R_RS)` bracket before the `select_reg(R_RD)` bracket — nesting reads the
+  wrong register while still passing the certificate). **Remaining:** heap value rep
+  (needs MEM_WORDS widening), the `run_on_cpu` halting-model/WCET harness (assumes
+  monotone PC; breaks on backward jumps), `Trace`/labels reversible while-loop +
+  reversible calling convention. Design docs: `md-design.md`, `md-alloc-design.md`,
+  `mdb-design.md`.
+
 - **M-E — Polish + optional energy pricing.** Optimization passes,
   energy annotation of compiled ROMs via the char-DB fits
   (`theseus-tisc::energy`).

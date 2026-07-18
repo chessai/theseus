@@ -1,4 +1,4 @@
-# Project status — where theseus is (2026-07-16)
+# Project status — where theseus is (2026-07-18)
 
 One-paragraph orientation for anyone (human or agent) picking this up. theseus
 is a **reversible-computing compiler + adiabatic-silicon backend**: a total,
@@ -10,7 +10,7 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`2741a39`. Everything below is merged there. Since M4-v1 this branch landed the
+`c229920`. Everything below is merged there. Since M4-v1 this branch landed the
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
 thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU
@@ -29,9 +29,18 @@ separated into its own body** — `system_step` splits into `cpu_pre`/`mem_body`
 `cpu_post` on reduced carriers (MemState absent from the CPU bodies), a
 `TwoBodyRing` proves the split `== SystemRing == eval^R`, and a static timing
 certificate (Stage 2b-lite) validates the two loops clock in lockstep (absolute-
-tick arrival equations + equal period + phase closure). Next: **M-D** (heap /
-recursion / calling convention = arbitrary `.thse`). See the sections below and
-ADRs 0033–0046, and [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md).
+tick arrival equations + equal period + phase closure). **M-D (arbitrary `.thse`)
+is now in progress** — its recursion + allocation + addressing thirds are done:
+**list `Fold`/`Unfold` compile** to the CPU (guarded static unroll, per-copy
+displaced `Ctx`), the register allocator is **occupancy-aware** (`OccSet` bitmask —
+fixed a reproduced pre-existing M-B silent-corruption bug; nested control safely
+rejected), and **memory is data-dependently addressable** (`MEXCHR rd,ra` =
+`reg[rd] ↔ mem[reg[ra] % N]`, a register-sourced address that preserves the Stage-1b
+bus-quiescence closure — enforced by `ra≠rd`). Remaining for M-D: heap value rep
+(needs MEM_WORDS widening), the halting-model/WCET harness, and `Trace`/labels as a
+reversible while-loop + a reversible calling convention. See the sections below and
+ADRs 0033–0046, `docs/scratch/md*.md`, and
+[theory/reversible-memory-closure.md](theory/reversible-memory-closure.md).
 
 ## Status at a glance
 
@@ -44,7 +53,7 @@ ADRs 0033–0046, and [theory/reversible-memory-closure.md](theory/reversible-me
 | **M4-v1** TISC-1 CPU | ✅ **done** | the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** — ADR-0030's milestone, met |
 | **M4-v2** ring machine | ✅ **done + zero-garbage** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving**; reversible branching works (ADR-0034). **Physical closure achieved**: the R1 rail-role-swap cell (ADR-0040, real ngspice, adiabatic slope −1) makes lowering garbage-free — the step is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so the default runner `run == eval^R` closes with **zero** re-supplied boundary. The machine-level **money plot** confirms it: energy/step falls at adiabatic slope **−0.997**, crossing below the flat CMOS ½CV² floor at t_ramp ≈ 2.1e-8 s (active logic below CMOS across the whole clock range). |
 | **v0.2 dialect** software | ✅ **done** | μ-types + `iter`/`fold`/`unfold`: core + eval + surface syntax + **netlist lowering** + diagnostics; writable `.thse` programs run source→cells (ADRs 0035–0039) |
-| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **M-A + M-B + M-C1 + M-C2/L1 + Stage-1a + Stage-1b + Stage-2 (two-body) done** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive), **M-B** (reversible branching + **data-dependent iter** + general controlled ops + bare sums, ADR-0043), **M-C1** (register↔scratch **spill**, ADR-0044), and **M-C2 Layer 1** (resident **memory** + a reversible `MEXCH` exchange instruction + 1-of-N Fredkin tree, ADR-0046) all compile → ROM → run on the CPU → `run_on_cpu == eval` (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. Leaf ceiling now **14 + N** (straight-line) / **12 + N** (branching), N=4 resident memory words. **Conjecture C1 discharged** (the addressed-exchange tree is whole-domain ancilla-clean). Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience. Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042). **M-C2 Stage 1a** (externalize `MemState` into the `(CpuState,MemState)` composite carrier + `system_step` + composite oracle) is **done** (merged `8f27ba0`) — **C1 now discharged on the *real* re-targeted `select_mem` tree at N∈{2,4,8}**, State narrowed 24→20 fields, width-parameterized routing + one `cross_ctrl_fredkin` primitive. **M-C2 Stage 1b-A** (merged `1f59744`) makes the memory exchange **non-degenerate**: a `BusMsg` factor + the **emit/mem/absorb** 3-cycle (mem tree re-keyed on `BusMsg.addr` → touches **zero CpuState fields**, **§6 line-audit passes**), value-level `system_step == eval`, C1 re-verified on `select_mem_on_bus` at N∈{2,4,8}. **M-C2 Stage 1b-B** (merged `75c5a13`) closes it: `system_step` runs through a recirculating **`SystemRing`** and the **composite closure certificate holds** — `system_step` lowers **ancilla-clean**, `run == run_open == eval(system_step)^R`, bus-quiescent — **realizing Theorem 3.5 (the composite ring `CPU⊗bus⊗memory` closes zero-garbage)**. **Stage 1b COMPLETE.** **M-C2 Stage 2** (physical two-body separation) is **done**: **2a** (merged `2810bab` + cert-hardening `24ae386`) splits `system_step` into `cpu_pre`/`mem_body`/`cpu_post` on **reduced carriers** (MemState physically absent from the CPU bodies — the line-audit is now a *structural* fact, not a scan), a `TwoBodyRing` recirculates the three bodies and proves `two_body == SystemRing == eval^R` (authoritative wide-strided tier + direct per-body ancilla certificate); **2b-lite** (merged `2741a39`) adds a static realizability certificate — `TwoBodyTiming` validates the absolute-tick arrival equations + equal period (`D_cpu=D_mem=3028≡0 mod 4`) + phase closure, proving the two loops clock in lockstep (F1 same-revolution servicing, no pipeline skew). **Stage 2 COMPLETE** (2b-full compact-output-padder / materialized netlist deferred to the memory energy-ledger, ADR-0046 §9). **Next: M-D** (heap / recursion / calling convention = arbitrary `.thse`) |
+| **Surface → TISC-1 compiler** (the #1 goal) | 🔄 **…Stage-2 done; M-D in progress (recursion + allocation + data-dependent addressing done)** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive), **M-B** (reversible branching + **data-dependent iter** + general controlled ops + bare sums, ADR-0043), **M-C1** (register↔scratch **spill**, ADR-0044), and **M-C2 Layer 1** (resident **memory** + a reversible `MEXCH` exchange instruction + 1-of-N Fredkin tree, ADR-0046) all compile → ROM → run on the CPU → `run_on_cpu == eval` (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. Leaf ceiling now **14 + N** (straight-line) / **12 + N** (branching), N=4 resident memory words. **Conjecture C1 discharged** (the addressed-exchange tree is whole-domain ancilla-clean). Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience. Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042). **M-C2 Stage 1a** (externalize `MemState` into the `(CpuState,MemState)` composite carrier + `system_step` + composite oracle) is **done** (merged `8f27ba0`) — **C1 now discharged on the *real* re-targeted `select_mem` tree at N∈{2,4,8}**, State narrowed 24→20 fields, width-parameterized routing + one `cross_ctrl_fredkin` primitive. **M-C2 Stage 1b-A** (merged `1f59744`) makes the memory exchange **non-degenerate**: a `BusMsg` factor + the **emit/mem/absorb** 3-cycle (mem tree re-keyed on `BusMsg.addr` → touches **zero CpuState fields**, **§6 line-audit passes**), value-level `system_step == eval`, C1 re-verified on `select_mem_on_bus` at N∈{2,4,8}. **M-C2 Stage 1b-B** (merged `75c5a13`) closes it: `system_step` runs through a recirculating **`SystemRing`** and the **composite closure certificate holds** — `system_step` lowers **ancilla-clean**, `run == run_open == eval(system_step)^R`, bus-quiescent — **realizing Theorem 3.5 (the composite ring `CPU⊗bus⊗memory` closes zero-garbage)**. **Stage 1b COMPLETE.** **M-C2 Stage 2** (physical two-body separation) is **done**: **2a** (merged `2810bab` + cert-hardening `24ae386`) splits `system_step` into `cpu_pre`/`mem_body`/`cpu_post` on **reduced carriers** (MemState physically absent from the CPU bodies — the line-audit is now a *structural* fact, not a scan), a `TwoBodyRing` recirculates the three bodies and proves `two_body == SystemRing == eval^R` (authoritative wide-strided tier + direct per-body ancilla certificate); **2b-lite** (merged `2741a39`) adds a static realizability certificate — `TwoBodyTiming` validates the absolute-tick arrival equations + equal period (`D_cpu=D_mem=3028≡0 mod 4`) + phase closure, proving the two loops clock in lockstep (F1 same-revolution servicing, no pipeline skew). **Stage 2 COMPLETE** (2b-full compact-output-padder / materialized netlist deferred to the memory energy-ledger, ADR-0046 §9). **M-D (arbitrary `.thse`) IN PROGRESS** — recursion + allocation + addressing thirds done: **M-D.a** (`cf0639a`) compiles list `Fold`/`Unfold` via guarded static unroll (per-copy displaced `Ctx`, real-CPU oracle green); **M-D.alloc1** (`13ca492`) makes the register allocator **occupancy-aware** (`OccSet` bitmask — fixed a *reproduced pre-existing M-B silent-corruption bug* where a sub-context's "free" register held live data); **M-D.alloc2** (`a8b8fcc`) safely *rejects* doubly-nested skip-block control (reject-don't-corrupt; correct nested compilation deferred); **M-D.b** (`c229920`) adds **data-dependent memory addressing** — a `MEXCHR rd,ra` instruction (`reg[rd] ↔ mem[reg[ra] % N]`) whose address is a register value, preserving the Stage-1b bus-quiescence closure via `absorb=sym(emit)` cancellation (enforced by `ra≠rd`), verified by the real lowered `SystemRing == eval^R`. **Remaining M-D:** heap value rep (needs MEM_WORDS widening), halting-model/WCET harness, `Trace`/labels reversible while-loop + calling convention. Design docs: `docs/scratch/md-design.md`, `md-alloc-design.md`, `mdb-design.md` |
 | **stdlib** | ✅ increment 1–2 | implicit prelude (`Bit`, `Nat`, `notb`, `swapBit`, `cnot`, `toffoli`) via structural-dedup merge — no imports needed; a compositional reversible adder demonstrates arithmetic composes (ADR-0038 constraint respected) |
 | **M2** FPGA / Verilator | ⏸ parked | still stubs; a demo, not a phase |
 
@@ -283,9 +292,14 @@ depth-tracking bug) that unit tests missed.
   construction), `run == run_open == eval^R`, bus-quiescent — **realizing Theorem 3.5:
   the composite ring `CPU⊗bus⊗memory` closes zero-garbage.** `N=MEM_WORDS` is
   compile-time-fixed (=4); closure is N-independent + the tree's N∈{2,4,8} cleanliness
-  is discharged separately. **Stage 1b COMPLETE.** **Next: Stage 2** (two-body
-  separation) → M-D (heap value rep,
-  `Fold`/`Unfold`/`Trace` = arbitrary `.thse`) → M-E (energy).
+  is discharged separately. **Stage 1b COMPLETE.** **Stage 2 COMPLETE** (two-body
+  separation + 2b-lite timing certificate). **M-D IN PROGRESS** (theseus-v2
+  `c229920`): list `Fold`/`Unfold` compile (M-D.a), the allocator is occupancy-aware
+  (M-D.alloc1, fixing a pre-existing M-B corruption), nested control safely rejected
+  (M-D.alloc2), and memory is data-dependently addressable (M-D.b `MEXCHR`, Stage-1b
+  closure preserved). **Next in M-D:** heap value rep (needs MEM_WORDS widening) → the
+  halting-model/WCET harness → `Trace`/labels + reversible calling convention → M-E
+  (energy). Design docs `docs/scratch/md*.md`.
 - **Energy-price a compiled loop** — now that `iter`/`fold`/`unfold` (and
   compiled ROMs) lower to cells, run one through `theseus-spice::annotate` for a
   joules figure. Natural M-E artifact.

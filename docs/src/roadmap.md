@@ -3,9 +3,9 @@
 > **Current status (2026-07-16):** M1, M3a, M3b, **M4-v1**, the **M4-v2
 > ring-machine core** (recirculating CPU + reversible branching, Fibonacci on the
 > ring at 20× area saving, zero-garbage closure), and the **v0.2 software dialect**
-> are all done and merged on `chessai/theseus-v2` (`2741a39`). The **headline
+> are all done and merged on `chessai/theseus-v2` (`c229920`). The **headline
 > thread** is the **surface → TISC-1 ROM compiler** (the #1 goal), now at **M-A +
-> M-B + M-C1 + M-C2 Layer 1 + Stage 1a + Stage 1b + Stage 2 (two-body) done**: non-recursive, branching,
+> M-B + M-C1 + M-C2 (Stage 1 + Stage 2) done; M-D in progress**: non-recursive, branching,
 > data-dependent `iter` (the real `fib`), register↔scratch spill, resident memory via
 > a reversible `MEXCH` exchange + 1-of-N Fredkin tree, *and* — Stage 1a —
 > **`MemState` externalized** into the `(CpuState,MemState)` composite carrier with a
@@ -28,8 +28,15 @@
 > `2741a39`) is a static timing certificate validating the two loops clock in lockstep
 > (absolute-tick arrival equations + equal period + phase closure). The compact
 > output-padder / materialized two-body netlist (2b-full) is deferred to the memory
-> energy-ledger (ADR-0046 §9). **Next: M-D** (heap / recursion / calling convention =
-> arbitrary `.thse`). See [Project status](status.md). The post-v1
+> energy-ledger (ADR-0046 §9). **M-D (arbitrary `.thse`) IN PROGRESS** — recursion +
+> allocation + addressing thirds done: **M-D.a** (`cf0639a`) compiles list `Fold`/`Unfold`
+> (guarded static unroll, real-CPU verified); **M-D.alloc1** (`13ca492`) an occupancy-aware
+> allocator (`OccSet`, fixing a reproduced pre-existing M-B silent-corruption bug);
+> **M-D.alloc2** (`a8b8fcc`) safely rejects doubly-nested control; **M-D.b** (`c229920`)
+> data-dependent memory addressing (`MEXCHR rd,ra` = `reg[rd]↔mem[reg[ra]%N]`, preserving
+> the Stage-1b bus-quiescence closure via `ra≠rd`). Remaining: heap value rep (needs
+> MEM_WORDS widening), halting-model/WCET harness, `Trace`/labels + calling convention.
+> Design docs `docs/scratch/md*.md`. See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
 > shows machine-level adiabatic slope −0.997 crossing below the CMOS floor);
