@@ -233,6 +233,16 @@ const MAX_LEAVES: usize = 14 + MEM_WORDS;
 /// zero-source, ADR-0044 §2.4 / ADR-0046 §3.1).
 const MAX_LEAVES_BRANCHING: usize = 12 + MEM_WORDS;
 
+/// Maximum payload leaves for loop-carrier bodies (M-D.d §3).
+/// 4 dedicated aux (rc, rb, temp, ctrl) + 1 tag register = 5 occupied;
+/// with 8 registers that leaves ≤ 3 payload leaves register-resident
+/// before paging would be required (and loop aux are unpageable).
+const MAX_LEAVES_LOOP: usize = 3;
+
+/// Number of overhead instructions per loop iteration (Ltop to Lend,
+/// inclusive of both SWAPBRs). 5 before body + 5 after body = 10.
+const LOOP_OVERHEAD: usize = 10;
+
 /// First spillable scratch index (s0/s1 are decoder-reserved).
 const SCRATCH_SPILL_BASE: u8 = 2;
 
@@ -760,6 +770,43 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
                 }])
             });
         }
+
+        // ── Leaf-byte-level patterns (works for sum types too) ──────
+        //
+        // The patterns above require Value::Pair (product types). The
+        // patterns below use the generic leaf-byte encoding and work for
+        // any 2-leaf type (including sum types like Sum(Bit, One) used
+        // as Trace carriers).
+
+        // 3-cycle forward: (a, b) ↦ (a⊕b⊕1, a)
+        // Instruction sequence: XOR r0,r1; XORI r0,1; XOR r1,r0; XORI r1,1
+        // Used as the Trace body witness for the k=|u|+1 maximal trajectory.
+        if check_pattern_2leaf(&def.forward, &vals, &def.input_ty, &def.output_ty, |a, b| {
+            (a ^ b ^ 1, a)
+        }) {
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![
+                    Instr::Xor { rd: regs[0], rs: regs[1] },
+                    Instr::Xori { rd: regs[0], imm: 1 },
+                    Instr::Xor { rd: regs[1], rs: regs[0] },
+                    Instr::Xori { rd: regs[1], imm: 1 },
+                ])
+            });
+        }
+
+        // 3-cycle inverse (adjoint): (a, b) ↦ (b, a⊕b⊕1)
+        if check_pattern_2leaf(&def.forward, &vals, &def.input_ty, &def.output_ty, |a, b| {
+            (b, a ^ b ^ 1)
+        }) {
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![
+                    Instr::Xor { rd: regs[1], rs: regs[0] },
+                    Instr::Xori { rd: regs[1], imm: 1 },
+                    Instr::Xor { rd: regs[0], rs: regs[1] },
+                    Instr::Xori { rd: regs[0], imm: 1 },
+                ])
+            });
+        }
     }
 
     // Three-register prims: (c, a, b)
@@ -880,6 +927,37 @@ fn check_pattern_3reg(
     true
 }
 
+/// Check if a 2-leaf prim's clause table matches a byte-level pattern,
+/// using the generic leaf-byte encoding (works for sum types, not just
+/// products). Used for patterns that the `check_pattern_2reg` helper
+/// cannot match because it requires `Value::Pair`.
+fn check_pattern_2leaf(
+    forward: &std::collections::BTreeMap<Value, Value>,
+    vals: &[Value],
+    in_ty: &Type,
+    out_ty: &Type,
+    f: impl Fn(u8, u8) -> (u8, u8),
+) -> bool {
+    for v in vals {
+        let in_bytes = value_to_leaf_bytes(v, in_ty);
+        if in_bytes.len() != 2 {
+            return false;
+        }
+        let (exp_a, exp_b) = f(in_bytes[0], in_bytes[1]);
+        let Some(out) = forward.get(v) else {
+            return false;
+        };
+        let out_bytes = value_to_leaf_bytes(out, out_ty);
+        if out_bytes.len() != 2 {
+            return false;
+        }
+        if out_bytes[0] != exp_a || out_bytes[1] != exp_b {
+            return false;
+        }
+    }
+    true
+}
+
 /// Find a constant K such that a 1-register prim matches a ↦ f(a, K).
 fn find_constant_1reg(
     forward: &std::collections::BTreeMap<Value, Value>,
@@ -972,6 +1050,7 @@ fn is_bit_not(iso: &Iso) -> bool {
 /// Lower a recognized controlled-op idiom to TISC-1 instructions.
 /// The `ctx` covers [ctrl_leaves..., tgt_leaves...] (the input layout
 /// before the first SwapProd).
+#[allow(clippy::too_many_arguments)]
 fn lower_controlled_idiom(
     ctrl_ty: &Type,
     tgt_ty: &Type,
@@ -980,6 +1059,7 @@ fn lower_controlled_idiom(
     f: &Iso,
     g: &Iso,
     ctx: &Ctx,
+    meta: &mut LowerMeta,
 ) -> Result<(Vec<Instr>, Ctx), CompileError> {
     let n_ctrl = num_leaves(ctrl_ty)?;
     let n_tgt = num_leaves(tgt_ty)?;
@@ -1041,7 +1121,7 @@ fn lower_controlled_idiom(
         homes: dctx.homes[n_ctrl..n_ctrl + n_tgt].to_vec(),
         occ: dctx.occ,
     };
-    let (instrs_g, _) = lower(g, &ctx_tgt)?;
+    let (instrs_g, _) = lower(g, &ctx_tgt, meta)?;
 
     // Guard: reject doubly-nested skip-block control (reservation
     // ordering deferred).
@@ -1060,6 +1140,7 @@ fn lower_controlled_idiom(
     let mut instrs = Vec::new();
     instrs.extend(aux_pi);
     instrs.extend(ctrl_pi);
+    meta.forward_skip_total += instrs_g.len();
     instrs.extend(emit_skip_block(ctrl_reg, &instrs_g, rb, temp, false)?);
     instrs.extend(ctrl_po);
     instrs.extend(aux_po);
@@ -1213,10 +1294,45 @@ fn numeral_count(ty: &Type) -> Option<usize> {
 
 // ── Core lowering ────────────────────────────────────────────────────
 
-/// Compile a core `Iso` (M-A/M-B/M-C1) to a TISC-1 instruction sequence.
+/// Structured metadata returned by compilation (M-D.d §4).
 ///
-/// Returns `Err(CompileError)` for out-of-scope constructs (Trace/Fold/Unfold).
-pub fn compile(iso: &Iso) -> Result<Vec<Instr>, CompileError> {
+/// Replaces the ROM-scanning `max_skip_distance` with compositionally-
+/// computed WCET and forward-skip metadata. The ROM scanner mispairs
+/// once a loop bracket exists; this structure is always correct.
+#[derive(Clone, Debug)]
+pub struct Lowered {
+    pub instrs: Vec<Instr>,
+    /// Total forward-skip distance (from forward skip-blocks only;
+    /// the loop's backward bracket contributes 0).
+    pub forward_skip_total: usize,
+    /// Loop terms: `(k_max, iter_len)` for each Trace loop emitted.
+    /// `k_max = |u| + 1` (the corrected ADR-0007 bound).
+    /// `iter_len = |body| + LOOP_OVERHEAD` (one full iteration).
+    pub loop_terms: Vec<(usize, usize)>,
+}
+
+impl Lowered {
+    /// Compositional WCET: `|instrs| + Σ (k_max - 1) · iter_len`.
+    /// The first iteration is already counted in `|instrs|` (the ROM
+    /// length); additional iterations add `(k_max - 1) · iter_len`.
+    pub fn wcet(&self) -> usize {
+        let base = self.instrs.len();
+        let loop_contribution: usize = self
+            .loop_terms
+            .iter()
+            .map(|&(k_max, iter_len)| (k_max - 1) * iter_len)
+            .sum();
+        base + loop_contribution
+    }
+
+    /// Compositional S_max: forward-skip distance only.
+    pub fn s_max(&self) -> usize {
+        self.forward_skip_total
+    }
+}
+
+/// Compile a core `Iso` to a TISC-1 instruction sequence with metadata.
+pub fn compile_with_metadata(iso: &Iso) -> Result<Lowered, CompileError> {
     let (in_ty, _out_ty) = theseus_core::type_of(iso).map_err(|e| {
         CompileError::Deferred(format!("type error: {e:?}"))
     })?;
@@ -1228,8 +1344,30 @@ pub fn compile(iso: &Iso) -> Result<Vec<Instr>, CompileError> {
         });
     }
     let ctx = Ctx::new(n);
-    let (instrs, _final_ctx) = lower(iso, &ctx)?;
-    Ok(instrs)
+    let mut meta = LowerMeta::default();
+    let (instrs, _final_ctx) = lower(iso, &ctx, &mut meta)?;
+    Ok(Lowered {
+        instrs,
+        forward_skip_total: meta.forward_skip_total,
+        loop_terms: meta.loop_terms,
+    })
+}
+
+/// Compile a core `Iso` (M-A/M-B/M-C1/M-D.d) to a TISC-1 instruction sequence.
+///
+/// Returns `Err(CompileError)` for out-of-scope constructs.
+pub fn compile(iso: &Iso) -> Result<Vec<Instr>, CompileError> {
+    compile_with_metadata(iso).map(|l| l.instrs)
+}
+
+/// Metadata accumulated during lowering (M-D.d §4).
+///
+/// Threaded through all `lower` calls via `&mut LowerMeta` to
+/// compositionally track WCET and forward-skip distance.
+#[derive(Clone, Debug, Default)]
+struct LowerMeta {
+    forward_skip_total: usize,
+    loop_terms: Vec<(usize, usize)>,
 }
 
 /// Right-associate a left-nested `Seq` chain so that idiom recognizers
@@ -1256,8 +1394,8 @@ fn right_assoc_seq(iso: Iso) -> Iso {
 /// Recursive lowering: iso + register context → (instructions, updated context).
 /// INVARIANT: lower() returns with canonical layout restored (page-out
 /// bracketing). The shared-occ safety depends on this.
-fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
-    let result = lower_dispatch(iso, ctx);
+fn lower(iso: &Iso, ctx: &Ctx, meta: &mut LowerMeta) -> Result<(Vec<Instr>, Ctx), CompileError> {
+    let result = lower_dispatch(iso, ctx, meta);
     if let Ok((_, ref out_ctx)) = result {
         debug_assert_eq!(
             out_ctx.homes, ctx.homes,
@@ -1267,18 +1405,18 @@ fn lower(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
     result
 }
 
-fn lower_dispatch(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileError> {
+fn lower_dispatch(iso: &Iso, ctx: &Ctx, meta: &mut LowerMeta) -> Result<(Vec<Instr>, Ctx), CompileError> {
     // First, try matching the controlled-op idiom (before decomposing Seq).
     if let Some((ctrl_ty, tgt_ty, ctrl_l, ctrl_r, f, g)) = match_controlled_idiom(iso) {
-        return lower_controlled_idiom(ctrl_ty, tgt_ty, ctrl_l, ctrl_r, f, g, ctx);
+        return lower_controlled_idiom(ctrl_ty, tgt_ty, ctrl_l, ctrl_r, f, g, ctx, meta);
     }
 
     match iso {
         Iso::Id(_) => Ok((vec![], ctx.clone())),
 
         Iso::Seq(f, g) => {
-            let (mut instrs_f, ctx2) = lower(f, ctx)?;
-            let (instrs_g, ctx3) = lower(g, &ctx2)?;
+            let (mut instrs_f, ctx2) = lower(f, ctx, meta)?;
+            let (instrs_g, ctx3) = lower(g, &ctx2, meta)?;
             instrs_f.extend(instrs_g);
             Ok((instrs_f, ctx3))
         }
@@ -1289,8 +1427,8 @@ fn lower_dispatch(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileErro
             })?;
             let n_left = num_leaves(&in_f)?;
             let (ctx_f, ctx_g) = ctx.split(n_left);
-            let (mut instrs_f, ctx_f2) = lower(f, &ctx_f)?;
-            let (instrs_g, ctx_g2) = lower(g, &ctx_g)?;
+            let (mut instrs_f, ctx_f2) = lower(f, &ctx_f, meta)?;
+            let (instrs_g, ctx_g2) = lower(g, &ctx_g, meta)?;
             instrs_f.extend(instrs_g);
             Ok((instrs_f, Ctx::merge(&ctx_f2, &ctx_g2)))
         }
@@ -1329,7 +1467,7 @@ fn lower_dispatch(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileErro
             // (right-nested → left-nested), which prevents the
             // controlled-op idiom recognizer from matching.
             let adj = right_assoc_seq(adjoint(f));
-            lower(&adj, ctx)
+            lower(&adj, ctx, meta)
         }
 
         Iso::Prim(def) => {
@@ -1350,7 +1488,7 @@ fn lower_dispatch(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileErro
                 }
                 Some(d) => {
                     // M-B: guarded static unroll to D-1 iterations.
-                    lower_data_dependent_iter(n_ty, d, body, ctx)
+                    lower_data_dependent_iter(n_ty, d, body, ctx, meta)
                 }
                 None => Err(CompileError::Deferred(format!(
                     "iter with non-numeral type: {n_ty}"
@@ -1374,7 +1512,7 @@ fn lower_dispatch(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileErro
 
         Iso::Plus(f, g) => {
             // Bare Plus on Sum(a,b): branch on tag, apply f to Left, g to Right.
-            lower_bare_plus(f, g, ctx)
+            lower_bare_plus(f, g, ctx, meta)
         }
 
         Iso::AssocLSum(_, _, _)
@@ -1392,11 +1530,11 @@ fn lower_dispatch(iso: &Iso, ctx: &Ctx) -> Result<(Vec<Instr>, Ctx), CompileErro
             Ok((vec![], ctx.clone()))
         }
 
-        // ── Still deferred to M-C/M-D ──────────────────────────────
-        Iso::Trace(_, _) => Err(CompileError::Deferred("Trace (M-C/M-D)".into())),
+        // ── M-D.d: Trace (reversible while-loop) ────────────────────
+        Iso::Trace(u, body) => lower_trace(u, body, ctx, meta),
 
-        Iso::Fold(l, body) => lower_fold_unfold(l, body, ctx, true),
-        Iso::Unfold(l, body) => lower_fold_unfold(l, body, ctx, false),
+        Iso::Fold(l, body) => lower_fold_unfold(l, body, ctx, true, meta),
+        Iso::Unfold(l, body) => lower_fold_unfold(l, body, ctx, false, meta),
     }
 }
 
@@ -1415,6 +1553,7 @@ fn lower_data_dependent_iter(
     d: usize,
     body: &Iso,
     ctx: &Ctx,
+    meta: &mut LowerMeta,
 ) -> Result<(Vec<Instr>, Ctx), CompileError> {
     let n_counter = num_leaves(n_ty)?;
 
@@ -1426,7 +1565,7 @@ fn lower_data_dependent_iter(
 
     // Compile the body once with the displaced context's body sub-slice.
     let (_, dctx_body) = dctx.split(n_counter);
-    let (body_instrs, body_ctx_out) = lower(body, &dctx_body)?;
+    let (body_instrs, body_ctx_out) = lower(body, &dctx_body, meta)?;
 
     // Guard: reject doubly-nested skip-block control (reservation
     // ordering deferred).
@@ -1452,12 +1591,308 @@ fn lower_data_dependent_iter(
         let (ctrl_reg, ctrl_pi, ctrl_po) = ensure_reg(&dctx, i, &[rb, temp]);
         instrs.extend(ctrl_pi);
         // skip_when_set=false: skip body iff ctrl=0 (tag=0 means k ≤ i)
-        instrs.extend(emit_skip_block(ctrl_reg, &body_instrs, rb, temp, false)?);
+        let skip_instrs = emit_skip_block(ctrl_reg, &body_instrs, rb, temp, false)?;
+        meta.forward_skip_total += body_instrs.len();
+        instrs.extend(skip_instrs);
         instrs.extend(ctrl_po);
     }
 
     instrs.extend(aux_po);
     Ok((instrs, ctx.clone()))
+}
+
+// ── M-D.d: Trace as reversible while-loop ──────────────────────────
+
+/// Lower `Trace(u, body)` to a reversible while-loop using a backward
+/// branch and the ADR-0034 come-from join-dispatch discipline.
+///
+/// The loop skeleton (design §2, hand-verified):
+/// ```text
+/// prologue: XORI tag,1          ; inject Right (a-side)
+///           ADDI temp,δu        ; mint token
+/// Ltop:  SWAPBR rc              ; catch: rc ← δu on backward re-entry
+///        CSWAP  ctrl, rc, temp  ; join-dispatch: route witness
+///        SUBI   temp, δu        ; burn token
+///        XOR    ctrl, tag
+///        XORI   ctrl, 1         ; ctrl ⊕= ¬tag  →  0
+///        <body: L instrs>
+///        XOR    ctrl, tag
+///        XORI   ctrl, 1         ; ctrl := ¬tag
+///        ADDI   temp, δu        ; mint token
+///        CSWAP  ctrl, temp, rb  ; route: continue or exit
+/// Lend:  SWAPBR rb              ; continue → backward, exit → fall through
+///        SUBI   temp, δu        ; burn token (exit path)
+///        XORI   tag,1           ; strip Right
+/// ```
+///
+/// `δu = 256 − (L + LOOP_OVERHEAD)` is the backward jump distance.
+/// `k_max = |u| + 1` (corrected ADR-0007 bound).
+fn lower_trace(
+    u: &Type,
+    body: &Iso,
+    ctx: &Ctx,
+    meta: &mut LowerMeta,
+) -> Result<(Vec<Instr>, Ctx), CompileError> {
+    // ── Type analysis ──────────────────────────────────────────────
+    let (body_in_ty, body_out_ty) = theseus_core::type_of(body).map_err(|e| {
+        CompileError::Deferred(format!("type error in Trace body: {e:?}"))
+    })?;
+
+    // body : u+a ↔ u+b. Extract a, b.
+    let a_ty = match &body_in_ty {
+        Type::Sum(u1, a) if u1.as_ref() == u => a.as_ref().clone(),
+        _ => {
+            return Err(CompileError::Deferred(format!(
+                "Trace body input not Sum(u, _): {body_in_ty}"
+            )));
+        }
+    };
+    let _b_ty = match &body_out_ty {
+        Type::Sum(u2, b) if u2.as_ref() == u => b.as_ref().clone(),
+        _ => {
+            return Err(CompileError::Deferred(format!(
+                "Trace body output not Sum(u, _): {body_out_ty}"
+            )));
+        }
+    };
+
+    // Carrier = Sum(u, a). Leaf count = 1 + max(|u|, |a|).
+    let _n_u = num_leaves(u)?;
+    let _n_a = num_leaves(&a_ty)?;
+    let n_carrier = num_leaves(&body_in_ty)?; // = 1 + max(n_u, n_a)
+    let n_payload = n_carrier - 1; // payload leaves (tag excluded)
+
+    // |u| = number of inhabitants of u (for k_max).
+    let u_inhabitants = enumerate_values(u).len();
+    if u_inhabitants == 0 {
+        return Err(CompileError::Deferred(
+            "Trace with uninhabited carrier type u".into(),
+        ));
+    }
+    let k_max = u_inhabitants + 1; // corrected ADR-0007 bound
+
+    // ── Reject-don't-corrupt guards ────────────────────────────────
+
+    // Guard: payload leaves must fit in MAX_LEAVES_LOOP.
+    if n_payload > MAX_LEAVES_LOOP {
+        return Err(CompileError::Deferred(format!(
+            "Trace body carrier has {n_payload} payload leaves, max is {MAX_LEAVES_LOOP} (M-D.d §3)"
+        )));
+    }
+
+    // Guard: require canonical top-level context (same as fold/unfold).
+    let canonical = Ctx::new(ctx.homes.len());
+    if ctx.homes != canonical.homes {
+        return Err(CompileError::Deferred(
+            "Trace under a non-canonical context — deferred".into(),
+        ));
+    }
+
+    // Guard: reject nested Trace — the come-from join doesn't compose.
+    if contains_trace(body) {
+        return Err(CompileError::Deferred(
+            "nested Trace not supported — come-from join does not compose (M-D.d §5)".into(),
+        ));
+    }
+
+    // ── Lower the body once ────────────────────────────────────────
+
+    // The carrier Sum(u, a) has n_carrier = 1 + max(|u|, |a|) leaves:
+    //   leaf 0 = tag, leaves 1..n_carrier = payload (zero-extended).
+    // The ctx only has num_leaves(a) homes (the Trace input type).
+    // We need to allocate registers for: tag + extra payload + aux.
+    //
+    // Register layout:
+    //   regs 0..|a| = input a (from ctx)
+    //   We'll build the body_ctx with carrier layout:
+    //     body_ctx[0] = tag register (a free register)
+    //     body_ctx[1..1+|a|] = input registers (ctx.homes[0..|a|])
+    //     body_ctx[1+|a|..n_carrier] = extra payload (free registers)
+    let n_input = ctx.homes.len(); // = num_leaves(a)
+
+    // Total registers needed: n_carrier (body) + 4 (aux: rc, rb, temp, ctrl).
+    let total_regs_needed = n_carrier + 4;
+    if total_regs_needed > NUM_REGS {
+        return Err(CompileError::Deferred(format!(
+            "Trace needs {total_regs_needed} registers but only {NUM_REGS} available"
+        )));
+    }
+
+    // Build body_ctx: tag at leaf 0, then input payload, then zero-padding.
+    let mut body_homes = Vec::with_capacity(n_carrier);
+    // Tag register: first free register after input.
+    let _tag_start = n_input as u8;
+    // Actually, we need a specific layout. Let's assign:
+    //   tag = reg[n_input]  (first free reg after input)
+    //   payload[0..|a|] = reg[0..|a|] (input regs, unchanged)
+    //   payload[|a|..max(|u|,|a|)] = reg[n_input+1..] (additional free regs)
+    //   aux: rc, rb, temp, ctrl = next free regs after carrier
+    //
+    // But the body expects leaf 0 = tag. So body_ctx.homes[0] = Reg(tag_reg).
+    // body_ctx.homes[1..1+|a|] = ctx.homes[0..|a|] = Reg(0..n_input).
+    // body_ctx.homes[1+|a|..n_carrier] = Reg(n_input+1..) for extra payload.
+    let tag_reg_idx = n_input as u8; // allocate tag from first free reg
+    body_homes.push(Location::Reg(tag_reg_idx)); // leaf 0 = tag
+
+    // Payload: first n_input leaves from ctx (the input data).
+    for i in 0..n_input {
+        body_homes.push(ctx.homes[i]);
+    }
+    // Extra payload (if carrier is wider than input): from free registers.
+    let n_extra = n_carrier - 1 - n_input; // max(|u|,|a|) - |a| = max(0, |u|-|a|)
+    for j in 0..n_extra {
+        body_homes.push(Location::Reg(n_input as u8 + 1 + j as u8));
+    }
+
+    // Build occ: mark all carrier + aux registers as occupied.
+    let mut body_occ = ctx.occ;
+    for h in &body_homes {
+        body_occ.set(*h);
+    }
+
+    let body_ctx = Ctx {
+        homes: body_homes,
+        occ: body_occ,
+    };
+
+    // Body must not use Swapbr (no forward skip-blocks inside loops
+    // for v1 — the safe Swapbr-free-body policy, design §4/F6).
+    let mut body_meta = LowerMeta::default();
+    let (body_instrs, body_ctx_out) = lower(body, &body_ctx, &mut body_meta)?;
+
+    // Guard: reject body containing Swapbr (forward skip-blocks inside
+    // a loop body would require compositional S_max accounting under
+    // nesting, deferred per design §4/F6 safe policy).
+    if has_inner_control(&body_instrs) {
+        return Err(CompileError::Deferred(
+            "Trace body contains Swapbr (skip-block) — deferred (M-D.d F6 safe policy)".into(),
+        ));
+    }
+
+    // Guard: layout invariant — homes_in == homes_out (§3, hard error).
+    if body_ctx.homes != body_ctx_out.homes {
+        return Err(CompileError::Deferred(
+            "Trace body violates layout invariant: homes_in != homes_out (M-D.d §3)".into(),
+        ));
+    }
+
+    let body_len = body_instrs.len();
+    let iter_len = body_len + LOOP_OVERHEAD;
+
+    // Guard: P2 — wcet + S_max must fit in 256.
+    // prologue(2) + iter_len + epilogue(2) = 4 + iter_len = rom_len for the Trace.
+    // But the Trace might be composed with other code; P2 is checked at
+    // the top level in run_on_cpu. Here we check the Trace's own
+    // contribution is feasible.
+    let spine = 4; // prologue(2) + epilogue(2)
+    let this_wcet = spine + k_max * iter_len;
+    if this_wcet > 256 {
+        return Err(CompileError::Deferred(format!(
+            "Trace WCET {} exceeds 256 (k_max={}, iter_len={}, spine={}) (M-D.d §5)",
+            this_wcet, k_max, iter_len, spine
+        )));
+    }
+
+    // ── Compute δu ─────────────────────────────────────────────────
+    // After Lend (SWAPBR rb at offset iter_len-1 from Ltop):
+    //   PC = Ltop + (iter_len - 1) + δu + 1 = Ltop + iter_len + δu
+    // Want PC = Ltop → δu = 256 - iter_len (mod 256).
+    let delta_u: u8 = (256usize.wrapping_sub(iter_len) & 0xFF) as u8;
+
+    // ── Register assignment (§3) ───────────────────────────────────
+    // The body_ctx has tag at body_homes[0] = Reg(tag_reg_idx).
+    // Aux registers are allocated after all carrier registers.
+    let tag_reg: u8 = tag_reg_idx;
+    // Find the highest register used by the carrier.
+    let max_carrier_reg = body_ctx.homes.iter().filter_map(|h| match h {
+        Location::Reg(r) => Some(*r),
+        _ => None,
+    }).max().unwrap_or(0);
+    let aux_base = max_carrier_reg + 1;
+    let rc: u8 = aux_base;
+    let rb: u8 = aux_base + 1;
+    let temp: u8 = aux_base + 2;
+    let ctrl: u8 = aux_base + 3;
+
+    // Sanity: all aux must fit in registers.
+    if (ctrl as usize) >= NUM_REGS {
+        return Err(CompileError::Deferred(format!(
+            "Trace aux registers exceed register file (ctrl={}, NUM_REGS={})",
+            ctrl, NUM_REGS
+        )));
+    }
+
+    // ── Emit the skeleton ──────────────────────────────────────────
+    let mut instrs = vec![
+        // Prologue (2 instructions):
+        Instr::Xori { rd: tag_reg, imm: 1 },        // inject Right (a→u+a)
+        Instr::Addi { rd: temp, imm: delta_u },      // mint token
+        // Ltop: SWAPBR rc
+        Instr::Swapbr { rd: rc },
+        // Join-dispatch: CSWAP ctrl, rc, temp
+        Instr::Cswap { rd: ctrl, rs: rc, rt: temp },
+        // Burn token: SUBI temp, δu
+        Instr::Subi { rd: temp, imm: delta_u },
+        // Uncompute ctrl from tag (top): XOR ctrl, tag; XORI ctrl, 1
+        Instr::Xor { rd: ctrl, rs: tag_reg },
+        Instr::Xori { rd: ctrl, imm: 1 },
+    ];
+
+    // Body
+    instrs.extend_from_slice(&body_instrs);
+
+    // Compute ctrl from tag (bottom): XOR ctrl, tag; XORI ctrl, 1
+    // ctrl := ¬tag (1 = continue [Left], 0 = exit [Right])
+    instrs.push(Instr::Xor { rd: ctrl, rs: tag_reg });
+    instrs.push(Instr::Xori { rd: ctrl, imm: 1 });
+
+    // Mint token: ADDI temp, δu
+    instrs.push(Instr::Addi { rd: temp, imm: delta_u });
+
+    // Route: CSWAP ctrl, temp, rb
+    // continue: rb=δu, temp=0 · exit: rb=0, temp=δu
+    instrs.push(Instr::Cswap { rd: ctrl, rs: temp, rt: rb });
+
+    // Lend: SWAPBR rb
+    // continue: BR=δu → PC jumps back to Ltop · exit: BR=0 → fall through
+    instrs.push(Instr::Swapbr { rd: rb });
+
+    // Epilogue (2 instructions):
+    // Burn token (exit path): SUBI temp, δu
+    instrs.push(Instr::Subi { rd: temp, imm: delta_u });
+    // Strip Right: XORI tag, 1
+    instrs.push(Instr::Xori { rd: tag_reg, imm: 1 });
+
+    // ── Record metadata ────────────────────────────────────────────
+    // The loop's backward bracket contributes 0 to forward skip distance.
+    // Body's forward skips are 0 (Swapbr-free body policy).
+    meta.loop_terms.push((k_max, iter_len));
+
+    // Verify emitted instruction count.
+    debug_assert_eq!(
+        instrs.len(),
+        spine + iter_len,
+        "Trace ROM length mismatch: expected {}, got {}",
+        spine + iter_len,
+        instrs.len()
+    );
+
+    Ok((instrs, ctx.clone()))
+}
+
+/// Check if an Iso contains a Trace node (for nested-Trace rejection).
+fn contains_trace(iso: &Iso) -> bool {
+    match iso {
+        Iso::Trace(_, _) => true,
+        Iso::Seq(f, g) => contains_trace(f) || contains_trace(g),
+        Iso::Times(f, g) => contains_trace(f) || contains_trace(g),
+        Iso::Plus(f, g) => contains_trace(f) || contains_trace(g),
+        Iso::Sym(f) => contains_trace(f),
+        Iso::Iter(_, f) => contains_trace(f),
+        Iso::Fold(_, f) => contains_trace(f),
+        Iso::Unfold(_, f) => contains_trace(f),
+        _ => false,
+    }
 }
 
 // ── M-D.a: fold/unfold over list-spine (guarded static unroll) ──────
@@ -1476,6 +1911,7 @@ fn lower_fold_unfold(
     body: &Iso,
     ctx: &Ctx,
     ascending: bool,
+    meta: &mut LowerMeta,
 ) -> Result<(Vec<Instr>, Ctx), CompileError> {
     let (depth, elem_ty) = spine_info(l).ok_or_else(|| {
         CompileError::Deferred("Fold/Unfold with non-list-spine type".into())
@@ -1563,7 +1999,7 @@ fn lower_fold_unfold(
         let body_ctx = Ctx { homes: body_homes, occ: dctx.occ };
 
         // Lower the body against this per-copy context.
-        let (body_instrs, body_ctx_out) = lower(body, &body_ctx)?;
+        let (body_instrs, body_ctx_out) = lower(body, &body_ctx, meta)?;
 
         // Guard 3: Home-preservation invariant — promoted from debug_assert
         // to a hard error. A body that permutes homes would corrupt the
@@ -1599,6 +2035,7 @@ fn lower_fold_unfold(
 
         instrs.extend(tag_pi);
         // skip_when_set=false: skip body iff tag=0 (nil / shorter list).
+        meta.forward_skip_total += body_instrs.len();
         instrs.extend(emit_skip_block(tag_reg, &body_instrs, rb, temp, false)?);
         instrs.extend(tag_po);
     }
@@ -1617,6 +2054,7 @@ fn lower_bare_plus(
     f: &Iso,
     g: &Iso,
     ctx: &Ctx,
+    meta: &mut LowerMeta,
 ) -> Result<(Vec<Instr>, Ctx), CompileError> {
     let (in_f, _) = theseus_core::type_of(f).map_err(|e| {
         CompileError::Deferred(format!("type error in Plus/f: {e:?}"))
@@ -1651,8 +2089,8 @@ fn lower_bare_plus(
         occ: dctx.occ,
     };
 
-    let (instrs_f, _) = lower(f, &ctx_f)?;
-    let (instrs_g, _) = lower(g, &ctx_g)?;
+    let (instrs_f, _) = lower(f, &ctx_f, meta)?;
+    let (instrs_g, _) = lower(g, &ctx_g, meta)?;
 
     // Guard: reject doubly-nested skip-block control (reservation
     // ordering deferred).
@@ -1675,11 +2113,13 @@ fn lower_bare_plus(
 
     // Phase 1: f runs iff tag=0 → skip f iff tag=1
     if !f_is_nop {
+        meta.forward_skip_total += instrs_f.len();
         instrs.extend(emit_skip_block(tag_reg, &instrs_f, rb, temp, true)?);
     }
 
     // Phase 2: g runs iff tag=1 → skip g iff tag=0
     if !g_is_nop {
+        meta.forward_skip_total += instrs_g.len();
         instrs.extend(emit_skip_block(tag_reg, &instrs_g, rb, temp, false)?);
     }
 
@@ -1772,20 +2212,21 @@ pub fn max_skip_distance(instrs: &[Instr]) -> usize {
 
 /// Static WCET budget B for an `Iso` (ADR-0007 TH-1 ledger).
 ///
-/// For every program that exists today (all-monotone, no backward jumps)
-/// B == rom.len(). The invariant `B >= rom.len()` always holds.
-///
-/// Structured so M-D.d can later add a loop term `+ Σ k_ℓ·|body_ℓ|`
-/// without reshaping the signature.
+/// Compositional: `B = |instrs| + Σ (k_max − 1)·iter_len` where the
+/// first iteration is already counted in `|instrs|`. For monotone
+/// programs (no loops) `B == rom.len()`. The invariant `B >= rom.len()`
+/// always holds. `k_max = |u| + 1` (corrected ADR-0007 bound).
 pub fn wcet(iso: &Iso) -> Result<usize, CompileError> {
-    let instrs = compile(iso)?;
-    // Base budget: ROM length (covers every instruction once).
-    let base = instrs.len();
-    // Loop contribution: zero for monotone programs (M-D.d will add terms here).
-    let loop_contribution: usize = 0;
-    let b = base + loop_contribution;
-    debug_assert!(b >= instrs.len());
+    let lowered = compile_with_metadata(iso)?;
+    let b = lowered.wcet();
+    debug_assert!(b >= lowered.instrs.len());
     Ok(b)
+}
+
+/// Compositional S_max for an `Iso` — forward-skip distance only.
+pub fn s_max(iso: &Iso) -> Result<usize, CompileError> {
+    let lowered = compile_with_metadata(iso)?;
+    Ok(lowered.s_max())
 }
 
 // ── Run-on-CPU (available when theseus-eval is linked) ───────────────
@@ -1794,23 +2235,27 @@ pub fn wcet(iso: &Iso) -> Result<usize, CompileError> {
 /// steps with park-safety guards. This is the guarded core factored out of
 /// `run_on_cpu` so that negative tests can feed hand-built ROMs.
 ///
+/// `budget` and `s_max_val` are the compositional WCET and forward-skip
+/// distance. For hand-built ROMs without loop metadata, pass
+/// `instrs.len()` and `max_skip_distance(instrs)`.
+///
 /// Guard order: P2 (park-safety) → run → P1/P3 (terminal check).
 pub fn run_rom_on_cpu<E: std::fmt::Debug>(
     instrs: &[Instr],
     init: StateVals,
+    budget: usize,
+    s_max_val: usize,
     eval_fn: impl Fn(&Iso, Value, &mut u64) -> Result<Value, E>,
 ) -> Result<StateVals, CompileError> {
     let rom = assemble(instrs).map_err(|e| {
         CompileError::Deferred(format!("assemble failed: {e}"))
     })?;
-    let budget = instrs.len();
-    let s_max = max_skip_distance(instrs);
 
     // PARK-SAFETY GUARD (P2): parked PC must not wrap.
-    if budget + s_max > 256 {
+    if budget + s_max_val > 256 {
         return Err(CompileError::Deferred(format!(
             "parked PC B+S_max={} exceeds PC address space 256; program cannot park by idle (M-D.w)",
-            budget + s_max
+            budget + s_max_val
         )));
     }
 
@@ -1860,10 +2305,12 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
         CompileError::Deferred(format!("type error: {e:?}"))
     })?;
 
-    let instrs = compile(iso)?;
+    let lowered = compile_with_metadata(iso)?;
+    let budget = lowered.wcet();
+    let s_max_val = lowered.s_max();
     let state = marshal(input, &in_ty);
 
-    let final_state = run_rom_on_cpu(&instrs, state, eval_fn)?;
+    let final_state = run_rom_on_cpu(&lowered.instrs, state, budget, s_max_val, eval_fn)?;
 
     Ok(unmarshal(&final_state, &out_ty))
 }
@@ -1952,11 +2399,11 @@ pub fn run_on_cpu_fast(
         CompileError::Deferred(format!("type error: {e:?}"))
     })?;
 
-    let instrs = compile(iso)?;
-    let rom = assemble(&instrs).map_err(|e| {
+    let lowered = compile_with_metadata(iso)?;
+    let rom = assemble(&lowered.instrs).map_err(|e| {
         CompileError::Deferred(format!("assemble failed: {e}"))
     })?;
-    let budget = instrs.len();
+    let budget = lowered.wcet();
 
     let mut state = marshal(input, &in_ty);
 
