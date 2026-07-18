@@ -1,11 +1,15 @@
 # Roadmap v2: two tracks, layers, parked items
 
-> **Current status (2026-07-16):** M1, M3a, M3b, **M4-v1**, the **M4-v2
+> **Current status (2026-07-18):** M1, M3a, M3b, **M4-v1**, the **M4-v2
 > ring-machine core** (recirculating CPU + reversible branching, Fibonacci on the
 > ring at 20× area saving, zero-garbage closure), and the **v0.2 software dialect**
-> are all done and merged on `chessai/theseus-v2` (`6d180bf`). The **headline
-> thread** is the **surface → TISC-1 ROM compiler** (the #1 goal), now at **M-A +
-> M-B + M-C1 + M-C2 (Stage 1 + Stage 2) done; M-D in progress**: non-recursive, branching,
+> are all done and merged on `chessai/theseus-v2` (`e444dfb`). **The #1 goal — the
+> surface → TISC-1 ROM compiler — is COMPLETE end to end: `M-A→M-E`.** `.thse` compiles
+> to a ROM the CPU fetches/executes (`run_on_cpu == eval`), all the way to **measured
+> joules** (M-E: the real `fib` ROM = `6.62e-8 J`, WCET park tax 16.67%, honest B-vs-T
+> crossing 4.62e-8 s below the CMOS floor, in-range). Path so far: **M-A +
+> M-B + M-C1 + M-C2 (Stage 1 + Stage 2) + M-D.w (WCET+park) + M-D.d (`Trace` reversible
+> while-loop) + M-E (energy) done**: non-recursive, branching,
 > data-dependent `iter` (the real `fib`), register↔scratch spill, resident memory via
 > a reversible `MEXCH` exchange + 1-of-N Fredkin tree, *and* — Stage 1a —
 > **`MemState` externalized** into the `(CpuState,MemState)` composite carrier with a
@@ -43,10 +47,15 @@
 > join-dispatch, ADR-0034) verified `run_on_cpu == eval` on the real `system_step` iso
 > (t=3 two-re-entry + informative traces) and closing on the `SystemRing`; an
 > adversarial review caught an occ-blind register-aliasing bug (Trace under `Times`, now
-> rejected). Remaining: reversible calling convention (M-D.d2, shares the come-from
-> machinery); heap value rep (M-D.c, needs MEM_WORDS widening); plus a tracked pre-existing
-> `AssocSum` nested-sum no-op miscompile (F7). Design docs `docs/scratch/md*.md`,
-> `mdw-design.md`, `mdd-design.md`. See [Project status](status.md). The post-v1
+> rejected). **M-E** (`8c82630`) prices a compiled ROM in **measured joules** — the thesis
+> finale (see above). **Post-finale frontier — a *cluster*, not a line** (surfaced by the
+> [test-program roadmap](test-program-roadmap.md) + ADR-0007 **TH-1b** trajectory-
+> disjointness sizing law: a reversible while-loop's carrier must satisfy `|u| ≥ |input|`,
+> so real variable-`T` loops like GCD/Collatz break today on the 3-leaf loop-carrier cap):
+> **M-D.e (loop-carrier spill) + widen-PC + typed iteration bounds** must land *together*
+> to compile a real iterative loop; plus reversible **calling convention** (M-D.d2) and
+> **heap** (M-D.c1 widening / c2). Design docs `docs/scratch/md*.md`, `mdw/mdd/mdc/me-design.md`,
+> `tp1-gcd-design.md`; reviews `docs/reviews/` (L21). See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
 > shows machine-level adiabatic slope −0.997 crossing below the CMOS floor);
