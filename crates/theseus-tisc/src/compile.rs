@@ -1823,6 +1823,10 @@ fn exec_instr(instr: Instr, state: &mut StateVals) {
         Instr::Mexch { rd, addr } => {
             std::mem::swap(&mut state.regs[rd as usize], &mut state.mem[addr as usize]);
         }
+        Instr::MexchReg { rd, ra } => {
+            let addr = (state.regs[ra as usize] as usize) % MEM_WORDS;
+            std::mem::swap(&mut state.regs[rd as usize], &mut state.mem[addr]);
+        }
         Instr::Swapbr { rd } => {
             std::mem::swap(&mut state.regs[rd as usize], &mut state.br);
         }

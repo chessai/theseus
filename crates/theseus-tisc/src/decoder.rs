@@ -27,9 +27,10 @@
 //!    instructions run in sequence; opcodes are mutually exclusive, so
 //!    at most one fires.
 //!
-//!    **Reserved opcodes** (R 1001–1111 except none live there, and
-//!    I 101–111) match no predicate, so `decode_execute` is the
-//!    identity on them at the iso level. Source-level ISA totality
+//!    **Reserved opcodes** (R 1011–1111 and I 101–111) match no
+//!    predicate, so `decode_execute` is the identity on them at the
+//!    iso level (MEXCH 1001 and MEXCHR 1010 are handled by
+//!    emit/mem/absorb). Source-level ISA totality
 //!    (rejecting reserved opcodes as compile errors) is the coverage
 //!    checker's job (P1) and is out of scope here.
 //!
@@ -731,7 +732,7 @@ fn rotri_instr() -> Iso {
 // Public dispatch
 // ══════════════════════════════════════════════════════════════════════
 
-/// The 15 live TISC-1 instructions.
+/// The 16 live TISC-1 instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
     Add,
@@ -744,6 +745,7 @@ pub enum Op {
     Xchg,
     Swapbr,
     Mexch,
+    MexchReg,
     Addi,
     Subi,
     Xori,
@@ -752,7 +754,7 @@ pub enum Op {
 }
 
 impl Op {
-    /// The 14 CpuState-only instructions (all except MEXCH).
+    /// The 14 CpuState-only instructions (all except MEXCH/MEXCHR).
     /// Used by `decode_execute` (the ring step's decoder).
     pub const ALL: [Op; 14] = [
         Op::Add,
@@ -776,8 +778,9 @@ impl Op {
 /// IR's format/opcode bits match `op`, in which case the instruction is
 /// applied to the registers IR names.
 ///
-/// Panics on `Op::Mexch` — MEXCH operates on the composite carrier; use
-/// [`system_decode_execute`] for the oracle path.
+/// Panics on `Op::Mexch` / `Op::MexchReg` — these operate on the
+/// composite carrier via emit/mem/absorb; use [`system_decode_execute`]
+/// for the oracle path.
 pub fn instruction(op: Op) -> Iso {
     match op {
         Op::Add => add_instr(),
@@ -789,8 +792,8 @@ pub fn instruction(op: Op) -> Iso {
         Op::Cswap => cswap_instr(),
         Op::Xchg => xchg_instr(),
         Op::Swapbr => swapbr_instr(),
-        Op::Mexch => panic!(
-            "Op::Mexch operates on (CpuState, MemState); use system_decode_execute"
+        Op::Mexch | Op::MexchReg => panic!(
+            "Op::{op:?} operates on (CpuState, MemState); use system_decode_execute"
         ),
         Op::Addi => addi_instr(),
         Op::Subi => subi_instr(),
@@ -810,18 +813,19 @@ pub fn decode_execute_ops(ops: &[Op]) -> Iso {
 /// `decode_execute : CpuState <-> CpuState` — the ring decoder
 /// (decode_execute′, Stage 1a-B).
 ///
-/// All 14 non-MEXCH instructions. MEXCH is handled by the composite
-/// [`system_decode_execute`]. Reserved opcodes (including the MEXCH
-/// opcode 0b1001, which is now reserved at this level) are the identity.
+/// All 14 non-MEXCH/MEXCHR instructions. MEXCH and MEXCHR are handled
+/// by the emit/mem/absorb cycle in [`system_decode_execute`]. Reserved
+/// opcodes (including MEXCH 0b1001 and MEXCHR 0b1010) are the identity.
 pub fn decode_execute() -> Iso {
     decode_execute_ops(&Op::ALL)
 }
 
 /// `system_decode_execute : (CpuState, MemState) <-> (CpuState, MemState)`
-/// — the composite decoder, non-MEXCH instructions only (Stage 1b-A).
+/// — the composite decoder, non-MEXCH/MEXCHR instructions only (Stage 1b-A).
 ///
-/// All 14 non-MEXCH ops are `(instruction(op) ⊗ id_MemState)`. MEXCH is
-/// handled by the emit/mem/absorb 3-cycle in `system_step` (Stage 1b-A).
+/// All 14 non-MEXCH/MEXCHR ops are `(instruction(op) ⊗ id_MemState)`.
+/// MEXCH and MEXCHR are handled by the emit/mem/absorb 3-cycle in
+/// `system_step` (Stage 1b-A).
 pub fn system_decode_execute() -> Iso {
     let mem_id = Iso::Id(crate::types::mem_state_ty());
     let steps: Vec<Iso> = Op::ALL
@@ -905,6 +909,59 @@ fn cross_cnot(
     Iso::seq(Iso::sym(split.clone()), Iso::seq(core, split))
 }
 
+/// Toffoli across a 2-factor product boundary: `tgt_bit ^= ctrl1_bit AND ctrl2_bit`.
+///
+/// Carrier: `(fields(n_left), fields(n_right))`.
+/// Both controls are in the left factor (fields `ctrl1_field` and `ctrl2_field`,
+/// at bit positions `ctrl1_bit` and `ctrl2_bit` respectively);
+/// target is bit `tgt_bit` of field `tgt_field` in the right factor.
+///
+/// Used for AUX_PRED-gated address copies in the MEXCHR emit block:
+/// `BUS_ADDR[i] ^= AUX_PRED[0] AND reg[0][i]`.
+fn cross_toffoli(
+    ctrl1_field: usize,
+    ctrl1_bit: usize,
+    ctrl2_field: usize,
+    ctrl2_bit: usize,
+    tgt_field: usize,
+    tgt_bit: usize,
+    n_left: usize,
+    n_right: usize,
+) -> Iso {
+    use crate::addressing::split_fields;
+    assert!(ctrl1_field < n_left, "ctrl1_field out of range in left factor");
+    assert!(ctrl2_field < n_left, "ctrl2_field out of range in left factor");
+    assert!(ctrl1_bit < W, "ctrl1_bit out of range");
+    assert!(ctrl2_bit < W, "ctrl2_bit out of range");
+    assert!(tgt_field < n_right, "tgt_field out of range in right factor");
+    assert!(tgt_bit < W, "tgt_bit out of range");
+
+    let n_total = n_left + n_right;
+    let ctrl1_flat = ctrl1_field;
+    let ctrl2_flat = ctrl2_field;
+    let tgt_flat = n_left + tgt_field;
+
+    if ctrl1_field == ctrl2_field {
+        // Both controls in the same field — 2-field core.
+        let n2 = 2 * W;
+        let gate = gate_at(n2, &[ctrl1_bit, ctrl2_bit, W + tgt_bit], toffoli_prim());
+        let core = on_fields_n(&[ctrl1_flat, tgt_flat], vec![gate], n_total);
+        let split = split_fields(n_left, n_right);
+        Iso::seq(Iso::sym(split.clone()), Iso::seq(core, split))
+    } else {
+        // Controls in different fields — 3-field core.
+        let n3 = 3 * W;
+        let gate = gate_at(
+            n3,
+            &[ctrl1_bit, W + ctrl2_bit, 2 * W + tgt_bit],
+            toffoli_prim(),
+        );
+        let core = on_fields_n(&[ctrl1_flat, ctrl2_flat, tgt_flat], vec![gate], n_total);
+        let split = split_fields(n_left, n_right);
+        Iso::seq(Iso::sym(split.clone()), Iso::seq(core, split))
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // select_mem_on_bus (Stage 1b-A, Decision 4)
 // ══════════════════════════════════════════════════════════════════════
@@ -956,12 +1013,11 @@ fn select_mem_on_bus_n_inner(n_bus: usize, n_mem: usize) -> Iso {
 // ══════════════════════════════════════════════════════════════════════
 
 /// `emit : system_state_ty <-> system_state_ty` — the first phase of the
-/// MEXCH 3-cycle (Stage 1b-A).
+/// MEXCH/MEXCHR 3-cycle (Stage 1b-A; M-D.b).
 ///
-/// A self-contained bracket `pred ; selr ; [enable^=p ; addr^=IR.rt ;
-/// gated_swap(reg-head ↔ BusMsg.word)] ; sym(selr) ; sym(pred)`, built
-/// over `view_cpu_bus`. The swap is predicate-gated: only fires on MEXCH.
-/// `selr` is internal so `sym(emit)` re-selects the same `rd`.
+/// Two sequenced predicated blocks (MEXCH immediate + MEXCHR register-
+/// addressed), lifted to system_state_ty via `view_cpu_bus`.
+/// `absorb = sym(emit)` reverses both blocks.
 pub fn emit() -> Iso {
     let mem_ty = crate::types::mem_state_ty();
     let view = view_cpu_bus();
@@ -976,8 +1032,18 @@ pub fn emit() -> Iso {
 
 /// The emit sub-iso on `(CpuState, BusMsg)` = `(fields(n_cpu), fields(n_bus))`.
 ///
-/// pred ; selr ; [enable^=p ; addr^=IR.rt(ceil(log2 N) bits) ;
-/// gated_swap(reg[0] ↔ BusMsg.word)] ; sym(selr) ; sym(pred)
+/// Two sequenced, mutually-exclusive predicated blocks (opcodes 0b1001, 0b1010):
+///
+/// **MEXCH block** (immediate addressing, opcode 0b1001):
+///   `pred ; selr ; [enable^=p ; addr^=IR.rt ; gated_swap(reg0↔bus.word)] ; sym(selr) ; sym(pred)`
+///
+/// **MEXCHR block** (register addressing, opcode 0b1010, M-D.b):
+///   `pred ; [ sela ; <AUX_PRED-gated addr-copies reg[0]→BUS_ADDR> ; sym(sela) ] ;`
+///   `       [ selr ; enable^=p ; gated_swap(reg0↔bus.word) ; sym(selr) ] ; sym(pred)`
+///   The ra-bracket (sela) and rd-bracket (selr) are SEQUENTIAL, NEVER NESTED
+///   (nesting reads the wrong register AND passes the bus-quiescence certificate).
+///   MEXCHR encodes rt=0 so the MEXCH block's unpredicated IR.rt addr-copies
+///   contribute 0 — harmless.
 ///
 /// Public for Stage 2a: `cpu_pre`/`cpu_post` compose this directly on the
 /// `(Cpu, Bus)` carrier without the `view_cpu_bus` lift.
@@ -986,58 +1052,94 @@ pub fn emit_on_cpu_bus() -> Iso {
     let bus_id = Iso::Id(bus_ty);
     let n_cpu = NUM_CPU_FIELDS;
     let n_bus = NUM_BUS_FIELDS;
-
-    // Predicate (CpuState-only, lifted to (Cpu, Bus))
-    let pred_cpu = pred_compute(&r_pred(0b1001));
-    let pred = Iso::times(pred_cpu.clone(), bus_id.clone());
-
-    // Select reg[rd] to r0 slot (CpuState-only, lifted to (Cpu, Bus))
-    let selr_cpu = select_reg(R_RD);
-    let selr = Iso::times(selr_cpu.clone(), bus_id.clone());
-
-    // --- Cross-factor operations ---
-
-    // 1. enable ^= predicate bit (AUX_PRED_FIELD bit 0 → BUS_ENABLE bit 0)
-    let enable_cnot = cross_cnot(AUX_PRED_FIELD, 0, BUS_ENABLE_FIELD, 0, n_cpu, n_bus);
-
-    // 2. addr ^= IR.rt bits (ceil(log2 N) bits copied to BUS_ADDR)
     let n_addr = MEM_WIDTH.addr_bits();
-    let mut addr_cnots: Vec<Iso> = Vec::new();
-    for i in 0..n_addr {
-        addr_cnots.push(cross_cnot(
-            R_RT.ir_field,
-            R_RT.bits[i],
-            BUS_ADDR_FIELD,
-            i,
-            n_cpu,
-            n_bus,
-        ));
-    }
 
-    // 3. Predicate-gated swap: reg[0] ↔ BusMsg.word
-    let gsw = cross_factor_gated_swap(
-        AUX_PRED_FIELD,
-        0,
-        reg_field(0),
-        BUS_WORD_FIELD,
-        n_cpu,
-        n_bus,
-    );
+    // ── MEXCH block (opcode 0b1001, immediate addressing) ─────────
+    let mexch_block = {
+        let pred_cpu = pred_compute(&r_pred(0b1001));
+        let pred = Iso::times(pred_cpu, bus_id.clone());
 
-    // Inner: enable_cnot ; addr_cnots ; gated_swap
-    let mut inner_steps = vec![enable_cnot];
-    inner_steps.extend(addr_cnots);
-    inner_steps.push(gsw);
-    let inner = seq_balanced(inner_steps);
+        let selr = Iso::times(select_reg(R_RD), bus_id.clone());
 
-    // Full: pred ; selr ; inner ; sym(selr) ; sym(pred)
-    Iso::seq(
-        pred.clone(),
+        // 1. enable ^= predicate bit
+        let enable_cnot = cross_cnot(AUX_PRED_FIELD, 0, BUS_ENABLE_FIELD, 0, n_cpu, n_bus);
+
+        // 2. addr ^= IR.rt bits (unpredicated — contributes 0 for MEXCHR since rt=0)
+        let mut addr_cnots: Vec<Iso> = Vec::new();
+        for i in 0..n_addr {
+            addr_cnots.push(cross_cnot(
+                R_RT.ir_field,
+                R_RT.bits[i],
+                BUS_ADDR_FIELD,
+                i,
+                n_cpu,
+                n_bus,
+            ));
+        }
+
+        // 3. Predicate-gated swap: reg[0] ↔ BusMsg.word
+        let gsw = cross_factor_gated_swap(
+            AUX_PRED_FIELD, 0, reg_field(0), BUS_WORD_FIELD, n_cpu, n_bus,
+        );
+
+        let mut inner_steps = vec![enable_cnot];
+        inner_steps.extend(addr_cnots);
+        inner_steps.push(gsw);
+        let inner = seq_balanced(inner_steps);
+
+        // pred ; selr ; inner ; sym(selr) ; sym(pred)
         Iso::seq(
+            pred.clone(),
+            Iso::seq(
+                selr.clone(),
+                Iso::seq(inner, Iso::seq(Iso::sym(selr), Iso::sym(pred))),
+            ),
+        )
+    };
+
+    // ── MEXCHR block (opcode 0b1010, register addressing, M-D.b) ──
+    let mexchr_block = {
+        let pred_cpu = pred_compute(&r_pred(0b1010));
+        let pred = Iso::times(pred_cpu, bus_id.clone());
+
+        // Ra bracket: route reg[ra] to r0 slot via R_RS crossbar,
+        // copy addr bits (AUX_PRED-gated), then un-route.
+        let sela = Iso::times(select_reg(R_RS), bus_id.clone());
+        let mut gated_addr_copies: Vec<Iso> = Vec::new();
+        for i in 0..n_addr {
+            gated_addr_copies.push(cross_toffoli(
+                AUX_PRED_FIELD, 0,   // predicate control
+                reg_field(0), i,     // source: reg[0] bit i (= reg[ra] after sela)
+                BUS_ADDR_FIELD, i,   // target: BUS_ADDR bit i
+                n_cpu, n_bus,
+            ));
+        }
+        let ra_bracket = Iso::seq(
+            sela.clone(),
+            Iso::seq(seq_balanced(gated_addr_copies), Iso::sym(sela)),
+        );
+
+        // Rd bracket: route reg[rd] to r0 slot via R_RD crossbar,
+        // enable + gated-swap, then un-route.
+        let selr = Iso::times(select_reg(R_RD), bus_id.clone());
+        let enable_cnot = cross_cnot(AUX_PRED_FIELD, 0, BUS_ENABLE_FIELD, 0, n_cpu, n_bus);
+        let gsw = cross_factor_gated_swap(
+            AUX_PRED_FIELD, 0, reg_field(0), BUS_WORD_FIELD, n_cpu, n_bus,
+        );
+        let rd_bracket = Iso::seq(
             selr.clone(),
-            Iso::seq(inner, Iso::seq(Iso::sym(selr), Iso::sym(pred))),
-        ),
-    )
+            Iso::seq(enable_cnot, Iso::seq(gsw, Iso::sym(selr))),
+        );
+
+        // pred ; ra_bracket ; rd_bracket ; sym(pred)
+        Iso::seq(
+            pred.clone(),
+            Iso::seq(ra_bracket, Iso::seq(rd_bracket, Iso::sym(pred))),
+        )
+    };
+
+    // Sequence the two mutually-exclusive blocks.
+    Iso::seq(mexch_block, mexchr_block)
 }
 
 /// `absorb : system_state_ty <-> system_state_ty` — the third phase of the

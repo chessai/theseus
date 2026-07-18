@@ -232,20 +232,20 @@ pub fn step_ops(rom: &[u16], ops: &[Op]) -> Iso {
 }
 
 /// `step(rom) : CpuState <-> CpuState` — the ring machine cycle
-/// (decode_execute′, 14 non-MEXCH ops). Total bijection on CpuState;
+/// (decode_execute′, 14 non-MEXCH/MEXCHR ops). Total bijection on CpuState;
 /// SWAPBR is functional, branching works via `PC += BR + 1`.
 pub fn step(rom: &[u16]) -> Iso {
     step_ops(rom, &Op::ALL)
 }
 
 /// `system_step(rom) : ((CpuState, MemState), BusMsg) <-> ((CpuState, MemState), BusMsg)` —
-/// the full machine cycle including MEXCH on the 3-factor carrier
-/// (Stage 1b-A, ADR-0046 §4.5.8).
+/// the full machine cycle including MEXCH/MEXCHR on the 3-factor carrier
+/// (Stage 1b-A, ADR-0046 §4.5.8; M-D.b).
 ///
 /// Eight phases in the in-revolution order:
 /// 1. fetch         — IR ^= rom[PC]
-/// 2. decode_execute — non-MEXCH instructions (MEXCH handled by emit/mem/absorb)
-/// 3. emit — copy predicate → BusMsg.enable, IR.rt → BusMsg.addr, gated-swap reg[rd] ↔ BusMsg.word
+/// 2. decode_execute — non-MEXCH/MEXCHR instructions
+/// 3. emit — MEXCH: addr from IR.rt; MEXCHR: addr from reg[ra] (AUX_PRED-gated)
 /// 4. mem — route MemState[addr]→head keyed on BusMsg.addr, gated-swap BusMsg.word ↔ MemState[0]
 /// 5. absorb        — sym(emit): un-swap, zero BusMsg
 /// 6. unfetch       — re-zero IR (same ROM word, P4)
@@ -254,7 +254,7 @@ pub fn step(rom: &[u16]) -> Iso {
 ///
 /// CpuState-only phases are lifted to the 3-factor carrier via
 /// `(cpu_phase ⊗ id_Mem) ⊗ id_Bus`. The decode+execute phase (composite,
-/// non-MEXCH only) is lifted via `composite_phase ⊗ id_Bus`.
+/// non-MEXCH/MEXCHR only) is lifted via `composite_phase ⊗ id_Bus`.
 /// emit/mem/absorb operate natively on system_state_ty.
 pub fn system_step(rom: &[u16]) -> Iso {
     let mem_id = Iso::Id(crate::types::mem_state_ty());

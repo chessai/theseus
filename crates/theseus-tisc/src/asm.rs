@@ -45,6 +45,10 @@ pub enum AsmError {
     XchgScratchReserved { sx: u8 },
     /// MEXCH memory address out of range (must be < MEM_WORDS).
     MexchAddrOutOfRange { addr: u8 },
+    /// MEXCHR address register aliases data register (ra == rd),
+    /// which breaks bus-quiescence (the mem phase mutates reg[rd],
+    /// so absorb's re-read of reg[ra=rd] gets a different value).
+    MexchAddrAliasesData { rd: u8, ra: u8 },
     /// SWAPBR register index out of range (must be < NUM_REGS).
     SwapbrRegOutOfRange { rd: u8 },
     /// Program exceeds the 8-bit PC address space (> 256 instructions).
@@ -71,6 +75,13 @@ impl fmt::Display for AsmError {
             }
             AsmError::MexchAddrOutOfRange { addr } => {
                 write!(f, "MEXCH memory address out of range: m{addr} (MEM_WORDS={MEM_WORDS})")
+            }
+            AsmError::MexchAddrAliasesData { rd, ra } => {
+                write!(
+                    f,
+                    "MEXCHR r{rd}, r{ra}: address register aliases data register \
+                     (ra == rd breaks bus-quiescence)"
+                )
             }
             AsmError::SwapbrRegOutOfRange { rd } => {
                 write!(f, "SWAPBR r{rd}: register index out of range")
@@ -114,6 +125,10 @@ pub enum Instr {
     /// `r[rd] ↔ mem[addr]` (M-C2 Layer 1, ADR-0046 §3.1). Self-inverse
     /// memory exchange; `addr` indexes the memory bank (0..MEM_WORDS).
     Mexch { rd: u8, addr: u8 },
+    /// `r[rd] ↔ mem[r[ra] % MEM_WORDS]` (M-D.b). Self-inverse
+    /// data-dependent memory exchange; address comes from register `ra`
+    /// at runtime. Requires `ra != rd` (bus-quiescence invariant).
+    MexchReg { rd: u8, ra: u8 },
     /// `r[rd] += imm` (mod 256).
     Addi { rd: u8, imm: u8 },
     /// `r[rd] -= imm` (mod 256).
@@ -211,6 +226,12 @@ pub fn encode(instr: Instr) -> Result<u16, AsmError> {
             }
             r_word(0b1001, rd, 0, addr)
         }
+        Instr::MexchReg { rd, ra } => {
+            if rd == ra {
+                return Err(AsmError::MexchAddrAliasesData { rd, ra });
+            }
+            r_word(0b1010, rd, ra, 0)
+        }
         Instr::Addi { rd, imm } => i_word(0b000, rd, imm),
         Instr::Subi { rd, imm } => i_word(0b001, rd, imm),
         Instr::Xori { rd, imm } => i_word(0b010, rd, imm),
@@ -243,6 +264,7 @@ pub fn decode(word: u16) -> Option<Instr> {
             0b0111 => Some(Instr::Xchg { rd, sx: rt }),
             0b1000 => Some(Instr::Swapbr { rd }),
             0b1001 => Some(Instr::Mexch { rd, addr: rt }),
+            0b1010 => Some(Instr::MexchReg { rd, ra: rs }),
             _ => None, // reserved
         }
     } else {

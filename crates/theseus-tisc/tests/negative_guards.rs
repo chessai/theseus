@@ -20,10 +20,18 @@ fn decode_reserved_r_format_opcode() {
 }
 
 #[test]
-fn decode_reserved_r_format_opcode_1010() {
-    // R-format opcode 0b1010 is also reserved (only 0b0000..0b1001 are valid).
+fn decode_mexchr_opcode_1010() {
+    // R-format opcode 0b1010 is MEXCHR (M-D.b: data-dependent memory addressing).
     // [1 | 1010 | 000 | 000 | 000 | 00] = 0x8000 | (0b1010 << 11) = 0xD000
-    assert_eq!(decode(0xD000), None);
+    // rd=0, rs=0 (=ra), rt=0 — decodes to MexchReg{rd:0, ra:0}.
+    assert_eq!(decode(0xD000), Some(Instr::MexchReg { rd: 0, ra: 0 }));
+}
+
+#[test]
+fn decode_reserved_r_format_opcode_1011() {
+    // R-format opcode 0b1011 is reserved (0b0000..0b1010 are valid).
+    // [1 | 1011 | 000 | 000 | 000 | 00] = 0x8000 | (0b1011 << 11) = 0xD800
+    assert_eq!(decode(0xD800), None);
 }
 
 #[test]
