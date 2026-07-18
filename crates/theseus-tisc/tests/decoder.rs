@@ -154,6 +154,9 @@ fn op_samples(op: Op) -> Vec<StateVals> {
             st(regs_a(), r_ins(8, 7, 0, 0)), // SWAPBR r7
         ],
         Op::Mexch => panic!("MEXCH operates on composite carrier; not in CpuState decoder"),
+        Op::MexchReg => {
+            panic!("MEXCHR operates on composite carrier; not in CpuState decoder")
+        }
         Op::Addi => vec![
             st(regs_a(), i_ins(0, 0, 0xFF)),
             st(regs_b(), i_ins(0, 7, 0x01)),

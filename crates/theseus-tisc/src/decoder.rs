@@ -918,6 +918,7 @@ fn cross_cnot(
 ///
 /// Used for AUX_PRED-gated address copies in the MEXCHR emit block:
 /// `BUS_ADDR[i] ^= AUX_PRED[0] AND reg[0][i]`.
+#[allow(clippy::too_many_arguments)]
 fn cross_toffoli(
     ctrl1_field: usize,
     ctrl1_bit: usize,

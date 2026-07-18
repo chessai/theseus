@@ -13,7 +13,7 @@ use std::sync::OnceLock;
 
 use theseus_core::Iso;
 use theseus_tisc::asm::{self, AsmError, Instr};
-use theseus_tisc::ring_run::{system_ring, two_body_ring, SystemRing, TwoBodyRing};
+use theseus_tisc::ring_run::{system_ring, two_body_ring, SystemRing};
 use theseus_tisc::step::system_step;
 use theseus_tisc::types::{decode_system, encode_system, MEM_WORDS, StateVals};
 
@@ -84,6 +84,7 @@ fn mixed_rom() -> Vec<u16> {
 
 // ── Cached contexts ───────────────────────────────────────────────
 
+#[allow(dead_code)]
 struct Ctx {
     ring: SystemRing,
     iso: Iso,
@@ -99,6 +100,7 @@ fn ctx() -> &'static Ctx {
     })
 }
 
+#[allow(dead_code)]
 struct CtxWrap {
     ring: SystemRing,
     iso: Iso,
@@ -114,6 +116,7 @@ fn ctx_wrap() -> &'static CtxWrap {
     })
 }
 
+#[allow(dead_code)]
 struct MixedCtx {
     ring: SystemRing,
     iso: Iso,
@@ -152,7 +155,6 @@ const SAMPLE_PCS: [u8; 4] = [0, 1, 2, 4];
 // 1. Bus-quiescence PRESERVED with MEXCHR ROM
 // ══════════════════════════════════════════════════════════════════════
 
-#[test]
 fn bus_quiescent_with_mexchr() {
     let c = ctx();
     for &pc in &SAMPLE_PCS {
@@ -164,7 +166,6 @@ fn bus_quiescent_with_mexchr() {
     }
 }
 
-#[test]
 fn bus_quiescent_with_mexchr_wrap() {
     let c = ctx_wrap();
     for &pc in &SAMPLE_PCS {
@@ -176,7 +177,6 @@ fn bus_quiescent_with_mexchr_wrap() {
     }
 }
 
-#[test]
 fn bus_quiescent_with_mixed_rom() {
     let c = mixed_ctx();
     for &pc in &[0u8, 1, 2, 3, 5] {
@@ -192,7 +192,6 @@ fn bus_quiescent_with_mixed_rom() {
 // 1b. SystemRing matches eval oracle with MEXCHR ROM
 // ══════════════════════════════════════════════════════════════════════
 
-#[test]
 fn system_ring_mexchr_matches_eval_oracle() {
     let c = ctx();
     const MAX_R: u32 = 2;
@@ -230,7 +229,6 @@ fn system_ring_mexchr_matches_eval_oracle() {
 // 1c. Two-body ring with MEXCHR ROM
 // ══════════════════════════════════════════════════════════════════════
 
-#[test]
 fn two_body_ring_mexchr_matches_system_ring() {
     let rom = mexchr_rom();
     let two = two_body_ring(&rom);
@@ -271,7 +269,6 @@ fn two_body_ring_mexchr_matches_system_ring() {
 // 2. Oracle: MEXCHR hand-built program, run_on_cpu == eval
 // ══════════════════════════════════════════════════════════════════════
 
-#[test]
 fn mexchr_oracle_basic() {
     let c = ctx();
     // ROM: [ADDI r2,2 ; MEXCHR r1,r2 ; SUBI r6,0x11]
@@ -300,7 +297,6 @@ fn mexchr_oracle_basic() {
     assert_eq!(ring_result, result, "ring.run(s,3) != eval^3");
 }
 
-#[test]
 fn mexchr_oracle_wrap() {
     // reg[ra] ≥ MEM_WORDS: exercises the % mask.
     let c = ctx_wrap();
@@ -328,7 +324,6 @@ fn mexchr_oracle_wrap() {
 // 3. Alias L20 negative test: MexchReg{rd:1,ra:1} → Err
 // ══════════════════════════════════════════════════════════════════════
 
-#[test]
 fn mexchr_alias_rejected() {
     let result = asm::encode(Instr::MexchReg { rd: 1, ra: 1 });
     assert!(
@@ -337,7 +332,6 @@ fn mexchr_alias_rejected() {
     );
 }
 
-#[test]
 fn mexchr_encode_decode_round_trip() {
     // Verify round-trip for legal MexchReg
     for rd in 0..8u8 {
@@ -359,7 +353,6 @@ fn mexchr_encode_decode_round_trip() {
 //    bus_quiescent == false
 // ══════════════════════════════════════════════════════════════════════
 
-#[test]
 fn certificate_weakening_mexchr_aliased() {
     // Hand-craft a 16-bit ROM word with op=0b1010, rd=1, ra=1 (rs=1),
     // bypassing the assembler which rejects ra==rd.
@@ -404,4 +397,22 @@ fn certificate_weakening_mexchr_aliased() {
          this documents the certificate weakening: bus-quiescence now holds \
          only for ASSEMBLER-LEGAL ROMs"
     );
+}
+
+/// All MEXCHR checks in ONE sequential #[test]: each heavy check lowers the
+/// large system_step netlist; running them as separate concurrent tests
+/// (default cargo threads) exhausts memory (SIGKILL). Sequencing caps peak
+/// memory at one lowering — same pattern as ring_two_body_timing.
+#[test]
+fn mexchr_all_sequential() {
+    bus_quiescent_with_mexchr();
+    bus_quiescent_with_mexchr_wrap();
+    bus_quiescent_with_mixed_rom();
+    system_ring_mexchr_matches_eval_oracle();
+    two_body_ring_mexchr_matches_system_ring();
+    mexchr_oracle_basic();
+    mexchr_oracle_wrap();
+    mexchr_alias_rejected();
+    mexchr_encode_decode_round_trip();
+    certificate_weakening_mexchr_aliased();
 }
