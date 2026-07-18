@@ -1738,7 +1738,108 @@ pub fn unmarshal(s: &StateVals, ty: &Type) -> Value {
     v
 }
 
+// ── WCET budget + park-at-end convention (M-D.w, ADR-0007 TH-1) ─────
+
+/// Static upper bound on total forward-skip distance in a ROM.
+///
+/// Computed by pairing consecutive `Swapbr` instructions (they come in
+/// clean non-overlapping ordered pairs because skip blocks don't nest)
+/// and summing each pair's body length = (close_index - open_index - 1).
+/// This over-approximates (counts mutually-exclusive Plus arms as
+/// both-taken) which is SOUND.
+pub fn max_skip_distance(instrs: &[Instr]) -> usize {
+    let mut total = 0usize;
+    let mut i = 0;
+    while i < instrs.len() {
+        if matches!(instrs[i], Instr::Swapbr { .. }) {
+            // Find the matching close Swapbr
+            let open = i;
+            i += 1;
+            while i < instrs.len() && !matches!(instrs[i], Instr::Swapbr { .. }) {
+                i += 1;
+            }
+            if i < instrs.len() {
+                // body_len = close - open - 1
+                total += i - open - 1;
+            }
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    total
+}
+
+/// Static WCET budget B for an `Iso` (ADR-0007 TH-1 ledger).
+///
+/// For every program that exists today (all-monotone, no backward jumps)
+/// B == rom.len(). The invariant `B >= rom.len()` always holds.
+///
+/// Structured so M-D.d can later add a loop term `+ Σ k_ℓ·|body_ℓ|`
+/// without reshaping the signature.
+pub fn wcet(iso: &Iso) -> Result<usize, CompileError> {
+    let instrs = compile(iso)?;
+    // Base budget: ROM length (covers every instruction once).
+    let base = instrs.len();
+    // Loop contribution: zero for monotone programs (M-D.d will add terms here).
+    let loop_contribution: usize = 0;
+    let b = base + loop_contribution;
+    debug_assert!(b >= instrs.len());
+    Ok(b)
+}
+
 // ── Run-on-CPU (available when theseus-eval is linked) ───────────────
+
+/// Run a raw instruction stream on the real CPU (system_step) for `budget`
+/// steps with park-safety guards. This is the guarded core factored out of
+/// `run_on_cpu` so that negative tests can feed hand-built ROMs.
+///
+/// Guard order: P2 (park-safety) → run → P1/P3 (terminal check).
+pub fn run_rom_on_cpu<E: std::fmt::Debug>(
+    instrs: &[Instr],
+    init: StateVals,
+    eval_fn: impl Fn(&Iso, Value, &mut u64) -> Result<Value, E>,
+) -> Result<StateVals, CompileError> {
+    let rom = assemble(instrs).map_err(|e| {
+        CompileError::Deferred(format!("assemble failed: {e}"))
+    })?;
+    let budget = instrs.len();
+    let s_max = max_skip_distance(instrs);
+
+    // PARK-SAFETY GUARD (P2): parked PC must not wrap.
+    if budget + s_max > 256 {
+        return Err(CompileError::Deferred(format!(
+            "parked PC B+S_max={} exceeds PC address space 256; program cannot park by idle (M-D.w)",
+            budget + s_max
+        )));
+    }
+
+    // Scale eval fuel with budget (avoid spurious exhaustion on larger programs).
+    let mut fuel = (budget as u64) * 500_000_000u64;
+    if fuel < 8_000_000_000 {
+        fuel = 8_000_000_000;
+    }
+
+    // Run exactly B steps of system_step.
+    let step_iso = crate::step::system_step(&rom);
+    let mut cur = encode_system(&init);
+    for _ in 0..budget {
+        cur = eval_fn(&step_iso, cur, &mut fuel).map_err(|e| {
+            CompileError::Deferred(format!("CPU eval failed: {e:?}"))
+        })?;
+    }
+    let final_state = decode_system(&cur);
+
+    // DYNAMIC TERMINAL CHECK (P1, P3): BR=0, s0=0, s1=0.
+    if final_state.br != 0 || final_state.scratch[0] != 0 || final_state.scratch[1] != 0 {
+        return Err(CompileError::Deferred(format!(
+            "terminal precondition violated (BR={}/s0={}/s1={} != 0); park unsound (M-D.w)",
+            final_state.br, final_state.scratch[0], final_state.scratch[1]
+        )));
+    }
+
+    Ok(final_state)
+}
 
 /// Compile an `Iso` to a TISC-1 ROM, marshal an input value, run it on
 /// the simulated CPU for exactly `B = rom.len()` steps, and unmarshal
@@ -1760,24 +1861,9 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
     })?;
 
     let instrs = compile(iso)?;
-    let rom = assemble(&instrs).map_err(|e| {
-        CompileError::Deferred(format!("assemble failed: {e}"))
-    })?;
-    let budget = instrs.len();
-
     let state = marshal(input, &in_ty);
 
-    // Run the CPU for exactly `budget` steps using eval(system_step)
-    // on the 3-factor ((CpuState, MemState), BusMsg) carrier.
-    let step_iso = crate::step::system_step(&rom);
-    let mut cur = encode_system(&state);
-    let mut fuel = 8_000_000_000u64;
-    for _ in 0..budget {
-        cur = eval_fn(&step_iso, cur, &mut fuel).map_err(|e| {
-            CompileError::Deferred(format!("CPU eval failed: {e:?}"))
-        })?;
-    }
-    let final_state = decode_system(&cur);
+    let final_state = run_rom_on_cpu(&instrs, state, eval_fn)?;
 
     Ok(unmarshal(&final_state, &out_ty))
 }
@@ -1887,6 +1973,20 @@ pub fn run_on_cpu_fast(
     }
 
     Ok(unmarshal(&state, &out_ty))
+}
+
+/// Fast-sim helper: run a pre-assembled ROM for an explicit number of steps.
+/// Used by park-liveness tests (T2a/T2b) to verify the dead zone is inert.
+pub fn run_rom_fast(rom: &[u16], mut state: StateVals, steps: usize) -> StateVals {
+    for _ in 0..steps {
+        let pc = state.pc as usize;
+        let word = if pc < rom.len() { rom[pc] } else { 0 };
+        if let Some(instr) = crate::asm::decode(word) {
+            exec_instr(instr, &mut state);
+        }
+        state.pc = state.pc.wrapping_add(state.br).wrapping_add(1);
+    }
+    state
 }
 
 #[cfg(test)]

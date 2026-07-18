@@ -5,7 +5,9 @@
 //! asserts `cpu_run(iso, v) == theseus_eval::eval(iso, v)`.
 
 use theseus_core::{enumerate_values, type_of, Iso, Type, Value};
-use theseus_tisc::compile::{compile, run_on_cpu, run_on_cpu_fast};
+use theseus_tisc::compile::{
+    compile, max_skip_distance, run_on_cpu, run_on_cpu_fast, run_rom_on_cpu, run_rom_fast, wcet,
+};
 use theseus_tisc::types::MEM_WORDS;
 
 // ── Two oracles: one authoritative, one fast ─────────────────────────
@@ -938,4 +940,263 @@ fn reject_fold_containing_unfold() {
         ),
     );
     assert!(compile(&iso).is_err());
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// M-D.w: static WCET budget + reversible park-at-end halt convention
+// (ADR-0007 TH-1)
+// ══════════════════════════════════════════════════════════════════════
+
+use theseus_tisc::asm::{assemble, Instr};
+use theseus_tisc::compile::marshal;
+use theseus_tisc::types::{StateVals, NUM_REGS, NUM_SCRATCH};
+
+// ── T2a: park-liveness, straight-line, FAST sim (exhaustive) ────────
+
+#[test]
+fn mdw_t2a_park_liveness_straight_line() {
+    // Build a small straight-line iso (no skip blocks, S=0).
+    // fibStep on Bit×Bit = 2 leaves, purely straight-line.
+    let iso = elaborate(FIB_SRC, "fibStep");
+    let instrs = compile(&iso).unwrap();
+    let rom = assemble(&instrs).unwrap();
+    let rom_len = rom.len();
+    assert_eq!(max_skip_distance(&instrs), 0, "fibStep should be straight-line (no Swapbr)");
+
+    let (in_ty, out_ty) = type_of(&iso).unwrap();
+    let vals = enumerate_values(&in_ty);
+
+    for v in &vals {
+        let state = marshal(v, &in_ty);
+        // Baseline: run for exactly rom.len() steps.
+        let baseline = run_rom_fast(&rom, state.clone(), rom_len);
+        let baseline_out = theseus_tisc::compile::unmarshal(&baseline, &out_ty);
+
+        // Run for rom.len()+k for every k in the dead zone (up to 256 - rom_len).
+        let dead_zone = 256 - rom_len;
+        for k in 1..=dead_zone {
+            let extended = run_rom_fast(&rom, state.clone(), rom_len + k);
+            let extended_out = theseus_tisc::compile::unmarshal(&extended, &out_ty);
+            assert_eq!(
+                baseline_out, extended_out,
+                "park-liveness violated at k={k} for input {v:?}"
+            );
+        }
+    }
+}
+
+// ── T2b: park-liveness, skip program, tightness ─────────────────────
+
+#[test]
+fn mdw_t2b_park_liveness_skip_tightness() {
+    // Demonstrate the park bound is tight using a hand-built ROM with a skip
+    // block. The ROM: [Addi{r0,1}, Swapbr{r1}, Addi{r0,1}, Swapbr{r1}]
+    // (4 instructions, skip body_len=1, S_max=1).
+    // With BR=0 (no skip): executes all 4, r0 += 2. PC ends at 4.
+    // Dead zone for non-skip = 256-4 = 252 extra steps.
+    // With skip taken (if setup put body_len in BR): skips 1 instr, r0 += 1.
+    // PC ends at 4 + 1 = 5. Dead zone = 256 - 5 = 251 = 256 - rom_len - s_max.
+    //
+    // For this test we use the simpler non-skip path and show:
+    // (a) stable for 252 extra steps (whole dead zone)
+    // (b) at extra step 253 (total 257 = PC wraps to 1), corruption occurs.
+    let instrs = vec![
+        Instr::Addi { rd: 0, imm: 1 },  // r0 += 1
+        Instr::Swapbr { rd: 1 },          // open skip
+        Instr::Addi { rd: 0, imm: 1 },  // skip body: r0 += 1
+        Instr::Swapbr { rd: 1 },          // close skip
+    ];
+    let rom = assemble(&instrs).unwrap();
+    let rom_len = rom.len();
+    let s_max = max_skip_distance(&instrs);
+    assert_eq!(s_max, 1);
+    assert_eq!(rom_len, 4);
+
+    // Initial state: all zeros (BR=0 means no skip is taken, just Swapbr pairs
+    // swap BR=0 ↔ r1=0 = nop in terms of skip).
+    let init = StateVals {
+        regs: [0; NUM_REGS],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: [0; NUM_SCRATCH],
+        mem: [0; MEM_WORDS],
+    };
+
+    // Baseline: run for rom_len steps. r0 should be 2 (both Addi execute).
+    let baseline = run_rom_fast(&rom, init.clone(), rom_len);
+    assert_eq!(baseline.regs[0], 2);
+
+    // Park-liveness: stable for entire dead zone (252 extra steps).
+    let dead_zone = 256 - rom_len; // = 252 for non-skip path
+    for k in 1..=dead_zone {
+        let extended = run_rom_fast(&rom, init.clone(), rom_len + k);
+        assert_eq!(
+            extended.regs[0], baseline.regs[0],
+            "park-liveness violated at k={k}"
+        );
+    }
+
+    // Tightness: one more step (total = 257) wraps PC to 1, hitting ROM[1].
+    // ROM[1] is Swapbr{r1} which swaps r1=0 with BR=0 = still nop for data,
+    // but PC advances. At total 258 steps, PC=2, ROM[2]=Addi{r0,1}, r0 becomes 3.
+    let over = run_rom_fast(&rom, init.clone(), rom_len + dead_zone + 2);
+    assert_ne!(
+        over.regs[0], baseline.regs[0],
+        "bound should be tight: re-entering ROM corrupts r0"
+    );
+}
+
+// ── T3: WCET ledger — pinned golden number ──────────────────────────
+
+#[test]
+fn mdw_t3_wcet_ledger() {
+    // fibStep: a fixed monotone program. Pin WCET == rom.len() == exact golden number.
+    let iso = elaborate(FIB_SRC, "fibStep");
+    let instrs = compile(&iso).unwrap();
+    let b = wcet(&iso).unwrap();
+    let golden = instrs.len();
+    assert_eq!(b, golden, "WCET must equal rom.len() for monotone programs");
+    assert_eq!(golden, 2, "fibStep golden instruction count pinned at 2");
+    assert!(b >= instrs.len(), "WCET invariant B >= rom.len()");
+}
+
+// ── T4: two-direction bound — wcet(iso) == wcet(sym(iso)) ──────────
+
+#[test]
+fn mdw_t4_two_direction_bound() {
+    // ADR-0007 TH-1: wcet must be symmetric for forward/backward.
+    // Use self-adjoint isos (involutory) where fwd and bwd compile identically.
+    let bit = Type::sum(Type::One, Type::One);
+    let isos: Vec<(&str, Iso)> = vec![
+        ("swap_bit2", Iso::SwapProd(bit.clone(), bit.clone())),
+        ("cnot", elaborate(CNOT_SRC, "cnot")),
+        ("swapsum", Iso::SwapSum(Type::One, Type::One)),
+    ];
+    for (name, iso) in &isos {
+        let fwd = wcet(iso).unwrap();
+        let bwd = wcet(&Iso::sym(iso.clone())).unwrap();
+        assert_eq!(fwd, bwd, "WCET forward != backward for {name}");
+    }
+}
+
+// ── T5: precondition rejection (negative, hand-built ROMs) ──────────
+
+#[test]
+fn mdw_t5_p2_park_safety_overflow() {
+    // Hand-built ROM whose B + S_max > 256: ~135 instrs containing a ~130-instr skip block.
+    let mut instrs = Vec::new();
+    // Open Swapbr
+    instrs.push(Instr::Swapbr { rd: 1 });
+    // 130 NOP-equivalent instructions as skip body
+    for _ in 0..130 {
+        instrs.push(Instr::Addi { rd: 0, imm: 0 });
+    }
+    // Close Swapbr
+    instrs.push(Instr::Swapbr { rd: 1 });
+    // Pad to 135 total
+    while instrs.len() < 135 {
+        instrs.push(Instr::Addi { rd: 0, imm: 0 });
+    }
+    // S_max = 130, B = 135, B + S_max = 265 > 256.
+    assert_eq!(max_skip_distance(&instrs), 130);
+    assert_eq!(instrs.len(), 135);
+
+    let init = StateVals {
+        regs: [0; NUM_REGS],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: [0; NUM_SCRATCH],
+        mem: [0; MEM_WORDS],
+    };
+    let result = run_rom_on_cpu(&instrs, init, theseus_eval::eval);
+    assert!(result.is_err(), "P2 guard must reject");
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("parked PC"), "expected P2 error, got: {err_msg}");
+}
+
+#[test]
+fn mdw_t5_p3_terminal_s0_nonzero() {
+    // Hand-built trivial identity ROM (1 NOP), but initial s0 != 0.
+    // The NOP is Addi{rd:0, imm:0} which is identity. After 1 step the
+    // state is unchanged, so s0 remains nonzero → P3 terminal check fires.
+    let instrs = vec![Instr::Addi { rd: 0, imm: 0 }];
+    let mut init = StateVals {
+        regs: [0; NUM_REGS],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: [0; NUM_SCRATCH],
+        mem: [0; MEM_WORDS],
+    };
+    init.scratch[0] = 1; // s0 != 0
+    let result = run_rom_on_cpu(&instrs, init, theseus_eval::eval);
+    assert!(result.is_err(), "P3 guard must reject (s0 != 0)");
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("terminal precondition"), "expected P3 error, got: {err_msg}");
+}
+
+#[test]
+fn mdw_t5_p1_terminal_br_nonzero() {
+    // Hand-built ROM: a single Swapbr{rd:0} with r0=5, BR=0.
+    // After execution: r0=0, BR=5 → terminal BR != 0 → P1 fires.
+    let instrs = vec![Instr::Swapbr { rd: 0 }];
+    let mut init = StateVals {
+        regs: [0; NUM_REGS],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: [0; NUM_SCRATCH],
+        mem: [0; MEM_WORDS],
+    };
+    init.regs[0] = 5; // will become BR after Swapbr
+    let result = run_rom_on_cpu(&instrs, init, theseus_eval::eval);
+    assert!(result.is_err(), "P1 guard must reject (BR != 0)");
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(err_msg.contains("terminal precondition"), "expected P1 error, got: {err_msg}");
+}
+
+// ── T6: real-CPU spot-checks (AUTHORITATIVE, #[ignore]) ────────────
+
+#[test]
+#[ignore = "authoritative real-CPU park-liveness (slow); run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn mdw_t6_real_cpu_park_liveness() {
+    // For the SMALL straight-line program of T2a (fibStep), assert the REAL
+    // run_on_cpu gives the same output when run for rom.len(), rom.len()+1,
+    // and rom.len()+(dead_zone-1) steps — proving the real iso idles to identity.
+    let iso = elaborate(FIB_SRC, "fibStep");
+    let instrs = compile(&iso).unwrap();
+    let rom_len = instrs.len();
+    let dead_zone = 256 - rom_len;
+
+    let (in_ty, out_ty) = type_of(&iso).unwrap();
+    let vals = enumerate_values(&in_ty);
+
+    for v in &vals {
+        let state = marshal(v, &in_ty);
+        let rom = assemble(&instrs).unwrap();
+        let step_iso = theseus_tisc::step::system_step(&rom);
+
+        // Helper: run real CPU for `n` steps.
+        let run_real = |n: usize| -> StateVals {
+            let mut cur = theseus_tisc::types::encode_system(&state);
+            let mut fuel = 8_000_000_000u64;
+            for _ in 0..n {
+                cur = theseus_eval::eval(&step_iso, cur, &mut fuel).unwrap();
+            }
+            theseus_tisc::types::decode_system(&cur)
+        };
+
+        let base = run_real(rom_len);
+        let base_out = theseus_tisc::compile::unmarshal(&base, &out_ty);
+
+        let plus1 = run_real(rom_len + 1);
+        let plus1_out = theseus_tisc::compile::unmarshal(&plus1, &out_ty);
+        assert_eq!(base_out, plus1_out, "real CPU park failed at +1 for input {v:?}");
+
+        let far = run_real(rom_len + dead_zone - 1);
+        let far_out = theseus_tisc::compile::unmarshal(&far, &out_ty);
+        assert_eq!(base_out, far_out, "real CPU park failed at +{} for input {v:?}", dead_zone - 1);
+    }
 }
