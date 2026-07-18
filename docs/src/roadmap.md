@@ -62,6 +62,13 @@ as the acceptance test.
 Post-pivot (ADR-0022): the project is **two-tracked**, and the tracks
 are independent for months.
 
+> **Concurrent feedback loop:** the [test-program roadmap](test-program-roadmap.md) is a
+> co-evolving stress suite of non-trivial reversible programs. Its Tier-1/2 programs are
+> coverage + M-E energy/park-tax artifacts; its Tier-3 programs *productively break* the
+> pipeline to name the concrete customer for each remaining milestone (M-D.c widening/heap,
+> M-D.d2 calling convention, Trace-with-a-memory-body). The two roadmaps advance in
+> lockstep — this one adds capability, that one adds proof and pressure.
+
 ## The dependency graph
 
 ```text

@@ -100,3 +100,4 @@
 # Roadmap
 
 - [Layers, versions, parked items](roadmap.md)
+- [Test-program roadmap (stress suite)](test-program-roadmap.md)
