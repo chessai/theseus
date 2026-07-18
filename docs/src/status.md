@@ -10,7 +10,7 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`6d180bf`. Everything below is merged there. Since M4-v1 this branch landed the
+`2f331da`. Everything below is merged there. Since M4-v1 this branch landed the
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
 thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU
@@ -313,13 +313,22 @@ depth-tracking bug) that unit tests missed.
   the composite ring `CPU⊗bus⊗memory` closes zero-garbage.** `N=MEM_WORDS` is
   compile-time-fixed (=4); closure is N-independent + the tree's N∈{2,4,8} cleanliness
   is discharged separately. **Stage 1b COMPLETE.** **Stage 2 COMPLETE** (two-body
-  separation + 2b-lite timing certificate). **M-D IN PROGRESS** (theseus-v2
-  `c229920`): list `Fold`/`Unfold` compile (M-D.a), the allocator is occupancy-aware
+  separation + 2b-lite timing certificate). **M-D CONTROL TRACK DONE** (theseus-v2
+  `2f331da`): list `Fold`/`Unfold` compile (M-D.a), the allocator is occupancy-aware
   (M-D.alloc1, fixing a pre-existing M-B corruption), nested control safely rejected
-  (M-D.alloc2), and memory is data-dependently addressable (M-D.b `MEXCHR`, Stage-1b
-  closure preserved). **Next in M-D:** heap value rep (needs MEM_WORDS widening) → the
-  halting-model/WCET harness → `Trace`/labels + reversible calling convention → M-E
-  (energy). Design docs `docs/scratch/md*.md`.
+  (M-D.alloc2), memory is data-dependently addressable (M-D.b `MEXCHR`, Stage-1b
+  closure preserved), the **halting-model / static-WCET harness + reversible
+  park-at-end** is in (M-D.w `a2479b9`, ADR-0007 TH-1 straight-line), and **`Trace`
+  compiles as a reversible while-loop** — a runtime backward jump, verified real-CPU
+  `== eval` (t=3 two-re-entry + informative traces) + `SystemRing` closure (M-D.d
+  `6d180bf`). **Remaining M-D → M-E:** a reversible **calling convention** (M-D.d2,
+  shares the come-from machinery — confirm a real `.thse` needs it) → **heap value
+  rep** (M-D.c: c1 MEM_WORDS 4→8 widening designed+N=8-feasibility-measured, c2 heap
+  for trees past the 22-leaf ceiling) → **M-E (energy)**: price a compiled ROM/loop
+  through `theseus-spice::annotate` for a joules figure — the thesis finale. Design
+  docs `docs/scratch/md*.md`, `mdw-design.md`, `mdd-design.md`, `mdc-design.md`;
+  reviews `docs/reviews/`. A pre-existing latent `AssocSum` nested-sum no-op
+  miscompile is now loudly rejected (F7); correct nested-control compilation deferred.
 - **Energy-price a compiled loop** — now that `iter`/`fold`/`unfold` (and
   compiled ROMs) lower to cells, run one through `theseus-spice::annotate` for a
   joules figure. Natural M-E artifact.
