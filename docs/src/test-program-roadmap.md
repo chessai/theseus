@@ -42,9 +42,10 @@ figure.
 
 | ID | Program | Stresses | Needs / drives | Status |
 |---|---|---|---|---|
-| TP-0 | `fib` (`iter Nat fibStep`) | iter, spill, memory | — (baseline; M-E artifact) | ✅ compiles; M-E in flight |
-| **TP-1** | **GCD (subtractive Euclid)** | `Trace`, park-tax, memory | fits today | 🎯 next (M-E showcase) |
-| TP-2 | Bounded Collatz | `Trace`, park-tax, branching | fits today | ▫ planned |
+| TP-0 | `fib` (`iter Nat fibStep`) | iter, spill, memory | — (baseline; M-E artifact) | ✅ compiles; **M-E priced: 6.62e-8 J, park tax 16.67%** |
+| TP-1 | GCD (subtractive Euclid) | `Trace`, sizing wall | **M-D.e + widen-PC + k_max-tighten** | ⛔ Tier-3 (customer; *overdetermined* — TH-1b) |
+| TP-2 | Bounded Collatz | `Trace`, sizing wall | **M-D.e + widen-PC + k_max-tighten** | ⛔ Tier-3 (customer) |
+| ~~TP-1a~~ | ~~orbit-length (LFSR-to-target)~~ | — | — | ❌ **overturned** — not a bijection (converges on one exit state) |
 | TP-3 | LFSR / CRC over K steps | long `iter`, WCET | fits today | ▫ planned |
 | TP-4 | Sorting network (3–4 elts) | leaf ceiling, alloc, branching | fits today (tight) | ▫ planned |
 | TP-5 | S-box cipher round | `MEXCHR`, bus-quiescence, wide state | fits today? (see card) | ▫ planned — may reveal a lookup-vs-swap gap |
@@ -54,7 +55,25 @@ figure.
 | TP-9 | Reversible bytecode interpreter | everything | **drives M-D.c1 + M-D.d2 + Trace-mem-body** | ⛔ capstone (customer) |
 | TP-10 | Reversible stack (push/pop) | memory-as-stack | **drives M-D.d2 calling convention** | ⛔ breaks today (customer) |
 
-Status legend: ✅ done · 🎯 next · ▫ planned (fits) · ⛔ breaks today (a milestone customer).
+Status legend: ✅ done · 🎯 next · ▫ planned (fits) · ⛔ breaks today (a milestone customer)
+· ❌ overturned (not a valid program).
+
+> **First feedback-loop finding (TP-1 design + review, `docs/scratch/tp1-gcd-design.md`,
+> `docs/reviews/tp1-gcd-review.md`).** Designing GCD surfaced a general **sizing law**
+> (ADR-0007 **TH-1b**, trajectory disjointness): a `Trace`'s carrier must satisfy
+> `|u| ≥ |input|` for any always-iterating loop, and `k_max = |u|+1` is read from *type
+> cardinality*. Consequences that reshape this roadmap:
+> 1. **No non-trivial variable-`T` loop fits today.** GCD/Collatz break for *any*
+>    formulation (carrier ≥ input width ≫ the `MAX_LEAVES_LOOP=3` cap). My proposed
+>    LFSR-showcase (TP-1a) isn't even a bijection. Today's `Trace` ceiling is a bimodal toy.
+> 2. **The real milestone is a *cluster*, not just spill:** **M-D.e (loop-carrier spill) +
+>    widen-PC + a `k_max`-tightening mechanism** (typed/verified iteration bound). Without
+>    tightening, a raw `Trace`'s park tax is ~99.8% (dominated by the loose `|u|+1` bound) —
+>    meaningless. fib's park tax (16.67%) *is* meaningful only because `iter`/`fold` carry a
+>    numeral-typed (tight) iteration count.
+> 3. **M-E's park-tax showcase therefore rides on typed iteration bounds** — a genuine
+>    program-level park-tax *histogram* (GCD-style) is gated on the whole cluster. The
+>    honest M-E artifact today is fib and the `iter`/`fold` family (tight `k_max`).
 
 ---
 

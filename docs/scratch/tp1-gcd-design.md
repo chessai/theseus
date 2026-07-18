@@ -1,10 +1,32 @@
 # TP-1 — reversible GCD formulation (and what it reveals)
 
+> **REVIEW OUTCOME (Fable, `docs/reviews/tp1-gcd-review.md`) — OVERTURNED IN PART.**
+> - **GCD ⛔ breaks today: SOUND, and *overdetermined*.** Not just the §1 branch argument —
+>   a stronger, formulation-independent theorem (**ADR-0007 TH-1b, trajectory
+>   disjointness**): a bijective Trace body is backward-deterministic ⇒ distinct inputs'
+>   trajectories are vertex-disjoint in `u` ⇒ `|u| ≥ |a|` for always-iterating loops ⇒ GCD's
+>   ~`2^{2w}` pairs force `≥ 2w` payload leaves for *any* formulation. GCD breaks regardless
+>   of the branch.
+> - **§5/§6 TP-1a is OVERTURNED — it does not exist.** "Iterate σ until `x==1`, carrier=`x`"
+>   is **not a bijection** (every input converges on the same exit state `Left(1)`, so the
+>   body can't be injective — Trace of a bijection must be injective). Making it real needs a
+>   *counter* carrier ⇒ over the leaf cap **and** the WCET wall. **There is no fitting
+>   variable-`T` Trace showcase today** — only a "bimodal toy" (disjoint paths, `Σ(T−1)≤|u|`).
+> - **§4 law is wrong both ways (F3);** the correct law is below. **M-D.e alone will NOT
+>   unblock GCD (F4):** `k_max=|u|+1` from *type cardinality* ⇒ a 12-leaf carrier gives
+>   `k_max≈4097`, WCET≈10⁵. GCD needs **M-D.e (spill) + widen-PC + a `k_max`-tightening
+>   mechanism** (typed iteration bound). See ADR-0007 TH-1b.
+> - **§2 GCD typing is loose (F5):** `|a|≠|b|` and `hist«branch` need padding/junk arms
+>   before the rejection-witness `.thse` is writable.
+>
+> The sections below are the *original reasoning* (preserved — the branch argument in §1 is
+> verified correct, just not the tightest proof). Read the review + ADR-0007 TH-1b for the
+> corrected picture.
+
 **Goal:** formulate GCD as a total **bijection** compilable to a TISC-1 `Trace`, as the
-M-E park-tax showcase. **Outcome (spoiler):** the reversible formulation forces two costs
-that re-tier GCD from "fits today" to a **Tier-3 customer** naming a new milestone — and it
-surfaces a general law about which loop programs fit. A *different*, branch-free program is
-the M-E showcase that actually fits.
+M-E park-tax showcase. **Outcome:** the reversible formulation is *harder* than a re-tier —
+it exposes a general sizing theorem (ADR-0007 TH-1b) and a milestone *cluster* (spill +
+widen-PC + typed iteration bounds), and shows no non-trivial variable-`T` loop fits today.
 
 ## 1. Why GCD is not a bijection, and the Bennett tax
 

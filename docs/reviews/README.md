@@ -19,6 +19,7 @@ different model from the implementer). "Verdict" is the reviewer's, not the advi
 | M-D.d | implementation | DO-NOT-SHIP → fixed | [mdd-impl-review.md](mdd-impl-review.md) |
 | M-D.c1 (MEM_WORDS 4→8 widening) | design | *incomplete (ended mid-measurement)* | [mdc-design-review.md](mdc-design-review.md) |
 | M-E (energy-price a compiled ROM) | design | SHIP-WITH-FIXES | [me-design-review.md](me-design-review.md) |
+| TP-1 (reversible GCD formulation) | design | OVERTURNED-IN-PART | [tp1-gcd-review.md](tp1-gcd-review.md) |
 
 > **Recovered retroactively.** These reviews predate L21; they were folded into the
 > design docs + tests at the time but not committed as records. Captured here from the
@@ -89,6 +90,16 @@ Findings folded into `docs/scratch/me-design.md`; tests land with the implementa
 
 *Verdict on Q-A/B/(C)(D)(E): headline B is physical; per-word inverted; idle ≈ 100% of a
 step; M-E's real content is the WCET park tax + the honest program crossing.*
+
+### TP-1 GCD-formulation review (design-stage — no code, so findings → docs, not tests)
+A test-*program* formulation review (GCD isn't implemented; it's a Tier-3 customer). Its
+findings landed as **theory + roadmap**, not tests: the trajectory-disjointness sizing law
+→ **ADR-0007 TH-1b**; the GCD/Collatz/TP-1a re-tiering + the milestone cluster (M-D.e +
+widen-PC + `k_max`-tighten) → `docs/src/test-program-roadmap.md`; the corrected §4 fits-law
+and §2 typing → `docs/scratch/tp1-gcd-design.md`. When these programs are eventually
+implemented (after the cluster lands), the acceptance oracles become the tests. The
+verified-solid claims (2-to-1 GCD collision, no history-free GCD, come-from can't record
+branches) are recorded in the review.
 
 ## Earlier reviews — NOT recoverable (the exact gap L21 fixes)
 
