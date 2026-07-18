@@ -1849,3 +1849,114 @@ fn f7_factor_trivial_identity() {
     let instrs = result.unwrap();
     assert_eq!(instrs.len(), 0, "Factor(One,One,One) should be a no-op");
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Exact-behavior tests for DESIGN-review findings (maestro L21).
+// Each reproduces the SPECIFIC behavior a design reviewer flagged.
+// ══════════════════════════════════════════════════════════════════════
+
+// M-D.w design finding 1 (BLOCKER): the parked PC after `budget` steps is
+// B + S(input), NOT B — it depends on the forward-skip distance the input
+// takes. (mdw_t2b only exercised the S=0 path.) Two inputs of one branching
+// program that skip different-length arms park at DIFFERENT PCs, both past
+// rom.len() — the exact `B+S` arithmetic the reviewer derived.
+#[test]
+fn mdw_parked_pc_is_b_plus_s_not_b() {
+    let one = Type::One;
+    // Plus with asymmetric arms: f = 2 instrs, g = 1 instr, so Left and Right
+    // inputs skip different lengths.
+    let f = Iso::seq(
+        Iso::SwapSum(one.clone(), one.clone()),
+        Iso::SwapSum(one.clone(), one.clone()),
+    ); // Bit ↔ Bit, 2 Xori
+    let g = Iso::SwapSum(one.clone(), one.clone()); // Bit ↔ Bit, 1 Xori
+    let iso = Iso::plus(f, g); // Sum(Bit, Bit) ↔ Sum(Bit, Bit)
+    let instrs = compile(&iso).expect("plus compiles");
+    let rom = assemble(&instrs).expect("assemble");
+    let rom_len = rom.len();
+    let (in_ty, _out) = type_of(&iso).unwrap();
+
+    let left_in = Value::left(Value::left(Value::Unit)); // Left(0)
+    let right_in = Value::right(Value::left(Value::Unit)); // Right(0)
+    let parked_left = run_rom_fast(&rom, marshal(&left_in, &in_ty), rom_len);
+    let parked_right = run_rom_fast(&rom, marshal(&right_in, &in_ty), rom_len);
+
+    // Both idled past rom.len() (a skip was taken), and the two differ because
+    // S differs by arm — i.e. parked PC = rom.len() + S(input) = B + S, not B.
+    assert!(
+        parked_left.pc as usize > rom_len || parked_right.pc as usize > rom_len,
+        "an input must idle past rom.len (parked PC = B + S, S>0): L={} R={} rom_len={}",
+        parked_left.pc, parked_right.pc, rom_len
+    );
+    assert_ne!(
+        parked_left.pc, parked_right.pc,
+        "parked PC depends on the input's skip distance S (B+S), not just B"
+    );
+}
+
+// M-D.w design finding 3 (MAJOR): on the REAL system_step iso the idle cell
+// (IR=0 → ADDI r0,#0) adds s0 into r0, so with s0!=0 idling CORRUPTS r0 —
+// while the fast sim freezes. This is the exact fast-vs-real divergence that
+// precondition P3 (s0=0 at terminal) guards. Proves P3's teeth (L20 mutation).
+#[test]
+#[ignore = "authoritative real-CPU: real idle adds s0 (proves P3's teeth)"]
+fn mdw_real_idle_corrupts_r0_when_s0_nonzero() {
+    let instrs = vec![Instr::Addi { rd: 0, imm: 0 }]; // 1-instr identity ROM
+    let rom = assemble(&instrs).unwrap();
+    let init = StateVals {
+        regs: [0; NUM_REGS],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: {
+            let mut s = [0u8; NUM_SCRATCH];
+            s[0] = 1; // s0 != 0
+            s
+        },
+        mem: [0; MEM_WORDS],
+    };
+    // REAL iso: r0 accumulates s0 across the (idle) steps.
+    let step_iso = theseus_tisc::step::system_step(&rom);
+    let mut cur = theseus_tisc::types::encode_system(&init);
+    let mut fuel = 8_000_000_000u64;
+    for _ in 0..4 {
+        cur = theseus_eval::eval(&step_iso, cur, &mut fuel).unwrap();
+    }
+    let real_final = theseus_tisc::types::decode_system(&cur);
+    assert_ne!(
+        real_final.regs[0], 0,
+        "real idle with s0!=0 must corrupt r0 (adds s0 each step) — why P3 rejects s0!=0"
+    );
+    // Fast sim: idle freezes r0 (the differential blind spot P3 covers).
+    let fast_final = run_rom_fast(&rom, init.clone(), 4);
+    assert_eq!(
+        fast_final.regs[0], 0,
+        "fast sim idle freezes r0 — the divergence the real oracle (and P3) exposes"
+    );
+}
+
+// M-D.d design F4 (MAJOR): the loop's Ltop..Lend Swapbr pair must NOT be
+// counted as a forward skip. The compositional s_max (loop bracket => 0) is
+// correct; the old consecutive-Swapbr ROM scan (max_skip_distance) MISPAIRS
+// the two loop Swapbrs and counts the body as forward-skip distance — the
+// exact bug the compositional path avoids (and why the run budget must use
+// the compositional wcet/s_max, not a ROM scan).
+#[test]
+fn mdd_loop_bracket_not_counted_as_forward_skip() {
+    let (body, u_ty) = build_3cycle_body();
+    let iso = Iso::trace(u_ty, body);
+    let lowered = compile_with_metadata(&iso).expect("trace compiles");
+    assert_eq!(
+        lowered.s_max(),
+        0,
+        "compositional S_max: the loop bracket contributes 0 forward-skip distance"
+    );
+    let scan = max_skip_distance(&lowered.instrs);
+    assert!(
+        scan > lowered.s_max(),
+        "the consecutive-Swapbr ROM scan mispairs the loop bracket (scan={} > compositional={}) \
+         — F4: this is why the run budget must NOT derive S_max from a ROM scan",
+        scan,
+        lowered.s_max()
+    );
+}

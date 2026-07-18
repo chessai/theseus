@@ -30,8 +30,8 @@ Test names are in `crates/theseus-tisc/tests/compile.rs` unless noted.
 ### M-D.w DESIGN review
 | # | Finding | Test |
 |---|---|---|
-| BLOCKER-1 | parked PC = `B+S` (not `B`) → wrap; need `B+S_max≤256` | `mdw_t5_p2_park_safety_overflow` (135+130 ROM rejected); `mdw_t2b` tightness |
-| MAJOR-3 | real-iso idle adds `s0` → idle==identity only if `s0=0` | `mdw_t5_p3_terminal_s0_nonzero`; real-CPU `mdw_t6_real_cpu_park_liveness` (idle==identity) |
+| BLOCKER-1 | parked PC = `B+S` (not `B`) → wrap; need `B+S_max≤256` | guard: `mdw_t5_p2_park_safety_overflow` (135+130 ROM rejected); **exact arithmetic: `mdw_parked_pc_is_b_plus_s_not_b`** (two inputs skip different arms → park at different PCs); `mdw_t2b` tightness |
+| MAJOR-3 | real-iso idle adds `s0` → idle==identity only if `s0=0` | guard: `mdw_t5_p3_terminal_s0_nonzero`; identity: real-CPU `mdw_t6_real_cpu_park_liveness`; **exact divergence: real-CPU `mdw_real_idle_corrupts_r0_when_s0_nonzero`** (real idle adds s0, fast freezes — proves P3's teeth) |
 | MAJOR-4 | park is already live (reframe, not a bug) | n/a — observation; covered by the 17 existing skip-taking `*_real_cpu` tests |
 | P1 | `BR=0` at terminal | `mdw_t5_p1_terminal_br_nonzero` |
 | MINOR-5 | `B≥rom.len()` invariant | `mdw_t3_wcet_ledger` asserts it |
@@ -42,7 +42,7 @@ Test names are in `crates/theseus-tisc/tests/compile.rs` unless noted.
 |---|---|---|
 | F1/F2 | come-from witness accumulates / `ctrl` leaks (fixed via the §D skeleton) | `mdd_3cycle_trace_real_cpu` + `mdd_informative_trace_real_cpu` (t=3, two backward re-entries — fails if the come-from doesn't chain) |
 | F3 | totality bound off by one: `k_max=|u|+1`, not `|u|` (ADR-0007 corrected) | `mdd_wcet_golden` (pins k_max=3→46); `mdd_informative_trace` (t=3=\|u\|+1 output would be wrong at k_max=\|u\|) |
-| F4 | `S_max`/wcet must be compositional, not a ROM scan | *not-tested (refactor)* — the compositional path is exercised by `mdd_wcet_golden` + `mdd_park_under_loop` (uses `s_max()`); no "old scan fails here" repro |
+| F4 | `S_max`/wcet must be compositional, not a ROM scan (scan mispairs the loop bracket) | **`mdd_loop_bracket_not_counted_as_forward_skip`** — compositional `s_max()==0` while the ROM scan (`max_skip_distance`) miscounts the loop bracket; also `mdd_wcet_golden` + `mdd_park_under_loop` |
 | F5 | loop-carrier layout contract / leaf-count | `mdd_reject_leaf_count_mismatch` (`\|a\|≠\|b\|` rejected) |
 | F6 | inner-control policy (Swapbr-free bodies for v1) | `mdd_reject_swapbr_body` (Trace body with a skip-block rejected) |
 | F7 | pre-existing `AssocSum` nested-sum no-op miscompile | `f7_assoc_rsum_nested_rejected`, `f7_assoc_lsum_nested_rejected`, `f7_unite_sum_one_rejected`, `f7_uniti_sum_one_rejected`, `f7_distrib_nested_rejected`, `f7_factor_nested_rejected` + identity-preserved: `f7_assoc_identity_still_compiles`, `f7_distrib_trivial_identity`, `f7_factor_trivial_identity` |
@@ -66,8 +66,12 @@ Test names are in `crates/theseus-tisc/tests/compile.rs` unless noted.
   `lower()` fires first in debug builds, so this `lower_trace` guard is only reachable in
   release. A normal `assert!(is_err)` test can't hit it in a debug test build. Documented
   defensive backstop; would need a `#[cfg(not(debug_assertions))]` test to cover.
-- **F4 / F8 / F10-pairing / comment nits** — refactors, deliberate downgrades, or
-  non-behavioral (see rows above).
+- **F8 / F10-pairing / comment nits** — deliberate downgrade (F8: per-direction, not
+  equality), un-built (F10 pairing checker), or non-behavioral (see rows above).
+- **M-D.w finding 2** (T2 sweep bound) and **finding 4** (park-already-live) — a
+  test-design fix (embodied in `mdw_t2a`/`mdw_t2b`) and a reframe (covered by the 17
+  existing skip-taking `*_real_cpu` tests), not standalone bugs.
+- **M-D.w findings 6/7** (fuel scaling, citation nits) — non-behavioral.
 
 ## Incomplete reviews (Fable ended before the final verdict)
 - **M-D.w impl** and **M-D.c1 design**: the reviewer ran long and returned a status line
