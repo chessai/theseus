@@ -1,9 +1,16 @@
 # M-D.d — `Trace` as a reversible while-loop (backward jump + come-from)
 
-**Status:** design of record — **revised after fresh-context Fable adversarial review**
-(verdict on the first draft: DO-NOT-SHIP as drawn / NEEDS-REVISION; the architecture is
-sound and a corrected loop skeleton was hand-verified over 3 iterations — §2 below is now
-that skeleton). All ten findings (F1–F10) are folded in. Depends on **M-D.w** merged.
+**Status:** **IMPLEMENTED + MERGED** (theseus-v2 `6d180bf`). Design-reviewed (first draft
+DO-NOT-SHIP → revised to the hand-verified §2 skeleton), then implemented, then a second
+fresh-context adversarial review of the *implementation* (verdict DO-NOT-SHIP-as-drawn:
+core loop correct, but a BLOCKER perimeter bug — a Trace under `Times` grabbed registers
+without consulting `ctx.occ` and clobbered its sibling; fixed by an occ-equality guard +
+regression test, plus real guard-test assertions, a leaf-count guard, and an
+informative-output real-CPU test). Verified `run_on_cpu == eval` on the real `system_step`
+iso (t=3 two-re-entry + informative `Bit↔Bit` traces) and `SystemRing` closure. ADR-0007
+iteration bound corrected `|u|`→`|u|+1`. Deferred follow-ups: F7 (`AssocSum` nested-sum
+no-op miscompile, pre-existing, avoided here via the prim witness), M-D.d2 (calling
+convention). All ten design findings (F1–F10) were folded into §2–§8 below.
 
 **Scope of the core delegation (one task):** compile the `Trace` combinator to the
 TISC-1 CPU as a **reversible while-loop** (genuine backward branch + ADR-0034 come-from

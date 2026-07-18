@@ -10,7 +10,7 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`a2479b9`. Everything below is merged there. Since M4-v1 this branch landed the
+`6d180bf`. Everything below is merged there. Since M4-v1 this branch landed the
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
 thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU
@@ -42,11 +42,23 @@ budget and **parks reversibly at end** (forward-idle through identity-decoding z
 cells, never a fixpoint), discharging ADR-0007 TH-1 for the straight-line fragment
 (preconditions: `BR=0`, `B + S_max ≤ 256` so the 8-bit PC can't wrap into live ROM,
 `s0=s1=0`; a fresh-context review caught a *latent* parked-PC wrap bug and the real-iso
-`s0`-idle condition, both now enforced). Remaining for M-D: `Trace`/labels as a
-reversible while-loop (M-D.d, designed — `docs/scratch/mdd-design.md`; a review found
-ADR-0007's `≤|u|` iteration bound is off by one — the exact bound is `|u|+1`) + a
-reversible calling convention (M-D.d2), and heap value rep (M-D.c, needs MEM_WORDS
-widening). See the sections below and
+`s0`-idle condition, both now enforced). And **`Trace` now compiles as a reversible
+while-loop (M-D.d, `6d180bf`)** — a genuine *runtime backward jump* on the reversible
+CPU (the first construct that isn't guarded static unroll: the exit tag the body flips
+defeats unroll, so PC re-enters the body up to `|u|+1` times). The loop is a conserved-
+token **come-from join-dispatch** (ADR-0034): a hand-verified skeleton where `δu`
+circulates once per iteration so the aux registers are 0 at every body entry, `ctrl`
+rides across the backward `SWAPBR` and is uncomputed at the top from the unchanged tag.
+Verified `run_on_cpu == eval` on the **real** `system_step` iso for a t=3 trajectory
+(two backward re-entries) and an informative `Bit↔Bit` trace, and it **closes on the
+`SystemRing`** (`run == eval^R`, bus-quiescent). An adversarial review corrected
+ADR-0007's iteration bound (`|u|`→`|u|+1`) and caught an occ-blind register-aliasing bug
+(a Trace under `Times` clobbered its sibling — now rejected). Honest limit (8-bit PC):
+Traces compile only for tiny carriers (`|u|·|body| + spine ≤ 256`); bigger needs a
+widen-PC ADR. Remaining for M-D: a reversible calling convention (M-D.d2, shares the
+come-from machinery) and heap value rep (M-D.c, needs MEM_WORDS widening); plus a tracked
+pre-existing latent bug — nested-sum `AssocSum` lowers as a no-op and miscompiles (F7,
+unreachable today, avoided by M-D.d's prim witness). See the sections below and
 ADRs 0033–0046, `docs/scratch/md*.md`, and
 [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md).
 
