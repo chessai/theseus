@@ -44,7 +44,35 @@ MEXCHR rd, ra   :   reg[rd] ↔ mem[ reg[ra] mod MEM_WORDS ]      (require ra �
   tree uses exactly those. (At N=4, 2 bits; a `reg[ra]` value ≥ 4 wraps — document that the
   compiler/programmer keeps the index in range, or mask explicitly.)
 
-## The emit-phase change (the delicate part — the review must probe)
+## The emit realization — CORRECTED per Fable review (the naive version is BROKEN)
+The naive "addr_cnots read reg[ra]" is unbuildable: `cross_cnot` takes a COMPILE-TIME field
+index, but `ra` is runtime data → reading `reg[ra]` needs a **second crossbar
+`select_reg(R_RS)`** to route `reg[ra]` to the fixed r0 slot before any CNOT sources it. And
+`select_reg(R_RD)` is a full 3-level butterfly over ALL 8 register fields (rd=4 moves every
+register) — nesting the ra-read inside the `selr(R_RD)` bracket reads the WRONG register
+(e.g. rd=2,ra=1 → slot 0 holds r3, not r1), and — the nastiest part — **absorb=sym mirrors
+the same wrong read, so `bus_quiescent` still passes on a broken instruction** (the
+certificate cannot see it). MANDATORY correct structure:
+```
+pred(MEXCHR_op) ;
+  [ sela = select_reg(R_RS) ; <AUX_PRED-gated addr-copies from reg_field(0) to BUS_ADDR> ; sym(sela) ] ;   // ra bracket, fully closed, at register home positions
+  [ selr = select_reg(R_RD) ; enable_cnot ; gated_swap(reg0 ↔ bus.word) ; sym(selr) ] ;                     // rd bracket
+sym(pred)
+```
+- **Structural invariant (load-bearing):** the two brackets are SEQUENTIAL, never nested.
+  The ra bracket reads `reg[ra]` at its home field (post-sela route to slot 0); absorb=sym
+  runs the rd bracket first (restoring the loaded value into reg[rd]) then the ra bracket
+  (re-reading reg[ra]); since `ra≠rd` and mem touches only (Mem,Bus), `reg[ra]` is bitwise
+  identical at both reads → the addr XOR cancels → quiescent.
+- **The addr-copies MUST be AUX_PRED-gated** (cross-factor Toffolis — a new helper, pattern
+  from `cross_ctrl_fredkin`, using `toffoli_prim`). Unpredicated is fatal: the existing
+  `MEXCH r0, addr` encodes rs=0 (`asm.rs:212`), so an unpredicated reg-sourced copy would
+  read reg[0] for EVERY MEXCH, swap a new value into reg[0], and fail to cancel → quiescence
+  broken by an already-shipped instruction.
+- **MEXCHR encodes rt=0** (`r_word(op, rd, ra, 0)`) so the still-unpredicated IR.rt copy
+  (the immediate-MEXCH path) contributes 0 for MEXCHR words.
+
+## The emit-phase change (original notes — superseded by the CORRECTED realization above)
 `emit_on_cpu_bus` (decoder.rs:984-1041) currently, per MEXCH, does
 `pred ; selr ; [enable_cnot ; addr_cnots(IR.rt) ; gated_swap] ; sym(selr) ; sym(pred)`.
 For MEXCHR the address source is `reg[ra]`, not `IR.rt`. Two obligations:
@@ -61,6 +89,24 @@ For MEXCHR the address source is `reg[ra]`, not `IR.rt`. Two obligations:
    source; MEXCHR-pred → reg[ra] source), each self-inverse, so `absorb=sym(emit)` still
    holds per block. Verify the two predicates are mutually exclusive (distinct opcodes) so
    no double-emit.
+
+## Fable review fixes (folded — all MANDATORY)
+1. Emit = sequential closed ra-bracket (select_reg(R_RS)) BEFORE the rd-bracket; NEVER
+   nested (nesting reads the wrong register AND passes the certificate — invisible bug).
+2. Reg-sourced addr copies are AUX_PRED-gated cross-factor Toffolis (new helper); MEXCHR
+   encodes rt=0.
+3. **eval mask MANDATORY:** `exec_instr` (compile.rs:1823) and every byte-level simulator
+   must index `mem[reg[ra] % MEM_WORDS]` — naive `mem[reg[ra] as usize]` PANICS for
+   reg[ra]≥N (not just diverges). Matches the hardware low-addr_bits truncation. Add an
+   oracle case with reg[ra] ≥ N.
+4. **Certificate weakening documented:** post-MEXCHR, bus-quiescence holds only for
+   ASSEMBLER-LEGAL ROMs (the hardware predicate checks opcode only, not ra≠rd) — a
+   hand-crafted `op=MEXCHR, ra==rd` 16-bit word breaks quiescence. Add an L20 negative test
+   DEMONSTRATING `bus_quiescent == false` for that malformed word (so the weakening is
+   explicit + tested), and document it in the certificate docs.
+5. **Re-run BOTH certificates:** the Stage-1b `SystemRing` cert (tests/ring_system.rs) AND
+   the two-body ring (Stage-2a: `cpu_pre`/`cpu_post` embed `emit_on_cpu_bus`, step.rs:293-323
+   — any emit change flows into the two-body artifacts) with a MEXCHR ROM.
 
 ## Acceptance / obligations
 - **Bus-quiescence PRESERVED:** re-run the Stage-1b `SystemRing` certificate
