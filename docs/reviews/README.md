@@ -18,6 +18,7 @@ different model from the implementer). "Verdict" is the reviewer's, not the advi
 | M-D.d (Trace reversible while-loop) | design | DO-NOT-SHIP-as-drawn → revised | [mdd-design-review.md](mdd-design-review.md) |
 | M-D.d | implementation | DO-NOT-SHIP → fixed | [mdd-impl-review.md](mdd-impl-review.md) |
 | M-D.c1 (MEM_WORDS 4→8 widening) | design | *incomplete (ended mid-measurement)* | [mdc-design-review.md](mdc-design-review.md) |
+| M-E (energy-price a compiled ROM) | design | SHIP-WITH-FIXES | [me-design-review.md](me-design-review.md) |
 
 > **Recovered retroactively.** These reviews predate L21; they were folded into the
 > design docs + tests at the time but not committed as records. Captured here from the
@@ -72,6 +73,22 @@ Test names are in `crates/theseus-tisc/tests/compile.rs` unless noted.
   test-design fix (embodied in `mdw_t2a`/`mdw_t2b`) and a reframe (covered by the 17
   existing skip-taking `*_real_cpu` tests), not standalone bugs.
 - **M-D.w findings 6/7** (fuel scaling, citation nits) — non-behavioral.
+
+### M-E DESIGN review (energy-price a compiled ROM)
+Findings folded into `docs/scratch/me-design.md`; tests land with the implementation
+(acceptance A1–A6). Index the test per finding when M-E is implemented.
+| # | Finding | Test (acceptance) |
+|---|---|---|
+| F1 | per-word step energy is inverted — model prices static inventory, so `B×step_energy` is EXACT | A1 (identity check `total_j == B × step_j`) |
+| F2 | must lower the step net from fib's OWN ROM (not the 2-word money-plot ROM) | A3 golden from fib's net; A6 method-consistency |
+| F3 | honest comparison: reversible pays B, CMOS pays T (else the crossing is cosmetic) | A4 (crossing `B·E_step` vs `T·E_cmos`, in-range, ≥ per-step crossing) |
+| F4 | T defined by PC-in-dead-zone, not `decode()==None` (idle decodes to `Some(Addi)`) | A2 (`steps_t` = halt step; park-tax arithmetic) |
+| F5 | state `step(rom)` vs composite `system_step` (memory body) | design §3.2 / artifact text; noted |
+| F6/F7 | attribution `pc_add_br` row + residual; money-plot ROM opcode comments wrong | §5 obligations (comment fix; optional attribution) |
+| F8 | golden stable; memoize the ~2min fib step net; sweeps out of the gate | A3 golden; test fixture memoization |
+
+*Verdict on Q-A/B/(C)(D)(E): headline B is physical; per-word inverted; idle ≈ 100% of a
+step; M-E's real content is the WCET park tax + the honest program crossing.*
 
 ## Earlier reviews — NOT recoverable (the exact gap L21 fixes)
 
