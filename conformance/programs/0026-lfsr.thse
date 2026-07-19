@@ -1,0 +1,77 @@
+-- Conformance 0026 (dialect: synthesizable, compositional)
+-- Width-4 Galois LFSR (x^4+x+1, primitive, period 15) iterated K steps
+-- via `iter Nat@6` (k_max = 5).
+--
+-- Register x = (b0, b1, b2, b3): Bit product, b0 = lsb = FIRST tuple component.
+-- Galois feedback mask 0b1001: one tap cnot on (b0, b1).
+--
+-- One Galois step x ↦ (x>>1) ⊕ (mask·b0):
+--   lfsrStep = cnot01 ; swap01 ; swap12 ; swap23
+--   (1 feedback cnot on (b0,b1), then a 3-transposition right-rotate)
+--
+-- VERIFIED: 4 TISC instrs, 0 Swapbr; fast-CPU == eval == reference Galois(0b1001)
+-- on all 16 register inputs.
+--
+-- Full program: iter Nat@6 lfsrStep — domain = 6 × 16 = 96.
+-- ROM 104 instrs, wcet B = 104, 10 Swapbr (2 guard × 5 copies).
+-- 5-step orbit from seed 0b0001: 1 → 9 → 13 → 15 → 14 → 7.
+
+type Nat = Zero | Succ Nat
+type Bit = O | I
+
+-- Prelude gates (structural dedup drops these when the prelude is applied)
+iso notb : Bit <-> Bit
+| O <-> I
+| I <-> O
+
+iso swapBit : Bit * Bit <-> Bit * Bit
+| (a, b) <-> (b, a)
+
+iso cnot : Bit * Bit <-> Bit * Bit
+| (O, b) <-> (O, b)
+| (I, O) <-> (I, I)
+| (I, I) <-> (I, O)
+
+-- Bit identity (1-wire)
+iso idb : Bit <-> Bit
+| O <-> O
+| I <-> I
+
+-- Pair identity (2-wire)
+iso id2 : (Bit, Bit) <-> (Bit, Bit)
+| (x, y) <-> (x, y)
+
+-- 3-wire left-association: (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)
+iso asc : (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)
+| (x, (y, z)) <-> ((x, y), z)
+
+-- 4-wire top-level association:
+--   (Bit, (Bit, (Bit, Bit))) <-> ((Bit, Bit), (Bit, Bit))
+iso ascTop : (Bit, (Bit, (Bit, Bit))) <-> ((Bit, Bit), (Bit, Bit))
+| (x, (y, z)) <-> ((x, y), z)
+
+-- cnot on positions 0,1 of a 4-wire tuple: cnot(b0, b1) with identity on b2, b3.
+-- Wire layout: (Bit, (Bit, (Bit, Bit))) — cnot acts on the first pair.
+iso cnot01 : (Bit, (Bit, (Bit, Bit))) <-> (Bit, (Bit, (Bit, Bit)))
+= ascTop ; (cnot * id2) ; ~ascTop
+
+-- Swap positions 0,1 on a 4-wire tuple.
+iso swap01 : (Bit, (Bit, (Bit, Bit))) <-> (Bit, (Bit, (Bit, Bit)))
+= ascTop ; (swapBit * id2) ; ~ascTop
+
+-- Swap positions 1,2 on a 4-wire tuple: identity on b0, swap (b1, b2), identity on b3.
+iso swap12 : (Bit, (Bit, (Bit, Bit))) <-> (Bit, (Bit, (Bit, Bit)))
+= idb * (asc ; (swapBit * idb) ; ~asc)
+
+-- Swap positions 2,3 on a 4-wire tuple: identity on b0, identity on b1, swap (b2, b3).
+iso swap23 : (Bit, (Bit, (Bit, Bit))) <-> (Bit, (Bit, (Bit, Bit)))
+= idb * (idb * swapBit)
+
+-- One Galois LFSR step: cnot(b0→b1), then rotate right (3-transposition).
+-- Semantics: x ↦ (x >> 1) ⊕ (0b1001 · b0)
+iso lfsrStep : (Bit, (Bit, (Bit, Bit))) <-> (Bit, (Bit, (Bit, Bit)))
+= cnot01 ; swap01 ; swap12 ; swap23
+
+-- Width-4 Galois LFSR iterated up to 5 steps (Nat@6 = {0,1,2,3,4,5}).
+iso lfsr : Nat@6 * (Bit, (Bit, (Bit, Bit))) <-> Nat@6 * (Bit, (Bit, (Bit, Bit)))
+= iter Nat@6 lfsrStep
