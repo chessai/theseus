@@ -41,22 +41,28 @@ fn golden_pin_mexch_rom() {
 
     // F-teeth-1: assert the EXACT tuple from measured grounding (§4b).
     // If these fail, STOP and report the real measured values.
-    assert_eq!(t.d_pre, 2839, "GOLDEN PIN: d_pre={} (expected 2839)", t.d_pre);
+    // RE-PINNED (advisor, da9ca8f-era): M-D.b (c229920) added the MexchReg decode
+    // arm, growing the cpu_pre/cpu_post netlist (d_pre 2839→2976, d_post 152→289,
+    // d_locked/period 3028→3304, delta1 1→0, delta_hold 37→36). validate() still
+    // returns Ok (physical lockstep intact) — a legitimate re-pin, not a regression.
+    // M-D.b's scoped gate ran `--test ring_two_body` but not `ring_two_body_timing`,
+    // so this golden staled undetected until the full-suite run around M-D.b2.f1.
+    assert_eq!(t.d_pre, 2976, "GOLDEN PIN: d_pre={} (expected 2976)", t.d_pre);
     assert_eq!(t.d_mem, 35, "GOLDEN PIN: d_mem={} (expected 35)", t.d_mem);
-    assert_eq!(t.d_post, 152, "GOLDEN PIN: d_post={} (expected 152)", t.d_post);
-    assert_eq!(t.delta1, 1, "GOLDEN PIN: delta1={} (expected 1)", t.delta1);
+    assert_eq!(t.d_post, 289, "GOLDEN PIN: d_post={} (expected 289)", t.d_post);
+    assert_eq!(t.delta1, 0, "GOLDEN PIN: delta1={} (expected 0)", t.delta1);
     assert_eq!(t.delta2, 1, "GOLDEN PIN: delta2={} (expected 1)", t.delta2);
     assert_eq!(
-        t.delta_hold, 37,
-        "GOLDEN PIN: delta_hold={} (expected 37)",
+        t.delta_hold, 36,
+        "GOLDEN PIN: delta_hold={} (expected 36)",
         t.delta_hold
     );
     assert_eq!(
-        t.d_locked, 3028,
-        "GOLDEN PIN: d_locked={} (expected 3028)",
+        t.d_locked, 3304,
+        "GOLDEN PIN: d_locked={} (expected 3304)",
         t.d_locked
     );
-    assert_eq!(t.period, 3028, "GOLDEN PIN: period={} (expected 3028)", t.period);
+    assert_eq!(t.period, 3304, "GOLDEN PIN: period={} (expected 3304)", t.period);
 
     // validate() must pass on the golden ROM
     t.validate().expect("validate() failed on MEXCH golden ROM");
@@ -227,9 +233,15 @@ fn validate_rejects_mutations() {
         t.d_mem += 1;
     });
 
-    // d_post += 1: changes re-derived d_locked → "d_locked mismatch".
-    assert_rejects!("d_post += 1", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.d_post += 1;
+    // d_post += P: d_post feeds d_locked via period-alignment (align-up to P), so a
+    // sub-period perturbation (+1) is ABSORBED by the delta_hold slack — that is correct
+    // physics, not a cert gap (the old +1 happened to cross a boundary only because the
+    // pre-M-D.b d_post=152 sat on one; the re-pinned d_post=289 does not). Perturb by a
+    // full period P to shift the aligned d_locked → "d_locked mismatch". (delta1/delta2
+    // are mod-P residues, so d_pre/d_mem +1 above ARE caught; d_post's alignment is not
+    // +1-sensitive.)
+    assert_rejects!("d_post += P", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+        t.d_post += P;
     });
 
     // ── Assertion G: independently reachable (not implied by re-derivation) ──
