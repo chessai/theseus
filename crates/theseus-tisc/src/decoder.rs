@@ -609,7 +609,7 @@ fn ccnot_instr() -> Iso {
         &[reg_field(0), AUX_PRED_FIELD],
         vec![gate_at(
             2 * W,
-            &[W + 0, W + CCNOT_RS_COPY, W + CCNOT_RT_COPY, 0],
+            &[W, W + CCNOT_RS_COPY, W + CCNOT_RT_COPY, 0],
             cccnot_prim(),
         )],
     );
