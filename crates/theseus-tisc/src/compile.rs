@@ -959,6 +959,20 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
                 }])
             });
         }
+
+        // ccnot (bit-0 Toffoli): (t, c1, c2) ↦ (t ^ (c1&1 & c2&1), c1, c2)
+        // TARGET-FIRST: regs[0] = target (rd), regs[1] = control1 (rs), regs[2] = control2 (rt).
+        if check_pattern_3reg(&def.forward, &vals, |t, c1, c2| {
+            (t ^ ((c1 & 1) & (c2 & 1)), c1, c2)
+        }) {
+            return with_registers(ctx, &leaves, |regs| {
+                Ok(vec![Instr::Ccnot {
+                    rd: regs[0],
+                    rs: regs[1],
+                    rt: regs[2],
+                }])
+            });
+        }
     }
 
     // One-register prims: a ↦ f(a)
@@ -2784,6 +2798,9 @@ fn exec_instr(instr: Instr, state: &mut StateVals) {
             if state.regs[rd as usize] & 1 == 1 {
                 state.regs.swap(rs as usize, rt as usize);
             }
+        }
+        Instr::Ccnot { rd, rs, rt } => {
+            state.regs[rd as usize] ^= (state.regs[rs as usize] & state.regs[rt as usize]) & 1;
         }
         Instr::Xchg { rd, sx } => {
             std::mem::swap(&mut state.regs[rd as usize], &mut state.scratch[sx as usize]);

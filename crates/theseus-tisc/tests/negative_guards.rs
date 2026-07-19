@@ -28,10 +28,15 @@ fn decode_mexchr_opcode_1010() {
 }
 
 #[test]
-fn decode_reserved_r_format_opcode_1011() {
-    // R-format opcode 0b1011 is reserved (0b0000..0b1010 are valid).
+fn decode_r_format_opcode_1011_is_ccnot() {
+    // R-format opcode 0b1011 is CCNOT (bit-0 Toffoli).
     // [1 | 1011 | 000 | 000 | 000 | 00] = 0x8000 | (0b1011 << 11) = 0xD800
-    assert_eq!(decode(0xD800), None);
+    // rd=0, rs=0, rt=0
+    assert_eq!(decode(0xD800), Some(Instr::Ccnot { rd: 0, rs: 0, rt: 0 }));
+    // With distinct operands: rd=1, rs=2, rt=3
+    // [1 | 1011 | 001 | 010 | 011 | 00] = 0xD94C
+    let word = 0x8000 | (0b1011 << 11) | (1 << 8) | (2 << 5) | (3 << 2);
+    assert_eq!(decode(word), Some(Instr::Ccnot { rd: 1, rs: 2, rt: 3 }));
 }
 
 #[test]

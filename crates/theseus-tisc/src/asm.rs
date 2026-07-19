@@ -39,6 +39,8 @@ pub enum AsmError {
     AliasedOperands { mnemonic: &'static str, rd: u8, rs: u8 },
     /// CSWAP operands are not pairwise distinct.
     CswapNotDistinct { rd: u8, rs: u8, rt: u8 },
+    /// CCNOT operands are not pairwise distinct.
+    CcnotNotDistinct { rd: u8, rs: u8, rt: u8 },
     /// XCHG scratch index out of range (must be < NUM_SCRATCH).
     XchgScratchOutOfRange { sx: u8 },
     /// XCHG names decoder-reserved scratch s0 or s1.
@@ -66,6 +68,9 @@ impl fmt::Display for AsmError {
             }
             AsmError::CswapNotDistinct { rd, rs, rt } => {
                 write!(f, "CSWAP r{rd}, r{rs}, r{rt}: operands must be pairwise distinct")
+            }
+            AsmError::CcnotNotDistinct { rd, rs, rt } => {
+                write!(f, "CCNOT r{rd}, r{rs}, r{rt}: operands must be pairwise distinct")
             }
             AsmError::XchgScratchOutOfRange { sx } => {
                 write!(f, "XCHG scratch index out of range: s{sx}")
@@ -116,6 +121,8 @@ pub enum Instr {
     Rotr { rd: u8, rs: u8 },
     /// If `r[rd] & 1 == 1` then `r[rs] ↔ r[rt]`. Pairwise distinct.
     Cswap { rd: u8, rs: u8, rt: u8 },
+    /// `r[rd].bit0 ^= r[rs].bit0 & r[rt].bit0`. Pairwise distinct.
+    Ccnot { rd: u8, rs: u8, rt: u8 },
     /// `r[rd] ↔ s[sx]`. `sx` must be 2..8 (s0/s1 decoder-reserved).
     Xchg { rd: u8, sx: u8 },
     /// `BR ↔ r[rd]` (ADR-0034 D1: Pendulum semantics). The branch
@@ -205,6 +212,12 @@ pub fn encode(instr: Instr) -> Result<u16, AsmError> {
             }
             r_word(0b0110, rd, rs, rt)
         }
+        Instr::Ccnot { rd, rs, rt } => {
+            if rd == rs || rd == rt || rs == rt {
+                return Err(AsmError::CcnotNotDistinct { rd, rs, rt });
+            }
+            r_word(0b1011, rd, rs, rt)
+        }
         Instr::Xchg { rd, sx } => {
             if (sx as usize) >= NUM_SCRATCH {
                 return Err(AsmError::XchgScratchOutOfRange { sx });
@@ -265,6 +278,7 @@ pub fn decode(word: u16) -> Option<Instr> {
             0b1000 => Some(Instr::Swapbr { rd }),
             0b1001 => Some(Instr::Mexch { rd, addr: rt }),
             0b1010 => Some(Instr::MexchReg { rd, ra: rs }),
+            0b1011 => Some(Instr::Ccnot { rd, rs, rt }),
             _ => None, // reserved
         }
     } else {

@@ -232,7 +232,7 @@ pub fn step_ops(rom: &[u16], ops: &[Op]) -> Iso {
 }
 
 /// `step(rom) : CpuState <-> CpuState` — the ring machine cycle
-/// (decode_execute′, 14 non-MEXCH/MEXCHR ops). Total bijection on CpuState;
+/// (decode_execute′, 15 non-MEXCH/MEXCHR ops). Total bijection on CpuState;
 /// SWAPBR is functional, branching works via `PC += BR + 1`.
 pub fn step(rom: &[u16]) -> Iso {
     step_ops(rom, &Op::ALL)

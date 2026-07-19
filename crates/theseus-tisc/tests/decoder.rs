@@ -65,8 +65,11 @@ fn reference(s: &StateVals) -> StateVals {
             }
             0b0111 => std::mem::swap(&mut out.regs[rd], &mut out.scratch[rt]),
             0b1000 => std::mem::swap(&mut out.regs[rd], &mut out.br),
-            // 0b1001 = MEXCH: removed from CpuState decode_execute (Stage 1a-B);
-            // now a reserved opcode at this level (identity).
+            // 0b1001 = MEXCH, 0b1010 = MEXCHR: reserved at CpuState level (identity).
+            0b1011 => {
+                // CCNOT: r[rd].bit0 ^= r[rs].bit0 & r[rt].bit0
+                out.regs[rd] ^= (out.regs[rs] & out.regs[rt]) & 1;
+            }
             _ => {} // reserved: identity
         }
     } else {
@@ -142,6 +145,16 @@ fn op_samples(op: Op) -> Vec<StateVals> {
             st(regs_a(), r_ins(6, 4, 1, 2)), // r4 = 0x01: taken
             st(regs_a(), r_ins(6, 0, 1, 2)), // r0 = 0x00: not taken
             st(regs_b(), r_ins(6, 1, 3, 5)), // r1 = 0x21: taken
+        ],
+        Op::Ccnot => vec![
+            // rd=4(0x01), rs=1(0xFF), rt=2(0xAA): both controls bit0=1 → r4 ^= 1
+            st(regs_a(), r_ins(0b1011, 4, 1, 2)),
+            // rd=0(0x00), rs=2(0xAA), rt=3(0x55): rs.bit0=0 → no change
+            st(regs_a(), r_ins(0b1011, 0, 2, 3)),
+            // rd=7(0xC3), rs=4(0x01), rt=5(0x80): rs.bit0=1, rt.bit0=0 → no change
+            st(regs_a(), r_ins(0b1011, 7, 4, 5)),
+            // dense-byte: rd=0(0x10), rs=1(0x21), rt=2(0x32): both bit0=1 → rd ^= 1
+            st(regs_b(), r_ins(0b1011, 0, 1, 2)),
         ],
         Op::Xchg => vec![
             st(regs_a(), r_ins(7, 0, 0, 2)),
@@ -442,7 +455,7 @@ fn full_decoder_rotates() {
 
 #[test]
 fn full_decoder_moves() {
-    check_ops_semantics(&[Op::Exch, Op::Cswap, Op::Xchg, Op::Swapbr]);
+    check_ops_semantics(&[Op::Exch, Op::Cswap, Op::Ccnot, Op::Xchg, Op::Swapbr]);
 }
 
 #[test]

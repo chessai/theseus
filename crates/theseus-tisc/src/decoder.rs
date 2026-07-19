@@ -569,6 +569,65 @@ fn cswap_instr() -> Iso {
     predicated(&r_pred(0b0110), body)
 }
 
+/// CCNOT rd, rs, rt: bit-0 Toffoli — `r[rd].bit0 ^= r[rs].bit0 & r[rt].bit0`.
+///
+/// Structural sibling of `cswap_instr`. Copies the two control bits
+/// (r[rs].bit0 → s1 bit 5, r[rt].bit0 → s1 bit 6) via with_target-style
+/// CNOT brackets, then applies a single predicate-gated CCC-NOT
+/// (pred ∧ s1.5 ∧ s1.6 → r0-slot bit 0), then uncomputes the copies.
+/// s1 bits 5 and 6 are architecturally free (0=pred, 1–3=chain, 4=cswap-copy).
+fn ccnot_instr() -> Iso {
+    // s1 bit positions for the two control copies.
+    const CCNOT_RS_COPY: usize = 5; // s1 bit 5: copy of r[rs].bit0
+    const CCNOT_RT_COPY: usize = 6; // s1 bit 6: copy of r[rt].bit0
+
+    // Copy r[rs].bit0 into s1 bit 5: route r[rs] to r0-slot via R_RS crossbar,
+    // CNOT from r0-slot bit 0 to s1 bit 5, then un-route.
+    let copy_rs0 = with_target(
+        R_RS,
+        on_fields(
+            &[reg_field(0), AUX_PRED_FIELD],
+            vec![gate_at(2 * W, &[0, W + CCNOT_RS_COPY], cnot_prim())],
+        ),
+    );
+
+    // Copy r[rt].bit0 into s1 bit 6: route r[rt] to r0-slot via R_RT crossbar,
+    // CNOT from r0-slot bit 0 to s1 bit 6, then un-route.
+    let copy_rt0 = with_target(
+        R_RT,
+        on_fields(
+            &[reg_field(0), AUX_PRED_FIELD],
+            vec![gate_at(2 * W, &[0, W + CCNOT_RT_COPY], cnot_prim())],
+        ),
+    );
+
+    // Core: predicate-gated CCC-NOT on [r0-slot, s1]:
+    // r0-slot bit 0 ^= (pred ∧ s1.5 ∧ s1.6)
+    // Wire layout in 2-field core [r0-slot(0..8), s1(8..16)]:
+    //   pred = wire W+0 (s1 bit 0), ctrl1 = wire W+CCNOT_RS_COPY, ctrl2 = wire W+CCNOT_RT_COPY, target = wire 0.
+    let core = on_fields(
+        &[reg_field(0), AUX_PRED_FIELD],
+        vec![gate_at(
+            2 * W,
+            &[W + 0, W + CCNOT_RS_COPY, W + CCNOT_RT_COPY, 0],
+            cccnot_prim(),
+        )],
+    );
+
+    // The target register is r[rd]; route it to r0-slot, apply the core, un-route.
+    let gated_toffoli = with_target(R_RD, core);
+
+    // Full body: copy_rs ; copy_rt ; gated_toffoli ; sym(copy_rt) ; sym(copy_rs)
+    let body = Iso::seq(
+        copy_rs0.clone(),
+        Iso::seq(
+            copy_rt0.clone(),
+            Iso::seq(gated_toffoli, Iso::seq(Iso::sym(copy_rt0), Iso::sym(copy_rs0))),
+        ),
+    );
+    predicated(&r_pred(0b1011), body)
+}
+
 /// XCHG rd, sx: gated swap of the routed register and scratch slots.
 /// The scratch crossbar scrambles s1's position, so the predicate is
 /// first copied onto the R-format pad bit IR[0] (architecturally zero)
@@ -732,7 +791,7 @@ fn rotri_instr() -> Iso {
 // Public dispatch
 // ══════════════════════════════════════════════════════════════════════
 
-/// The 16 live TISC-1 instructions.
+/// The 17 live TISC-1 instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Op {
     Add,
@@ -742,6 +801,7 @@ pub enum Op {
     Rotl,
     Rotr,
     Cswap,
+    Ccnot,
     Xchg,
     Swapbr,
     Mexch,
@@ -754,9 +814,9 @@ pub enum Op {
 }
 
 impl Op {
-    /// The 14 CpuState-only instructions (all except MEXCH/MEXCHR).
+    /// The 15 CpuState-only instructions (all except MEXCH/MEXCHR).
     /// Used by `decode_execute` (the ring step's decoder).
-    pub const ALL: [Op; 14] = [
+    pub const ALL: [Op; 15] = [
         Op::Add,
         Op::Sub,
         Op::Xor,
@@ -764,6 +824,7 @@ impl Op {
         Op::Rotl,
         Op::Rotr,
         Op::Cswap,
+        Op::Ccnot,
         Op::Xchg,
         Op::Swapbr,
         Op::Addi,
@@ -790,6 +851,7 @@ pub fn instruction(op: Op) -> Iso {
         Op::Rotl => rotl_instr(),
         Op::Rotr => rotr_instr(),
         Op::Cswap => cswap_instr(),
+        Op::Ccnot => ccnot_instr(),
         Op::Xchg => xchg_instr(),
         Op::Swapbr => swapbr_instr(),
         Op::Mexch | Op::MexchReg => panic!(
@@ -813,7 +875,7 @@ pub fn decode_execute_ops(ops: &[Op]) -> Iso {
 /// `decode_execute : CpuState <-> CpuState` — the ring decoder
 /// (decode_execute′, Stage 1a-B).
 ///
-/// All 14 non-MEXCH/MEXCHR instructions. MEXCH and MEXCHR are handled
+/// All 15 non-MEXCH/MEXCHR instructions. MEXCH and MEXCHR are handled
 /// by the emit/mem/absorb cycle in [`system_decode_execute`]. Reserved
 /// opcodes (including MEXCH 0b1001 and MEXCHR 0b1010) are the identity.
 pub fn decode_execute() -> Iso {
@@ -823,7 +885,7 @@ pub fn decode_execute() -> Iso {
 /// `system_decode_execute : (CpuState, MemState) <-> (CpuState, MemState)`
 /// — the composite decoder, non-MEXCH/MEXCHR instructions only (Stage 1b-A).
 ///
-/// All 14 non-MEXCH/MEXCHR ops are `(instruction(op) ⊗ id_MemState)`.
+/// All 15 non-MEXCH/MEXCHR ops are `(instruction(op) ⊗ id_MemState)`.
 /// MEXCH and MEXCHR are handled by the emit/mem/absorb 3-cycle in
 /// `system_step` (Stage 1b-A).
 pub fn system_decode_execute() -> Iso {
