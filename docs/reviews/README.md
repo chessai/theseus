@@ -24,6 +24,7 @@ different model from the implementer). "Verdict" is the reviewer's, not the advi
 | M-D.b2 (compiler-side MEXCHR emission) | design | DO-NOT-SHIP-as-drawn → revised (route i, n=2) | [mdb2-design-review.md](mdb2-design-review.md) |
 | M-D.b2.f1 | implementation | SHIP-WITH-FIXES (emission sound; 4 blocking test/guard fixes) | [mdb2-impl-review.md](mdb2-impl-review.md) |
 | M-D.b2.f2 (array map: iter ∘ memexch) | design | SHIP-WITH-FIXES (no blockers; d=4, energy-API + reduce-finding fixes) | [mdb2-f2-design-review.md](mdb2-f2-design-review.md) |
+| M-D.b2.f2 | implementation | SHIP-WITH-FIXES (program traced sound; 1 blocking test-split F2-I1) | [mdb2-f2-impl-review.md](mdb2-f2-impl-review.md) |
 
 > **Recovered retroactively.** These reviews predate L21; they were folded into the
 > design docs + tests at the time but not committed as records. Captured here from the
@@ -112,6 +113,18 @@ into `docs/scratch/mdb2-f2-design.md`; tests land with impl (§7). Tests in `tes
 | F2-5 | MINOR park-tax overstated ~2.5× (6-instr spine always runs) → 40%→0 at d=4 | `T6` exact-value assertions (B=30, T(k)=18+4k) |
 | F2-6 | MINOR T5 wording (succ is LAST in body, not "between copies") | `T5` asserts exact slice `[MexchReg,Xori{rd},MexchReg,Xori{ra}]` |
 | F2-7 | MINOR displaced-idx regime (d≥5) reachable, sound, untested (I-1 class) | `T-F2-7`: d=5, assert displacement `Mexch{_,≥2}` + whole-domain oracle |
+
+### M-D.b2.f2 IMPLEMENTATION review (F2-I1…F2-I4)
+Program traced sound to the exact 4-instr body; every pinned trajectory recomputed correct;
+g² (k>n) and d=5-displaced-idx both have default-tier whole-domain oracles. Fixes = advisor-finish
+(test-only) in `tests/array_map.rs`.
+| # | Finding | Fix / test |
+|---|---|---|
+| F2-I1 | **BLOCKER** the park-tax histogram (M-E deliverable) was asserted only inside `#[ignore]`d T6 → default suite pinned neither B=30 nor T(k) | split: **non-ignored `t6a_trace_histogram`** (wcet==30, `rom_trace.steps_t`==18+4k, ratios) + `#[ignore]` `t6b_park_tax_pricing` (joules) |
+| F2-I2 | MINOR T6 `total_j==B·step_j` is a model identity (I-5 shape), not a check | `t6b` comment marks it the static-inventory identity; the real two-path check stays in memexch T7 |
+| F2-I3 | MINOR T5 didn't pin succ-is-LAST / body_len=4 | `t5` adds `assert!(matches!(instrs[pos2+2], Swapbr))` + `assert_ne!(rd,ra)` |
+| F2-I4 | MINOR (doc) T-F2-7 "fails if F-4 regresses" overstated (idx is Bit) | design §7 line corrected (occ-seed/pop-order only; F-4 stays f1 T5-F4) |
+| — | CONFIRMED CLOSED | program==design (traced); T2 k=3 + T-F2-7 d=5 real oracles; T3 idx=1 nonzero (no I-2); f1 T7 reroute strengthened (real two-path) |
 
 ### Not-tested-by-design exceptions (justified)
 - **Layout-invariant guard** (`homes_in≠homes_out`, compile.rs) — a `debug_assert` in

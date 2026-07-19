@@ -155,8 +155,9 @@ the map-semantics + varying-address assertions; the park-tax histogram; `rom_pro
   `SystemRing` (`run==eval^R`, reuse the f1/M-D.b harness), on an `idx=1`,`k≥1` state.
 - **T-F2-7 (displaced-idx regime, d=5):** compile arrayMap at d=5, assert the aux page-in
   contains a displacement `Mexch{_, addr≥2}` (idx displaced to `Mem(2)`), and
-  `run_on_cpu_fast_resident == eval` over the whole domain (80 inputs) — fails if the occ seed,
-  the free-slot pop order, or the F-4 bound ever regresses (the I-1 class).
+  `run_on_cpu_fast_resident == eval` over the whole domain (80 inputs) — fails if the occ seed
+  or the free-slot pop order regresses (the I-1 class). (Not an F-4 test: idx is a `Bit`, so no
+  out-of-range address is representable here; F-4 reject coverage stays f1's T5-F4.)
 - OOM discipline: real-CPU/closure tiers `#[ignore]` + serialized.
 
 ## 8. Residual obligations for the IMPL reviewer
