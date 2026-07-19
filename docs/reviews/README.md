@@ -23,6 +23,7 @@ different model from the implementer). "Verdict" is the reviewer's, not the advi
 | TP-1 (reversible GCD formulation) | design | OVERTURNED-IN-PART | [tp1-gcd-review.md](tp1-gcd-review.md) |
 | M-D.b2 (compiler-side MEXCHR emission) | design | DO-NOT-SHIP-as-drawn → revised (route i, n=2) | [mdb2-design-review.md](mdb2-design-review.md) |
 | M-D.b2.f1 | implementation | SHIP-WITH-FIXES (emission sound; 4 blocking test/guard fixes) | [mdb2-impl-review.md](mdb2-impl-review.md) |
+| M-D.b2.f2 (array map: iter ∘ memexch) | design | SHIP-WITH-FIXES (no blockers; d=4, energy-API + reduce-finding fixes) | [mdb2-f2-design-review.md](mdb2-f2-design-review.md) |
 
 > **Recovered retroactively.** These reviews predate L21; they were folded into the
 > design docs + tests at the time but not committed as records. Captured here from the
@@ -98,6 +99,19 @@ the correction task (branch off `maestro/01KXVSZ8XW…`). Tests in `tests/memexc
 | I-7 | MINOR `resident > n_leaves` → underflow panic, not clean reject | add `resident≤n` to the reject set + negative test |
 | I-8 | MINOR T6 comment (marshal↔Ctx satisfied by construction); `run_on_cpu_fast_resident` dup loop | comment; optional dedup |
 | PRE-EXISTING | `fib_cpu::assembler_encode_roundtrip` red on base (M-D.b `9279bc0` made 0b1010=MexchReg; scoped gate hid it) | update the stale assertion: `decode(0xD100)==Some(MexchReg{rd:1,ra:0})`; **widen the gate** to include fib_cpu/composite/ring so rot can't recur |
+
+### M-D.b2.f2 DESIGN review (array map, F2-1…F2-7)
+No blockers (composition sound, idx-stability traced at instruction level). Findings folded
+into `docs/scratch/mdb2-f2-design.md`; tests land with impl (§7). Tests in `tests/` (new file).
+| # | Finding | Test (planned) |
+|---|---|---|
+| F2-1 | MAJOR d=3 makes k>n unreachable → g² untested | d=4; `T2` whole-domain incl. k=3; `T4/T-k3` pins k=3 g²=id |
+| F2-2 | MAJOR `rom_program_energy` hardwires non-resident → rejects arrayMap ROM | new `rom_program_energy_resident`; `T6` runs on it (+ reroute f1 T7, resolves I-5) |
+| F2-3 | MAJOR "reduce impossible w/o new prim" is FALSE (borrow-swap = non-destructive read; arithmetic sum blocked by single-leaf width F-1, not memexch) | design §5 corrected; parity-reduce = f3 candidate (no f2 test) |
+| F2-4 | MINOR "guard runs per copy" wrong — body lowered once, duplicated | design §3/§6 reworded; `T5` pins duplicated-body shape |
+| F2-5 | MINOR park-tax overstated ~2.5× (6-instr spine always runs) → 40%→0 at d=4 | `T6` exact-value assertions (B=30, T(k)=18+4k) |
+| F2-6 | MINOR T5 wording (succ is LAST in body, not "between copies") | `T5` asserts exact slice `[MexchReg,Xori{rd},MexchReg,Xori{ra}]` |
+| F2-7 | MINOR displaced-idx regime (d≥5) reachable, sound, untested (I-1 class) | `T-F2-7`: d=5, assert displacement `Mexch{_,≥2}` + whole-domain oracle |
 
 ### Not-tested-by-design exceptions (justified)
 - **Layout-invariant guard** (`homes_in≠homes_out`, compile.rs) — a `debug_assert` in
