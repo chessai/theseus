@@ -331,7 +331,7 @@ fn t3_real_cpu_oracle() {
     let samples = vec![
         make_input(1, 1, 0, 1, 0, 1), // k=1, idx=1, acc=1, data=0, arr=[0,1]; data≠arr[1]=1
         make_input(2, 1, 1, 1, 0, 0), // k=2, idx=1, acc=1
-        make_input(2, 1, 0, 1, 1, 0), // k=2, idx=1, acc=1, data=0≠arr[1]=0 OK, arr[0]=1
+        make_input(2, 1, 0, 1, 1, 0), // k=2, idx=1, acc=1, data=0, arr=[1,0] (data==arr[1]=0 — reduce still visible via acc XOR); sample 1 covers data≠arr[idx]
     ];
     for input in &samples {
         let expected = eval_xor_reduce(d, input);
@@ -416,7 +416,7 @@ fn t4_reduce_semantics() {
         }
     }
 
-    // F3-4: d=4, k=3, idx0=0 ⇒ acc_out = acc0 ⊕ arr[1] (arr[0] XOR-ed twice cancels).
+    // design T4 / §8.4 (XOR-twice-cancels): d=4, k=3, idx0=0 ⇒ acc_out = acc0 ⊕ arr[1] (arr[0] XOR-ed twice cancels).
     // Iterations: idx=0→arr[0], idx=1→arr[1], idx=0→arr[0] again.
     // acc = acc0 ⊕ arr[0] ⊕ arr[1] ⊕ arr[0] = acc0 ⊕ arr[1].
     let d4 = 4;
@@ -432,7 +432,7 @@ fn t4_reduce_semantics() {
                     assert_eq!(
                         acc_out,
                         acc ^ arr1,
-                        "F3-4: acc_out = acc0 ⊕ arr[1] (arr[0] XOR-ed twice cancels)"
+                        "§8.4: acc_out = acc0 ⊕ arr[1] (arr[0] XOR-ed twice cancels)"
                     );
                     assert_eq!(data_out, data, "data preserved");
                     assert_eq!(
@@ -523,6 +523,13 @@ fn t5_varying_address_exact_shape() {
             ),
         };
         assert_eq!(d_r_check, d_r);
+
+        // impl-review #1: a_r must be the ACCUMULATOR register — distinct from the address
+        // reg (ra) and the data reg (d_r). Without this, T5 alone would accept an
+        // acc-untouched "xor idx into data" slice (a_r==ra) — compositionally killed by
+        // T2/T4, but pin it here too so T5 has teeth in isolation.
+        assert_ne!(a_r, ra, "copy {copy_idx}: acc reg a_r must differ from address reg ra");
+        assert_ne!(a_r, d_r, "copy {copy_idx}: acc reg a_r must differ from data reg d_r");
 
         // instrs[pos1+2] = Xor{rd: d_r, rs: a_r}  (F3-1: Xor writes DATA's reg, NOT acc's)
         assert_eq!(
