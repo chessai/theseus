@@ -10,7 +10,23 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`00d2468` (**value-width `Type::Flat(n)` foundation merged** — `30c4415`, code — atop f3.5 + TP-3).
+`1a81b40` (**value-width slices 1 + 2 merged** — `Type::Flat(n)` foundation `30c4415` + the byte-wide
+XOR reduce `ae61941`, atop f3.5 + TP-3).
+**Value-width slice-2** is the first *program* over the foundation: f3's XOR/parity reduce lifted
+from **bit** elements to full **`Flat(w)` word** elements — `acc ^= arr[i]` over words. Only the
+elements become `Flat(w)`; **`idx` stays `Bit`** (sidesteps the width-advance trap). The one real
+change is `memexch_prim_idx(elem_ty, idx_ty, n)` (an explicit index type, guarded
+`num_leaves(idx_ty)==1`); the memexch RECOGNIZER is untouched (its semantic-verify + home-layout
+guard already read the address generically). Because `MexchReg` swaps whole registers and `Xor` is
+byte-parallel, **the compiled ROM is byte-identical to f3's across w∈{1,2,4}** (pinned by T1's
+cross-width `assert_eq!` on the full instruction sequence + `wcet==24`), so `B=24, T(k)=12+6k,
+{50,25,0}%` carry over verbatim. Verified `run_on_cpu==eval` full-word at Flat(2) whole-domain
+(1536) and Flat(4) whole-domain (393k, hoist-compiled so it runs in seconds not hours), + real
+`system_step` (L19) + per-step canonicalization (`mem[0..2]` resident words stay `<2^w`). Caps at
+Flat(4) (the Flat(8) memexch table = 33.5M entries). Design + impl reviews (Fable, both recomputed
+the ROM==f3 by hand) `docs/reviews/valwidth-reduce-*`. **Ladder from here:** Flat(8) `Add` reduce
+(real numeric sum, native mod-256) → byte-parallel `Ccnot` decoder second-buffer (F35-1b) for the
+full masked accumulate `acc ^= key & arr[i]`. The prior tip `00d2468`:
 **Value-width slice-1** introduces a new core `Type::Flat(n)`: a width-parameterized SINGLE-leaf
 word (`cardinality = 2^n` but `num_leaves = 1` — decoupling cardinality from leaf-count, the wall
 that capped a program value leaf at 1 bit). `Value` is UNCHANGED — a `Flat(n)` value is the
