@@ -10,7 +10,24 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`2faed16` (**f3.5 `Ccnot` instruction + TP-3 LFSR merged**, atop the M-D.b2 map+reduce pair).
+`00d2468` (**value-width `Type::Flat(n)` foundation merged** — `30c4415`, code — atop f3.5 + TP-3).
+**Value-width slice-1** introduces a new core `Type::Flat(n)`: a width-parameterized SINGLE-leaf
+word (`cardinality = 2^n` but `num_leaves = 1` — decoupling cardinality from leaf-count, the wall
+that capped a program value leaf at 1 bit). `Value` is UNCHANGED — a `Flat(n)` value is the
+existing thermometer `Right^k(Left(Unit))`. Exactly 10 match-arms across 5 crates (core/eval/
+netlist/tisc; theseus-check untouched); a bare byte-`Xor` prim over `Flat(w)` recognizes to the
+already-byte-parallel `Instr::Xor` and `run_on_cpu == eval` (Flat(4) whole-domain + Flat(8)
+strided + real `system_step`, L19). Chosen `Flat(n)`-over-`Word8` because the whole-domain oracle
++ the recognizer both enumerate `(2^w)^{#operands}` — a 3-operand op at `Word8` is 16.7M
+(infeasible), so **verify-at-Flat(2/4), ship-Flat(8)** by strided sampling + a ROM-shape parametric
+pin. Standing rule (from the review): table-based `PrimDef` caps `Flat(8)` at **2 operands
+forever** — the reason width-parameterization is load-bearing. This is the foundation for f3.5's
+sequel (byte-wide computation); NEXT slices: byte-XOR reduce (Flat(4) max — the memexch table
+walls at Flat(8)), then `Flat(8)` `Add` reduce (real numeric sum), then byte-parallel `Ccnot`
+(decoder second-buffer, F35-1b) for the full masked accumulate. Both design + impl reviews were
+Fable-BUILT-and-verified (`docs/reviews/valwidth-flat-*`). NOTE: value-width is ORTHOGONAL to
+M-D.c (which is MEM_WORDS/heap width, not value width — the roadmap previously mislabeled it).
+The prior tip `2faed16`: **f3.5 `Ccnot` instruction + TP-3 LFSR merged**, atop the M-D.b2 map+reduce pair.
 **f3.5** (`8a8d8ef`) adds the compiler's **first user-facing ISA instruction** — a bit-0
 Toffoli `Ccnot` (opcode `0b1011`) with a `system_step` decoder arm (structural sibling of
 `cswap_instr`: two bit-0 control copies into free s1 bits + one predicate-gated `cccnot_prim`)

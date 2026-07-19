@@ -69,10 +69,15 @@
 > user-facing `Ccnot` instruction (bit-0 Toffoli 0b1011 + decoder arm) rather than the refuted
 > 7-instr carry-trick; target-first ⇒ no Exch plumbing, d=3 displaced `B=34, T(k)=14+10k`; it
 > taxed every program's `step_j` (fib 6.62e-8→7.23e-8 J). **TP-3 LFSR DONE** (`3b4f123`).
-> **Next:** M-D.e loop-carrier spill (deferred — its minimal test needs a `recognize_prim` ext
-> that collided with f3.5; mechanism verified sound), widen-PC, or f3.5 byte-wide accumulate
-> (M-D.c). Design docs
-> `docs/scratch/md*.md`, `mdw/mdd/mdc/mdb2/mdb2-f2/mdb2-f3/me-design.md`; reviews `docs/reviews/` (L21).
+> **VALUE-WIDTH slice-1 DONE** (`30c4415`): a new core `Type::Flat(n)` — a width-parameterized
+> single-leaf word (cardinality 2^n, `num_leaves=1`) — the foundation for f3.5's byte-wide sequel.
+> `Value` unchanged (thermometer); bare byte-`Xor` `run_on_cpu==eval`. NOTE value-width is a
+> SEPARATE axis from **M-D.c** (which is MEM_WORDS/heap width — this doc previously conflated them).
+> **Next:** value-width slice-2 (byte-XOR reduce, Flat(4) max) → Flat(8) `Add` reduce (numeric sum)
+> → byte-parallel `Ccnot` decoder (the full masked accumulate); OR M-D.e loop-carrier spill
+> (deferred — its minimal test needs a `recognize_prim` ext that collided with f3.5; mechanism
+> verified sound); OR widen-PC. Design docs `docs/scratch/{md*,valwidth-flat}.md`; reviews
+> `docs/reviews/` (L21).
 > See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
