@@ -3,8 +3,9 @@
 > **Current status (2026-07-18):** M1, M3a, M3b, **M4-v1**, the **M4-v2
 > ring-machine core** (recirculating CPU + reversible branching, Fibonacci on the
 > ring at 20× area saving, zero-garbage closure), and the **v0.2 software dialect**
-> are all done and merged on `chessai/theseus-v2` (`da9ca8f`; M-E finale `e444dfb`,
-> M-D.b2.f1 compiler-side MEXCHR emission `da9ca8f`). **The #1 goal — the
+> are all done and merged on `chessai/theseus-v2` (`52704b5`; M-E finale `e444dfb`,
+> M-D.b2.f1 compiler-side MEXCHR emission `da9ca8f`, M-D.b2.f2 iter-array-map `52704b5`).
+> **The #1 goal — the
 > surface → TISC-1 ROM compiler — is COMPLETE end to end: `M-A→M-E`.** `.thse` compiles
 > to a ROM the CPU fetches/executes (`run_on_cpu == eval`), all the way to **measured
 > joules** (M-E: the real `fib` ROM = `6.62e-8 J`, WCET park tax 16.67%, honest B-vs-T
@@ -55,13 +56,16 @@
 > so real variable-`T` loops like GCD/Collatz break today on the 3-leaf loop-carrier cap):
 > **M-D.e (loop-carrier spill) + widen-PC + typed iteration bounds** must land *together*
 > to compile a real iterative loop; plus reversible **calling convention** (M-D.d2) and
-> **heap** (M-D.c1 widening / c2). **First post-finale increment landed — M-D.b2.f1**
-> (`da9ca8f`): the compiler now **emits `MexchReg`** from a compiled program (a `memexch`
-> primitive over a 2-word resident array, `Bit`-indexed → `run_on_cpu == eval` + closure) —
-> the missing *front-half* of M-D.b, surfaced by the array-map customer in the test-program
-> loop. **f2 = `iter memexch`** (in-memory array map/reduce) is the next M-E artifact. Design
-> docs `docs/scratch/md*.md`, `mdw/mdd/mdc/mdb2/me-design.md`, `tp1-gcd-design.md`; reviews
-> `docs/reviews/` (L21). See [Project status](status.md). The post-v1
+> **heap** (M-D.c1 widening / c2). **Post-finale increments landed — M-D.b2.f1 + f2**
+> (`52704b5`): the compiler now **emits `MexchReg`** from a compiled program (f1: a `memexch`
+> prim over a 2-word resident array → `run_on_cpu == eval` + closure — the missing *front-half*
+> of M-D.b), and **composes it under `iter`** (f2: `arrayMap` maps `g` over the first `k` words,
+> address varying per iteration → a **WCET park-tax histogram** `B=30`, `T(k)=18+4k`, `{40…0}%`,
+> the histogram the test-program loop wanted, via `iter` with a tight numeral `k_max`). Surfaced
+> by the array-map customer. **f3 = the reduce** (parity/XOR expressible today via borrow-swap;
+> arithmetic sum needs value-width → M-D.c). Design docs `docs/scratch/md*.md`,
+> `mdw/mdd/mdc/mdb2/mdb2-f2/me-design.md`, `tp1-gcd-design.md`; reviews `docs/reviews/` (L21).
+> See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
 > shows machine-level adiabatic slope −0.997 crossing below the CMOS floor);
