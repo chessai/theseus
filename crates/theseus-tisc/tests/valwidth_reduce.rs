@@ -250,8 +250,8 @@ fn decompose_output(v: &Value, w: u8) -> (usize, u8, u8, u8, u8, u8) {
 fn t1_emission_parametric_pin() {
     for w in [1u8, 2, 4] {
         let iso = reduce_flat(w, 3);
-        let lowered =
-            compile_with_metadata_resident(&iso, 2).expect(&format!("compile reduce_flat({w}, 3)"));
+        let lowered = compile_with_metadata_resident(&iso, 2)
+            .unwrap_or_else(|_| panic!("compile reduce_flat({w}, 3)"));
 
         // Assert exactly 4 MexchReg and 2 Xor at d=3.
         let mexchr_count = lowered
@@ -558,7 +558,6 @@ fn t6_canonicalization_real_cpu() {
     let w = 2u8;
     let d = 3usize;
     let iso = reduce_flat(w, d);
-    let ty = carrier_ty(w, d);
 
     let samples = vec![
         make_input(2, 3, 1, 1, 2, 3),
