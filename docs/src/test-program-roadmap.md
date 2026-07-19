@@ -86,11 +86,13 @@ Status legend: ✅ done · 🎯 next · ▫ planned (fits) · ⛔ breaks today (
 > resident array; **f2** (`52704b5`) **composes it under `iter`** — `arrayMap` maps `g` over the
 > first `k` words, **address varying per iteration** (the first real MEXCHR-under-load), priced
 > into a **WCET park-tax histogram** (`B=30`, `T(k)=18+4k`, `{40…0}%`, tight numeral `k_max` —
-> the histogram this roadmap wanted, via `iter`, no `Trace` needed). **f3 = the reduce**: a
-> parity/XOR reduce is expressible *today* via the borrow-swap idiom (a non-destructive indexed
-> read — the f2 review overturned "memexch can't reduce"); only an **arithmetic** sum is blocked,
-> by single-leaf value **width** (→ M-D.c), not by memexch. TP-5's lookup-vs-swap subtlety and
-> TP-6/7's Trace-with-mem-body gap remain separate customers.
+> the histogram this roadmap wanted, via `iter`, no `Trace` needed). **f3** (`87c3f7e`) = the
+> XOR/parity **REDUCE** — `acc ⊕= arr[i]` via the borrow-swap idiom (a non-destructive indexed
+> read; the f2 review's "memexch CAN reduce" — confirmed by a probe + built), histogram `B=24,
+> T(k)=12+6k, {50,25,0}%`. The **map+reduce pair** is complete. **Next: f3.5 dot-product**
+> (`acc ⊕= key ∧ arr[i]`) needs a **CCNOT recognizer** (Toffoli-into-acc trips
+> `has_inner_control`); an **arithmetic** sum needs single-leaf value **width** (→ M-D.c). TP-5's
+> lookup-vs-swap subtlety and TP-6/7's Trace-with-mem-body gap remain separate customers.
 
 ---
 

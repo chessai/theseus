@@ -10,19 +10,20 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`52704b5` (**M-D.b2.f2 merged** — a reversible in-memory **array map**: `arrayMap = iter
-Nat_4 [memexch; g; memexch; succ_idx]` maps a bijection `g` over the first `k` resident-array
-words with the `MexchReg` address **varying per iteration** — the first data-dependent
-addressing *under load*. `run_on_cpu == eval` + `SystemRing` closure, and priced by a new
-`rom_program_energy_resident` into a genuine **WCET park-tax histogram** across `k`: `B=30`,
-`T(k)=18+4k`, park tax `{40%,26.7%,13.3%,0}` — *tight* (numeral `k_max`), the histogram the
-test-program roadmap wanted, achieved with `iter` (no `Trace`/M-D.e needed). Built by pure
-composition of f1's `memexch` under `iter` (no new emission machinery; a probe confirmed the
-composition first). Prior: **M-D.b2.f1** (`da9ca8f`) — the compiler *emits* `MexchReg` from a
-compiled program (a `memexch` prim over a 2-word resident array; the missing front-half of
-M-D.b). Both via full L19/L20/L21 discipline (design → Fable design-review → delegate → Fable
-impl-review → advisor-finish/teeth-check → full-suite; reviews `docs/reviews/mdb2-*`). M-E's
-`8c82630` is the prior finale.). Everything below is merged there. Since M4-v1 this branch landed the
+`2e4b5e1` (**M-D.b2 map+reduce pair merged** — the compiler emits `MexchReg` from compiled
+programs and composes it under `iter` for in-memory array processing, all reusing f1's
+`memexch` (no new emission machinery; each preceded by a compile-first probe):
+**f1** (`da9ca8f`) emits `MexchReg` from a `memexch` prim over a 2-word resident array (the
+missing front-half of M-D.b); **f2** (`52704b5`) = a reversible **array MAP** `arrayMap = iter
+Nat_4 [memexch; g; memexch; succ]` mapping `g` over the first `k` words, address **varying per
+iteration** (first data-dependent addressing *under load*), priced into a WCET park-tax
+histogram `B=30, T(k)=18+4k, {40…0}%`; **f3** (`87c3f7e`) = a reversible **XOR/parity REDUCE**
+`acc ⊕= arr[i]` via the borrow-swap idiom (a non-destructive indexed read — overturning
+"memexch can't reduce"; `AssocProd` regroup is free), histogram `B=24, T(k)=12+6k, {50,25,0}%`.
+All `run_on_cpu == eval` (real `system_step`, L19) + `SystemRing` closure + `rom_program_energy_
+resident` pricing; all via full L19/L20/L21 discipline (probe → design → Fable design-review →
+delegate → Fable impl-review → advisor-finish → full-suite; reviews `docs/reviews/mdb2-*`).
+M-E's `8c82630` is the prior finale.). Everything below is merged there. Since M4-v1 this branch landed the
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
 thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU
