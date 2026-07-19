@@ -340,7 +340,10 @@ fn cardinality_u64(ty: &Type) -> u64 {
         Type::One => 1,
         Type::Sum(a, b) => cardinality_u64(a).saturating_add(cardinality_u64(b)),
         Type::Prod(a, b) => cardinality_u64(a).saturating_mul(cardinality_u64(b)),
-        Type::Flat(n) => 1u64 << n,
+        Type::Flat(n) => {
+            debug_assert!(*n <= 8, "Flat({n}): width must be <= 8");
+            1u64 << n
+        }
     }
 }
 

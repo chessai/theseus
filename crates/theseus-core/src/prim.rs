@@ -60,6 +60,7 @@ pub fn enumerate_values(ty: &Type) -> Vec<Value> {
             vals
         }
         Type::Flat(n) => {
+            debug_assert!(*n <= 8, "Flat({n}): width must be <= 8");
             let card = 1usize << n;
             (0..card)
                 .map(|k| {

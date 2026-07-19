@@ -1238,13 +1238,34 @@ fn find_constant_1reg(
 /// The index type is taken as `elem_ty` itself for f1 (Bit indexes a 2-word array).
 /// F-4 CHECK: returns Err if the index type has MORE THAN `n` representable values.
 /// The op is an involution, so forward == backward and both names are "memexch" (F-8).
+///
+/// Delegates to `memexch_prim_idx(elem_ty, elem_ty, n)` — index type equals element type.
 pub fn memexch_prim(elem_ty: &Type, n: usize) -> Result<PrimDef, CompileError> {
+    memexch_prim_idx(elem_ty, elem_ty, n)
+}
+
+/// Like `memexch_prim`, but with an explicit `idx_ty` (may differ from `elem_ty`).
+///
+/// Guards:
+/// - elem_ty must be a single-leaf type.
+/// - idx_ty must be a single-leaf type (else the addr byte at offset 1 is corrupt).
+/// - idx_count(idx_ty) <= n.
+/// - n <= MEM_WORDS.
+pub fn memexch_prim_idx(elem_ty: &Type, idx_ty: &Type, n: usize) -> Result<PrimDef, CompileError> {
     // I-6: elem_ty must be a single-leaf type (multi-leaf elements can't match
     // the MexchReg single-register exchange semantics).
     let elem_leaves = num_leaves(elem_ty)?;
     if elem_leaves != 1 {
         return Err(CompileError::UnrecognizedPrim(format!(
-            "memexch_prim: elem_ty must have exactly 1 leaf, got {elem_leaves}"
+            "memexch_prim_idx: elem_ty must have exactly 1 leaf, got {elem_leaves}"
+        )));
+    }
+    // MAJOR-1: idx_ty must also be a single-leaf type — else the body hard-assumes
+    // addr = 1 byte at offset 1; a multi-leaf idx overlaps the arr.
+    let idx_leaves = num_leaves(idx_ty)?;
+    if idx_leaves != 1 {
+        return Err(CompileError::UnrecognizedPrim(format!(
+            "memexch_prim_idx: idx_ty must have exactly 1 leaf, got {idx_leaves}"
         )));
     }
     // I-6: n must fit within MEM_WORDS (the max representable addr byte).
@@ -1254,16 +1275,14 @@ pub fn memexch_prim(elem_ty: &Type, n: usize) -> Result<PrimDef, CompileError> {
             max: MEM_WORDS,
         });
     }
-    // For f1: index type = elem_ty (Bit → 2 values for n=2).
-    let idx_ty = elem_ty.clone();
-    let idx_count = enumerate_values(&idx_ty).len();
+    let idx_count = enumerate_values(idx_ty).len();
     // F-4: every representable index value must be < n (so a % MEM_WORDS == a
     // for all representable a, since n <= MEM_WORDS). The tag byte a encodes
     // the thermometer depth ∈ {0, ..., idx_count-1}, not bounded by idx_count
     // in the general case — the constraint is idx_count <= n.
     if idx_count > n {
         return Err(CompileError::Deferred(format!(
-            "memexch_prim: index type has {idx_count} values but n={n}; \
+            "memexch_prim_idx: index type has {idx_count} values but n={n}; \
              every representable index must be < n"
         )));
     }
