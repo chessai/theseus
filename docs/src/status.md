@@ -1,4 +1,4 @@
-# Project status — where theseus is (2026-07-18)
+# Project status — where theseus is (2026-07-19)
 
 One-paragraph orientation for anyone (human or agent) picking this up. theseus
 is a **reversible-computing compiler + adiabatic-silicon backend**: a total,
@@ -10,7 +10,27 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`2e4b5e1` (**M-D.b2 map+reduce pair merged** — the compiler emits `MexchReg` from compiled
+`2faed16` (**f3.5 `Ccnot` instruction + TP-3 LFSR merged**, atop the M-D.b2 map+reduce pair).
+**f3.5** (`8a8d8ef`) adds the compiler's **first user-facing ISA instruction** — a bit-0
+Toffoli `Ccnot` (opcode `0b1011`) with a `system_step` decoder arm (structural sibling of
+`cswap_instr`: two bit-0 control copies into free s1 bits + one predicate-gated `cccnot_prim`)
+— and uses it for a **masked-XOR reduce** `acc ⊕= key ∧ arr[i]` (target-first recognizer ⇒ no
+Exch plumbing; d=3 *displaced* regime `B=34, T(k)=14+10k`, `run_on_cpu==eval` + `validate()`
+closure). Adding an op to `Op::ALL` enlarges the decoder netlist, so `step_j` (a static
+inventory over the *whole* decoder, present whether or not the op fires) rises for **every**
+program — the **ISA-growth energy tax**: fib's finale moved `6.62e-8 → 7.23e-8 J` (+9.15%; B/T
+codegen unchanged). **TP-3** (`3b4f123`) is a width-4 Galois LFSR (x⁴+x+1) run k_max=5 via
+`iter Nat@6` (`conformance/0026-lfsr.thse`) — the longest-yet iter + lowest-branching body,
+whole-domain oracle + a third (low-branching) park-tax curve (`B=104, T(k)=14+10k`, 0 at k=5).
+Both via full L19/L20/L21 (design → Fable design-review → delegate → Fable impl-review →
+advisor-finish → full-suite; reviews `docs/reviews/{f35,tp3-lfsr}-*`) — the impl-reviews caught
+real evidence-layer defects the maestro verifier passed (f3.5's un-re-pinned ring **and** fib
+energy goldens + a vacuous decoder oracle; TP-3's dropped T(k) pin). Concurrency note:
+**M-D.e loop-carrier spill** was the intended second thread but its minimal test needs a
+`recognize_prim` extension that **collides with f3.5** (adversarially confirmed,
+`docs/reviews/mde-spill-design-review.md`), so it is **deferred** to after f3.5 (its spill
+*mechanism* is verified sound; only the packaging + a recognizer-vocabulary extension remain).
+The prior M-D.b2 map+reduce pair: the compiler emits `MexchReg` from compiled
 programs and composes it under `iter` for in-memory array processing, all reusing f1's
 `memexch` (no new emission machinery; each preceded by a compile-first probe):
 **f1** (`da9ca8f`) emits `MexchReg` from a `memexch` prim over a 2-word resident array (the

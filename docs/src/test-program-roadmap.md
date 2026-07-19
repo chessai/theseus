@@ -42,11 +42,11 @@ figure.
 
 | ID | Program | Stresses | Needs / drives | Status |
 |---|---|---|---|---|
-| TP-0 | `fib` (`iter Nat fibStep`) | iter, spill, memory | — (baseline; M-E artifact) | ✅ compiles; **M-E priced: 6.62e-8 J, park tax 16.67%** |
+| TP-0 | `fib` (`iter Nat fibStep`) | iter, spill, memory | — (baseline; M-E artifact) | ✅ compiles; **M-E priced: now 7.23e-8 J post-Ccnot (was 6.62e-8), park tax 16.67%** |
 | TP-1 | GCD (subtractive Euclid) | `Trace`, sizing wall | **M-D.e + widen-PC + k_max-tighten** | ⛔ Tier-3 (customer; *overdetermined* — TH-1b) |
 | TP-2 | Bounded Collatz | `Trace`, sizing wall | **M-D.e + widen-PC + k_max-tighten** | ⛔ Tier-3 (customer) |
 | ~~TP-1a~~ | ~~orbit-length (LFSR-to-target)~~ | — | — | ❌ **overturned** — not a bijection (converges on one exit state) |
-| TP-3 | LFSR / CRC over K steps | long `iter`, WCET | fits today | ▫ planned |
+| TP-3 | LFSR / CRC over K steps | long `iter`, WCET | fits today | ✅ **MERGED `3b4f123`** — width-4 Galois x⁴+x+1, `iter Nat@6` (k_max=5, the D≥7 ceiling), B=104 T=14+10k, 3rd park-tax curve; `conformance/0026-lfsr.thse` |
 | TP-4 | Sorting network (3–4 elts) | leaf ceiling, alloc, branching | fits today (tight) | ▫ planned |
 | TP-5 | S-box cipher round | `MEXCHR`, bus-quiescence, wide state | fits today? (see card) | ▫ planned — may reveal a lookup-vs-swap gap |
 | TP-6 | Binary search (table in mem) | `Trace`+`MEXCHR` body | **drives Trace-with-mem-body** | ⛔ breaks today (customer) |

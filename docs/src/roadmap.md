@@ -3,9 +3,10 @@
 > **Current status (2026-07-18):** M1, M3a, M3b, **M4-v1**, the **M4-v2
 > ring-machine core** (recirculating CPU + reversible branching, Fibonacci on the
 > ring at 20× area saving, zero-garbage closure), and the **v0.2 software dialect**
-> are all done and merged on `chessai/theseus-v2` (`2e4b5e1`; M-E finale `e444dfb`, the
+> are all done and merged on `chessai/theseus-v2` (`2faed16`; M-E finale `e444dfb`, the
 > M-D.b2 map+reduce pair: f1 MEXCHR-emission `da9ca8f`, f2 array-map `52704b5`, f3 XOR-reduce
-> `87c3f7e`). **The #1 goal — the
+> `87c3f7e`; **f3.5 `Ccnot` first user-facing ISA instruction + masked reduce `8a8d8ef`** —
+> ISA-growth energy tax moved fib to 7.23e-8 J; **TP-3 LFSR `3b4f123`**). **The #1 goal — the
 > surface → TISC-1 ROM compiler — is COMPLETE end to end: `M-A→M-E`.** `.thse` compiles
 > to a ROM the CPU fetches/executes (`run_on_cpu == eval`), all the way to **measured
 > joules** (M-E: the real `fib` ROM = `6.62e-8 J`, WCET park tax 16.67%, honest B-vs-T
@@ -64,8 +65,13 @@
 > → park-tax histogram `B=30, T(k)=18+4k, {40…0}%`); **f3** (`87c3f7e`) = XOR/parity **REDUCE**
 > (`acc ⊕= arr[i]` via the borrow-swap idiom = a non-destructive indexed read; histogram
 > `B=24, T(k)=12+6k, {50,25,0}%`). Both tight (numeral `k_max`), via `iter` (no `Trace`/M-D.e).
-> Surfaced by the array-map customer. **Next: f3.5 dot-product** (needs a CCNOT recognizer —
-> Toffoli-into-acc trips `has_inner_control`) or the **M-D.e cluster**. Design docs
+> Surfaced by the array-map customer. **f3.5 masked reduce DONE** (`8a8d8ef`) via Route β — a new
+> user-facing `Ccnot` instruction (bit-0 Toffoli 0b1011 + decoder arm) rather than the refuted
+> 7-instr carry-trick; target-first ⇒ no Exch plumbing, d=3 displaced `B=34, T(k)=14+10k`; it
+> taxed every program's `step_j` (fib 6.62e-8→7.23e-8 J). **TP-3 LFSR DONE** (`3b4f123`).
+> **Next:** M-D.e loop-carrier spill (deferred — its minimal test needs a `recognize_prim` ext
+> that collided with f3.5; mechanism verified sound), widen-PC, or f3.5 byte-wide accumulate
+> (M-D.c). Design docs
 > `docs/scratch/md*.md`, `mdw/mdd/mdc/mdb2/mdb2-f2/mdb2-f3/me-design.md`; reviews `docs/reviews/` (L21).
 > See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
