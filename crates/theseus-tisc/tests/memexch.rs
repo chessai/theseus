@@ -18,7 +18,7 @@ use theseus_tisc::compile::{
     run_on_cpu_fast_resident, run_on_cpu_resident, unmarshal_resident,
     CompileError,
 };
-use theseus_tisc::types::MEM_WORDS;
+use theseus_tisc::types::{MEM_WORDS, StateVals};
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -87,10 +87,17 @@ fn t2_fast_oracle_whole_domain() {
 #[ignore]
 fn t3_real_cpu_oracle() {
     let iso = memexch_iso();
-    // Sample a subset (first 4 inputs) to keep runtime bounded.
-    for input in full_domain().into_iter().take(4) {
-        let expected = eval_memexch(&input);
-        let got = run_on_cpu_resident(&iso, &input, 2, |iso, v, fuel| {
+    // I-2: sample inputs that INCLUDE addr=1 (not just the first 4 which
+    // are all addr=0 due to left-factor-major enumeration). Take the first
+    // 2 (addr=0) and last 2 (addr=1) to cover both address values.
+    let domain = full_domain();
+    let samples: Vec<_> = domain.iter().take(2)
+        .chain(domain.iter().rev().take(2))
+        .cloned()
+        .collect();
+    for input in &samples {
+        let expected = eval_memexch(input);
+        let got = run_on_cpu_resident(&iso, input, 2, |iso, v, fuel| {
             theseus_eval::eval(iso, v, fuel)
         })
         .expect("run_on_cpu_resident");
@@ -114,8 +121,12 @@ fn t4_system_ring_closure() {
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
     let ring = system_ring(&rom);
 
-    // Check bus_quiescent on the ring with a sample state.
-    let sample = full_domain().into_iter().next().unwrap();
+    // I-2: use a sample with addr=1 (data != arr[1]) so the MexchReg
+    // actually exchanges — not just the all-zeros no-op.
+    // Pick the LAST value in the domain (addr=1, data=1, arr=[1,1]... the
+    // highest thermometer encoding). Fall back to last if domain is small.
+    let domain = full_domain();
+    let sample = domain.last().unwrap().clone();
     let init = marshal_resident(&sample, &memexch_ty(), 2);
     assert!(ring.bus_quiescent(&init), "SystemRing must be bus-quiescent");
 
@@ -237,6 +248,9 @@ fn t5_f4_overwide_index_rejected() {
 }
 
 // ── T6: marshal_resident↔Ctx home property ───────────────────────────
+// I-8: The marshal↔Ctx-home property is satisfied BY CONSTRUCTION: both
+// marshal_resident and Ctx::new_resident call home_of (per I-3, the sole
+// placement function). This roundtrip test confirms the property holds.
 
 #[test]
 fn t6_marshal_unmarshal_roundtrip() {
@@ -252,10 +266,10 @@ fn t6_marshal_unmarshal_roundtrip() {
     }
 }
 
-// ── T5-F6a: resident=MEM_WORDS + exhausting scratch → TooManyLeaves ──
+// ── T5-F6a: head>14 bounds reject (NOT an occ test — see I-1 below) ──
 
 #[test]
-fn t5_f6a_spill_exhaustion() {
+fn t5_f6a_head_exceeds_14_rejected() {
     // Build a program with resident=MEM_WORDS (=4) and enough head leaves
     // to force spill exhaustion. Head leaves > 14 → TooManyLeaves.
     // resident=MEM_WORDS means head leaves = n - MEM_WORDS.
@@ -317,9 +331,15 @@ fn t5_f6b_displacement_disjoint() {
         }
     }
 
-    // Oracle check on a sample.
+    // I-2: Oracle check on samples that INCLUDE addr=1 (the memexch
+    // portion is the rightmost factor; take first 2 + last 2 to cover
+    // both addr values since left-factor-major cycles the rightmost fastest).
     let full_ty = Type::prod(big_ty, memexch_ty());
-    let sample: Vec<_> = enumerate_values(&full_ty).into_iter().take(4).collect();
+    let all_vals = enumerate_values(&full_ty);
+    let sample: Vec<_> = all_vals.iter().take(2)
+        .chain(all_vals.iter().rev().take(2))
+        .cloned()
+        .collect();
     for input in &sample {
         let expected = {
             let mut fuel = 10_000_000u64;
@@ -354,9 +374,13 @@ fn t5_f7_paging_bracket() {
     assert!(has_mexchr, "padded ROM must contain MexchReg");
     assert!(has_xchg, "padded ROM must contain Xchg bracket for paging");
 
-    // Sampled oracle.
+    // I-2: Sampled oracle — include addr=1 (take first 2 + last 2).
     let full_ty = Type::prod(pad_ty, memexch_ty());
-    let sample: Vec<_> = enumerate_values(&full_ty).into_iter().take(4).collect();
+    let all_vals = enumerate_values(&full_ty);
+    let sample: Vec<_> = all_vals.iter().take(2)
+        .chain(all_vals.iter().rev().take(2))
+        .cloned()
+        .collect();
     for input in &sample {
         let expected = {
             let mut fuel = 10_000_000u64;
@@ -417,29 +441,190 @@ fn t7_energy_prices_mexchr_rom() {
     let step_j = step_bd.total_j;
     assert!(step_j > 0.0, "step energy must be > 0");
 
-    // Run trace to find T (marshal with resident).
+    // I-5: Two-path energy check (not a tautology).
+    // Path 1: total_j from rom_trace (dynamic B from actual execution).
     let ty = memexch_ty();
     let init = marshal_resident(&input, &ty, 2);
     let trace = rom_trace(&rom, init, budget);
+    let total_j_trace = trace.steps_b as f64 * step_j;
 
-    let steps_b = trace.steps_b;
-    let steps_t = trace.steps_t;
-    let total_j = steps_b as f64 * step_j;
+    // Path 2: total_j from static WCET budget (compile-time B).
+    let total_j_wcet = budget as f64 * step_j;
 
-    assert!(total_j > 0.0, "total energy must be > 0");
-    // Straight-line: B == T (no loops, park tax 0).
+    assert!(total_j_trace > 0.0, "total energy must be > 0");
+    // Straight-line: dynamic B == static B == T (no loops, park tax 0).
     assert_eq!(
-        steps_b, steps_t,
+        trace.steps_b, budget,
+        "memexch is straight-line: dynamic steps_b must equal static wcet budget"
+    );
+    assert_eq!(
+        trace.steps_b, trace.steps_t,
         "memexch is straight-line: B must equal T"
     );
-    // total == B * step (exact identity).
-    let expected_total = steps_b as f64 * step_j;
-    let rel_err = ((total_j - expected_total) / expected_total).abs();
+    // Cross-check: both paths yield the same total (a real two-path check).
+    let rel_err = ((total_j_trace - total_j_wcet) / total_j_wcet).abs();
     assert!(
         rel_err < 1e-15,
-        "total_j ({:.6e}) != B*step ({:.6e}), rel_err={:.2e}",
-        total_j,
-        expected_total,
+        "total_j from trace ({:.6e}) != wcet*step ({:.6e}), rel_err={:.2e}",
+        total_j_trace,
+        total_j_wcet,
         rel_err
+    );
+}
+
+// ── I-1: occ obligation test — genuine Mem displacement with resident=2 ─
+//
+// With head=14 (all 8 regs + 6 scratch occupied) and resident=2, the
+// allocate_aux free-slot scan pops from the END of the free_slots vec.
+// The mem scan pushes [Mem(3),Mem(2),Mem(1),Mem(0)] so .pop() gives Mem(0)
+// first. WITHOUT the occ seed marking Mem(0),Mem(1) as occupied, the
+// displacement would land on Mem(0), clobbering arr[0] → oracle divergence.
+// WITH the seed, only Mem(2),Mem(3) are free → .pop() gives Mem(2) first.
+//
+// Construction: Times(Plus(swap_on_sum_14, _), Id(arr_2))
+//   - sum_14 = Sum(payload_13, payload_13): 1 tag + 13 payload = 14 head leaves
+//   - Plus with one non-identity arm forces allocate_aux
+//   - Id(arr_2) = the 2 resident leaves at Mem(0),Mem(1)
+
+#[test]
+fn i1_occ_obligation_displacement_disjoint() {
+    // Build a 13-leaf payload type: product of 13 Bits.
+    let mut payload_ty = Type::One;
+    for _ in 0..13 {
+        payload_ty = Type::prod(bit(), payload_ty);
+    }
+
+    // Sum type: 1 tag + 13 payload = 14 head leaves.
+    let sum_ty = Type::sum(payload_ty.clone(), payload_ty.clone());
+
+    // Build a non-identity arm for the Left branch: SwapProd swaps the
+    // first two Bit fields (so is_structural_identity returns false).
+    // The payload is Bit × (Bit × rest) so SwapProd(Bit, Bit × rest)
+    // would swap at the top level — but we need it to be on the payload only.
+    // Use a simple Seq(SwapProd(Bit, remaining), SwapProd(Bit, remaining)) which
+    // composes to identity semantically but is NOT recognized as structural id.
+    // Actually simpler: just use SwapProd on the first two factors.
+    let rest_ty = {
+        let mut t = Type::One;
+        for _ in 0..12 {
+            t = Type::prod(bit(), t);
+        }
+        t
+    };
+    let swap_arm = Iso::SwapProd(bit(), rest_ty);
+    // g arm: identity on the Right payload.
+    let id_arm = Iso::Id(payload_ty.clone());
+    let plus_iso = Iso::Plus(Box::new(swap_arm), Box::new(id_arm));
+
+    // Arr type: 2 Bit leaves (the resident portion).
+    let arr_ty = Type::prod(bit(), Type::prod(bit(), Type::One));
+    let id_arr = Iso::Id(arr_ty.clone());
+
+    // Compose: Times(plus_on_sum14, id_arr) → 14 + 2 = 16 leaves.
+    let composed = Iso::Times(Box::new(plus_iso), Box::new(id_arr));
+
+    // Compile with resident=2 (head=14).
+    let lowered = compile_with_metadata_resident(&composed, 2)
+        .expect("compile branching + resident=2");
+
+    // (a) Any immediate Mexch displacement must have addr >= 2.
+    for instr in &lowered.instrs {
+        if let Instr::Mexch { rd: _, addr } = instr {
+            assert!(
+                *addr >= 2,
+                "I-1: Mexch displacement addr={} < 2, would clobber resident word",
+                addr
+            );
+        }
+    }
+
+    // (b) Whole-domain oracle (on a sample including both Left and Right inputs).
+    let full_ty = Type::prod(sum_ty, arr_ty);
+    let all_vals = enumerate_values(&full_ty);
+    // Sample first 4 + last 4 to cover both sum arms.
+    let sample: Vec<_> = all_vals.iter().take(4)
+        .chain(all_vals.iter().rev().take(4))
+        .cloned()
+        .collect();
+    for input in &sample {
+        let expected = {
+            let mut fuel = 10_000_000u64;
+            theseus_eval::eval(&composed, input.clone(), &mut fuel).expect("eval")
+        };
+        let got = run_on_cpu_fast_resident(&composed, input, 2)
+            .expect("fast oracle");
+        assert_eq!(got, expected, "I-1 oracle mismatch for {input:?}");
+    }
+}
+
+// ── I-4: marshal_resident panics on head>14 with resident>0 ─────────────
+
+#[test]
+#[should_panic(expected = "head leaves")]
+fn i4_marshal_resident_panics_on_aliasing_layout() {
+    // 17-leaf type with resident=2: head = 15 > 14 → would alias.
+    // Today without the guard this round-trip-corrupts; with the guard it panics.
+    let mut ty = Type::One;
+    for _ in 0..17 {
+        ty = Type::prod(bit(), ty);
+    }
+    let val = enumerate_values(&ty).into_iter().next().unwrap();
+    // This must panic (the failing-without-fix witness).
+    let _ = marshal_resident(&val, &ty, 2);
+}
+
+#[test]
+#[should_panic(expected = "head leaves")]
+fn i4_unmarshal_resident_panics_on_aliasing_layout() {
+    let mut ty = Type::One;
+    for _ in 0..17 {
+        ty = Type::prod(bit(), ty);
+    }
+    let state = StateVals {
+        regs: [0; 8],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: [0; 8],
+        mem: [0; MEM_WORDS],
+    };
+    // This must panic.
+    let _ = unmarshal_resident(&state, &ty, 2);
+}
+
+// ── I-6: memexch_prim rejects multi-leaf elem_ty ────────────────────────
+
+#[test]
+fn i6_memexch_prim_rejects_multi_leaf_elem() {
+    // A 2-leaf elem_ty (Bit × Bit) must be rejected.
+    let two_leaf = Type::prod(bit(), Type::prod(bit(), Type::One));
+    let result = memexch_prim(&two_leaf, 2);
+    assert!(
+        result.is_err(),
+        "memexch_prim with 2-leaf elem_ty should be rejected, got Ok"
+    );
+}
+
+#[test]
+fn i6_memexch_prim_rejects_n_over_mem_words() {
+    // n > MEM_WORDS must be rejected.
+    let result = memexch_prim(&bit(), MEM_WORDS + 1);
+    assert!(
+        result.is_err(),
+        "memexch_prim with n={} > MEM_WORDS should be rejected, got Ok",
+        MEM_WORDS + 1
+    );
+}
+
+// ── I-7: compile_with_metadata_resident rejects resident > n ────────────
+
+#[test]
+fn i7_resident_greater_than_n_rejected() {
+    // Iso::Id(Bit) has 1 leaf; resident=2 > 1 → reject (not underflow-panic).
+    let iso = Iso::Id(bit());
+    let result = compile_with_metadata_resident(&iso, 2);
+    assert!(
+        matches!(result, Err(CompileError::TooManyLeaves { .. })),
+        "expected TooManyLeaves for resident > n, got {result:?}"
     );
 }

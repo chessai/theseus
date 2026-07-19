@@ -154,7 +154,11 @@ fn assembler_encode_roundtrip() {
     assert_eq!(decode(0x06B5), None, "I-format pad bit set");
     // R opcode 0b1001 is now MEXCH (M-C2 Layer 1).
     assert_eq!(decode(0xC800), Some(Instr::Mexch { rd: 0, addr: 0 }), "MEXCH r0, m0");
-    assert_eq!(decode(0xD100), None, "reserved R opcode 1010");
+    assert_eq!(
+        decode(0xD100),
+        Some(Instr::MexchReg { rd: 1, ra: 0 }),
+        "R opcode 1010 is now MEXCHR (M-D.b)"
+    );
     assert_eq!(decode(0x5000), None, "reserved I opc 101");
 
     // assemble = per-word encode.
