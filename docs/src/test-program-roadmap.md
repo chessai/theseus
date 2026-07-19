@@ -75,6 +75,19 @@ Status legend: ✅ done · 🎯 next · ▫ planned (fits) · ⛔ breaks today (
 >    program-level park-tax *histogram* (GCD-style) is gated on the whole cluster. The
 >    honest M-E artifact today is fib and the `iter`/`fold` family (tight `k_max`).
 
+> **Second feedback-loop finding (the iter+MEXCHR array-map, `docs/scratch/mdb2-design.md` +
+> `docs/reviews/mdb2-*`).** Picked as a *fits-today* win; grounding it in the code first
+> (L20) overturned that — **the compiler emitted zero `MexchReg`.** M-D.b had shipped the
+> *machine* capability (the CPU executes register-addressed memory exchange + the `SystemRing`
+> closes zero-garbage) but never the *compiler front-half* that emits it. So any program that
+> needs data-dependent addressing from `.thse` — the array-map, **TP-5 S-box**, TP-6/7 —
+> was a Tier-3 customer, not fits-today. The milestone that closes it is **M-D.b2** (compiler-
+> side MEXCHR emission), whose **f1 is now landed** (`da9ca8f`): a `memexch` primitive over a
+> 2-word resident array, `Bit`-indexed → an emitted `MexchReg`, `run_on_cpu == eval` + closure.
+> **f2 = `iter memexch`** (the in-memory array map/reduce) — the second M-E energy artifact and
+> the first *real* driver of MEXCHR under per-iteration load. TP-5's lookup-vs-swap subtlety
+> and TP-6/7's Trace-with-mem-body gap are still separate customers.
+
 ---
 
 ## Tier 1 — fit the pipeline, best M-E artifacts

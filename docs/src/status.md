@@ -10,7 +10,15 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`8c82630` (M-E merged). Everything below is merged there. Since M4-v1 this branch landed the
+`da9ca8f` (**M-D.b2.f1 merged** — the compiler now *emits* `MexchReg` from a compiled
+program: a `memexch` primitive over a 2-word **resident array**, `Bit`-indexed at runtime,
+lowers to a `MexchReg` with `run_on_cpu == eval` + `SystemRing` zero-garbage closure. This
+is the missing *front-half* of M-D.b, which had shipped the ISA + closure but **no codegen
+path** that emits it — a gap surfaced by the test-program feedback loop. Full L19/L20/L21
+discipline: design → Fable design-review (DO-NOT-SHIP → route (i) n=2) → delegate → Fable
+impl-review (emission proven sound) → correction task closing 4 test-teeth/guard blockers →
+advisor teeth-check + full-suite. Reviews: `docs/reviews/mdb2-*`. M-E's `8c82630` is the
+prior finale.). Everything below is merged there. Since M4-v1 this branch landed the
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and — the **current headline
 thread** — the **surface → TISC-1 ROM compiler** (the #1 goal: a simulated CPU

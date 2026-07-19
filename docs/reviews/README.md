@@ -89,7 +89,7 @@ are all "invariant real, nothing notices if it breaks" (L15 / M-D.d F-1 class). 
 the correction task (branch off `maestro/01KXVSZ8XW…`). Tests in `tests/memexch.rs`.
 | # | Finding | Fix / test |
 |---|---|---|
-| I-1 | **BLOCKER** F-6/occ obligation has zero teeth (T5-F6b's `addr≥2` never runs; deleting occ-seed keeps suite green) | new test: a **branching** program, resident=2, head=14, forcing `allocate_aux` to take a Mem zero-slot → assert displacement `Mexch.addr≥2` + oracle; fails without occ-seed |
+| I-1 | **BLOCKER** F-6/occ obligation has zero teeth (T5-F6b's `addr≥2` never runs; deleting occ-seed keeps suite green) | `i1_occ_obligation_displacement_disjoint` (branching `Times(Plus,Id(arr))`, head=14, resident=2). **Advisor teeth-check (L20): neutering the occ seed makes `i1` FAIL** — but via *register aliasing* (`allocate_aux` grabs occupied `r0` → illegal `CSWAP r0,r1,r0`), not the predicted mem-displacement-onto-`Mem(0)`. So the occ seed's *necessity* is teeth-tested; F-6's specific mem-spill-onto-resident sub-case (register aliasing dominates first) is **deferred to f2** as a coverage refinement. |
 | I-2 | **BLOCKER** authoritative real-CPU tier never runs a nonzero address (`enumerate_values` left-major → `take(4)`=addr 0; T4 all-zeros) | T3/T4 + sampled oracles must include `addr=1, d≠arr[1]` |
 | I-3 | **BLOCKER** F-5 half-done: legacy `Ctx::new`/`marshal`/`unmarshal` keep parallel inline layout | refactor them to delegate to `*_resident(…,0)` (make drift unrepresentable) |
 | I-4 | **BLOCKER** `marshal_resident`/`unmarshal_resident` silently alias when `head>14` (pub, no bounds check) | guard `home_of` else-branch (panic/assert `n−resident≤14`) + aliasing regression test |

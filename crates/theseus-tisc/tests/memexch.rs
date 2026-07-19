@@ -472,14 +472,21 @@ fn t7_energy_prices_mexchr_rom() {
     );
 }
 
-// ── I-1: occ obligation test — genuine Mem displacement with resident=2 ─
+// ── I-1: occ obligation test — occ seed is load-bearing at head=14, resident=2 ─
 //
-// With head=14 (all 8 regs + 6 scratch occupied) and resident=2, the
-// allocate_aux free-slot scan pops from the END of the free_slots vec.
-// The mem scan pushes [Mem(3),Mem(2),Mem(1),Mem(0)] so .pop() gives Mem(0)
-// first. WITHOUT the occ seed marking Mem(0),Mem(1) as occupied, the
-// displacement would land on Mem(0), clobbering arr[0] → oracle divergence.
-// WITH the seed, only Mem(2),Mem(3) are free → .pop() gives Mem(2) first.
+// With head=14 (all 8 regs + 6 scratch occupied) and resident=2, the branching
+// `Plus` forces `allocate_aux` to grab an aux zero-source. WITHOUT the occ seed,
+// `allocate_aux` believes every location is free and grabs an OCCUPIED slot.
+//
+// ADVISOR TEETH-CHECK (verified, L20): neutering the occ seed
+// (`OccSet::from_locations(&homes[..0])` in `Ctx::new_resident`) makes THIS test
+// FAIL — but via *register aliasing* (`allocate_aux` reuses the occupied `r0` →
+// `assemble` rejects `CSWAP r0,r1,r0: operands must be pairwise distinct`), which
+// fires BEFORE any memory displacement. So this test proves the occ seed is
+// *necessary*; F-6's specific "a mem spill never lands on a resident word"
+// sub-case (register aliasing dominates first at this size) is a coverage
+// refinement deferred to f2. The `Mexch.addr >= 2` assertion below is therefore a
+// belt-and-braces guard (it holds; it is not the failing edge here).
 //
 // Construction: Times(Plus(swap_on_sum_14, _), Id(arr_2))
 //   - sum_14 = Sum(payload_13, payload_13): 1 tag + 13 payload = 14 head leaves
