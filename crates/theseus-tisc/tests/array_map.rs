@@ -364,28 +364,36 @@ fn t5_varying_address_exact_shape() {
             Instr::Xori { rd: ra1, imm: 1 },
             "copy {pair_idx}: succ must be Xori{{rd={ra1}, imm=1}} after second memexch"
         );
+        // F2-I3: succ is the LAST body instruction — the copy closes with the
+        // skip-block's trailing Swapbr right after it (pins body_len == 4; without
+        // this a lowering that appended body instrs would pass and silently move T(k)).
+        assert!(
+            matches!(instrs[pos2 + 2], Instr::Swapbr { .. }),
+            "copy {pair_idx}: body must be exactly 4 instrs — succ followed by the closing Swapbr, got {:?}",
+            instrs[pos2 + 2]
+        );
+        // data and address registers must differ (MexchReg aliasing is rejected).
+        assert_ne!(rd1, ra1, "copy {pair_idx}: data reg must differ from address reg");
     }
 }
 
-// ── T6: park-tax histogram (exact) via rom_program_energy_resident ───
+// ── T6a: park-tax histogram TRACE (default tier — the M-E measurable, F2-I1) ──
+//
+// The milestone's headline deliverable is the histogram T(k)/park_tax(k). Its
+// measurable half needs only compile→assemble→rom_trace (milliseconds, no netlist,
+// no CharDb), so it lives in the DEFAULT tier — pinning B=30 and T(k)=18+4k against
+// any regression in the unroll spine / body_len / skip semantics. The joule PRICING
+// half is the #[ignore]'d t6b (it needs the ~min spice lowering).
 
 #[test]
-#[ignore]
-fn t6_park_tax_histogram() {
-    use theseus_tisc::energy::{rom_program_energy_resident, rom_trace};
-    use theseus_spice::chardb::rung0_measured;
+fn t6a_trace_histogram() {
+    use theseus_tisc::energy::rom_trace;
 
     let d = 4usize;
     let iso = array_map_iso(d);
-    let db = rung0_measured();
-    let t_ramp = 1e-7;
-
-    // Lower the step net once (expensive).
     let lowered =
         compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
-    let step_iso = theseus_tisc::step::step(&rom);
-    let step_net = theseus_netlist::lower_iso(&step_iso).expect("lower step");
 
     // B = 30 (ROM length for d=4 iter).
     let b = lowered.wcet();
@@ -393,19 +401,14 @@ fn t6_park_tax_histogram() {
 
     // T(k) = 18 + 4k (6-instr skip spine × 3 copies = 18 base; body_len=4 per active copy).
     let expected_t = |k: usize| -> usize { 18 + 4 * k };
-    let expected_park_tax = |k: usize| -> f64 {
-        (b - expected_t(k)) as f64 / b as f64
-    };
-
-    // Price through the API for one representative input per k.
+    let ty = carrier_ty(d);
     let mut park_taxes = Vec::new();
 
     for k in 0..d {
         let input = make_input(k, 0, 0, 1, 0);
-        let ty = carrier_ty(d);
         let init = marshal_resident(&input, &ty, 2);
         let trace = rom_trace(&rom, init, b);
-
+        assert_eq!(trace.steps_b, b, "steps_b must equal B={b}");
         assert_eq!(
             trace.steps_t,
             expected_t(k),
@@ -413,31 +416,10 @@ fn t6_park_tax_histogram() {
             expected_t(k),
             trace.steps_t
         );
-
-        let pe = rom_program_energy_resident(&iso, &input, 2, &db, t_ramp, &step_net)
-            .expect("rom_program_energy_resident");
-
-        assert_eq!(pe.steps_b, b, "steps_b must equal B={b}");
-
-        // Park tax must match expected.
-        let expected_pt = expected_park_tax(k);
-        let diff = (pe.park_tax - expected_pt).abs();
-        assert!(
-            diff < 1e-10,
-            "park_tax(k={k}): expected {expected_pt:.6}, got {:.6}",
-            pe.park_tax
-        );
-        park_taxes.push(pe.park_tax);
-
-        // total_j == B * step_j exact.
-        let total_expected = b as f64 * pe.step_j;
-        assert!(
-            (pe.total_j - total_expected).abs() < 1e-30,
-            "total_j must be B*step_j exactly"
-        );
+        park_taxes.push((b - trace.steps_t) as f64 / b as f64);
     }
 
-    // Park tax must be strictly decreasing: 40% > 26.7% > 13.3% > 0%.
+    // Strictly decreasing: 40% > 26.7% > 13.3% > 0%.
     assert!((park_taxes[0] - 0.4).abs() < 1e-10, "park_tax(0) must be 40%");
     assert!(
         (park_taxes[1] - 8.0 / 30.0).abs() < 1e-10,
@@ -447,10 +429,7 @@ fn t6_park_tax_histogram() {
         (park_taxes[2] - 4.0 / 30.0).abs() < 1e-10,
         "park_tax(2) must be 4/30 ≈ 13.3%"
     );
-    assert!(
-        park_taxes[3].abs() < 1e-10,
-        "park_tax(3) must be 0%"
-    );
+    assert!(park_taxes[3].abs() < 1e-10, "park_tax(3) must be 0%");
     for i in 0..3 {
         assert!(
             park_taxes[i] > park_taxes[i + 1],
@@ -458,6 +437,50 @@ fn t6_park_tax_histogram() {
             park_taxes[i],
             i + 1,
             park_taxes[i + 1]
+        );
+    }
+}
+
+// ── T6b: park-tax histogram PRICING (joules — #[ignore], needs spice) ────
+
+#[test]
+#[ignore]
+fn t6b_park_tax_pricing() {
+    use theseus_tisc::energy::rom_program_energy_resident;
+    use theseus_spice::chardb::rung0_measured;
+
+    let d = 4usize;
+    let iso = array_map_iso(d);
+    let db = rung0_measured();
+    let t_ramp = 1e-7;
+
+    let lowered =
+        compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
+    let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
+    let step_iso = theseus_tisc::step::step(&rom);
+    let step_net = theseus_netlist::lower_iso(&step_iso).expect("lower step");
+
+    let b = lowered.wcet();
+    let expected_t = |k: usize| -> usize { 18 + 4 * k };
+
+    for k in 0..d {
+        let input = make_input(k, 0, 0, 1, 0);
+        let pe = rom_program_energy_resident(&iso, &input, 2, &db, t_ramp, &step_net)
+            .expect("rom_program_energy_resident");
+        assert_eq!(pe.steps_b, b, "steps_b must equal B={b}");
+        assert_eq!(pe.steps_t, expected_t(k), "T(k={k}) must match the trace");
+        assert!(pe.step_j > 0.0, "step_j must be > 0 (a memory-touching ROM is priced)");
+        // total_j == B·step_j is the static-inventory MODEL IDENTITY (F2-I2 — not a
+        // falsifiable cross-check; the genuine two-path energy check is memexch T7).
+        assert!(
+            (pe.total_j - b as f64 * pe.step_j).abs() < 1e-30,
+            "total_j is B·step_j (model identity)"
+        );
+        let expected_pt = (b - expected_t(k)) as f64 / b as f64;
+        assert!(
+            (pe.park_tax - expected_pt).abs() < 1e-10,
+            "park_tax(k={k}): expected {expected_pt:.6}, got {:.6}",
+            pe.park_tax
         );
     }
 }
