@@ -25,6 +25,7 @@ different model from the implementer). "Verdict" is the reviewer's, not the advi
 | M-D.b2.f1 | implementation | SHIP-WITH-FIXES (emission sound; 4 blocking test/guard fixes) | [mdb2-impl-review.md](mdb2-impl-review.md) |
 | M-D.b2.f2 (array map: iter ∘ memexch) | design | SHIP-WITH-FIXES (no blockers; d=4, energy-API + reduce-finding fixes) | [mdb2-f2-design-review.md](mdb2-f2-design-review.md) |
 | M-D.b2.f2 | implementation | SHIP-WITH-FIXES (program traced sound; 1 blocking test-split F2-I1) | [mdb2-f2-impl-review.md](mdb2-f2-impl-review.md) |
+| M-D.b2.f3 (XOR/parity reduce) | design | SHIP-WITH-FIXES (no blockers; 5 doc/test minors, counts recomputed=probe) | [mdb2-f3-design-review.md](mdb2-f3-design-review.md) |
 
 > **Recovered retroactively.** These reviews predate L21; they were folded into the
 > design docs + tests at the time but not committed as records. Captured here from the
@@ -125,6 +126,19 @@ g² (k>n) and d=5-displaced-idx both have default-tier whole-domain oracles. Fix
 | F2-I3 | MINOR T5 didn't pin succ-is-LAST / body_len=4 | `t5` adds `assert!(matches!(instrs[pos2+2], Swapbr))` + `assert_ne!(rd,ra)` |
 | F2-I4 | MINOR (doc) T-F2-7 "fails if F-4 regresses" overstated (idx is Bit) | design §7 line corrected (occ-seed/pop-order only; F-4 stays f1 T5-F4) |
 | — | CONFIRMED CLOSED | program==design (traced); T2 k=3 + T-F2-7 d=5 real oracles; T3 idx=1 nonzero (no I-2); f1 T7 reroute strengthened (real two-path) |
+
+### M-D.b2.f3 DESIGN review (XOR/parity reduce, F3-1…F3-5)
+No blockers/majors — the reviewer recomputed the d=3/d=4 instruction counts (24/56) = the probe
+exactly, confirming reduceStep data-preservation, the free Assoc regroup, displaced-idx
+stability, XOR-twice cancellation. Fixes folded into `docs/scratch/mdb2-f3-design.md`; tests
+land with impl (§7) in a new `tests/` file.
+| # | Finding | Fix / test |
+|---|---|---|
+| F3-1 | MINOR garbled T5 hides the Xor-direction trap (physical `Xor{rd:data,rs:acc}` — leading Exch swaps first) | T5 pins exact 6-slice `[MexchReg, Exch{a,d}, Xor{rd:d,rs:a}, Exch{a,d}, MexchReg, Xori{ra}]` + closing Swapbr + rd≠ra |
+| F3-2 | MINOR (doc) §6 "xor aliasing reject applies" false (no such reject; unreachable via injective homes) | §6 corrected; not-tested (unreachable) |
+| F3-3 | MINOR T4 never starts idx0=1 — the only oracle-blind (idx0-ignoring) error class | T4 adds `idx0=1,k=1 ⇒ acc0⊕arr1, idx_out=0` |
+| F3-4 | MINOR T-d4 under-pins the displaced regime | T-d4 asserts instrs.len()==56, wcet==56, 6 MexchReg, 3 Xor |
+| F3-5 | MINOR (scope) f3.5 dot-product NOT clean — Toffoli-into-acc trips has_inner_control | §5 re-scoped (needs CCNOT recognizer / nested control) |
 
 ### Not-tested-by-design exceptions (justified)
 - **Layout-invariant guard** (`homes_in≠homes_out`, compile.rs) — a `debug_assert` in
