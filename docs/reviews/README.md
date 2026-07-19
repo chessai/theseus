@@ -22,6 +22,7 @@ different model from the implementer). "Verdict" is the reviewer's, not the advi
 | M-E | implementation | SHIP-WITH-FIXES | [me-impl-review.md](me-impl-review.md) |
 | TP-1 (reversible GCD formulation) | design | OVERTURNED-IN-PART | [tp1-gcd-review.md](tp1-gcd-review.md) |
 | M-D.b2 (compiler-side MEXCHR emission) | design | DO-NOT-SHIP-as-drawn → revised (route i, n=2) | [mdb2-design-review.md](mdb2-design-review.md) |
+| M-D.b2.f1 | implementation | SHIP-WITH-FIXES (emission sound; 4 blocking test/guard fixes) | [mdb2-impl-review.md](mdb2-impl-review.md) |
 
 > **Recovered retroactively.** These reviews predate L21; they were folded into the
 > design docs + tests at the time but not committed as records. Captured here from the
@@ -81,6 +82,22 @@ Findings folded into `docs/scratch/mdb2-design.md`; tests land with the f1 imple
 | F-8 | MINOR `Sym(memexch)` needs `backward_name="memexch"` | `T5-F8` (`Sym(memexch)` → same `MexchReg`) |
 | F-9 | MINOR need `compile_with_metadata_resident`; assert `resident>0 ⇒ in_leaves==out_leaves` | covered by `T1` (compile entry) + wrapper assert |
 | F-10 | MINOR "constant addr → immediate Mexch" is N/A for f1 (no constant-folding of inputs) | *not-tested* — no such behavior in f1 |
+
+### M-D.b2.f1 IMPLEMENTATION review (I-1…I-8 + a pre-existing red)
+Emission path found SOUND (no `MexchReg`-diverges-from-eval input constructible). Blockers
+are all "invariant real, nothing notices if it breaks" (L15 / M-D.d F-1 class). Fixes land in
+the correction task (branch off `maestro/01KXVSZ8XW…`). Tests in `tests/memexch.rs`.
+| # | Finding | Fix / test |
+|---|---|---|
+| I-1 | **BLOCKER** F-6/occ obligation has zero teeth (T5-F6b's `addr≥2` never runs; deleting occ-seed keeps suite green) | new test: a **branching** program, resident=2, head=14, forcing `allocate_aux` to take a Mem zero-slot → assert displacement `Mexch.addr≥2` + oracle; fails without occ-seed |
+| I-2 | **BLOCKER** authoritative real-CPU tier never runs a nonzero address (`enumerate_values` left-major → `take(4)`=addr 0; T4 all-zeros) | T3/T4 + sampled oracles must include `addr=1, d≠arr[1]` |
+| I-3 | **BLOCKER** F-5 half-done: legacy `Ctx::new`/`marshal`/`unmarshal` keep parallel inline layout | refactor them to delegate to `*_resident(…,0)` (make drift unrepresentable) |
+| I-4 | **BLOCKER** `marshal_resident`/`unmarshal_resident` silently alias when `head>14` (pub, no bounds check) | guard `home_of` else-branch (panic/assert `n−resident≤14`) + aliasing regression test |
+| I-5 | MINOR T7 headline assertion is a tautology (`total_j`==`expected_total` same expr) | compute via `rom_program_energy`; cross-check against `B·step` |
+| I-6 | MINOR `memexch_prim` accepts multi-leaf/degenerate `elem_ty`; F-4 comment wrong | enforce `num_leaves(elem_ty)==1` + `max addr byte < n`; reject tests |
+| I-7 | MINOR `resident > n_leaves` → underflow panic, not clean reject | add `resident≤n` to the reject set + negative test |
+| I-8 | MINOR T6 comment (marshal↔Ctx satisfied by construction); `run_on_cpu_fast_resident` dup loop | comment; optional dedup |
+| PRE-EXISTING | `fib_cpu::assembler_encode_roundtrip` red on base (M-D.b `9279bc0` made 0b1010=MexchReg; scoped gate hid it) | update the stale assertion: `decode(0xD100)==Some(MexchReg{rd:1,ra:0})`; **widen the gate** to include fib_cpu/composite/ring so rot can't recur |
 
 ### Not-tested-by-design exceptions (justified)
 - **Layout-invariant guard** (`homes_in≠homes_out`, compile.rs) — a `debug_assert` in
