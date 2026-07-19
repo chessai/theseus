@@ -248,10 +248,16 @@ fn decompose_output(v: &Value, w: u8) -> (usize, u8, u8, u8, u8, u8) {
 
 #[test]
 fn t1_emission_parametric_pin() {
+    // MAJOR-1: pin that the FULL instruction sequence is identical across widths
+    // (the parametric argument — the ROM is width-independent, == f3's Bit ROM),
+    // and that WCET==24 for every w (not just w=2 via T5).
+    let mut roms: Vec<Vec<Instr>> = Vec::new();
     for w in [1u8, 2, 4] {
         let iso = reduce_flat(w, 3);
         let lowered = compile_with_metadata_resident(&iso, 2)
             .unwrap_or_else(|_| panic!("compile reduce_flat({w}, 3)"));
+        assert_eq!(lowered.wcet(), 24, "w={w}: WCET must be 24 (f3's clean-regime B)");
+        roms.push(lowered.instrs.clone());
 
         // Assert exactly 4 MexchReg and 2 Xor at d=3.
         let mexchr_count = lowered
@@ -337,6 +343,10 @@ fn t1_emission_parametric_pin() {
             );
         }
     }
+    // Cross-w: the full ROM must be byte-identical across widths (width-independent
+    // codegen — the parametric pin the design/review F3 mandated).
+    assert_eq!(roms[0], roms[1], "reduce ROM must be identical for Flat(1) vs Flat(2)");
+    assert_eq!(roms[1], roms[2], "reduce ROM must be identical for Flat(2) vs Flat(4)");
 }
 
 // ── T2: Flat(2) whole-domain, hoist-compiled ────────────────────────
@@ -530,10 +540,15 @@ fn t6_canonicalization_flat2() {
         // Single-step loop
         for _step in 0..budget {
             state = run_rom_fast(&rom, state, 1);
-            // Check that all regs and scratch bytes used by the program are < 2^w.
-            // The body uses at most 5 value leaves; check the first 5 regs and
-            // the scratch slots used for mem (the resident=2 words).
-            for i in 0..5 {
+            // Canonicalization (MAJOR-2): every VALUE byte must stay < 2^w each step.
+            // The value leaves live in regs 0..6 (Nat_3 counter 0-2, acc, data, idx —
+            // all thermometer tags) and the resident Flat(w) words in mem[0..2] — the
+            // latter is MexchReg's byte-wide surface and the whole point of this check
+            // (marshal_resident writes resident leaves to state.mem, NOT scratch, so the
+            // prior scratch[0..2] check was vacuous). regs >= 6 are iter's internal
+            // skip-block aux (e.g. the body-length jump offset) — non-canonical BY DESIGN,
+            // not value bytes, so they are deliberately excluded.
+            for i in 0..6 {
                 assert!(
                     state.regs[i] <= mask,
                     "step canon: reg[{i}]={} > mask={mask}",
@@ -542,9 +557,9 @@ fn t6_canonicalization_flat2() {
             }
             for i in 0..2 {
                 assert!(
-                    state.scratch[i] <= mask,
-                    "step canon: scratch[{i}]={} > mask={mask}",
-                    state.scratch[i]
+                    state.mem[i] <= mask,
+                    "step canon: mem[{i}]={} > mask={mask} (resident Flat word dirtied)",
+                    state.mem[i]
                 );
             }
         }
