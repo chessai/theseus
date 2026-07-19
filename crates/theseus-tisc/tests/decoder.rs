@@ -147,14 +147,16 @@ fn op_samples(op: Op) -> Vec<StateVals> {
             st(regs_b(), r_ins(6, 1, 3, 5)), // r1 = 0x21: taken
         ],
         Op::Ccnot => vec![
-            // rd=4(0x01), rs=1(0xFF), rt=2(0xAA): both controls bit0=1 → r4 ^= 1
+            // rd=4(0x01), rs=1(0xFF), rt=2(0xAA): rs.bit0=1, rt.bit0=0 → no change
             st(regs_a(), r_ins(0b1011, 4, 1, 2)),
             // rd=0(0x00), rs=2(0xAA), rt=3(0x55): rs.bit0=0 → no change
             st(regs_a(), r_ins(0b1011, 0, 2, 3)),
             // rd=7(0xC3), rs=4(0x01), rt=5(0x80): rs.bit0=1, rt.bit0=0 → no change
             st(regs_a(), r_ins(0b1011, 7, 4, 5)),
-            // dense-byte: rd=0(0x10), rs=1(0x21), rt=2(0x32): both bit0=1 → rd ^= 1
+            // dense-byte: rd=0(0x10), rs=1(0x21), rt=2(0x32): rs.bit0=1, rt.bit0=0 → no change
             st(regs_b(), r_ins(0b1011, 0, 1, 2)),
+            // FIRING: rd=0(0x00), rs=3(0x55), rt=4(0x01): both bit0=1 → r0 ^= 1 = 0x01
+            st(regs_a(), r_ins(0b1011, 0, 3, 4)),
         ],
         Op::Xchg => vec![
             st(regs_a(), r_ins(7, 0, 0, 2)),

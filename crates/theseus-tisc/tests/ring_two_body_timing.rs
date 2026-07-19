@@ -48,18 +48,14 @@ fn golden_pin_mexch_rom() {
     // M-D.b's scoped gate ran `--test ring_two_body` but not `ring_two_body_timing`,
     // so this golden staled undetected until the full-suite run around M-D.b2.f1.
     //
-    // NEEDS RE-PIN (f3.5): Adding Op::Ccnot to Op::ALL grows the decode_execute
-    // netlist (one additional predicated instruction). Same class as the MEXCHR
-    // re-pin above. The assertion format strings report the measured values on
-    // failure; the advisor re-pins once validate()==Ok confirms lockstep intact.
-    // Printing measured values for advisor re-pin:
-    eprintln!(
-        "GOLDEN MEASURED: d_pre={} d_mem={} d_post={} delta1={} delta2={} delta_hold={} d_locked={} period={}",
-        t.d_pre, t.d_mem, t.d_post, t.delta1, t.delta2, t.delta_hold, t.d_locked, t.period
-    );
-    assert_eq!(t.d_pre, 2976, "GOLDEN PIN: d_pre={} (expected 2976 — NEEDS RE-PIN after Ccnot)", t.d_pre);
+    // RE-PINNED (f3.5): Adding Op::Ccnot to Op::ALL grows the decode_execute
+    // netlist by one additional predicated instruction (opcode 0b1011, bit-0
+    // Toffoli). Same class as the MEXCHR re-pin above: cpu_pre/cpu_post depth
+    // increases (d_pre 2976→3316, d_locked/period 3304→3644). validate()==Ok
+    // confirms physical lockstep intact.
+    assert_eq!(t.d_pre, 3316, "GOLDEN PIN: d_pre={} (expected 3316)", t.d_pre);
     assert_eq!(t.d_mem, 35, "GOLDEN PIN: d_mem={} (expected 35)", t.d_mem);
-    assert_eq!(t.d_post, 289, "GOLDEN PIN: d_post={} (expected 289 — NEEDS RE-PIN after Ccnot)", t.d_post);
+    assert_eq!(t.d_post, 289, "GOLDEN PIN: d_post={} (expected 289)", t.d_post);
     assert_eq!(t.delta1, 0, "GOLDEN PIN: delta1={} (expected 0)", t.delta1);
     assert_eq!(t.delta2, 1, "GOLDEN PIN: delta2={} (expected 1)", t.delta2);
     assert_eq!(
@@ -68,11 +64,11 @@ fn golden_pin_mexch_rom() {
         t.delta_hold
     );
     assert_eq!(
-        t.d_locked, 3304,
-        "GOLDEN PIN: d_locked={} (expected 3304 — NEEDS RE-PIN after Ccnot)",
+        t.d_locked, 3644,
+        "GOLDEN PIN: d_locked={} (expected 3644)",
         t.d_locked
     );
-    assert_eq!(t.period, 3304, "GOLDEN PIN: period={} (expected 3304 — NEEDS RE-PIN after Ccnot)", t.period);
+    assert_eq!(t.period, 3644, "GOLDEN PIN: period={} (expected 3644)", t.period);
 
     // validate() must pass on the golden ROM
     t.validate().expect("validate() failed on MEXCH golden ROM");

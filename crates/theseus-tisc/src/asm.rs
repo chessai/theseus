@@ -1,7 +1,7 @@
 //! TISC-1 assembler: typed instruction mnemonics → 16-bit ROM words
 //! (tisc-1-spec §3).
 //!
-//! [`Instr`] covers the 14 architected instructions; [`encode`] emits
+//! [`Instr`] covers the 17 architected instructions; [`encode`] emits
 //! the exact bit layout the decoder dispatches on:
 //!
 //! - **R-format** (bit 15 = 1): `[1 | opcode[14:11] | rd[10:8] |

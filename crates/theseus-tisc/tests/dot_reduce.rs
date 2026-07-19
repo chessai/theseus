@@ -324,11 +324,24 @@ fn t5_masked_reduce_fast_oracle() {
         lowered.instrs
     );
 
-    // Verify the Ccnot target is the acc home register.
-    let first_ccnot = lowered.instrs.iter().find(|i| matches!(i, Instr::Ccnot { .. })).unwrap();
-    if let Instr::Ccnot { rd, rs, rt } = first_ccnot {
-        eprintln!("Ccnot: rd(acc)={rd}, rs(key)={rs}, rt(data)={rt}");
-    }
+    // Verify the Ccnot target is the acc home register (Reg 0 for resident=2,
+    // body leaf 0 = acc). All Ccnot instructions must target the same register.
+    let ccnot_rds: Vec<u8> = lowered
+        .instrs
+        .iter()
+        .filter_map(|i| match i {
+            Instr::Ccnot { rd, .. } => Some(*rd),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        ccnot_rds.iter().all(|&r| r == ccnot_rds[0]),
+        "all Ccnot instructions must target the same register (acc home), got {ccnot_rds:?}"
+    );
+    assert_eq!(
+        ccnot_rds[0], 0,
+        "Ccnot rd must be 0 (acc home = body leaf 0 → Reg 0)"
+    );
 
     // Full domain oracle check.
     for input in &domain {
@@ -407,55 +420,47 @@ fn t6a_trace_histogram() {
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
 
     // B = wcet for d=3 iter.
+    // body_len = 4 (MexchReg + Ccnot + MexchReg + Xori; assocs are free leaf-identity).
+    // skip-block overhead per copy = 6 (Addi + Cswap + Swapbr + [body] + Swapbr + Cswap + Subi).
+    // copies = d-1 = 2. B = copies * (body_len + overhead) = 2 * (4 + 6) = 20.
     let b = lowered.wcet();
-    eprintln!("dot_reduce d=3: B (WCET) = {b}");
-    // The body has: memexch(1) + reduceStep3(1=Ccnot) + memexch(1) + succ(1) = 4? No —
-    // body_len depends on whether Assoc regroupings compile to anything. The assocs
-    // ARE free (leaf-identity). So body_len = MexchReg + Ccnot + MexchReg + Xori = 4? No wait,
-    // the f3 body was 6 because reduceStep = Exch + Xor + Exch = 3 instrs.
-    // Here reduceStep3 = Ccnot = 1 instr. But the regrouping needs assocL/assocR...
-    // Actually the assocs in f3 were free. Here the assocs are also free if they're
-    // just product re-association of leaves. Let me measure and pin.
-    // body_len for dot_reduce: memexch(1) + ccnot(1) + memexch(1) + succ(1) = 4
-    // skip spine per copy = 6 (same as f3: [Swapbr, guard-check, Swapbr, Swapbr, skip, Swapbr]?)
-    // Actually skip spine = body_len + 2 (the guard Swapbr pair)? Let me just measure.
-    // B = 2 * (skip_spine) where skip_spine = body_len + 6? No — for f3:
-    //   B=24, d=3 → copies=2, B/copies=12 per copy, body_len=6, skip=12-6=6.
-    // For dot_reduce: if body_len=4, per copy = 4+6 = 10, B = 2*10 = 20.
-    // But this is just prediction — MEASURE and pin the real value.
+    assert_eq!(b, 20, "B (WCET) must be 20 for dot_reduce d=3");
 
-    // Measure T(k) for all k.
+    // T(k) = copies * overhead + k * body_len = 12 + 4k.
+    // T(0)=12, T(1)=16, T(2)=20=B.
+    let expected_t = |k: usize| -> usize { 12 + 4 * k };
+
     let mut measured_t = Vec::new();
     for k in 0..d {
         let input = make_input(k, 0, 1, 0, 0, 1, 0);
         let init = marshal_resident(&input, &ty, 2);
         let trace = rom_trace(&rom, init, b);
         assert_eq!(trace.steps_b, b, "steps_b must equal B={b}");
+        assert_eq!(
+            trace.steps_t,
+            expected_t(k),
+            "T(k={k}) must be {}, got {}",
+            expected_t(k),
+            trace.steps_t
+        );
         measured_t.push(trace.steps_t);
-        eprintln!("dot_reduce d=3: T(k={k}) = {}", trace.steps_t);
     }
 
-    // T(k) must be monotonically non-decreasing and T(d-1) == B (park-tax 0 at k=d-1).
+    // T(d-1) == B (park-tax 0 at max k).
     assert_eq!(
         measured_t[d - 1], b,
         "T(d-1) must equal B (zero park-tax at max k)"
     );
-    for i in 0..d - 1 {
-        assert!(
-            measured_t[i] < measured_t[i + 1],
-            "T(k) must be strictly increasing: T({i})={} >= T({})={}",
-            measured_t[i],
-            i + 1,
-            measured_t[i + 1]
-        );
-    }
 
-    // Park-tax must be strictly decreasing and end at 0.
+    // Park-tax: strictly decreasing, ends at 0.
+    // park_tax(0) = (20-12)/20 = 40%, park_tax(1) = (20-16)/20 = 20%, park_tax(2) = 0%.
     let park_taxes: Vec<f64> = measured_t
         .iter()
         .map(|&t| (b - t) as f64 / b as f64)
         .collect();
-    assert!(park_taxes[d - 1].abs() < 1e-10, "park_tax(d-1) must be 0%");
+    assert!((park_taxes[0] - 0.4).abs() < 1e-10, "park_tax(0) must be 40%");
+    assert!((park_taxes[1] - 0.2).abs() < 1e-10, "park_tax(1) must be 20%");
+    assert!(park_taxes[2].abs() < 1e-10, "park_tax(2) must be 0%");
     for i in 0..d - 1 {
         assert!(
             park_taxes[i] > park_taxes[i + 1],
@@ -501,11 +506,18 @@ fn t6b_energy_pricing() {
 }
 
 // ── T7: SystemRing closure validate()==Ok (#[ignore]) ───────────────
+//
+// Design §7.4 obligation: validate()==Ok WITH Op::Ccnot in Op::ALL.
+// The default-tier ring_two_body_timing::stage2b_lite_timing_certificate
+// already exercises validate() on the full decode_execute netlist (which
+// includes Op::Ccnot via Op::ALL). This test adds a dot-reduce-specific
+// system_step oracle check and an explicit validate() call on the
+// dot-reduce ROM's two_body_timing_certificate.
 
 #[test]
 #[ignore = "SystemRing closure requires full system_step lowering; run via --ignored"]
 fn t7_system_ring_closure() {
-    use theseus_tisc::ring_run::system_ring;
+    use theseus_tisc::ring_run::{system_ring, two_body_timing_certificate};
     use theseus_tisc::types::{decode_system, encode_system};
 
     let d = 3;
@@ -515,6 +527,11 @@ fn t7_system_ring_closure() {
     let lowered = compile_with_metadata_resident(&iso, 2).expect("compile dot_reduce d=3");
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
     let ring = system_ring(&rom);
+
+    // §7.4: validate()==Ok on the dot-reduce ROM's timing certificate.
+    let cert = two_body_timing_certificate(&rom).expect("no rail skew on dot-reduce ROM");
+    cert.validate()
+        .expect("validate() must pass on dot-reduce ROM (§7.4 closure obligation)");
 
     // Sample with k≥1, key=1, acc≠0.
     let sample = make_input(2, 1, 1, 0, 0, 1, 0);

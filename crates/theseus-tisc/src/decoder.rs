@@ -23,11 +23,11 @@
 //!    state-changing gates carry that predicate as an extra control.
 //!    All routing brackets (crossbars, operand fetch, immediate masks)
 //!    are unconditional and self-cancelling, so when the predicate is
-//!    low the whole instruction is the identity. The 14 predicated
+//!    low the whole instruction is the identity. The 15 predicated
 //!    instructions run in sequence; opcodes are mutually exclusive, so
 //!    at most one fires.
 //!
-//!    **Reserved opcodes** (R 1011–1111 and I 101–111) match no
+//!    **Reserved opcodes** (R 1100–1111 and I 101–111) match no
 //!    predicate, so `decode_execute` is the identity on them at the
 //!    iso level (MEXCH 1001 and MEXCHR 1010 are handled by
 //!    emit/mem/absorb). Source-level ISA totality
@@ -44,8 +44,11 @@
 //!   is CNOT-masked onto s0; the TK adder adds `s0 ⊕ imm`). Same
 //!   convention as `instr::addi`.
 //! - **s1 (scratch 1) holds the predicate bit (bit 0), the Toffoli
-//!   chain intermediates (bits 1–3), and CSWAP's control-bit copy
-//!   (bit 4); it must be 0 on entry** and is restored to 0 on exit.
+//!   chain intermediates (bits 1–3), CSWAP's control-bit copy
+//!   (bit 4), and CCNOT's two control-bit copies (bits 5–6); it must
+//!   be 0 on entry** and is restored to 0 on exit. Note: aliased
+//!   CCNOT (rd==rs or rd==rt) leaves a non-zero s1 residue — a
+//!   bijection but unspecified semantics (the P1 checker rejects it).
 //! - **XCHG** routes the scratch file through a second crossbar, which
 //!   scrambles s1's position, so its gate control is first copied onto
 //!   the (architecturally zero) R-format pad bit IR[0] and removed

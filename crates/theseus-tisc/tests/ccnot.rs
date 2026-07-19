@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use theseus_core::prim::{enumerate_values, PrimDef};
-use theseus_core::{Iso, Type, Value};
+use theseus_core::{Iso, Type};
 
 use theseus_tisc::asm::{decode, encode, AsmError, Instr};
 use theseus_tisc::compile::{
@@ -82,11 +82,12 @@ fn t1_single_ccnot_emission() {
     );
     match lowered.instrs[0] {
         Instr::Ccnot { rd, rs, rt } => {
-            // Target-first: rd is the target (leaf 0), rs/rt are controls (leaf 1, leaf 2).
-            // Verify they're distinct.
-            assert_ne!(rd, rs, "rd must differ from rs");
-            assert_ne!(rd, rt, "rd must differ from rt");
-            assert_ne!(rs, rt, "rs must differ from rt");
+            // Target-first: rd is the target (leaf 0 → Reg 0),
+            // rs/rt are controls (leaf 1 → Reg 1, leaf 2 → Reg 2).
+            // Spec §6 T1: fails if rd/rs/rt permuted.
+            assert_eq!(rd, 0, "rd must be 0 (target = leaf 0 home)");
+            assert_eq!(rs, 1, "rs must be 1 (control1 = leaf 1 home)");
+            assert_eq!(rt, 2, "rt must be 2 (control2 = leaf 2 home)");
         }
         ref other => panic!("expected Ccnot, got {other:?}"),
     }
