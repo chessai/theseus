@@ -113,6 +113,27 @@ synthesis** (B4.2, done): any admitted bijection lowers to a verified k-CSWAP
 network (Miller–Maslov–Dueck; Toffoli-k → CSWAP+ancilla, AND-reduced to stay
 ≤K3).
 
+## Running the pipeline yourself (compile → simulated CPU → histogram / joules)
+
+All under `nix develop` (e.g. `nix develop --command bash -c '<cmd>'`):
+
+- **Array map + XOR reduce, with the WCET park-tax histogram** (compile → `run_on_cpu`
+  vs `eval` → `rom_trace` per `k`):
+  `cargo run -p theseus-tisc --example array_histogram --release`
+  → prints each program's ROM (instr count, `MexchReg` count, WCET `B`), a sample
+  `run_on_cpu == eval` check, and the histogram (`T(k)` + `(B−T)/B` with ASCII bars):
+  map `{40, 26.7, 13.3, 0}%`, reduce `{50, 25, 0}%`.
+- **The energy finale in measured joules** (fib → 24-instr ROM → priced from the
+  committed ngspice char-DB): `cargo run -p theseus-tisc --example rom_energy --release`
+  (the `step(rom)` netlist lowering takes ~2 min).
+- **The machine-level money plot** (energy/step vs power-clock ramp):
+  `cargo run -p theseus-tisc --example cpu_money_plot --release`.
+- **The programs themselves** are built as Core-Π `Iso`s (no surface syntax for resident
+  arrays yet); the builders live in `examples/array_histogram.rs` and the `tests/`
+  (`array_map.rs`, `xor_reduce.rs`). Whole-domain `run_on_cpu == eval` oracles + the
+  real-`system_step` (L19) tiers run via `cargo test -p theseus-tisc [--test <file>]
+  [-- --ignored]`.
+
 ## TISC-1 (the M4-v1 CPU) — `crates/theseus-tisc`
 
 A reversible ISA (ADR-0030): 160-bit State (8×W8 regs + PC + BR + IR16 + 8
