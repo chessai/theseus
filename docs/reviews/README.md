@@ -26,6 +26,7 @@ different model from the implementer). "Verdict" is the reviewer's, not the advi
 | M-D.b2.f2 (array map: iter ∘ memexch) | design | SHIP-WITH-FIXES (no blockers; d=4, energy-API + reduce-finding fixes) | [mdb2-f2-design-review.md](mdb2-f2-design-review.md) |
 | M-D.b2.f2 | implementation | SHIP-WITH-FIXES (program traced sound; 1 blocking test-split F2-I1) | [mdb2-f2-impl-review.md](mdb2-f2-impl-review.md) |
 | M-D.b2.f3 (XOR/parity reduce) | design | SHIP-WITH-FIXES (no blockers; 5 doc/test minors, counts recomputed=probe) | [mdb2-f3-design-review.md](mdb2-f3-design-review.md) |
+| M-D.b2.f3 | implementation | SHIP-WITH-FIXES (test-only; every pinned value recomputed correct; 3 test-polish minors) | [mdb2-f3-impl-review.md](mdb2-f3-impl-review.md) |
 
 > **Recovered retroactively.** These reviews predate L21; they were folded into the
 > design docs + tests at the time but not committed as records. Captured here from the
@@ -139,6 +140,18 @@ land with impl (§7) in a new `tests/` file.
 | F3-3 | MINOR T4 never starts idx0=1 — the only oracle-blind (idx0-ignoring) error class | T4 adds `idx0=1,k=1 ⇒ acc0⊕arr1, idx_out=0` |
 | F3-4 | MINOR T-d4 under-pins the displaced regime | T-d4 asserts instrs.len()==56, wcet==56, 6 MexchReg, 3 Xor |
 | F3-5 | MINOR (scope) f3.5 dot-product NOT clean — Toffoli-into-acc trips has_inner_control | §5 re-scoped (needs CCNOT recognizer / nested control) |
+
+### M-D.b2.f3 IMPLEMENTATION review (test-only) — zero blocking
+Fresh-context Fable recomputed EVERY pinned value (T4 trajectory table, B=24, T(k)=12+6k, park
+{50,25,0}, d=3 4/2, d=4 56/56/6/3) — all correct; the F3-1 Xor-direction pinned right
+(`Xor{rd:data,rs:acc}`); `#[ignore]` = the designed OOM tier; no vacuity. 3 test-polish minors
+fixed advisor-finish in `tests/xor_reduce.rs`:
+| # | Finding | Fix |
+|---|---|---|
+| 1 | T5 derives `a_r` (acc reg) rather than pinning it — T5-alone would accept an acc-untouched slice (closed compositionally by T2/T4) | add `assert_ne!(a_r, ra)` + absolute d=3 pin `(a_r,d_r,ra)==(3,4,5)` |
+| 2 | T3 sample-3 comment self-contradictory ("data=0≠arr[1]=0"); coverage intact via sample 1 | corrected comment |
+| 3 | T4's d=4 XOR-twice block mislabeled "F3-4" (it's design T4/§8.4) | relabel |
+| 4 | (cosmetic) xor_prim backward loop duplicates forward | `backward = forward.clone()` |
 
 ### Not-tested-by-design exceptions (justified)
 - **Layout-invariant guard** (`homes_in≠homes_out`, compile.rs) — a `debug_assert` in
