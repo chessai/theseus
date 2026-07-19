@@ -35,7 +35,7 @@ impl Type {
     /// Convenience constructor for `Flat(n)` — a single-leaf word of width
     /// `n` bits (cardinality `2^n`). Panics if `n` is 0 or > 8.
     pub fn flat(n: u8) -> Self {
-        assert!(n >= 1 && n <= 8, "Flat width must be 1..=8, got {n}");
+        assert!((1..=8).contains(&n), "Flat width must be 1..=8, got {n}");
         Type::Flat(n)
     }
 
