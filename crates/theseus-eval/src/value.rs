@@ -13,6 +13,23 @@ pub fn inhabits(value: &Value, ty: &Type) -> bool {
         (Value::Left(v), Type::Sum(a, _)) => inhabits(v, a),
         (Value::Right(v), Type::Sum(_, b)) => inhabits(v, b),
         (Value::Pair(a, b), Type::Prod(ta, tb)) => inhabits(a, ta) && inhabits(b, tb),
+        (_, Type::Flat(n)) => {
+            // A Flat(n) value is a thermometer Right^k(Left(Unit)) with k < 2^n.
+            let mut count = 0u64;
+            let mut cur = value;
+            loop {
+                match cur {
+                    Value::Left(u) if u.as_ref() == &Value::Unit => {
+                        return count < (1u64 << n);
+                    }
+                    Value::Right(rest) => {
+                        count += 1;
+                        cur = rest;
+                    }
+                    _ => return false,
+                }
+            }
+        }
         _ => false,
     }
 }

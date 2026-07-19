@@ -59,6 +59,19 @@ pub fn enumerate_values(ty: &Type) -> Vec<Value> {
             }
             vals
         }
+        Type::Flat(n) => {
+            let card = 1usize << n;
+            (0..card)
+                .map(|k| {
+                    // Right^k(Left(Unit)) — same thermometer encoding as numeral_ty
+                    let mut v = Value::left(Value::Unit);
+                    for _ in 0..k {
+                        v = Value::right(v);
+                    }
+                    v
+                })
+                .collect()
+        }
     }
 }
 

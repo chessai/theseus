@@ -23,6 +23,7 @@ pub fn cardinality(ty: &Type) -> usize {
         Type::One => 1,
         Type::Sum(a, b) => cardinality(a) + cardinality(b),
         Type::Prod(a, b) => cardinality(a) * cardinality(b),
+        Type::Flat(n) => 1usize << n,
     }
 }
 

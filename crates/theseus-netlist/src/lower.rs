@@ -145,6 +145,7 @@ fn type_is_uninhabited(ty: &Type) -> bool {
         Type::One => false,
         Type::Sum(a, b) => type_is_uninhabited(a) && type_is_uninhabited(b),
         Type::Prod(a, b) => type_is_uninhabited(a) || type_is_uninhabited(b),
+        Type::Flat(_) => false,
     }
 }
 

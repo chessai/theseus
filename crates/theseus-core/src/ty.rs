@@ -16,6 +16,9 @@ pub enum Type {
     Sum(Box<Type>, Box<Type>),
     /// Product type: `a × b`.
     Prod(Box<Type>, Box<Type>),
+    /// Width-parameterized single-leaf word: cardinality `2^n`, `num_leaves = 1`.
+    /// Values reuse the existing thermometer encoding `Right^k(Left(Unit))`.
+    Flat(u8),
 }
 
 impl Type {
@@ -27,6 +30,13 @@ impl Type {
     /// Convenience constructor for `a × b`.
     pub fn prod(a: Type, b: Type) -> Self {
         Type::Prod(Box::new(a), Box::new(b))
+    }
+
+    /// Convenience constructor for `Flat(n)` — a single-leaf word of width
+    /// `n` bits (cardinality `2^n`). Panics if `n` is 0 or > 8.
+    pub fn flat(n: u8) -> Self {
+        assert!(n >= 1 && n <= 8, "Flat width must be 1..=8, got {n}");
+        Type::Flat(n)
     }
 
     /// The unary numeral type with `count` inhabitants:
@@ -66,6 +76,7 @@ impl fmt::Display for Type {
             Type::One => write!(f, "1"),
             Type::Sum(a, b) => write!(f, "({a} + {b})"),
             Type::Prod(a, b) => write!(f, "({a} × {b})"),
+            Type::Flat(n) => write!(f, "Flat({n})"),
         }
     }
 }

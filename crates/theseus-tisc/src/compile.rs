@@ -83,6 +83,15 @@ fn num_leaves(ty: &Type) -> Result<usize, CompileError> {
             let lb = num_leaves(b)?;
             Ok(la + lb)
         }
+        Type::Flat(n) => {
+            if (1..=8).contains(n) {
+                Ok(1)
+            } else {
+                Err(CompileError::Deferred(format!(
+                    "Flat({n}): width must be 1..=8"
+                )))
+            }
+        }
     }
 }
 
@@ -132,6 +141,19 @@ fn value_from_leaf_bytes(bytes: &[u8], ty: &Type) -> (Value, usize) {
             let (vb, nb) = value_from_leaf_bytes(&bytes[na..], b);
             (Value::pair(va, vb), na + nb)
         }
+        Type::Flat(n) => {
+            let byte = bytes[0];
+            assert!(
+                (byte as u64) < (1u64 << n),
+                "value_from_leaf_bytes: byte {byte} out of range for Flat({n})"
+            );
+            // Build Right^byte(Left(Unit))
+            let mut v = Value::left(Value::Unit);
+            for _ in 0..byte {
+                v = Value::right(v);
+            }
+            (v, 1)
+        }
     }
 }
 
@@ -170,6 +192,14 @@ fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
             let mut bytes = value_to_leaf_bytes(va, a);
             bytes.extend(value_to_leaf_bytes(vb, b));
             bytes
+        }
+        Type::Flat(n) => {
+            let byte = leaf_value_to_u8(v);
+            assert!(
+                (byte as u64) < (1u64 << n),
+                "value_to_leaf_bytes: byte {byte} out of range for Flat({n})"
+            );
+            vec![byte]
         }
     }
 }

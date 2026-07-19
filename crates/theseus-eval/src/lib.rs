@@ -676,4 +676,90 @@ mod tests {
             run(&iso, v).expect("Distrib should accept all enumerated values");
         }
     }
+
+    // ─── Flat type: inhabits + round-trip tests ────────────────────────
+
+    #[test]
+    fn inhabits_flat_values() {
+        for n in [1u8, 4, 8] {
+            let ty = Type::Flat(n);
+            let card = 1usize << n;
+            // Every thermometer Right^k(Left(Unit)) for k < 2^n inhabits Flat(n).
+            for k in 0..card {
+                let mut v = Value::left(Value::Unit);
+                for _ in 0..k {
+                    v = Value::right(v);
+                }
+                assert!(
+                    inhabits(&v, &ty),
+                    "thermo({k}) should inhabit Flat({n})"
+                );
+            }
+            // One past the end does NOT inhabit.
+            let mut v = Value::left(Value::Unit);
+            for _ in 0..card {
+                v = Value::right(v);
+            }
+            assert!(
+                !inhabits(&v, &ty),
+                "thermo({card}) should NOT inhabit Flat({n})"
+            );
+        }
+    }
+
+    #[test]
+    fn inhabits_flat_rejects_non_thermometer() {
+        let ty = Type::Flat(4);
+        assert!(!inhabits(&Value::Unit, &ty));
+        assert!(!inhabits(&Value::pair(Value::Unit, Value::Unit), &ty));
+    }
+
+    #[test]
+    fn round_trip_flat_xor_prim() {
+        // Build a byte-Xor prim over Flat(4): (a, b) ↦ (a, a^b), self-inverse.
+        let flat4 = Type::Flat(4);
+        let ty = Type::prod(flat4.clone(), flat4.clone());
+        let vals = enumerate(&ty);
+
+        let mut fwd = BTreeMap::new();
+        for v in &vals {
+            let Value::Pair(a, b) = v else { panic!("expected pair") };
+            let a_idx = thermo_idx(a);
+            let b_idx = thermo_idx(b);
+            let out_b = a_idx ^ b_idx;
+            let out = Value::pair(thermo_val(a_idx), thermo_val(out_b));
+            fwd.insert(v.clone(), out);
+        }
+
+        let def = PrimDef {
+            forward_name: "xor".into(),
+            backward_name: "xor".into(),
+            input_ty: ty.clone(),
+            output_ty: ty,
+            forward: fwd.clone(),
+            backward: fwd,
+        };
+        let iso = Iso::Prim(Box::new(def));
+        assert_round_trip(&iso);
+    }
+
+    fn thermo_val(k: usize) -> Value {
+        let mut v = Value::left(Value::Unit);
+        for _ in 0..k {
+            v = Value::right(v);
+        }
+        v
+    }
+
+    fn thermo_idx(v: &Value) -> usize {
+        let mut count = 0usize;
+        let mut cur = v;
+        loop {
+            match cur {
+                Value::Left(_) => return count,
+                Value::Right(rest) => { count += 1; cur = rest; }
+                _ => return count,
+            }
+        }
+    }
 }
