@@ -34,6 +34,10 @@ pub enum CompileError {
     UnrecognizedPrim(String),
     /// Instruction would alias registers (rd == rs).
     AliasedRegisters { instr: String },
+    /// Resident array leaves are not at the expected memory locations.
+    /// The arr leaves must home at [Mem(0), Mem(1), …, Mem(n-1)] in order;
+    /// a composition that shifts them would silently corrupt execution.
+    ResidentMisplaced(String),
 }
 
 impl fmt::Display for CompileError {
@@ -46,6 +50,9 @@ impl fmt::Display for CompileError {
             CompileError::UnrecognizedPrim(msg) => write!(f, "unrecognized prim: {msg}"),
             CompileError::AliasedRegisters { instr } => {
                 write!(f, "aliased registers in {instr}")
+            }
+            CompileError::ResidentMisplaced(msg) => {
+                write!(f, "resident array misplaced: {msg}")
             }
         }
     }
@@ -345,6 +352,28 @@ const LOOP_OVERHEAD: usize = 10;
 /// First spillable scratch index (s0/s1 are decoder-reserved).
 const SCRATCH_SPILL_BASE: u8 = 2;
 
+// ── Placement (sole layout function — F-5) ──────────────────────────
+
+/// The SOLE placement function for leaf→location mapping.
+/// Trailing `resident` leaves [n-resident, n) → Mem(leaf - (n - resident)).
+/// Head leaves [0, n-resident) → Reg(0..8) then Scratch(2..8) by the existing rule.
+/// Marshal, unmarshal, and Ctx MUST all call this — no re-implemented layout (F-5).
+fn home_of(leaf: usize, n_leaves: usize, resident: usize) -> Location {
+    let head = n_leaves - resident;
+    if leaf >= head {
+        // Trailing resident leaf → memory
+        Location::Mem((leaf - head) as u8)
+    } else if leaf < NUM_REGS {
+        Location::Reg(leaf as u8)
+    } else if leaf < 14 {
+        Location::Scratch((leaf - 6) as u8)
+    } else {
+        // This case should not be reachable if bounds are checked,
+        // but for safety map to Mem (will be caught by bounds check).
+        Location::Mem((leaf - 14) as u8)
+    }
+}
+
 // ── Register allocation context ──────────────────────────────────────
 
 /// Maps leaf positions to physical locations (register or scratch word).
@@ -362,17 +391,19 @@ struct Ctx {
 impl Ctx {
     /// Canonical home layout (ADR-0044 §2.1 + ADR-0046 §3.1):
     /// L < 8 → Reg(L); 8 ≤ L < 14 → Scratch(L − 6); 14 ≤ L < 14+N → Mem(L − 14).
+    /// Delegates to `new_resident(n_leaves, 0)` — `home_of` is the sole
+    /// placement function (I-3 / design §8(1)).
     fn new(n_leaves: usize) -> Self {
+        Self::new_resident(n_leaves, 0)
+    }
+
+    /// Resident-aware home layout: trailing `resident` leaves map to Mem,
+    /// head leaves use the existing Reg/Scratch rule. Seeds `occ` from
+    /// homes (F-6: prevents allocate_aux from placing spills on live
+    /// resident words). `resident == 0` reproduces `Ctx::new` bit-for-bit.
+    fn new_resident(n_leaves: usize, resident: usize) -> Self {
         let homes: Vec<Location> = (0..n_leaves)
-            .map(|i| {
-                if i < NUM_REGS {
-                    Location::Reg(i as u8)
-                } else if i < 14 {
-                    Location::Scratch((i - 6) as u8)
-                } else {
-                    Location::Mem((i - 14) as u8)
-                }
-            })
+            .map(|i| home_of(i, n_leaves, resident))
             .collect();
         let occ = OccSet::from_locations(&homes);
         Ctx { homes, occ }
@@ -965,6 +996,70 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
         }
     }
 
+    // ── memexch: (d, a, arr[0..n]) ↦ (arr[a], a, arr[a←d]) ────────────
+    // Fast pre-filter: name == "memexch" and shape is 2 head + n resident leaves.
+    if def.forward_name == "memexch" && n_in >= 3 && n_in == n_out {
+        let n_arr = n_in - 2; // number of array elements
+
+        // F-3: SEMANTIC VERIFY — check every input against memexch semantics.
+        let all_vals = enumerate_values(&def.input_ty);
+        for v in &all_vals {
+            let in_bytes = value_to_leaf_bytes(v, &def.input_ty);
+            let d = in_bytes[0];
+            let a = in_bytes[1];
+            let idx = (a as usize) % MEM_WORDS; // CPU's rule
+
+            // Expected output: (arr[idx], a, arr[idx ← d])
+            let mut exp_bytes = in_bytes.clone();
+            if idx < n_arr {
+                exp_bytes[0] = in_bytes[2 + idx];
+                exp_bytes[2 + idx] = d;
+            } else {
+                // Index outside array — table cannot match memexch semantics
+                return Err(CompileError::UnrecognizedPrim(
+                    "memexch semantic verify: index out of array bounds".into(),
+                ));
+            }
+
+            let Some(out) = def.forward.get(v) else {
+                return Err(CompileError::UnrecognizedPrim(
+                    "memexch semantic verify: missing forward entry".into(),
+                ));
+            };
+            let out_bytes = value_to_leaf_bytes(out, &def.output_ty);
+            if out_bytes != exp_bytes {
+                return Err(CompileError::UnrecognizedPrim(
+                    "memexch semantic verify: table mismatch".into(),
+                ));
+            }
+        }
+
+        // F-2: HOME-LAYOUT GUARD — arr leaves must be at [Mem(0), ..., Mem(n_arr-1)] in order.
+        for j in 0..n_arr {
+            let leaf_idx = 2 + j; // arr leaves start at position 2
+            if leaf_idx >= ctx.homes.len() || ctx.homes[leaf_idx] != Location::Mem(j as u8) {
+                return Err(CompileError::ResidentMisplaced(format!(
+                    "arr leaf {} must be at Mem({}) but is at {:?}",
+                    j,
+                    j,
+                    ctx.homes.get(leaf_idx)
+                )));
+            }
+        }
+
+        // EMIT: page data (leaf 0) and addr (leaf 1) into registers.
+        return with_registers(ctx, &[0, 1], |regs| {
+            let rd = regs[0]; // data register
+            let ra = regs[1]; // address register
+            if rd == ra {
+                return Err(CompileError::AliasedRegisters {
+                    instr: "MEXCHR".into(),
+                });
+            }
+            Ok(vec![Instr::MexchReg { rd, ra }])
+        });
+    }
+
     Err(CompileError::UnrecognizedPrim(format!(
         "prim '{}' not recognized as a TISC-1 pattern",
         def.forward_name
@@ -1087,6 +1182,97 @@ fn find_constant_1reg(
         return Some(k);
     }
     None
+}
+
+// ── memexch primitive generator (M-D.b2) ────────────────────────────
+
+/// Build a `PrimDef` for `memexch(elem_ty, n)`:
+///   (data:elem_ty) × (addr:idx_ty) × Arr[elem_ty; n]
+///     ↔ (data:elem_ty) × (addr:idx_ty) × Arr[elem_ty; n]
+/// Semantics: (d, a, arr) ↦ (arr[a], a, arr[a ← d])
+///
+/// The index type is taken as `elem_ty` itself for f1 (Bit indexes a 2-word array).
+/// F-4 CHECK: returns Err if the index type has MORE THAN `n` representable values.
+/// The op is an involution, so forward == backward and both names are "memexch" (F-8).
+pub fn memexch_prim(elem_ty: &Type, n: usize) -> Result<PrimDef, CompileError> {
+    // I-6: elem_ty must be a single-leaf type (multi-leaf elements can't match
+    // the MexchReg single-register exchange semantics).
+    let elem_leaves = num_leaves(elem_ty)?;
+    if elem_leaves != 1 {
+        return Err(CompileError::UnrecognizedPrim(format!(
+            "memexch_prim: elem_ty must have exactly 1 leaf, got {elem_leaves}"
+        )));
+    }
+    // I-6: n must fit within MEM_WORDS (the max representable addr byte).
+    if n > MEM_WORDS {
+        return Err(CompileError::TooManyLeaves {
+            needed: n,
+            max: MEM_WORDS,
+        });
+    }
+    // For f1: index type = elem_ty (Bit → 2 values for n=2).
+    let idx_ty = elem_ty.clone();
+    let idx_count = enumerate_values(&idx_ty).len();
+    // F-4: every representable index value must be < n (so a % MEM_WORDS == a
+    // for all representable a, since n <= MEM_WORDS). The tag byte a encodes
+    // the thermometer depth ∈ {0, ..., idx_count-1}, not bounded by idx_count
+    // in the general case — the constraint is idx_count <= n.
+    if idx_count > n {
+        return Err(CompileError::Deferred(format!(
+            "memexch_prim: index type has {idx_count} values but n={n}; \
+             every representable index must be < n"
+        )));
+    }
+
+    // Build the carrier type: (elem × idx) × (elem^n)
+    // elem^n = elem × elem × ... × One (right-nested product, n times)
+    let mut arr_ty = Type::One;
+    for _ in (0..n).rev() {
+        arr_ty = Type::prod(elem_ty.clone(), arr_ty);
+    }
+    // Full type: (data × (addr × arr))
+    // Flatten as a product: data × addr × arr[0] × arr[1] × ... × arr[n-1]
+    // which gives num_leaves = 1 + 1 + n leaves (for single-leaf elem_ty).
+    let full_ty = Type::prod(
+        elem_ty.clone(),
+        Type::prod(idx_ty.clone(), arr_ty.clone()),
+    );
+
+    let vals = enumerate_values(&full_ty);
+    let n_leaves = num_leaves(&full_ty)?;
+
+    let mut forward = std::collections::BTreeMap::new();
+
+    for v in &vals {
+        // Decompose into leaf bytes: [data, addr, arr[0], arr[1], ..., arr[n-1]]
+        let bytes = value_to_leaf_bytes(v, &full_ty);
+        debug_assert_eq!(bytes.len(), n_leaves);
+
+        let d = bytes[0];
+        let a = bytes[1];
+        let idx = (a as usize) % n; // always == a since a ∈ {0,..,idx_count-1} and idx_count <= n
+
+        // Output: (arr[idx], a, arr[idx ← d])
+        let mut out_bytes = bytes.clone();
+        out_bytes[0] = bytes[2 + idx]; // data_out = arr[idx]
+        // out_bytes[1] = a (unchanged)
+        out_bytes[2 + idx] = d; // arr[idx] ← d
+
+        let (out_val, _) = value_from_leaf_bytes(&out_bytes, &full_ty);
+        forward.insert(v.clone(), out_val);
+    }
+
+    // Involution: backward == forward (F-8)
+    let backward = forward.clone();
+
+    Ok(PrimDef {
+        forward_name: "memexch".into(),
+        backward_name: "memexch".into(),
+        input_ty: full_ty.clone(),
+        output_ty: full_ty,
+        forward,
+        backward,
+    })
 }
 
 // ── Controlled-op idiom recognition ──────────────────────────────────
@@ -1443,6 +1629,46 @@ pub fn compile_with_metadata(iso: &Iso) -> Result<Lowered, CompileError> {
         });
     }
     let ctx = Ctx::new(n);
+    let mut meta = LowerMeta::default();
+    let (instrs, _final_ctx) = lower(iso, &ctx, &mut meta)?;
+    Ok(Lowered {
+        instrs,
+        forward_skip_total: meta.forward_skip_total,
+        loop_terms: meta.loop_terms,
+    })
+}
+
+/// Compile with a `resident` count: trailing `resident` leaves live in
+/// mem[0..resident]. The head leaves (n - resident) must fit in 14 slots
+/// (8 regs + 6 scratch). `resident == 0` reproduces `compile_with_metadata`.
+pub fn compile_with_metadata_resident(iso: &Iso, resident: usize) -> Result<Lowered, CompileError> {
+    let (in_ty, _out_ty) = theseus_core::type_of(iso).map_err(|e| {
+        CompileError::Deferred(format!("type error: {e:?}"))
+    })?;
+    let n = num_leaves(&in_ty)?;
+    // I-7: Reject: resident > n (would underflow n - resident)
+    if resident > n {
+        return Err(CompileError::TooManyLeaves {
+            needed: resident,
+            max: n,
+        });
+    }
+    // Reject: resident > MEM_WORDS
+    if resident > MEM_WORDS {
+        return Err(CompileError::TooManyLeaves {
+            needed: resident,
+            max: MEM_WORDS,
+        });
+    }
+    // Reject: head leaves > 14
+    let head = n - resident;
+    if head > 14 {
+        return Err(CompileError::TooManyLeaves {
+            needed: head,
+            max: 14,
+        });
+    }
+    let ctx = Ctx::new_resident(n, resident);
     let mut meta = LowerMeta::default();
     let (instrs, _final_ctx) = lower(iso, &ctx, &mut meta)?;
     Ok(Lowered {
@@ -2288,8 +2514,44 @@ fn lower_bare_plus(
 /// to its canonical home: `regs[i]` for i < 8, `scratch[i-6]` for
 /// 8 ≤ i < 14, `mem[i-14]` for 14 ≤ i < 14+MEM_WORDS.
 /// All other state fields are zeroed.
+/// Delegates to `marshal_resident(v, ty, 0)` — `home_of` is the sole
+/// placement function (I-3 / design §8(1)).
 pub fn marshal(v: &Value, ty: &Type) -> StateVals {
+    marshal_resident(v, ty, 0)
+}
+
+/// Unmarshal a `StateVals` back to a `Value`, reading leaf `i` from
+/// its canonical home: `regs[i]` for i < 8, `scratch[i-6]` for
+/// 8 ≤ i < 14, `mem[i-14]` for 14 ≤ i < 14+MEM_WORDS.
+/// Delegates to `unmarshal_resident(s, ty, 0)` — `home_of` is the sole
+/// placement function (I-3 / design §8(1)).
+pub fn unmarshal(s: &StateVals, ty: &Type) -> Value {
+    unmarshal_resident(s, ty, 0)
+}
+
+/// Marshal a `Value` into `StateVals` using `home_of` with a `resident` count.
+/// Trailing `resident` leaves land in mem[0..resident]; head leaves use
+/// Reg/Scratch as usual. `resident == 0` reproduces `marshal` bit-for-bit.
+pub fn marshal_resident(v: &Value, ty: &Type, resident: usize) -> StateVals {
     let bytes = value_to_leaf_bytes(v, ty);
+    let n = bytes.len();
+    // I-4: reject-don't-corrupt — panic if layout would alias resident words.
+    // Only fires when resident > 0 (resident=0 has no collision risk).
+    if resident > 0 {
+        assert!(
+            resident <= MEM_WORDS,
+            "marshal_resident: resident ({resident}) > MEM_WORDS ({MEM_WORDS})"
+        );
+        assert!(
+            resident <= n,
+            "marshal_resident: resident ({resident}) > n_leaves ({n})"
+        );
+        let head = n - resident;
+        assert!(
+            head <= 14,
+            "marshal_resident: head leaves ({head}) > 14 — would alias resident words"
+        );
+    }
     let mut state = StateVals {
         regs: [0; NUM_REGS],
         pc: 0,
@@ -2299,37 +2561,56 @@ pub fn marshal(v: &Value, ty: &Type) -> StateVals {
         mem: [0; MEM_WORDS],
     };
     for (i, &b) in bytes.iter().enumerate() {
-        if i < NUM_REGS {
-            state.regs[i] = b;
-        } else if i < 14 {
-            // Spill: leaf i → scratch[i - 6] (s2..s7, skipping s0/s1).
-            state.scratch[i - 6] = b;
-        } else {
-            // Memory: leaf i → mem[i - 14].
-            state.mem[i - 14] = b;
+        match home_of(i, n, resident) {
+            Location::Reg(r) => state.regs[r as usize] = b,
+            Location::Scratch(s) => state.scratch[s as usize] = b,
+            Location::Mem(a) => state.mem[a as usize] = b,
         }
     }
     state
 }
 
-/// Unmarshal a `StateVals` back to a `Value`, reading leaf `i` from
-/// its canonical home: `regs[i]` for i < 8, `scratch[i-6]` for
-/// 8 ≤ i < 14, `mem[i-14]` for 14 ≤ i < 14+MEM_WORDS.
-pub fn unmarshal(s: &StateVals, ty: &Type) -> Value {
-    let n = num_leaves(ty).expect("unmarshal: num_leaves");
+/// Unmarshal a `StateVals` back to a `Value` using `home_of` with a `resident` count.
+/// `resident == 0` reproduces `unmarshal` bit-for-bit.
+pub fn unmarshal_resident(s: &StateVals, ty: &Type, resident: usize) -> Value {
+    let n = num_leaves(ty).expect("unmarshal_resident: num_leaves");
+    // I-4: reject-don't-corrupt — panic if layout would alias resident words.
+    // Only fires when resident > 0 (resident=0 has no collision risk).
+    if resident > 0 {
+        assert!(
+            resident <= MEM_WORDS,
+            "unmarshal_resident: resident ({resident}) > MEM_WORDS ({MEM_WORDS})"
+        );
+        assert!(
+            resident <= n,
+            "unmarshal_resident: resident ({resident}) > n_leaves ({n})"
+        );
+        let head = n - resident;
+        assert!(
+            head <= 14,
+            "unmarshal_resident: head leaves ({head}) > 14 — would alias resident words"
+        );
+    }
     let bytes: Vec<u8> = (0..n)
-        .map(|i| {
-            if i < NUM_REGS {
-                s.regs[i]
-            } else if i < 14 {
-                s.scratch[i - 6]
-            } else {
-                s.mem[i - 14]
-            }
+        .map(|i| match home_of(i, n, resident) {
+            Location::Reg(r) => s.regs[r as usize],
+            Location::Scratch(sx) => s.scratch[sx as usize],
+            Location::Mem(a) => s.mem[a as usize],
         })
         .collect();
     let (v, _) = value_from_leaf_bytes(&bytes, ty);
     v
+}
+
+/// Public wrapper for `value_to_leaf_bytes` (needed by tests that build
+/// forged PrimDefs via raw leaf-byte manipulation).
+pub fn value_to_leaf_bytes_pub(v: &Value, ty: &Type) -> Vec<u8> {
+    value_to_leaf_bytes(v, ty)
+}
+
+/// Public wrapper for `value_from_leaf_bytes`.
+pub fn value_from_leaf_bytes_pub(bytes: &[u8], ty: &Type) -> (Value, usize) {
+    value_from_leaf_bytes(bytes, ty)
 }
 
 // ── WCET budget + park-at-end convention (M-D.w, ADR-0007 TH-1) ─────
@@ -2574,6 +2855,76 @@ pub fn run_on_cpu_fast(
     }
 
     Ok(unmarshal(&state, &out_ty))
+}
+
+/// Resident-aware real-CPU oracle: compile with `resident`, marshal with
+/// `resident`, run on the real system_step, unmarshal with `resident`.
+/// F-9: asserts `resident > 0 ⇒ num_leaves(in_ty) == num_leaves(out_ty)`.
+pub fn run_on_cpu_resident<E: std::fmt::Debug>(
+    iso: &Iso,
+    input: &Value,
+    resident: usize,
+    eval_fn: impl Fn(&Iso, Value, &mut u64) -> Result<Value, E>,
+) -> Result<Value, CompileError> {
+    let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
+        CompileError::Deferred(format!("type error: {e:?}"))
+    })?;
+    if resident > 0 {
+        let n_in = num_leaves(&in_ty)?;
+        let n_out = num_leaves(&out_ty)?;
+        assert_eq!(
+            n_in, n_out,
+            "run_on_cpu_resident: resident>0 requires num_leaves(in)==num_leaves(out), got {n_in} vs {n_out}"
+        );
+    }
+
+    let lowered = compile_with_metadata_resident(iso, resident)?;
+    let budget = lowered.wcet();
+    let s_max_val = lowered.s_max();
+    let state = marshal_resident(input, &in_ty, resident);
+
+    let final_state = run_rom_on_cpu(&lowered.instrs, state, budget, s_max_val, eval_fn)?;
+
+    Ok(unmarshal_resident(&final_state, &out_ty, resident))
+}
+
+/// Resident-aware fast-sim oracle: compile with `resident`, marshal with
+/// `resident`, run the direct simulator, unmarshal with `resident`.
+pub fn run_on_cpu_fast_resident(
+    iso: &Iso,
+    input: &Value,
+    resident: usize,
+) -> Result<Value, CompileError> {
+    let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
+        CompileError::Deferred(format!("type error: {e:?}"))
+    })?;
+    if resident > 0 {
+        let n_in = num_leaves(&in_ty)?;
+        let n_out = num_leaves(&out_ty)?;
+        assert_eq!(
+            n_in, n_out,
+            "run_on_cpu_fast_resident: resident>0 requires num_leaves(in)==num_leaves(out), got {n_in} vs {n_out}"
+        );
+    }
+
+    let lowered = compile_with_metadata_resident(iso, resident)?;
+    let rom = assemble(&lowered.instrs).map_err(|e| {
+        CompileError::Deferred(format!("assemble failed: {e}"))
+    })?;
+    let budget = lowered.wcet();
+
+    let mut state = marshal_resident(input, &in_ty, resident);
+
+    for _ in 0..budget {
+        let pc = state.pc as usize;
+        let word = if pc < rom.len() { rom[pc] } else { 0 };
+        if let Some(instr) = crate::asm::decode(word) {
+            exec_instr(instr, &mut state);
+        }
+        state.pc = state.pc.wrapping_add(state.br).wrapping_add(1);
+    }
+
+    Ok(unmarshal_resident(&state, &out_ty, resident))
 }
 
 /// Fast-sim helper: run a pre-assembled ROM for an explicit number of steps.
