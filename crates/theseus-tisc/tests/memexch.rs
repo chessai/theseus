@@ -414,12 +414,15 @@ fn t5_f8_sym_memexch() {
     }
 }
 
-// ── T7: rom_program_energy prices MEXCHR-bearing ROM > 0 ─────────────
+// ── T7: rom_program_energy_resident prices MEXCHR-bearing ROM > 0 ────
+//
+// Rerouted through `rom_program_energy_resident` (F2-2) to resolve the
+// I-5 tautology: cross-check total_j from the API vs steps_b × step_j.
 
 #[test]
 #[ignore]
 fn t7_energy_prices_mexchr_rom() {
-    use theseus_tisc::energy::{balanced_energy, rom_trace};
+    use theseus_tisc::energy::{balanced_energy, rom_program_energy_resident};
     use theseus_spice::chardb::rung0_measured;
 
     let iso = memexch_iso();
@@ -427,49 +430,46 @@ fn t7_energy_prices_mexchr_rom() {
     let db = rung0_measured();
     let t_ramp = 1e-7;
 
-    // Compile with resident=2 and get the ROM.
+    // Compile with resident=2 and get the ROM + step net.
     let lowered = compile_with_metadata_resident(&iso, 2).expect("compile");
     let budget = lowered.wcet();
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
 
-    // Lower the CPU-only step net for this ROM.
     let step_iso = theseus_tisc::step::step(&rom);
     let net = theseus_netlist::lower_iso(&step_iso).expect("lower_iso");
 
-    // Price one step.
+    // Path 1: rom_program_energy_resident API (the new entry point).
+    let pe = rom_program_energy_resident(&iso, &input, 2, &db, t_ramp, &net)
+        .expect("rom_program_energy_resident");
+    assert!(pe.total_j > 0.0, "total energy must be > 0");
+    assert!(pe.step_j > 0.0, "step energy must be > 0");
+
+    // Path 2: manual balanced_energy × budget (independent calculation).
     let step_bd = balanced_energy(&net, &db, t_ramp).expect("balanced_energy");
     let step_j = step_bd.total_j;
-    assert!(step_j > 0.0, "step energy must be > 0");
+    let total_j_manual = budget as f64 * step_j;
 
-    // I-5: Two-path energy check (not a tautology).
-    // Path 1: total_j from rom_trace (dynamic B from actual execution).
-    let ty = memexch_ty();
-    let init = marshal_resident(&input, &ty, 2);
-    let trace = rom_trace(&rom, init, budget);
-    let total_j_trace = trace.steps_b as f64 * step_j;
-
-    // Path 2: total_j from static WCET budget (compile-time B).
-    let total_j_wcet = budget as f64 * step_j;
-
-    assert!(total_j_trace > 0.0, "total energy must be > 0");
-    // Straight-line: dynamic B == static B == T (no loops, park tax 0).
-    assert_eq!(
-        trace.steps_b, budget,
-        "memexch is straight-line: dynamic steps_b must equal static wcet budget"
+    // Cross-check: total_j from API == steps_b × step_j (exact).
+    let api_total = pe.steps_b as f64 * pe.step_j;
+    assert!(
+        (pe.total_j - api_total).abs() < 1e-30,
+        "API total_j must equal steps_b * step_j exactly"
     );
-    assert_eq!(
-        trace.steps_b, trace.steps_t,
-        "memexch is straight-line: B must equal T"
-    );
-    // Cross-check: both paths yield the same total (a real two-path check).
-    let rel_err = ((total_j_trace - total_j_wcet) / total_j_wcet).abs();
+
+    // Cross-check: API total matches manual calculation.
+    let rel_err = ((pe.total_j - total_j_manual) / total_j_manual).abs();
     assert!(
         rel_err < 1e-15,
-        "total_j from trace ({:.6e}) != wcet*step ({:.6e}), rel_err={:.2e}",
-        total_j_trace,
-        total_j_wcet,
+        "total_j from API ({:.6e}) != budget*step_j ({:.6e}), rel_err={:.2e}",
+        pe.total_j,
+        total_j_manual,
         rel_err
     );
+
+    // Straight-line: B == T (no loops, park tax 0).
+    assert_eq!(pe.steps_b, budget, "steps_b must equal static wcet budget");
+    assert_eq!(pe.steps_b, pe.steps_t, "memexch is straight-line: B must equal T");
+    assert!(pe.park_tax.abs() < 1e-15, "memexch park_tax must be 0");
 }
 
 // ── I-1: occ obligation test — occ seed is load-bearing at head=14, resident=2 ─

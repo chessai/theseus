@@ -442,6 +442,53 @@ pub fn rom_program_energy(
     })
 }
 
+/// Energy-price a compiled TISC-1 ROM with resident-array marshalling (F2-2).
+///
+/// Mirrors [`rom_program_energy`] but uses `compile_with_metadata_resident`
+/// and `marshal_resident` so the memexch home guard is satisfied for ROMs
+/// that address resident memory words.
+pub fn rom_program_energy_resident(
+    iso: &theseus_core::Iso,
+    input: &theseus_core::Value,
+    resident: usize,
+    db: &CharDb,
+    t_ramp: f64,
+    step_net: &PhasedCellNetlist,
+) -> Result<ProgramEnergy, RomProgramEnergyError> {
+    let lowered = crate::compile::compile_with_metadata_resident(iso, resident)?;
+    let budget = lowered.wcet();
+    let rom = crate::asm::assemble(&lowered.instrs)
+        .map_err(|e| RomProgramEnergyError::Asm(format!("{e}")))?;
+
+    let (in_ty, _out_ty) = theseus_core::type_of(iso)
+        .map_err(|e| RomProgramEnergyError::Type(format!("{e:?}")))?;
+    let init = crate::compile::marshal_resident(input, &in_ty, resident);
+
+    let trace = rom_trace(&rom, init, budget);
+
+    let step_bd = balanced_energy(step_net, db, t_ramp)?;
+    let step_j = step_bd.total_j;
+
+    let steps_b = trace.steps_b;
+    let steps_t = trace.steps_t;
+    let total_j = steps_b as f64 * step_j;
+    let productive_j = steps_t as f64 * step_j;
+    let park_tax = if steps_b > 0 {
+        (steps_b - steps_t) as f64 / steps_b as f64
+    } else {
+        0.0
+    };
+
+    Ok(ProgramEnergy {
+        total_j,
+        productive_j,
+        steps_b,
+        steps_t,
+        park_tax,
+        step_j,
+    })
+}
+
 /// Error type for `rom_program_energy`.
 #[derive(Debug)]
 pub enum RomProgramEnergyError {
