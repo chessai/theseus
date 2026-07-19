@@ -324,8 +324,8 @@ fn t5_masked_reduce_fast_oracle() {
         lowered.instrs
     );
 
-    // Verify the Ccnot target is the acc home register (Reg 0 for resident=2,
-    // body leaf 0 = acc). All Ccnot instructions must target the same register.
+    // Verify the Ccnot target is the acc home register (Reg 3: the Nat_3 counter
+    // occupies Reg 0-2, acc = first payload leaf). All Ccnot must target the same register.
     let ccnot_rds: Vec<u8> = lowered
         .instrs
         .iter()
@@ -339,8 +339,8 @@ fn t5_masked_reduce_fast_oracle() {
         "all Ccnot instructions must target the same register (acc home), got {ccnot_rds:?}"
     );
     assert_eq!(
-        ccnot_rds[0], 0,
-        "Ccnot rd must be 0 (acc home = body leaf 0 → Reg 0)"
+        ccnot_rds[0], 3,
+        "Ccnot rd must be 3 (acc home: Nat_3 counter occupies Reg 0-2, acc = first payload → Reg 3)"
     );
 
     // Full domain oracle check.
@@ -419,16 +419,16 @@ fn t6a_trace_histogram() {
     let lowered = compile_with_metadata_resident(&iso, 2).expect("compile dot_reduce d=3");
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
 
-    // B = wcet for d=3 iter.
-    // body_len = 4 (MexchReg + Ccnot + MexchReg + Xori; assocs are free leaf-identity).
-    // skip-block overhead per copy = 6 (Addi + Cswap + Swapbr + [body] + Swapbr + Cswap + Subi).
-    // copies = d-1 = 2. B = copies * (body_len + overhead) = 2 * (4 + 6) = 20.
+    // B = wcet for d=3 iter. MEASURED (displaced regime, per design F35-6): at d=3 the
+    // Nat_3 counter + payload (acc,key,data,idx,arr0,arr1) leave idx displaced to Mem, so
+    // the body PAGES idx each iteration → body_len = 10 productive instrs (MexchReg +
+    // Ccnot + MexchReg + Xori + idx-displacement paging), not the naive clean-regime 4.
+    // copies = d-1 = 2 → B = 34.
     let b = lowered.wcet();
-    assert_eq!(b, 20, "B (WCET) must be 20 for dot_reduce d=3");
+    assert_eq!(b, 34, "B (WCET) must be 34 for dot_reduce d=3");
 
-    // T(k) = copies * overhead + k * body_len = 12 + 4k.
-    // T(0)=12, T(1)=16, T(2)=20=B.
-    let expected_t = |k: usize| -> usize { 12 + 4 * k };
+    // MEASURED T(k) = 14 + 10k → T(0)=14, T(1)=24, T(2)=34=B (affine, tight numeral k_max).
+    let expected_t = |k: usize| -> usize { 14 + 10 * k };
 
     let mut measured_t = Vec::new();
     for k in 0..d {
@@ -453,13 +453,14 @@ fn t6a_trace_histogram() {
     );
 
     // Park-tax: strictly decreasing, ends at 0.
-    // park_tax(0) = (20-12)/20 = 40%, park_tax(1) = (20-16)/20 = 20%, park_tax(2) = 0%.
+    // park_tax(0) = (34-14)/34 = 20/34 ≈ 58.8%, park_tax(1) = (34-24)/34 = 10/34 ≈ 29.4%,
+    // park_tax(2) = 0%.
     let park_taxes: Vec<f64> = measured_t
         .iter()
         .map(|&t| (b - t) as f64 / b as f64)
         .collect();
-    assert!((park_taxes[0] - 0.4).abs() < 1e-10, "park_tax(0) must be 40%");
-    assert!((park_taxes[1] - 0.2).abs() < 1e-10, "park_tax(1) must be 20%");
+    assert!((park_taxes[0] - 20.0 / 34.0).abs() < 1e-10, "park_tax(0) must be 20/34");
+    assert!((park_taxes[1] - 10.0 / 34.0).abs() < 1e-10, "park_tax(1) must be 10/34");
     assert!(park_taxes[2].abs() < 1e-10, "park_tax(2) must be 0%");
     for i in 0..d - 1 {
         assert!(
