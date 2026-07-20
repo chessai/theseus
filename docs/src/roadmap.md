@@ -73,7 +73,7 @@
 > single-leaf word (cardinality 2^n, `num_leaves=1`) — the foundation for f3.5's byte-wide sequel.
 > `Value` unchanged (thermometer); bare byte-`Xor` `run_on_cpu==eval`. NOTE value-width is a
 > SEPARATE axis from **M-D.c** (which is MEM_WORDS/heap width — this doc previously conflated them).
-> **value-width slice-2 (byte-XOR reduce) DONE** (`ae61941`); **slice-3 Flat(8) `Add` reduce = real numeric sum via `fold` DONE** (`06ecf6b`). **Next (final rung):** byte-parallel `Ccnot` decoder second-buffer (masked accumulate)
+> **VALUE-WIDTH LADDER COMPLETE (slices 1-4):** Type::Flat(n) `30c4415`; byte-XOR reduce `ae61941`; Flat(8) Add reduce (numeric sum via fold) `06ecf6b`; **byte-parallel Ccnot + masked accumulate `250f4f7`** (BR-buffer decoder change; acc^=key&elem via fold, caps Flat(4)). Unlocks GF(2) dot-products/gated-reductions/bit-sliced-crypto/keyed-LFSR/most-of-TP-5. **Next:** M-D.e loop-carrier spill cluster (variable-T loops GCD/Collatz); OR TP-5 S-box; OR widen-PC
 > → byte-parallel `Ccnot` decoder (the full masked accumulate); OR M-D.e loop-carrier spill
 > (deferred — its minimal test needs a `recognize_prim` ext that collided with f3.5; mechanism
 > verified sound); OR widen-PC. Design docs `docs/scratch/{md*,valwidth-flat}.md`; reviews

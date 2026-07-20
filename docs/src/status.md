@@ -10,8 +10,33 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`0d3ca83` (**value-width slices 1–3 merged** — `Type::Flat(n)` foundation `30c4415`, byte-wide XOR
-reduce `ae61941`, and the **Flat(8) `Add` reduce** `06ecf6b`, atop f3.5 + TP-3).
+`979723e` (**the byte-wide value-width ladder is COMPLETE** — slices 1–4: `Type::Flat(n)` foundation
+`30c4415`, byte XOR reduce `ae61941`, Flat(8) `Add` reduce `06ecf6b`, and the **byte-parallel `Ccnot`
++ masked accumulate** `250f4f7`, atop f3.5 + TP-3).
+**Value-width slice-4 (final rung)** lifts `Ccnot` (opcode `0b1011`, redefined — no new opcode) from
+**bit-0** to **byte-parallel** `r[rd] ^= r[rs] & r[rt]` over all 8 bits — a `system_step` **decoder**
+change (the highest-bar work). The crux was that byte-parallel AND needs the target + BOTH control
+bytes colocated, but the decoder pins only two full bytes (r0-slot + `s0`); the Fable design review
+BUILT the fix and settled it: **`BR` (the branch register, canonically 0 outside branches) serves as
+the second operand buffer** via a *content-agnostic swap-fetch* (BR's live value rides through r[rt]'s
+cell and is written back — no `BR=0` assumption; `PC += BR + 1` stays exact). The core is 8 predicated
+`cccnot_prim` gates; the recognizer gained a **target-last** arm (the fold body is `(elem,(key,acc))`);
+`exec_instr` drops the `&1`. This completes the masked accumulate `acc ^= key & arr[i]` — a GF(2)⁸
+bilinear op (8 parallel AND-XOR lanes): the core of GF(2) dot products, gated reductions, GF(2)
+matrix–vector / linear codes, bit-sliced boolean logic, and keyed LFSR/CRC. Verified: dense-byte AND
+on the **real balanced system ring** (`ancillas_restored` + `bus_quiescent`, L19); the Flat(4) masked
+fold whole-domain (69,888) `run_on_cpu==eval` + independent reference + a bit-0-discriminating case
+(`elems=[2],key=2`); `validate()==Ok`; real `system_step`. The masked-accumulate *program* caps at
+Flat(4) (the 3-operand prim table walls at Flat(8), 256³) — the instruction's full 8-bit behavior is
+proven at the dense-byte system-ring tier. Redefining `0b1011` is safe (Bit programs are bit-0-identical
+— `dot_reduce` + 26 targets untouched-and-green; only `t_dense` flips). Another mild ISA-growth energy
+tax: the `0b1011` body grew, so **fib rose `7.23e-8 → 7.3674162103e-8 J` (+1.91%)** (`step_j`
+3.0697567543e-9; much less than f3.5's +9.15% — no new opcode). Both reviews Fable-**built-and-verified**
+(the impl review independently re-ran every authority tier: system-ring, real-CPU, both goldens). Reviews
+`docs/reviews/valwidth-ccnot-*`. **The value-width arc is closed: `Flat(n)` words + XOR/Add/masked-AND
+reductions over bytes.** The prior tip `0d3ca83`:
+**value-width slices 1–3 merged** — `Type::Flat(n)` foundation `30c4415`, byte-wide XOR
+reduce `ae61941`, and the **Flat(8) `Add` reduce** `06ecf6b`, atop f3.5 + TP-3.
 **Value-width slice-3** is the first *arithmetic* over the foundation — a real numeric sum
 `acc += arr[i]` over full 8-bit words, `acc_out = (acc0 + Σ elems) mod 256`, carries and all. Where
 slice-2 was byte-wide XOR (bitwise, canonical at every width), Add is **canonical only at Flat(8)**
