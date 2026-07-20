@@ -257,7 +257,7 @@ fn mde_spill_real_cpu() {
 #[test]
 #[ignore = "ring closure test (slow, OOM-sensitive); run via --ignored"]
 fn mde_spill_system_ring_closure() {
-    use theseus_tisc::ring_run::two_body_timing_certificate;
+    use theseus_tisc::ring_run::{system_ring, two_body_timing_certificate};
     use theseus_tisc::types::{decode_system, encode_system};
 
     let (body, u_ty, _carrier) = build_walk_body();
@@ -266,6 +266,7 @@ fn mde_spill_system_ring_closure() {
     let lowered = compile_with_metadata(&iso).expect("compile");
     let rom = assemble(&lowered.instrs).expect("assemble");
     let budget = lowered.wcet();
+    let ring = system_ring(&rom);
 
     // validate()==Ok on the spilled-carrier ROM's timing certificate.
     let cert = two_body_timing_certificate(&rom)
@@ -280,6 +281,13 @@ fn mde_spill_system_ring_closure() {
 
     for v in enumerate_values(&bit) {
         let state = marshal(&v, &in_ty);
+        // Bus-quiescence of the spilled-carrier ROM (M-D.e 5b): the paging
+        // `Xchg` is a CPU-internal reg↔scratch op with no bus leg, so the ring
+        // must be bus-quiescent at the initial state even under the back-edge.
+        assert!(
+            ring.bus_quiescent(&state),
+            "SystemRing must be bus-quiescent on the spilled-carrier ROM (input {v:?})"
+        );
         let mut cur = encode_system(&state);
         let mut fuel = 8_000_000_000u64;
 

@@ -26,6 +26,13 @@
 > - **(F1b) safety rationale:** paging is reversible via the **self-inverse exchange bracket**
 >   (`Xchg spare,s_k; op; Xchg spare,s_k`, net-zero for ANY spare value) — NOT because aux=0;
 >   assert the paging spare is an aux index if relied on (T1).
+>   **(2a amendment, impl-review):** as BUILT, the bracket wraps the WHOLE 13-instruction walk
+>   body in ONE page-in / page-out pair (the recognizer emits all 13 in a single `with_registers`
+>   call), not one bracket per instruction — so the emitted ROM has exactly **2** paging `Xchg`
+>   (at body indices 7 and 21), not 26. The safety condition is correspondingly "spare dead across
+>   the whole body" (holds: spare = ctrl = r7, unread in the window) rather than "dead across one
+>   instruction". Wherever §1/§3 below say "page-in/use/page-out **within** the body" per
+>   instruction, read it as this single whole-body bracket.
 > - **(F2) precedent:** the f3/fold d=4 spill is bracket-inside-repeated-straight-line-code and
 >   does NOT exercise the Trace back-edge; the back-edge safety rests on the skeleton walk +
 >   the spike's real-CPU run (first-of-kind).

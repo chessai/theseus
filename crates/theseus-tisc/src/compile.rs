@@ -399,6 +399,11 @@ fn home_of(leaf: usize, n_leaves: usize, resident: usize) -> Location {
     } else if leaf < NUM_REGS {
         Location::Reg(leaf as u8)
     } else if leaf < 14 {
+        // NOTE (M-D.e 3b): canonical leaf 8 maps here to Scratch(2) =
+        // SCRATCH_SPILL_BASE — the same slot `lower_trace` pages a spilled
+        // loop-carrier leaf to. Unreachable under Trace at MAX_LEAVES_LOOP=4
+        // (would need n_input ≥ 9), but the collision is pinned here at the
+        // producer as well as at the spill site in `lower_trace`.
         Location::Scratch((leaf - 6) as u8)
     } else {
         // This case should not be reachable if bounds are checked,
