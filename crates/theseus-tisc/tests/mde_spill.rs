@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 use theseus_core::prim::{enumerate_values, PrimDef};
-use theseus_core::{Iso, Type, Value};
+use theseus_core::{Iso, Type};
 use theseus_tisc::asm::{assemble, Instr};
 use theseus_tisc::compile::{
     compile, compile_with_metadata, marshal, mde_walk_bytes, run_on_cpu_fast,
@@ -144,9 +144,9 @@ fn mde_spill_emission() {
     // Body region = [ltop+5 .. lend-4).
     let body_start = ltop + 5;
     let body_end = lend - 4;
-    for i in body_start..body_end {
+    for (i, instr) in instrs.iter().enumerate().take(body_end).skip(body_start) {
         assert!(
-            !matches!(instrs[i], Instr::Swapbr { .. }),
+            !matches!(instr, Instr::Swapbr { .. }),
             "walk body must be Swapbr-free (found Swapbr at index {i})"
         );
     }
