@@ -55,8 +55,8 @@
 > [test-program roadmap](test-program-roadmap.md) + ADR-0007 **TH-1b** trajectory-
 > disjointness sizing law: a reversible while-loop's carrier must satisfy `|u| ≥ |input|`,
 > so real variable-`T` loops like GCD/Collatz break today on the 3-leaf loop-carrier cap):
-> **M-D.e (loop-carrier spill) + widen-PC + typed iteration bounds** must land *together*
-> to compile a real iterative loop; plus reversible **calling convention** (M-D.d2) and
+> **M-D.e (loop-carrier spill) [slice-1 DONE, see below] + widen-PC + typed iteration bounds** must
+> land *together* to compile a real iterative loop; plus reversible **calling convention** (M-D.d2) and
 > **heap** (M-D.c1 widening / c2). **Post-finale landed — the M-D.b2 map+reduce pair**
 > (`2e4b5e1`): the compiler **emits `MexchReg`** from a compiled program (f1 `da9ca8f`: a
 > `memexch` prim over a 2-word resident array → `run_on_cpu == eval` + closure — the missing
@@ -73,10 +73,17 @@
 > single-leaf word (cardinality 2^n, `num_leaves=1`) — the foundation for f3.5's byte-wide sequel.
 > `Value` unchanged (thermometer); bare byte-`Xor` `run_on_cpu==eval`. NOTE value-width is a
 > SEPARATE axis from **M-D.c** (which is MEM_WORDS/heap width — this doc previously conflated them).
-> **VALUE-WIDTH LADDER COMPLETE (slices 1-4):** Type::Flat(n) `30c4415`; byte-XOR reduce `ae61941`; Flat(8) Add reduce (numeric sum via fold) `06ecf6b`; **byte-parallel Ccnot + masked accumulate `250f4f7`** (BR-buffer decoder change; acc^=key&elem via fold, caps Flat(4)). Unlocks GF(2) dot-products/gated-reductions/bit-sliced-crypto/keyed-LFSR/most-of-TP-5. **Next:** M-D.e loop-carrier spill cluster (variable-T loops GCD/Collatz); OR TP-5 S-box; OR widen-PC
-> → byte-parallel `Ccnot` decoder (the full masked accumulate); OR M-D.e loop-carrier spill
-> (deferred — its minimal test needs a `recognize_prim` ext that collided with f3.5; mechanism
-> verified sound); OR widen-PC. Design docs `docs/scratch/{md*,valwidth-flat}.md`; reviews
+> **VALUE-WIDTH LADDER COMPLETE (slices 1-4):** Type::Flat(n) `30c4415`; byte-XOR reduce `ae61941`; Flat(8) Add reduce (numeric sum via fold) `06ecf6b`; **byte-parallel Ccnot + masked accumulate `250f4f7`** (BR-buffer decoder change; acc^=key&elem via fold, caps Flat(4)). Unlocks GF(2) dot-products/gated-reductions/bit-sliced-crypto/keyed-LFSR/most-of-TP-5.
+> **M-D.e slice-1 (loop-carrier scratch-spill) DONE** (`7be4a82`+`8f49741`): a reversible `Trace` carries
+> a 4th payload leaf by paging a zero-init padding leaf to `Scratch(2)` across the backward jump —
+> `MAX_LEAVES_LOOP` 3→4, `n_input+1 ≤ budget` guard (live-input spill still rejected), pinned
+> `check_pattern_kleaf`/`mde_spill_walk` recognizer, whole-body paging bracket (2 `Xchg`). Highest-bar
+> `lower_trace` change: full L19/L20/L21, Fable impl-review SHIP, **real `system_step`==eval across 5
+> back-edges with the spilled leaf live** + `validate()==Ok`/eval^R. Machinery-proof (like M-D.d), not
+> yet a useful program. Reviews `docs/reviews/mde-spill-{design-review-r2,impl-review}.md`.
+> **Next:** the rest of the M-D.e cluster — **widen-PC + typed iteration bounds** (unlock useful
+> variable-T loops GCD/Collatz); OR live-input relocation spill (a SEPARATE slice, its own review);
+> OR TP-5 S-box. Design docs `docs/scratch/{md*,valwidth-flat}.md`; reviews
 > `docs/reviews/` (L21).
 > See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and

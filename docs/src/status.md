@@ -1,4 +1,4 @@
-# Project status — where theseus is (2026-07-19)
+# Project status — where theseus is (2026-07-20)
 
 One-paragraph orientation for anyone (human or agent) picking this up. theseus
 is a **reversible-computing compiler + adiabatic-silicon backend**: a total,
@@ -10,7 +10,21 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`979723e` (**the byte-wide value-width ladder is COMPLETE** — slices 1–4: `Type::Flat(n)` foundation
+`8f49741` (**M-D.e slice-1 — loop-carrier scratch-spill — MERGED** `7be4a82`, atop the completed
+byte-wide value-width ladder). A reversible `Trace` (while-loop) can now carry a 4th payload leaf by
+**paging it to scratch across the backward jump**: `MAX_LEAVES_LOOP` 3→4, the loop guard replaced with
+`n_input+1 ≤ carrier_reg_budget(4)` (tag + all *live* input leaves stay register-resident — the sole
+barrier against live-input silent corruption; only a zero-init **padding** leaf may spill), and a pinned
+`check_pattern_kleaf`/`mde_spill_walk` recognizer emitting the 13-instruction walk in ONE `with_registers`
+call → the paging is a **whole-body** page-in/page-out bracket (2 `Xchg`, not per-instruction). A
+`lower_trace` change = the highest bar: full L19/L20/L21 (design → Fable design-review that RE-BUILT the
+spike → delegate → **Fable impl-review (SHIP, no BLOCKER/MAJOR)** → advisor-finish → real-CPU authority),
+reviews `docs/reviews/mde-spill-{design-review-r2,impl-review}.md`. **Authority PASS:** the real
+`system_step` CPU carries the spilled leaf (s2=1 live) across **5 backward jumps** and agrees with eval
+exactly (input 0 = 6 iterations, 4858s), plus `validate()==Ok` + run==eval^R with the ring bus-quiescent.
+This is a **machinery-proof** slice (like M-D.d) — a synthetic walk proving Trace spill *closes*, NOT yet
+a useful program (variable-T loops GCD/Collatz still need widen-PC + typed bounds, separate later slices).
+The prior tip `979723e` (**byte-wide value-width ladder COMPLETE** — slices 1–4: `Type::Flat(n)` foundation
 `30c4415`, byte XOR reduce `ae61941`, Flat(8) `Add` reduce `06ecf6b`, and the **byte-parallel `Ccnot`
 + masked accumulate** `250f4f7`, atop f3.5 + TP-3).
 **Value-width slice-4 (final rung)** lifts `Ccnot` (opcode `0b1011`, redefined — no new opcode) from
@@ -102,11 +116,12 @@ whole-domain oracle + a third (low-branching) park-tax curve (`B=104, T(k)=14+10
 Both via full L19/L20/L21 (design → Fable design-review → delegate → Fable impl-review →
 advisor-finish → full-suite; reviews `docs/reviews/{f35,tp3-lfsr}-*`) — the impl-reviews caught
 real evidence-layer defects the maestro verifier passed (f3.5's un-re-pinned ring **and** fib
-energy goldens + a vacuous decoder oracle; TP-3's dropped T(k) pin). Concurrency note:
-**M-D.e loop-carrier spill** was the intended second thread but its minimal test needs a
-`recognize_prim` extension that **collides with f3.5** (adversarially confirmed,
-`docs/reviews/mde-spill-design-review.md`), so it is **deferred** to after f3.5 (its spill
-*mechanism* is verified sound; only the packaging + a recognizer-vocabulary extension remain).
+energy goldens + a vacuous decoder oracle; TP-3's dropped T(k) pin). Concurrency note (RESOLVED):
+**M-D.e loop-carrier spill** was deferred behind f3.5 because its minimal test needed a
+`recognize_prim` extension that collided with f3.5's; once f3.5 merged the collision was gone and
+**slice-1 is now MERGED** (`7be4a82`+`8f49741`) — the spill mechanism is no longer just "verified
+sound on paper" but proven on the real CPU across the back-edge (see the header + `docs/reviews/
+mde-spill-*`).
 The prior M-D.b2 map+reduce pair: the compiler emits `MexchReg` from compiled
 programs and composes it under `iter` for in-memory array processing, all reusing f1's
 `memexch` (no new emission machinery; each preceded by a compile-first probe):
