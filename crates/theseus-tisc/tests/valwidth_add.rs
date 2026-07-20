@@ -258,6 +258,9 @@ fn t1_emission_pin() {
         .filter(|i| matches!(i, Instr::Add { .. }))
         .count();
     assert_eq!(add_count_d4, 3, "D=4 must have 3 Adds, got {add_count_d4}; ROM: {:?}", lowered_d4.instrs);
+    // D=4 = 31 instrs / wcet 31 (design-review-attested; MINOR-1 full-per-D pin).
+    assert_eq!(lowered_d4.instrs.len(), 31, "D=4 ROM must be 31 instrs; ROM: {:?}", lowered_d4.instrs);
+    assert_eq!(lowered_d4.wcet(), 31, "D=4 WCET must be 31");
 }
 
 // ── T-bare: bare addInto, whole-domain 65536, HOISTED ─────────────────
@@ -505,7 +508,79 @@ fn t_sum_d3_strided() {
         }
     }
 
+    // len-0 (empty) list: sweep ALL 256 acc0 — the inactive-skip path must
+    // preserve acc for every value (acc-dependent-corruption corner, Finding 5).
+    for acc0 in 0u16..256 {
+        let input = sum_fold_input(&[], acc0 as u8, d);
+        let state = marshal(&input, &ty);
+        let final_state = run_rom_fast(&rom, state, budget);
+        let rom_out = unmarshal(&final_state, &ty);
+        let expected_acc = reference_sum(&[], acc0 as u8);
+        let actual_acc = extract_acc(&rom_out, d);
+        assert_eq!(actual_acc, expected_acc, "sumFold D=3 empty-list ref mismatch acc0={acc0}");
+        checked += 1;
+    }
+
     eprintln!("T-sum-D3: checked {checked} inputs (stride={stride})");
+}
+
+// ── T-sum-D4: 3-element chain (D=4), edge cases + strided, HOISTED ─────
+// Finding 8 (MAJOR): D=4 was only compiled/Add-counted, never EXECUTED — a
+// bug confined to the third fold copy would pass every other test. Run it.
+#[test]
+fn t_sum_d4_strided() {
+    let d = 4usize; // lists of length <= 3
+    let iso = sum_fold_iso(d);
+    let ty = sum_fold_ty(d);
+
+    let lowered = compile_with_metadata(&iso).expect("compile sumFold D=4");
+    let rom = assemble(&lowered.instrs).expect("assemble");
+    let budget = lowered.wcet();
+
+    let eval_def = add_prim_def();
+    let eval_iso = Iso::fold(
+        Type::list_spine_ty(Type::Flat(8), d),
+        Iso::Prim(Box::new(eval_def)),
+    );
+
+    let check = |elems: &[u8], acc0: u8, checked: &mut usize| {
+        let input = sum_fold_input(elems, acc0, d);
+        let state = marshal(&input, &ty);
+        let final_state = run_rom_fast(&rom, state, budget);
+        let rom_out = unmarshal(&final_state, &ty);
+        let mut fuel = 100_000_000u64;
+        let eval_out = theseus_eval::eval(&eval_iso, input.clone(), &mut fuel).expect("eval D=4");
+        assert_eq!(rom_out, eval_out, "sumFold D=4: rom vs eval on elems={elems:?}, acc0={acc0}");
+        let expected_acc = reference_sum(elems, acc0);
+        let actual_acc = extract_acc(&rom_out, d);
+        assert_eq!(
+            actual_acc, expected_acc,
+            "sumFold D=4: ref mismatch elems={elems:?}, acc0={acc0}, expected={expected_acc}, got={actual_acc}"
+        );
+        *checked += 1;
+    };
+
+    let mut checked = 0usize;
+    // Mandatory 3-element edge cases (the third-copy chain).
+    check(&[200, 100, 56], 0, &mut checked); // 200+100+56 = 356 → 100
+    check(&[255, 255, 255], 255, &mut checked); // 255*4 = 1020 → 252
+    check(&[0, 0, 0], 0, &mut checked);
+    check(&[], 99, &mut checked); // empty at D=4
+    check(&[7], 3, &mut checked); // len-1
+    check(&[7, 11], 3, &mut checked); // len-2
+    // Coarse stride over (e1,e2,e3,acc0) for length-3 lists: stride 85 → {0,85,170,255}.
+    let stride = 85u16;
+    eprintln!("T-sum-D4: stride={stride}");
+    for e1 in (0u16..256).step_by(stride as usize) {
+        for e2 in (0u16..256).step_by(stride as usize) {
+            for e3 in (0u16..256).step_by(stride as usize) {
+                for acc0 in (0u16..256).step_by(stride as usize) {
+                    check(&[e1 as u8, e2 as u8, e3 as u8], acc0 as u8, &mut checked);
+                }
+            }
+        }
+    }
+    eprintln!("T-sum-D4: checked {checked} inputs (stride={stride})");
 }
 
 // ── T-real: real CPU (#[ignore]) ──────────────────────────────────────
