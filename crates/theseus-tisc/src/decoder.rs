@@ -51,8 +51,9 @@
 //!   and restored afterwards. The swap is content-agnostic — BR's
 //!   entry value rides in r[rt]'s cell for the duration of the core
 //!   and is written back on exit (no BR=0 assumption). Aliased
-//!   CCNOT (rd==rs or rd==rt) produces rd^=BR_entry∧rt — bijective
-//!   but unspecified; `encode` rejects via CcnotNotDistinct.
+//!   CCNOT operand/BR/s0 residues vary by alias case (rd==rt exits
+//!   with BR corrupted; rd==rs leaves an s0 residue) — all bijective,
+//!   unspecified-semantics; `encode` rejects via CcnotNotDistinct.
 //! - **XCHG** routes the scratch file through a second crossbar, which
 //!   scrambles s1's position, so its gate control is first copied onto
 //!   the (architecturally zero) R-format pad bit IR[0] and removed

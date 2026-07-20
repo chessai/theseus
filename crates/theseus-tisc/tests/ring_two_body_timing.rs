@@ -8,7 +8,7 @@
 //! # Assertions
 //!
 //! - F-teeth-1: golden-tuple pin for the MEXCH ROM
-//! - validate() Ok for a handful of ROMs (MEXCH, ADD, SWAPBR)
+//! - validate() Ok for a handful of ROMs (MEXCH, ADD, SWAPBR, CCNOT)
 //! - §F line-audit: input_ty checks on all three bodies
 //!
 //! # One consolidated test (memory-safe)
@@ -92,6 +92,15 @@ fn validate_swapbr_rom() {
         .expect("no rail skew")
         .validate()
         .expect("validate() failed on SWAPBR ROM");
+}
+
+fn validate_ccnot_rom() {
+    // Byte-parallel Ccnot ROM: CCNOT rd=1, rs=2, rt=3
+    let rom = vec![r_ins(0b1011, 1, 2, 3)];
+    two_body_timing_certificate(&rom)
+        .expect("no rail skew")
+        .validate()
+        .expect("validate() failed on CCNOT ROM");
 }
 
 // ── §F line-audit: input_ty checks on all three bodies ─────────────
@@ -276,6 +285,7 @@ fn stage2b_lite_timing_certificate() {
     golden_pin_mexch_rom();
     validate_add_rom();
     validate_swapbr_rom();
+    validate_ccnot_rom();
     line_audit_input_types();
     validate_rejects_mutations();
 }

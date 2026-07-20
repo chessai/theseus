@@ -185,7 +185,7 @@ fn t4_self_inverse() {
     }
 }
 
-// ── T-dense: dense-byte 0xAA/0x55 — Ccnot changes ONLY bit0 ───────
+// ── T-dense: dense-byte 0xAA/0x55 — full-byte AND over all 8 bits ──
 
 #[test]
 fn t_dense_full_byte_and() {
@@ -228,12 +228,8 @@ fn t_dense_full_byte_and() {
         mem: [0; MEM_WORDS],
     };
     let out2 = run_rom_fast(&rom2, state2.clone(), 1);
-    let expected_rd2: u8 = 0x33; // 0x33 ^ (0xAA & 0x44) = 0x33 ^ 0x00
-    assert_eq!(
-        out2.regs[3],
-        expected_rd2,
-        "r3 ^= (0xAA & 0x44) = 0x33 ^ 0x00 = 0x33"
-    );
+    // 0xAA & 0x44 = 0x00, so r3 ^= 0x00 = 0x33; all regs unchanged.
+    assert_eq!(out2.regs, state2.regs, "case 2: all regs unchanged (AND product is 0x00)");
 }
 
 // ── T-neg: 2-leaf xor recognizes as Xor NOT Ccnot ─────────────────

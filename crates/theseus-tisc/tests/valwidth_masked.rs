@@ -5,7 +5,7 @@
 //! T-prog: Flat(4) masked fold, whole-domain (69888 inputs), HOISTED.
 //! T-prog-disc: discriminating case — elems=[2], key=2, proves 4-bit parallel AND.
 //! T-real: real CPU (#[ignore]).
-//! T7: SystemRing validate()==Ok (closure).
+//! T7: SystemRing ancillas_restored + bus_quiescent (closure).
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -368,13 +368,13 @@ fn t_real_cpu() {
     }
 }
 
-// ── T7: SystemRing validate()==Ok (closure) ─────────────────────────
+// ── T7: SystemRing ancillas_restored + bus_quiescent (closure) ──────
 
 #[test]
-fn t7_system_ring_validate() {
+fn t7_system_ring_closure() {
     let ring = ccnot_ring();
 
-    // The ring must close: ancillas restored on a representative state.
+    // The ring must close: ancillas restored + bus quiescent on a representative state.
     let state = StateVals {
         regs: [0x00, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3],
         pc: 0,

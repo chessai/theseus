@@ -1,6 +1,6 @@
 //! Masked-XOR REDUCE tests: `acc ⊕= key ∧ arr[i]` (M-D.b2.f3.5).
 //!
-//! The program uses the Ccnot instruction (bit-0 Toffoli) inside a borrow-swap
+//! The program uses the Ccnot instruction (byte-parallel Toffoli) inside a borrow-swap
 //! loop: memexch loads arr[idx] into data, reduceStep3 applies Ccnot, memexch
 //! restores, succ advances idx.
 //!

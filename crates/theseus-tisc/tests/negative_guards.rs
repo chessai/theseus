@@ -29,7 +29,7 @@ fn decode_mexchr_opcode_1010() {
 
 #[test]
 fn decode_r_format_opcode_1011_is_ccnot() {
-    // R-format opcode 0b1011 is CCNOT (bit-0 Toffoli).
+    // R-format opcode 0b1011 is CCNOT (byte-parallel Toffoli).
     // [1 | 1011 | 000 | 000 | 000 | 00] = 0x8000 | (0b1011 << 11) = 0xD800
     // rd=0, rs=0, rt=0
     assert_eq!(decode(0xD800), Some(Instr::Ccnot { rd: 0, rs: 0, rt: 0 }));
