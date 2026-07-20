@@ -206,9 +206,10 @@ fn t_dense_full_byte_and() {
         mem: [0; MEM_WORDS],
     };
     let out = run_rom_fast(&rom, state.clone(), 1);
+    let expected_rd: u8 = 0xFF; // 0xAA ^ (0x55 & 0xFF)
     assert_eq!(
         out.regs[0],
-        0xAA ^ (0x55 & 0xFF),
+        expected_rd,
         "r0 should be 0xAA ^ (0x55 & 0xFF) = 0xFF (full-byte AND)"
     );
     assert_eq!(out.regs[1], 0x55, "r1 unchanged");
@@ -227,9 +228,10 @@ fn t_dense_full_byte_and() {
         mem: [0; MEM_WORDS],
     };
     let out2 = run_rom_fast(&rom2, state2.clone(), 1);
+    let expected_rd2: u8 = 0x33; // 0x33 ^ (0xAA & 0x44) = 0x33 ^ 0x00
     assert_eq!(
         out2.regs[3],
-        0x33 ^ (0xAA & 0x44),
+        expected_rd2,
         "r3 ^= (0xAA & 0x44) = 0x33 ^ 0x00 = 0x33"
     );
 }
