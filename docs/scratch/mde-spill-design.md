@@ -1,5 +1,49 @@
 # M-D.e slice 1 — loop-carrier scratch-spill (minimal, machinery-proof)
 
+> **Revision r2 — supersedes the r1 specifics below.** The r1 design-review
+> (`docs/reviews/mde-spill-design-review.md`) verified the paging MECHANISM sound (I1-I5)
+> but rejected the r1 minimal-test specifics (F5 allocation, F6 inexpressible body). Both
+> are now RESOLVED and empirically de-risked by a throwaway spike (`docs/scratch/mde-spike/`
+> — the recognizer/cap diff + `spike_mde.rs.ref`), built after the whole value-width ladder
+> merged (so the F6 `recognize_prim` collision with f3.5 is GONE). r2 = r1's verified
+> invariants + the spike's concrete construction + the review's rationale fixes:
+> - **(F5, u-wide) allocation:** carrier `Sum(N5, Bit)` — u = `nat_chain(5)` (a 4-leaf, 5-
+>   inhabitant nat, k_max=6), payload `Bit`; `num_leaves = 5` (tag + max(4,1)). **4 payload
+>   leaves** → with `MAX_LEAVES_LOOP` bumped **3→4**, payload leaf 4 homes in **Scratch(2)**;
+>   NO live-data relocation (the wide u fills the low registers canonically; the spilled leaf
+>   is scratch-homed by `home_of`, marshal zeroes it). The 5-payload case still rejects
+>   (cap-by-one).
+> - **(F6, k-leaf recognizer):** a `check_pattern_kleaf` arm recognizing a pinned linear map
+>   over k=5 carrier leaves — the spike's "thermometer walk" `R0→L4→L3→L2→L1→L0→R1→R0`,
+>   emitted as a **Swapbr-free 13-instruction sequence** (Xor/Xori/Cswap) that TOUCHES ALL
+>   payload leaves incl. the spilled leaf 4. Slots into `recognize_prim` cleanly now (no f3.5
+>   collision). This is the F6 vocabulary extension in minimal (pinned) form — the design
+>   review should decide whether to keep it pinned (test-scaffold, minimal) or make it a
+>   modest k-register-linear-map generalization (more useful, bigger). It is NOT a useful
+>   program (a synthetic walk) — this slice is a MACHINERY-PROOF (like M-D.d), proving Trace
+>   spill closes across the back-edge; useful variable-T loops (GCD/Collatz) need the rest of
+>   the M-D.e cluster (widen-PC + typed bounds).
+> - **(F1b) safety rationale:** paging is reversible via the **self-inverse exchange bracket**
+>   (`Xchg spare,s_k; op; Xchg spare,s_k`, net-zero for ANY spare value) — NOT because aux=0;
+>   assert the paging spare is an aux index if relied on (T1).
+> - **(F2) precedent:** the f3/fold d=4 spill is bracket-inside-repeated-straight-line-code and
+>   does NOT exercise the Trace back-edge; the back-edge safety rests on the skeleton walk +
+>   the spike's real-CPU run (first-of-kind).
+> - **THE SPIKE'S RESULT (to be re-confirmed by the design review's own build):** the 4-payload
+>   `Trace(N5, walk)` COMPILES; input 0 takes **6 iterations (5 back-edges)** with the spilled
+>   leaf 4 live across the jump; the ROM contains the paging `Xchg{_, sx≥2}` inside the loop
+>   body; `spike_mde_spill_trace` (fast oracle over the 2 Bit inputs) + `_real_cpu` (real
+>   system_step, L19) + `reject_5_payload` (cap-by-one). My own re-runs timed out on the cold
+>   compile under load; the design review must re-build and run the DEFINITIVE real-CPU across
+>   the back-edge — that is the go/no-go this slice hinges on.
+> - **Tests (F6 strength):** T1 pins the paging Xchg BETWEEN the Ltop/Lend offsets (not a spine
+>   relocation); T3 asserts ≥2 iterations (input 0 → 6, exercising the back-edge with a paged
+>   leaf); T-reject(5) confirms the cap.
+> **First-slice scope decision (for the review):** fold the k-leaf recognizer + the spill into
+> ONE slice (the recognizer exists to enable the spill body; f3.5 collision is gone). widen-PC
+> and typed iteration bounds are SEPARATE later slices of the cluster.
+
+
 **Milestone.** The first bite of the M-D.e cluster (loop-carrier spill + widen-PC +
 typed-bounds tighten; ADR-0007 TH-1b). This slice does **only** loop-carrier spill, and
 only to **scratch** (not mem), for **one** payload leaf over the register cap. It is a
