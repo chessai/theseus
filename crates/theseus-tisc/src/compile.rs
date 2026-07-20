@@ -369,11 +369,14 @@ const MAX_LEAVES: usize = 14 + MEM_WORDS;
 /// zero-source, ADR-0044 §2.4 / ADR-0046 §3.1).
 const MAX_LEAVES_BRANCHING: usize = 12 + MEM_WORDS;
 
-/// Maximum payload leaves for loop-carrier bodies (M-D.d §3).
+/// Maximum payload leaves for loop-carrier bodies (M-D.d §3, M-D.e slice 1).
 /// 4 dedicated aux (rc, rb, temp, ctrl) + 1 tag register = 5 occupied;
-/// with 8 registers that leaves ≤ 3 payload leaves register-resident
-/// before paging would be required (and loop aux are unpageable).
-const MAX_LEAVES_LOOP: usize = 3;
+/// with 8 registers that leaves ≤ 3 payload leaves register-resident.
+/// The 4th payload leaf spills to Scratch(SCRATCH_SPILL_BASE) via the
+/// self-inverse exchange bracket in `with_registers` (M-D.e: one
+/// scratch-spilled zero-init padding leaf; live-input spill still rejected
+/// by the `n_input+1 ≤ carrier_reg_budget` guard in `lower_trace`).
+const MAX_LEAVES_LOOP: usize = 4;
 
 /// Number of overhead instructions per loop iteration (Ltop to Lend,
 /// inclusive of both SWAPBRs). 5 before body + 5 after body = 10.
@@ -1117,10 +1120,94 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
         });
     }
 
+    // ── M-D.e slice 1: 5-leaf pinned walk (k-leaf recognizer) ──────────
+    // The 7-cycle "thermometer walk" on Sum(N5, Bit):
+    //   R0 → L4 → L3 → L2 → L1 → L0 → R1 → R0
+    // Swapbr-free 13-instruction sequence; touches ALL payload leaves
+    // including the spilled leaf 4. Pinned recognizer: name-gate +
+    // semantic gate (check_pattern_kleaf verifies the full forward table
+    // vs the byte map over all canonical values — a mismatch rejects).
+    // NOTE: check_pattern_kleaf enumerates the whole input type
+    // (exponential in leaves) — acceptable for k=5 (7 values).
+    if def.forward_name == "mde_spill_walk" && n_in == 5 && n_out == 5 {
+        let vals = enumerate_values(&def.input_ty);
+        if check_pattern_kleaf(&def.forward, &vals, &def.input_ty, &def.output_ty, 5, mde_walk_bytes) {
+            // Emit all 13 instructions in ONE `with_registers` call →
+            // the paging is a WHOLE-BODY bracket (one page-in at entry,
+            // one page-out at exit), NOT per-instruction.
+            return with_registers(ctx, &leaves, |regs| {
+                let (t, p1, p2, p3, p4) = (regs[0], regs[1], regs[2], regs[3], regs[4]);
+                Ok(vec![
+                    Instr::Xor { rd: t, rs: p1 },
+                    Instr::Xori { rd: t, imm: 1 },
+                    Instr::Xori { rd: p1, imm: 1 },
+                    Instr::Xor { rd: p2, rs: p3 },
+                    Instr::Xor { rd: p3, rs: p4 },
+                    Instr::Xori { rd: t, imm: 1 },
+                    Instr::Cswap { rd: t, rs: p1, rt: p2 },
+                    Instr::Cswap { rd: t, rs: p2, rt: p3 },
+                    Instr::Cswap { rd: t, rs: p3, rt: p4 },
+                    Instr::Xori { rd: t, imm: 1 },
+                    Instr::Xor { rd: p3, rs: p4 },
+                    Instr::Xor { rd: p2, rs: p3 },
+                    Instr::Xor { rd: p1, rs: p2 },
+                ])
+            });
+        }
+    }
+
     Err(CompileError::UnrecognizedPrim(format!(
         "prim '{}' not recognized as a TISC-1 pattern",
         def.forward_name
     )))
+}
+
+/// Byte semantics of the pinned 13-instruction walk (M-D.e slice 1).
+/// Must match the emitted instruction sequence EXACTLY (byte-wide).
+/// Scaffold for the machinery-proof test; not a public API.
+#[doc(hidden)]
+pub fn mde_walk_bytes(b: &mut [u8]) {
+    b[0] ^= b[1];
+    b[0] ^= 1;
+    b[1] ^= 1;
+    b[2] ^= b[3];
+    b[3] ^= b[4];
+    b[0] ^= 1;
+    if b[0] & 1 == 1 {
+        b.swap(1, 2);
+        b.swap(2, 3);
+        b.swap(3, 4);
+    }
+    b[0] ^= 1;
+    b[3] ^= b[4];
+    b[2] ^= b[3];
+    b[1] ^= b[2];
+}
+
+/// k-leaf generalization of `check_pattern_2leaf` — verify a prim's
+/// clause table matches a pinned byte-level map over k leaves.
+fn check_pattern_kleaf(
+    forward: &std::collections::BTreeMap<Value, Value>,
+    vals: &[Value],
+    in_ty: &Type,
+    out_ty: &Type,
+    k: usize,
+    f: impl Fn(&mut [u8]),
+) -> bool {
+    for v in vals {
+        let mut bytes = value_to_leaf_bytes(v, in_ty);
+        if bytes.len() != k {
+            return false;
+        }
+        f(&mut bytes);
+        let Some(out) = forward.get(v) else {
+            return false;
+        };
+        if value_to_leaf_bytes(out, out_ty) != bytes {
+            return false;
+        }
+    }
+    true
 }
 
 /// Check if a 2-register prim's clause table matches a pattern.
@@ -2166,11 +2253,17 @@ fn lower_trace(
     //     body_ctx[1+|a|..n_carrier] = extra payload (free registers)
     let n_input = ctx.homes.len(); // = num_leaves(a)
 
-    // Total registers needed: n_carrier (body) + 4 (aux: rc, rb, temp, ctrl).
-    let total_regs_needed = n_carrier + 4;
-    if total_regs_needed > NUM_REGS {
+    // M-D.e slice 1: registers available to the carrier = NUM_REGS - 4 aux.
+    // Overflow zero-init padding leaves spill to Scratch(SCRATCH_SPILL_BASE+).
+    let carrier_reg_budget = NUM_REGS - 4; // = 4
+    // Guard (a): tag + all LIVE INPUT leaves must be register-resident.
+    // This is the ONLY barrier against live-input silent corruption (r1 F5.2):
+    // a live leaf forced to Scratch with no relocation → loop reads 0.
+    if n_input + 1 > carrier_reg_budget {
         return Err(CompileError::Deferred(format!(
-            "Trace needs {total_regs_needed} registers but only {NUM_REGS} available"
+            "Trace tag+input needs {} registers but carrier budget is {carrier_reg_budget} \
+             (live-input spill not supported, M-D.e F5.2)",
+            n_input + 1
         )));
     }
 
@@ -2194,10 +2287,24 @@ fn lower_trace(
     for i in 0..n_input {
         body_homes.push(ctx.homes[i]);
     }
-    // Extra payload (if carrier is wider than input): from free registers.
+    // Extra payload (if carrier is wider than input): register-resident
+    // up to the carrier_reg_budget, then spill to Scratch(SCRATCH_SPILL_BASE+).
+    // Only zero-init PADDING leaves may spill (no live-data relocation — the
+    // n_input+1 guard above ensures all input leaves are register-resident).
     let n_extra = n_carrier - 1 - n_input; // max(|u|,|a|) - |a| = max(0, |u|-|a|)
+    let mut spill_count = 0u8;
     for j in 0..n_extra {
-        body_homes.push(Location::Reg(n_input as u8 + 1 + j as u8));
+        let reg = n_input + 1 + j; // candidate register index
+        if reg < carrier_reg_budget {
+            body_homes.push(Location::Reg(reg as u8));
+        } else {
+            // M-D.e: zero-init padding leaf spills to scratch.
+            // Marshal already zeroes Scratch — no live-data relocation (F5).
+            // NOTE: home_of maps canonical leaf 8 → Scratch(2)=SCRATCH_SPILL_BASE;
+            // at cap 4 this is unreachable, but the collision is pinned here.
+            body_homes.push(Location::Scratch(SCRATCH_SPILL_BASE + spill_count));
+            spill_count += 1;
+        }
     }
 
     // Build occ: mark all carrier + aux registers as occupied.
