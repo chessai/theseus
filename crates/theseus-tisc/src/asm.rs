@@ -121,7 +121,7 @@ pub enum Instr {
     Rotr { rd: u8, rs: u8 },
     /// If `r[rd] & 1 == 1` then `r[rs] ↔ r[rt]`. Pairwise distinct.
     Cswap { rd: u8, rs: u8, rt: u8 },
-    /// `r[rd].bit0 ^= r[rs].bit0 & r[rt].bit0`. Pairwise distinct.
+    /// `r[rd] ^= r[rs] & r[rt]` (byte-parallel). Pairwise distinct.
     Ccnot { rd: u8, rs: u8, rt: u8 },
     /// `r[rd] ↔ s[sx]`. `sx` must be 2..8 (s0/s1 decoder-reserved).
     Xchg { rd: u8, sx: u8 },

@@ -1,10 +1,10 @@
-//! Ccnot (bit-0 Toffoli) instruction tests (M-D.b2.f3.5).
+//! Ccnot (byte-parallel) instruction tests.
 //!
 //! T1: exact single-Ccnot emission from a 3-leaf target-first prim.
 //! T2: run_on_cpu == eval (real system_step) on all 8 inputs.
 //! T3: encode/decode round-trip + CcnotNotDistinct rejection.
 //! T4: Ccnot is self-inverse on CPU (distinct operands).
-//! T-dense: dense-byte 0xAA/0x55 — Ccnot changes ONLY bit0 of r[rd].
+//! T-dense: dense-byte full-byte AND (r[rd] ^= r[rs] & r[rt] over all 8 bits).
 //! T-neg: a 2-leaf (c,t)↦(c,t⊕c) recognizes as Xor NOT Ccnot; aliased Ccnot rejected.
 
 use std::collections::BTreeMap;
@@ -188,13 +188,12 @@ fn t4_self_inverse() {
 // ── T-dense: dense-byte 0xAA/0x55 — Ccnot changes ONLY bit0 ───────
 
 #[test]
-fn t_dense_bit0_only() {
+fn t_dense_full_byte_and() {
     use theseus_tisc::compile::run_rom_fast;
     use theseus_tisc::types::{StateVals, MEM_WORDS};
 
-    // Set up state with dense-byte register values.
-    // r0=0xAA(bit0=0), r1=0x55(bit0=1), r2=0xFF(bit0=1), r3=0x33
-    // CCNOT r0, r1, r2: r0.bit0 ^= (r1.bit0=1 & r2.bit0=1) = 1 → r0 = 0xAA^1 = 0xAB
+    // Dense-byte full-byte AND: r[rd] ^= r[rs] & r[rt] over all 8 bits.
+    // r0=0xAA, r1=0x55, r2=0xFF → r0 ^= (0x55 & 0xFF) = 0xAA ^ 0x55 = 0xFF
     let instr = Instr::Ccnot { rd: 0, rs: 1, rt: 2 };
     let rom = vec![encode(instr).unwrap()];
 
@@ -207,14 +206,16 @@ fn t_dense_bit0_only() {
         mem: [0; MEM_WORDS],
     };
     let out = run_rom_fast(&rom, state.clone(), 1);
-    // Only r0.bit0 changed.
-    assert_eq!(out.regs[0], 0xAB, "r0 should be 0xAA ^ 1 = 0xAB (only bit0 flipped)");
+    assert_eq!(
+        out.regs[0],
+        0xAA ^ (0x55 & 0xFF),
+        "r0 should be 0xAA ^ (0x55 & 0xFF) = 0xFF (full-byte AND)"
+    );
     assert_eq!(out.regs[1], 0x55, "r1 unchanged");
     assert_eq!(out.regs[2], 0xFF, "r2 unchanged");
     assert_eq!(out.regs[3..], state.regs[3..], "other regs unchanged");
 
-    // Case where one control bit0 is 0: no change.
-    // CCNOT r3, r0, r4: r0.bit0=0 → r3 unchanged
+    // Case 2: r3=0x33, rs=r0=0xAA, rt=r4=0x44 → r3 ^= (0xAA & 0x44) = 0x33 ^ 0x00 = 0x33
     let instr2 = Instr::Ccnot { rd: 3, rs: 0, rt: 4 };
     let rom2 = vec![encode(instr2).unwrap()];
     let state2 = StateVals {
@@ -226,7 +227,11 @@ fn t_dense_bit0_only() {
         mem: [0; MEM_WORDS],
     };
     let out2 = run_rom_fast(&rom2, state2.clone(), 1);
-    assert_eq!(out2.regs, state2.regs, "no change when control bit0 is 0");
+    assert_eq!(
+        out2.regs[3],
+        0x33 ^ (0xAA & 0x44),
+        "r3 ^= (0xAA & 0x44) = 0x33 ^ 0x00 = 0x33"
+    );
 }
 
 // ── T-neg: 2-leaf xor recognizes as Xor NOT Ccnot ─────────────────

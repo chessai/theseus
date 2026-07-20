@@ -48,27 +48,27 @@ fn golden_pin_mexch_rom() {
     // M-D.b's scoped gate ran `--test ring_two_body` but not `ring_two_body_timing`,
     // so this golden staled undetected until the full-suite run around M-D.b2.f1.
     //
-    // RE-PINNED (f3.5): Adding Op::Ccnot to Op::ALL grows the decode_execute
-    // netlist by one additional predicated instruction (opcode 0b1011, bit-0
-    // Toffoli). Same class as the MEXCHR re-pin above: cpu_pre/cpu_post depth
-    // increases (d_pre 2976→3316, d_locked/period 3304→3644). validate()==Ok
-    // confirms physical lockstep intact.
-    assert_eq!(t.d_pre, 3316, "GOLDEN PIN: d_pre={} (expected 3316)", t.d_pre);
+    // RE-PINNED (f4, byte-parallel Ccnot): Redefining Op::Ccnot from bit-0
+    // Toffoli to byte-parallel (convention B: BR swap-fetch + 8 CCC-NOTs)
+    // grows the decode_execute netlist (d_pre 3316→3345, delta1 0→3,
+    // delta_hold 36→39, d_locked/period 3644→3676). d_post=289, d_mem=35
+    // unchanged. validate()==Ok confirms physical lockstep intact.
+    assert_eq!(t.d_pre, 3345, "GOLDEN PIN: d_pre={} (expected 3345)", t.d_pre);
     assert_eq!(t.d_mem, 35, "GOLDEN PIN: d_mem={} (expected 35)", t.d_mem);
     assert_eq!(t.d_post, 289, "GOLDEN PIN: d_post={} (expected 289)", t.d_post);
-    assert_eq!(t.delta1, 0, "GOLDEN PIN: delta1={} (expected 0)", t.delta1);
+    assert_eq!(t.delta1, 3, "GOLDEN PIN: delta1={} (expected 3)", t.delta1);
     assert_eq!(t.delta2, 1, "GOLDEN PIN: delta2={} (expected 1)", t.delta2);
     assert_eq!(
-        t.delta_hold, 36,
-        "GOLDEN PIN: delta_hold={} (expected 36)",
+        t.delta_hold, 39,
+        "GOLDEN PIN: delta_hold={} (expected 39)",
         t.delta_hold
     );
     assert_eq!(
-        t.d_locked, 3644,
-        "GOLDEN PIN: d_locked={} (expected 3644)",
+        t.d_locked, 3676,
+        "GOLDEN PIN: d_locked={} (expected 3676)",
         t.d_locked
     );
-    assert_eq!(t.period, 3644, "GOLDEN PIN: period={} (expected 3644)", t.period);
+    assert_eq!(t.period, 3676, "GOLDEN PIN: period={} (expected 3676)", t.period);
 
     // validate() must pass on the golden ROM
     t.validate().expect("validate() failed on MEXCH golden ROM");

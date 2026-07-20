@@ -319,14 +319,14 @@ fn me_a3_golden() {
 
     // Pinned golden values (deterministic: committed char-DB fits + fixed
     // lowering of fib's own 24-word ROM step net at T_RAMP=1e-7).
-    // RE-PINNED for f3.5: adding Op::Ccnot to Op::ALL enlarges the system_step
-    // decoder netlist, so step_j (the per-step STATIC inventory over the whole
-    // decoder — present whether or not Ccnot fires) rises for EVERY program.
+    // RE-PINNED for f4 (byte-parallel Ccnot): redefining Op::Ccnot from bit-0
+    // Toffoli to byte-parallel (convention B: BR swap-fetch + 8 CCC-NOTs)
+    // enlarges the system_step decoder netlist. step_j rises for EVERY program.
     // fib's B=24/T=20 codegen is unchanged; only the per-step energy grew:
-    // step_j 2.7596147106e-9 → 3.0121307847e-9 (+9.15%), total_j = 24·step_j.
+    // step_j 3.0121307847e-9 → 3.0697567543e-9 (+1.91%), total_j = 24·step_j.
     // This is the ISA-growth energy tax, not a codegen regression.
-    const GOLDEN_TOTAL_J: f64 = 7.2291138832e-8;
-    const GOLDEN_STEP_J: f64 = 3.0121307847e-9;
+    const GOLDEN_TOTAL_J: f64 = 7.3674162103e-8;
+    const GOLDEN_STEP_J: f64 = 3.0697567543e-9;
     const GOLDEN_B: usize = 24;
     const GOLDEN_T: usize = 20;
 

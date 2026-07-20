@@ -67,8 +67,8 @@ fn reference(s: &StateVals) -> StateVals {
             0b1000 => std::mem::swap(&mut out.regs[rd], &mut out.br),
             // 0b1001 = MEXCH, 0b1010 = MEXCHR: reserved at CpuState level (identity).
             0b1011 => {
-                // CCNOT: r[rd].bit0 ^= r[rs].bit0 & r[rt].bit0
-                out.regs[rd] ^= (out.regs[rs] & out.regs[rt]) & 1;
+                // CCNOT: r[rd] ^= r[rs] & r[rt] (byte-parallel)
+                out.regs[rd] ^= out.regs[rs] & out.regs[rt];
             }
             _ => {} // reserved: identity
         }
@@ -147,15 +147,15 @@ fn op_samples(op: Op) -> Vec<StateVals> {
             st(regs_b(), r_ins(6, 1, 3, 5)), // r1 = 0x21: taken
         ],
         Op::Ccnot => vec![
-            // rd=4(0x01), rs=1(0xFF), rt=2(0xAA): rs.bit0=1, rt.bit0=0 → no change
+            // rd=4(0x01), rs=1(0xFF), rt=2(0xAA): rd ^= FF&AA = rd^AA = 0xAB
             st(regs_a(), r_ins(0b1011, 4, 1, 2)),
-            // rd=0(0x00), rs=2(0xAA), rt=3(0x55): rs.bit0=0 → no change
+            // rd=0(0x00), rs=2(0xAA), rt=3(0x55): rd ^= AA&55 = rd^00 = 0x00
             st(regs_a(), r_ins(0b1011, 0, 2, 3)),
-            // rd=7(0xC3), rs=4(0x01), rt=5(0x80): rs.bit0=1, rt.bit0=0 → no change
+            // rd=7(0xC3), rs=4(0x01), rt=5(0x80): rd ^= 01&80 = rd^00 = 0xC3
             st(regs_a(), r_ins(0b1011, 7, 4, 5)),
-            // dense-byte: rd=0(0x10), rs=1(0x21), rt=2(0x32): rs.bit0=1, rt.bit0=0 → no change
+            // dense-byte: rd=0(0x10), rs=1(0x21), rt=2(0x32): rd ^= 21&32 = rd^20 = 0x30
             st(regs_b(), r_ins(0b1011, 0, 1, 2)),
-            // FIRING: rd=0(0x00), rs=3(0x55), rt=4(0x01): both bit0=1 → r0 ^= 1 = 0x01
+            // rd=0(0x00), rs=3(0x55), rt=4(0x01): rd ^= 55&01 = rd^01 = 0x01
             st(regs_a(), r_ins(0b1011, 0, 3, 4)),
         ],
         Op::Xchg => vec![

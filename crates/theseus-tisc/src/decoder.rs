@@ -44,11 +44,15 @@
 //!   is CNOT-masked onto s0; the TK adder adds `s0 ⊕ imm`). Same
 //!   convention as `instr::addi`.
 //! - **s1 (scratch 1) holds the predicate bit (bit 0), the Toffoli
-//!   chain intermediates (bits 1–3), CSWAP's control-bit copy
-//!   (bit 4), and CCNOT's two control-bit copies (bits 5–6); it must
-//!   be 0 on entry** and is restored to 0 on exit. Note: aliased
-//!   CCNOT (rd==rs or rd==rt) leaves a non-zero s1 residue — a
-//!   bijection but unspecified semantics (the P1 checker rejects it).
+//!   chain intermediates (bits 1–3), and CSWAP's control-bit copy
+//!   (bit 4); it must be 0 on entry** and is restored to 0 on exit.
+//! - **BR (field 9) is used by CCNOT as a 2nd operand buffer**
+//!   (convention B): r[rt] is swap-fetched into BR before the core
+//!   and restored afterwards. The swap is content-agnostic — BR's
+//!   entry value rides in r[rt]'s cell for the duration of the core
+//!   and is written back on exit (no BR=0 assumption). Aliased
+//!   CCNOT (rd==rs or rd==rt) produces rd^=BR_entry∧rt — bijective
+//!   but unspecified; `encode` rejects via CcnotNotDistinct.
 //! - **XCHG** routes the scratch file through a second crossbar, which
 //!   scrambles s1's position, so its gate control is first copied onto
 //!   the (architecturally zero) R-format pad bit IR[0] and removed
@@ -572,60 +576,49 @@ fn cswap_instr() -> Iso {
     predicated(&r_pred(0b0110), body)
 }
 
-/// CCNOT rd, rs, rt: bit-0 Toffoli — `r[rd].bit0 ^= r[rs].bit0 & r[rt].bit0`.
+/// CCNOT rd, rs, rt: byte-parallel — `r[rd] ^= r[rs] & r[rt]` over all 8 bits.
 ///
-/// Structural sibling of `cswap_instr`. Copies the two control bits
-/// (r[rs].bit0 → s1 bit 5, r[rt].bit0 → s1 bit 6) via with_target-style
-/// CNOT brackets, then applies a single predicate-gated CCC-NOT
-/// (pred ∧ s1.5 ∧ s1.6 → r0-slot bit 0), then uncomputes the copies.
-/// s1 bits 5 and 6 are architecturally free (0=pred, 1–3=chain, 4=cswap-copy).
+/// Convention B (BR as 2nd operand buffer): swap-fetch r[rt] into BR
+/// (field 9) via a content-agnostic swap (BR's entry value rides in
+/// r[rt]'s cell for the core and is written back on exit — no BR=0
+/// assumption). The fetch is sequenced OUTSIDE `with_two_regs` so the
+/// core sees [r0-slot(rd), s0(rs), BR(rt), s1(pred)] as four fields.
+///
+/// Each bit lane `i` applies a predicate-gated CCC-NOT:
+///   r[rd][i] ^= pred ∧ r[rs][i] ∧ r[rt][i]
+///
+/// Value-level aliasing caveat: rs==rt gives rd^=BR_entry∧rt (bijective
+/// but unspecified). The P1 checker / `encode` already rejects via
+/// CcnotNotDistinct.
 fn ccnot_instr() -> Iso {
-    // s1 bit positions for the two control copies.
-    const CCNOT_RS_COPY: usize = 5; // s1 bit 5: copy of r[rs].bit0
-    const CCNOT_RT_COPY: usize = 6; // s1 bit 6: copy of r[rt].bit0
-
-    // Copy r[rs].bit0 into s1 bit 5: route r[rs] to r0-slot via R_RS crossbar,
-    // CNOT from r0-slot bit 0 to s1 bit 5, then un-route.
-    let copy_rs0 = with_target(
-        R_RS,
-        on_fields(
-            &[reg_field(0), AUX_PRED_FIELD],
-            vec![gate_at(2 * W, &[0, W + CCNOT_RS_COPY], cnot_prim())],
-        ),
+    // Swap-fetch r[rt] into BR: select_reg(R_RT) routes r[rt] to r0-slot,
+    // swap r0-slot ↔ BR, then sym(select_reg(R_RT)) routes back.
+    // Content-agnostic: whatever was in BR rides in r[rt]'s cell.
+    let sel_rt = select_reg(R_RT);
+    let swap_br = at_fields(
+        Iso::SwapProd(word8(), word8()),
+        &[reg_field(0), BR_FIELD],
     );
+    let fetch_rt_br =
+        Iso::seq(sel_rt.clone(), Iso::seq(swap_br, Iso::sym(sel_rt)));
 
-    // Copy r[rt].bit0 into s1 bit 6: route r[rt] to r0-slot via R_RT crossbar,
-    // CNOT from r0-slot bit 0 to s1 bit 6, then un-route.
-    let copy_rt0 = with_target(
-        R_RT,
-        on_fields(
-            &[reg_field(0), AUX_PRED_FIELD],
-            vec![gate_at(2 * W, &[0, W + CCNOT_RT_COPY], cnot_prim())],
-        ),
-    );
-
-    // Core: predicate-gated CCC-NOT on [r0-slot, s1]:
-    // r0-slot bit 0 ^= (pred ∧ s1.5 ∧ s1.6)
-    // Wire layout in 2-field core [r0-slot(0..8), s1(8..16)]:
-    //   pred = wire W+0 (s1 bit 0), ctrl1 = wire W+CCNOT_RS_COPY, ctrl2 = wire W+CCNOT_RT_COPY, target = wire 0.
+    // Core: 4-field [r0-slot(rd), s0(rs), BR(rt-value), s1(pred)].
+    // Wire layout: r0-slot = 0..W, s0 = W..2W, BR = 2W..3W, s1 = 3W..4W.
+    // Per-bit CCC-NOT: target = bit i, controls = pred(3W), rs-bit(W+i), rt-bit(2W+i).
+    let gates = (0..W)
+        .map(|i| gate_at(4 * W, &[3 * W, W + i, 2 * W + i, i], cccnot_prim()))
+        .collect();
     let core = on_fields(
-        &[reg_field(0), AUX_PRED_FIELD],
-        vec![gate_at(
-            2 * W,
-            &[W, W + CCNOT_RS_COPY, W + CCNOT_RT_COPY, 0],
-            cccnot_prim(),
-        )],
+        &[reg_field(0), AUX_OPERAND_FIELD, BR_FIELD, AUX_PRED_FIELD],
+        gates,
     );
 
-    // The target register is r[rd]; route it to r0-slot, apply the core, un-route.
-    let gated_toffoli = with_target(R_RD, core);
-
-    // Full body: copy_rs ; copy_rt ; gated_toffoli ; sym(copy_rt) ; sym(copy_rs)
+    // Body: fetch_rt_br ; with_two_regs(R_RD, R_RS, core) ; sym(fetch_rt_br)
     let body = Iso::seq(
-        copy_rs0.clone(),
+        fetch_rt_br.clone(),
         Iso::seq(
-            copy_rt0.clone(),
-            Iso::seq(gated_toffoli, Iso::seq(Iso::sym(copy_rt0), Iso::sym(copy_rs0))),
+            with_two_regs(R_RD, R_RS, core),
+            Iso::sym(fetch_rt_br),
         ),
     );
     predicated(&r_pred(0b1011), body)
