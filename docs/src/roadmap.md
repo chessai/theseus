@@ -73,7 +73,7 @@
 > single-leaf word (cardinality 2^n, `num_leaves=1`) — the foundation for f3.5's byte-wide sequel.
 > `Value` unchanged (thermometer); bare byte-`Xor` `run_on_cpu==eval`. NOTE value-width is a
 > SEPARATE axis from **M-D.c** (which is MEM_WORDS/heap width — this doc previously conflated them).
-> **value-width slice-2 (byte-XOR reduce over Flat(w)) DONE** (`ae61941`). **Next:** Flat(8) `Add` reduce (numeric sum)
+> **value-width slice-2 (byte-XOR reduce) DONE** (`ae61941`); **slice-3 Flat(8) `Add` reduce = real numeric sum via `fold` DONE** (`06ecf6b`). **Next (final rung):** byte-parallel `Ccnot` decoder second-buffer (masked accumulate)
 > → byte-parallel `Ccnot` decoder (the full masked accumulate); OR M-D.e loop-carrier spill
 > (deferred — its minimal test needs a `recognize_prim` ext that collided with f3.5; mechanism
 > verified sound); OR widen-PC. Design docs `docs/scratch/{md*,valwidth-flat}.md`; reviews

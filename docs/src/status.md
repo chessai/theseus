@@ -10,8 +10,27 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`1a81b40` (**value-width slices 1 + 2 merged** — `Type::Flat(n)` foundation `30c4415` + the byte-wide
-XOR reduce `ae61941`, atop f3.5 + TP-3).
+`0d3ca83` (**value-width slices 1–3 merged** — `Type::Flat(n)` foundation `30c4415`, byte-wide XOR
+reduce `ae61941`, and the **Flat(8) `Add` reduce** `06ecf6b`, atop f3.5 + TP-3).
+**Value-width slice-3** is the first *arithmetic* over the foundation — a real numeric sum
+`acc += arr[i]` over full 8-bit words, `acc_out = (acc0 + Σ elems) mod 256`, carries and all. Where
+slice-2 was byte-wide XOR (bitwise, canonical at every width), Add is **canonical only at Flat(8)**
+(at `Flat(w<8)` `a+b mod 256` overflows the range → an honest `Flat(w<8)` `addInto` is rejected by
+`admit()` as `BackwardNotTotal`), so there is **no verify-at-small** for it. And the memexch table
+walls at Flat(8) (33.5M entries) — so the reduce vehicle is **`fold` over a `Flat8List`** (M-D.a
+guarded static unroll of the list spine, element-agnostic), NOT `iter+memexch`. `addInto = (a,b)↦(a,
+a+b)` recognizes to `Instr::Add`; the only prim table is 65536 (2-operand). Verified: the bare Flat(8)
+Add whole-domain (65536), the fold-over-`Flat` spine walk whole-domain (Flat(2), 340), `sumFold` at
+D=2 whole-domain (65792 — every carry/wrap pair) + D=3/D=4 strided with mandatory carry edge cases
+(`200+100→44`, `255+1→0`, `255·4→252`) against an **independent modular-sum reference** + real
+`system_step` (L19). Both reviews Fable-**built-and-verified** (the design review compiled the D=3
+ROM and ran the carries; the impl review caught that D=4's 3-Add chain was compiled-but-never-executed
+— now a hoisted D=4 tier). Honest limitation: the *composed* reduce's L19 authority is whole-domain at
+D=2, strided at D≥3 (Flat(8) list domain intractable). Reviews `docs/reviews/valwidth-add-*`.
+**The ladder's final rung:** byte-parallel `Ccnot` (the decoder second-buffer, F35-1b) for the full
+masked accumulate `acc ^= key & arr[i]`. The prior tip `1a81b40`:
+**value-width slices 1 + 2 merged** — `Type::Flat(n)` foundation `30c4415` + the byte-wide
+XOR reduce `ae61941`, atop f3.5 + TP-3.
 **Value-width slice-2** is the first *program* over the foundation: f3's XOR/parity reduce lifted
 from **bit** elements to full **`Flat(w)` word** elements — `acc ^= arr[i]` over words. Only the
 elements become `Flat(w)`; **`idx` stays `Bit`** (sidesteps the width-advance trap). The one real
