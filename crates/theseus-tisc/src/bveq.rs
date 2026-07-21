@@ -836,16 +836,15 @@ pub fn equiv(
                 }
             } else {
                 // I4: upper output bits of operand registers must be
-                // identically false under the Flat(w) input constraint.
+                // UNCONDITIONALLY false — not merely false under the
+                // Flat(w) input constraint (which would be circular:
+                // constraining inputs to zero then checking that
+                // pass-through outputs are also zero proves nothing).
                 // MAJOR-1: check BOTH a AND b (not just a).
                 let a_bdd = expr_to_bdd(&a.regs[reg][bit], &map)?;
                 let b_bdd = expr_to_bdd(&b.regs[reg][bit], &map)?;
                 for side_bdd in [&a_bdd, &b_bdd] {
-                    let check = match constraint {
-                        Some(ref c) => c.and(side_bdd),
-                        None => side_bdd.clone(),
-                    };
-                    if let Some(witness) = check.sat_witness() {
+                    if let Some(witness) = side_bdd.sat_witness() {
                         return Err(BveqError::NotEquivalent(decode_counterexample(
                             &witness, &map, reg, bit,
                         )));
