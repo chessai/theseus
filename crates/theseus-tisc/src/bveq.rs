@@ -442,6 +442,12 @@ pub enum BveqError {
     WidthOutOfRange { w: usize },
     /// RegTransfer frame size mismatch (must be NUM_REGS).
     FrameSizeMismatch { side: &'static str, len: usize },
+    /// A register bit-row has the wrong length (must be BITS). N3: a short row
+    /// must return Err, not panic on index.
+    RowSizeMismatch { side: &'static str, reg: usize, len: usize },
+    /// An `operand_regs` entry is out of range (≥ NUM_REGS). N2: the new
+    /// MAJOR-2 parameter must be validated, not fed to VarMap::var (which panics).
+    OperandRegOutOfRange { reg: usize },
     /// VarMap::new overflow: BITS * num_operands exceeds u16.
     VarMapOverflow { num_operands: usize },
     /// The two transfers are not equivalent; includes a concrete counterexample.
@@ -481,6 +487,12 @@ impl std::fmt::Display for BveqError {
             }
             BveqError::FrameSizeMismatch { side, len } => {
                 write!(f, "RegTransfer frame size mismatch on {side}: len={len} (expected {NUM_REGS})")
+            }
+            BveqError::RowSizeMismatch { side, reg, len } => {
+                write!(f, "RegTransfer bit-row size mismatch on {side} reg {reg}: len={len} (expected {BITS})")
+            }
+            BveqError::OperandRegOutOfRange { reg } => {
+                write!(f, "operand_regs entry out of range: {reg} (max {})", NUM_REGS - 1)
             }
             BveqError::VarMapOverflow { num_operands } => {
                 write!(f, "VarMap overflow: BITS({BITS}) * num_operands({num_operands}) exceeds u16")
@@ -754,19 +766,33 @@ pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
 ///
 /// # `operand_regs` (MAJOR-2)
 ///
-/// The caller-supplied set of registers that are constrained to Flat(`w`).
-/// Only these registers have their input bits `w..7` forced false and their
-/// output bits `w..7` checked under the I4 obligation. All other registers'
-/// bits are fully free (Flat(8)), preventing a global constraint from
-/// certifying a corrupting sequence as identity.
+/// The caller-supplied set of registers that hold Flat(`w`) values. Only these
+/// registers have their input bits `w..7` forced false and their output bits
+/// `w..7` checked under the I4 obligation. All other registers' bits are fully
+/// free (Flat(8)), preventing a global constraint from certifying a corrupting
+/// sequence as identity.
 ///
-/// # I4 obligation (r2 MAJOR-1, MANDATORY)
+/// **CALLER OBLIGATION (N5):** `operand_regs` must be derived from the prim's
+/// TYPE, never from the candidate instruction sequence. `equiv` trusts it and
+/// cannot validate it:
+/// - **Over-declaring** a register that is not actually Flat(`w`) forces its
+///   upper bits to zero and thereby HIDES any difference conditioned on them —
+///   returning `Ok` on a corrupting sequence (unsound *by declaration*). See
+///   `bveq_major2_overdeclaration_hides_corruption`.
+/// - **Empty `operand_regs`** at `w < 8` makes the constraint vacuously true and
+///   degrades `equiv` to full unconstrained Flat(8) equality (ignoring `w`) —
+///   strictly stricter (fail-safe), but surprising.
 ///
-/// For `w < 8` (Flat(w) spec), under the constraint that operand registers'
-/// input bits `w..7` are false:
+/// # I4 obligation (r2 MAJOR-1 + N1, MANDATORY)
+///
+/// For `w < 8` (Flat(w) spec), **under the Flat(w) input constraint** on the
+/// operand registers (invariant preservation: Flat(w) in ⇒ Flat(w) out):
 /// - Low `w` output bits of `a` must equal `b` (the spec) for all registers.
-/// - Output bits `w..7` of BOTH `a` AND `b` must be identically false for
-///   operand registers (MAJOR-1: applied to BOTH sides, not just `a`).
+/// - Output bits `w..7` of BOTH `a` AND `b` must be false *under the input
+///   constraint* for operand registers (MAJOR-1: BOTH sides; N1: UNDER the
+///   constraint, not unconditionally — an unconditional check rejects every
+///   reversible model, since a bijection's output bit is never identically
+///   false).
 ///
 /// # Returns
 ///
@@ -774,8 +800,11 @@ pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
 /// concretely-verified witness decoded through the shared mapping.
 /// `Err(...)` for validation failures (out-of-range, etc.).
 ///
-/// **Never panics** across the recognizer boundary (returns `Result` —
-/// r2 MAJOR-3).
+/// **Never panics** across the recognizer boundary on any register/width/frame
+/// input (returns `Result` — r2 MAJOR-3). The ONE remaining abort is a stack
+/// overflow from a pathologically deep `BvExpr` (unbounded recursion in
+/// `expr_to_bdd`/`eval_expr`); this is unreachable from `symbolic_exec`, which
+/// only builds straight-line-bounded expressions.
 pub fn equiv(
     a: &RegTransfer,
     b: &RegTransfer,
@@ -797,6 +826,27 @@ pub fn equiv(
             side: "b",
             len: b.regs.len(),
         });
+    }
+    // N3: validate every bit-row length, else a short row panics on index
+    // below (a slice-2 spec-builder emitting only `w` bits is the obvious bug).
+    for (side, t) in [("a", a), ("b", b)] {
+        for (reg, row) in t.regs.iter().enumerate() {
+            if row.len() != BITS {
+                return Err(BveqError::RowSizeMismatch {
+                    side,
+                    reg,
+                    len: row.len(),
+                });
+            }
+        }
+    }
+    // N2: validate operand_regs entries (the new MAJOR-2 parameter), else the
+    // constraint builder feeds an OOB index to VarMap::var → panic (which would
+    // itself violate the MAJOR-3 never-panic contract).
+    for &op in operand_regs {
+        if op >= NUM_REGS {
+            return Err(BveqError::OperandRegOutOfRange { reg: op });
+        }
     }
 
     let map = VarMap::new(NUM_REGS)?;
@@ -835,16 +885,25 @@ pub fn equiv(
                     )));
                 }
             } else {
-                // I4: upper output bits of operand registers must be
-                // UNCONDITIONALLY false — not merely false under the
-                // Flat(w) input constraint (which would be circular:
-                // constraining inputs to zero then checking that
-                // pass-through outputs are also zero proves nothing).
-                // MAJOR-1: check BOTH a AND b (not just a).
+                // I4 (N1 fix): upper output bits w..7 of operand registers must
+                // be identically false UNDER the Flat(w) input constraint — i.e.
+                // Flat(w) inputs produce Flat(w) outputs (invariant preservation,
+                // NOT circular). Pass-through upper bits (`Var(op, b≥w)`) are
+                // legitimately false once the constraint zeroes those inputs, so
+                // identity/reversible models are ACCEPTED; a real width-escape
+                // (e.g. byte-Add's carry into bit w — a function of the LOW,
+                // unconstrained bits) stays satisfiable and is REJECTED.
+                // The prior UNCONDITIONAL check rejected every reversible model at
+                // w<8 (identity ≡ identity included), since an output bit of a
+                // bijection can never be identically false. MAJOR-1: BOTH sides.
                 let a_bdd = expr_to_bdd(&a.regs[reg][bit], &map)?;
                 let b_bdd = expr_to_bdd(&b.regs[reg][bit], &map)?;
                 for side_bdd in [&a_bdd, &b_bdd] {
-                    if let Some(witness) = side_bdd.sat_witness() {
+                    let check = match constraint {
+                        Some(ref c) => c.and(side_bdd),
+                        None => side_bdd.clone(),
+                    };
+                    if let Some(witness) = check.sat_witness() {
                         return Err(BveqError::NotEquivalent(decode_counterexample(
                             &witness, &map, reg, bit,
                         )));
@@ -1003,6 +1062,18 @@ mod z3_tests {
                 // byte-Add at Flat(4) has carry in upper bits, so it's not self-equal
                 // under I4 — this is the exact T3 scenario.
                 false,
+            ),
+            // N4: w<8 pass-through ACCEPT case — the case that distinguishes the
+            // correct UNDER-constraint I4 (accept) from the old unconditional bug
+            // (which rejected every reversible model at w<8). Exch's Flat(4)
+            // upper output bits are pass-throughs of constrained-zero inputs.
+            (
+                "exch_eq_flat4",
+                vec![Instr::Exch { rd: 0, rs: 1 }],
+                vec![Instr::Exch { rd: 0, rs: 1 }],
+                4,
+                vec![0, 1],
+                true,
             ),
         ];
 

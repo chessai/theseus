@@ -168,7 +168,11 @@ fn bveq_major1_i4_argument_swap_rejection() {
         "MAJOR-1: equiv(spec, model, 4) must ALSO reject (I4 must check BOTH sides)"
     );
 
-    // Also reject a spec with junk upper bits.
+    // Also reject a spec with GENUINELY-MALFORMED upper bits (N1: the I4
+    // obligation is UNDER the Flat(w) constraint, so a pass-through upper bit
+    // `Var(0,i≥4)` is legitimately false and ACCEPTED — that is invariant
+    // preservation, not junk. Real junk is a LOW-bit-dependent upper bit
+    // (`Var(0,0)`), which stays satisfiable under the constraint → rejected).
     let mut junk_spec = RegTransfer::identity();
     {
         let mut carry = BvExpr::Const(false);
@@ -180,14 +184,14 @@ fn bveq_major1_i4_argument_swap_rejection() {
             junk_spec.regs[0][i] = sum;
             carry = new_carry;
         }
-        // Junk in upper bits instead of constant-false.
+        // Malformed: upper bits depend on a LOW (unconstrained) input bit.
         for i in 4..BITS {
-            junk_spec.regs[0][i] = BvExpr::var(0, i);
+            junk_spec.regs[0][i] = BvExpr::var(0, 0);
         }
     }
     assert!(
         bveq::equiv(&junk_spec, &junk_spec, 4, &[0, 1]).is_err(),
-        "MAJOR-1: spec with junk upper bits must be rejected by I4 on both sides"
+        "MAJOR-1: spec with low-bit-dependent upper bits must be rejected by I4 (both sides)"
     );
 }
 
@@ -234,6 +238,129 @@ fn bveq_major2_global_constraint_escape() {
         regs_after[0], 0x0F,
         "r0 should be 0x0F (rotr(0xF0,4)=0x0F, 0x0F & 0x0F = 0x0F, 0 ^ 0x0F = 0x0F)"
     );
+}
+
+// ── MAJOR-2 teeth, ISOLATED from I4: corrupt a NON-operand register ──
+
+#[test]
+fn bveq_major2_nonoperand_corruption_rejected() {
+    // MAJOR-2 teeth isolated from the I4 obligation (N1 review): corrupt a
+    // NON-operand register (r2), conditioned on a free register's upper bits
+    // (r3). With operand_regs=[0,1], r2 and r3 are unconstrained, so the
+    // corruption is visible in r2's equality check → REJECT. Under a (buggy)
+    // GLOBAL constraint, r3's upper nibble is forced zero and rotr(r3,4)'s low
+    // nibble vanishes → corruption hidden → this assertion flips to failing.
+    // That is exactly the regression guard the r1/r2 review demanded.
+    let model = bveq::symbolic_exec(&[
+        Instr::Rotri { rd: 3, imm: 4 },
+        Instr::Ccnot { rd: 2, rs: 3, rt: 6 },
+        Instr::Rotli { rd: 3, imm: 4 },
+    ])
+    .unwrap();
+    let identity = RegTransfer::identity();
+    assert!(
+        bveq::equiv(&model, &identity, 4, &[0, 1]).is_err(),
+        "MAJOR-2: corruption of a non-operand register (r2 via free r3) must be rejected"
+    );
+}
+
+#[test]
+fn bveq_major2_overdeclaration_hides_corruption() {
+    // N5 CONTRACT HAZARD (pinned, not endorsed): `equiv` trusts `operand_regs`.
+    // OVER-declaring a register that is NOT actually Flat(w) forces its upper
+    // bits to zero and thereby HIDES any corruption conditioned on them —
+    // `equiv` then returns Ok on a corrupting sequence. This is UNSOUND BY
+    // DECLARATION and cannot be detected inside `equiv`. It is why slice-2 MUST
+    // derive `operand_regs` from the prim's TYPE, never from the candidate
+    // sequence. This test pins the hazard so a future reader sees it explicitly.
+    let model = bveq::symbolic_exec(&[
+        Instr::Rotri { rd: 3, imm: 4 },
+        Instr::Ccnot { rd: 0, rs: 3, rt: 5 },
+        Instr::Rotli { rd: 3, imm: 4 },
+    ])
+    .unwrap();
+    let identity = RegTransfer::identity();
+    // Correct: r3 free → rejected.
+    assert!(bveq::equiv(&model, &identity, 4, &[0, 5]).is_err());
+    // Over-declared (r3 wrongly declared Flat(4)) → corruption hidden → Ok.
+    assert!(
+        bveq::equiv(&model, &identity, 4, &[0, 3, 5]).is_ok(),
+        "N5: over-declaring r3 hides the corruption (unsound-by-declaration hazard)"
+    );
+}
+
+// ── N1 regression: positive w<8 ACCEPT cases (were MISSING; would have caught N1) ──
+
+#[test]
+fn bveq_n1_identity_accepts_at_flat4() {
+    // N1 regression (L20): the prior UNCONDITIONAL I4 rejected EVERY reversible
+    // model at w<8 — including identity ≡ identity — because an output bit of a
+    // bijection can never be identically false. Under-constraint I4 accepts it.
+    let id = RegTransfer::identity();
+    assert!(
+        bveq::equiv(&id, &id, 4, &[0]).is_ok(),
+        "N1: identity must be equal to itself at Flat(4)"
+    );
+    assert!(
+        bveq::equiv(&id, &id, 4, &[0, 1, 2]).is_ok(),
+        "N1: identity self-equal with multiple operands"
+    );
+}
+
+#[test]
+fn bveq_n1_exch_accepts_at_flat4() {
+    // A genuine Flat(4) reversible op (register swap) must be certifiable.
+    let model = bveq::symbolic_exec(&[Instr::Exch { rd: 0, rs: 1 }]).unwrap();
+    assert!(
+        bveq::equiv(&model, &model, 4, &[0, 1]).is_ok(),
+        "N1: Exch must be equal to itself at Flat(4)"
+    );
+}
+
+#[test]
+fn bveq_n1_flat4_xor_spec_accepts() {
+    // Hand-built Flat(4) xorInto spec vs the Xor instruction model — the real
+    // slice-2 positive use case. Byte-Xor is width-agnostic: low 4 bits = a^b,
+    // upper bits pass-through (legitimately false under the Flat(4) constraint).
+    let model = bveq::symbolic_exec(&[Instr::Xor { rd: 1, rs: 0 }]).unwrap();
+    let mut spec = RegTransfer::identity();
+    for i in 0..BITS {
+        spec.regs[1][i] = BvExpr::var(0, i).xor(BvExpr::var(1, i));
+    }
+    assert!(
+        bveq::equiv(&model, &spec, 4, &[0, 1]).is_ok(),
+        "N1: Flat(4) xorInto must be accepted (byte-Xor is width-agnostic)"
+    );
+}
+
+// ── N2/N3 regression: validate the new operand_regs param + bit-rows ──
+
+#[test]
+fn bveq_n2_operand_reg_out_of_range_returns_err() {
+    // N2 (L20): the new MAJOR-2 operand_regs param fed an OOB index straight to
+    // VarMap::var → panic (itself violating the MAJOR-3 never-panic contract).
+    let id = RegTransfer::identity();
+    let result = bveq::equiv(&id, &id, 4, &[9]);
+    assert!(result.is_err(), "N2: out-of-range operand_regs must return Err, not panic");
+    match result.unwrap_err() {
+        BveqError::OperandRegOutOfRange { reg: 9 } => {}
+        other => panic!("expected OperandRegOutOfRange(9), got: {other}"),
+    }
+}
+
+#[test]
+fn bveq_n3_short_bit_row_returns_err() {
+    // N3 (L20): a RegTransfer with a short bit-row (a slice-2 spec emitting only
+    // w bits) panicked on index. Must return Err(RowSizeMismatch).
+    let mut short = RegTransfer::identity();
+    short.regs[0].truncate(4);
+    let id = RegTransfer::identity();
+    let result = bveq::equiv(&short, &id, 4, &[0]);
+    assert!(result.is_err(), "N3: short bit-row must return Err, not panic");
+    match result.unwrap_err() {
+        BveqError::RowSizeMismatch { side: "a", reg: 0, len: 4 } => {}
+        other => panic!("expected RowSizeMismatch(a, 0, 4), got: {other}"),
+    }
 }
 
 // ── MAJOR-3 regression: panics + silent aliasing → Err ──────────────
