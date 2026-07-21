@@ -67,6 +67,8 @@ impl BvExpr {
         BvExpr::Const(b)
     }
 
+    // Fluent builder consistent with `.xor()/.and()/.or()`; not the std trait.
+    #[allow(clippy::should_implement_trait)]
     pub fn not(self) -> Self {
         BvExpr::Not(Box::new(self))
     }
@@ -209,10 +211,10 @@ pub fn eval_expr(expr: &BvExpr, operands: &[u8]) -> bool {
 /// Evaluate a full register transfer at concrete register values.
 pub fn eval_transfer(transfer: &RegTransfer, regs: &[u8; NUM_REGS]) -> [u8; NUM_REGS] {
     let mut result = [0u8; NUM_REGS];
-    for r in 0..NUM_REGS {
+    for (r, out_reg) in result.iter_mut().enumerate() {
         for bit in 0..BITS {
             if eval_expr(&transfer.regs[r][bit], regs) {
-                result[r] |= 1 << bit;
+                *out_reg |= 1 << bit;
             }
         }
     }
@@ -293,9 +295,9 @@ fn bv_rotr_const(bits: &[BvExpr], amount: usize) -> Vec<BvExpr> {
 fn bv_rotl_var(val: &[BvExpr], amount_bits: &[BvExpr]) -> Vec<BvExpr> {
     let n = val.len();
     let mut bits: Vec<BvExpr> = val.to_vec();
-    for stage in 0..3 {
+    for (stage, sel_src) in amount_bits.iter().enumerate().take(3) {
         let shift = 1usize << stage;
-        let sel = amount_bits[stage].clone();
+        let sel = sel_src.clone();
         let prev = bits.clone();
         bits = (0..n)
             .map(|i| {
@@ -314,9 +316,9 @@ fn bv_rotl_var(val: &[BvExpr], amount_bits: &[BvExpr]) -> Vec<BvExpr> {
 fn bv_rotr_var(val: &[BvExpr], amount_bits: &[BvExpr]) -> Vec<BvExpr> {
     let n = val.len();
     let mut bits: Vec<BvExpr> = val.to_vec();
-    for stage in 0..3 {
+    for (stage, sel_src) in amount_bits.iter().enumerate().take(3) {
         let shift = 1usize << stage;
-        let sel = amount_bits[stage].clone();
+        let sel = sel_src.clone();
         let prev = bits.clone();
         bits = (0..n)
             .map(|i| {
@@ -394,10 +396,11 @@ fn decode_counterexample(
     bit: usize,
 ) -> Counterexample {
     let mut operand_values = [0u8; NUM_REGS];
-    for op in 0..map.num_operands().min(NUM_REGS) {
+    let n_op = map.num_operands().min(NUM_REGS);
+    for (op, ov) in operand_values.iter_mut().enumerate().take(n_op) {
         for b in 0..BITS {
             if witness.value(map.var(op, b)) {
-                operand_values[op] |= 1 << b;
+                *ov |= 1 << b;
             }
         }
     }
