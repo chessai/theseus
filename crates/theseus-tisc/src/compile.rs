@@ -2946,7 +2946,7 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
 // programs with larger ROMs (e.g. guarded-unroll iter).
 
 /// Execute one TISC-1 instruction on the machine state (direct simulation).
-fn exec_instr(instr: Instr, state: &mut StateVals) {
+pub fn exec_instr(instr: Instr, state: &mut StateVals) {
     match instr {
         Instr::Add { rd, rs } => {
             state.regs[rd as usize] = state.regs[rd as usize].wrapping_add(state.regs[rs as usize]);

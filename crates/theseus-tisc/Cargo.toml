@@ -6,10 +6,15 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+z3-crosscheck = ["dep:easy-smt"]
+
 [dependencies]
 theseus-core = { path = "../theseus-core" }
 theseus-netlist = { path = "../theseus-netlist" }
 theseus-spice = { path = "../theseus-spice" }
+biodivine-lib-bdd = "=0.6.3"
+easy-smt = { version = "0.2", optional = true }
 
 [dev-dependencies]
 theseus-eval = { path = "../theseus-eval" }

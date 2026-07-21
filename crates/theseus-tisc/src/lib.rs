@@ -5,6 +5,7 @@
 //! `Iso : State <-> State` that can be lowered to a cell netlist.
 
 pub mod asm;
+pub mod bveq;
 pub mod compile;
 pub mod types;
 pub mod addressing;
