@@ -16,6 +16,7 @@ use theseus_core::typing::is_numeral_ty;
 use theseus_core::{adjoint, Iso, Type, Value};
 
 use crate::asm::{assemble, Instr};
+use crate::bveq;
 use crate::types::{
     decode_system, encode_system,
     StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH,
@@ -38,6 +39,10 @@ pub enum CompileError {
     /// The arr leaves must home at [Mem(0), Mem(1), …, Mem(n-1)] in order;
     /// a composition that shifts them would silently corrupt execution.
     ResidentMisplaced(String),
+    /// The bveq emission verifier rejected an instruction sequence that
+    /// enumeration accepted — a real emission bug (transposed operands,
+    /// wrong arm). Carries a human-readable description of the failure.
+    EmissionVerificationFailed(String),
 }
 
 impl fmt::Display for CompileError {
@@ -53,6 +58,9 @@ impl fmt::Display for CompileError {
             }
             CompileError::ResidentMisplaced(msg) => {
                 write!(f, "resident array misplaced: {msg}")
+            }
+            CompileError::EmissionVerificationFailed(msg) => {
+                write!(f, "emission verification failed: {msg}")
             }
         }
     }
@@ -307,7 +315,7 @@ fn structural_iso_is_identity(
 
 /// Where a leaf value resides: register, scratch word, or memory word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Location {
+pub enum Location {
     Reg(u8),
     Scratch(u8),
     Mem(u8),
@@ -318,10 +326,10 @@ enum Location {
 /// free (zero from marshalling) vs. occupied by a leaf outside the
 /// current sub-context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct OccSet {
-    regs: u8,
-    scratch: u8,
-    mem: u32,
+pub struct OccSet {
+    pub regs: u8,
+    pub scratch: u8,
+    pub mem: u32,
 }
 
 impl OccSet {
@@ -329,7 +337,7 @@ impl OccSet {
         OccSet { regs: 0, scratch: 0, mem: 0 }
     }
 
-    fn from_locations(locs: &[Location]) -> Self {
+    pub fn from_locations(locs: &[Location]) -> Self {
         let mut occ = Self::empty();
         for loc in locs {
             occ.set(*loc);
@@ -418,12 +426,12 @@ fn home_of(leaf: usize, n_leaves: usize, resident: usize) -> Location {
 /// Between every instruction the machine is in canonical layout — every
 /// leaf sits in its home (ADR-0044 §2.1).
 #[derive(Clone, Debug)]
-struct Ctx {
+pub struct Ctx {
     /// `homes[i]` = canonical physical location for leaf `i`.
-    homes: Vec<Location>,
+    pub homes: Vec<Location>,
     /// Whole-machine occupancy: bits for every location holding live data.
     /// Copied unchanged across split/merge; updated only by displacement.
-    occ: OccSet,
+    pub occ: OccSet,
 }
 
 impl Ctx {
@@ -853,6 +861,130 @@ fn emit_skip_block(
     Ok(out)
 }
 
+// ── BVEQ emission verifier (slice-2: decomposed check) ──────────────
+
+/// Verify that a register-pure instruction sequence `body` computes the
+/// prim defined by `def`, with operands homed in `operand_regs`.
+///
+/// The DECOMPOSED CHECK (design r2):
+/// 1. `symbolic_exec(body)` — fail closed on non-register-pure / aliased / OOB.
+/// 2. FRAME CLOSURE: non-operand registers unchanged (identity); operand
+///    output bits depend only on operand-register input variables.
+/// 3. POINTWISE over the table: every `(in, out)` row of `def.forward`
+///    agrees with `eval_transfer` on the operand registers.
+///
+/// Returns `Ok(())` on success, `Err(CompileError::EmissionVerificationFailed)`
+/// on mismatch. `operand_regs` MUST be TYPE-derived (from `regs`/`ctx.homes`),
+/// NEVER candidate-derived (N5).
+pub fn bveq_verify_emission(
+    body: &[Instr],
+    def: &PrimDef,
+    operand_regs: &[u8],
+) -> Result<(), CompileError> {
+    // Step 1: symbolic_exec — fail closed.
+    let transfer = bveq::symbolic_exec(body).map_err(|e| {
+        CompileError::EmissionVerificationFailed(format!(
+            "symbolic_exec rejected body for '{}': {e}",
+            def.forward_name
+        ))
+    })?;
+
+    // Build the shared VarMap over the full register file.
+    let map = bveq::VarMap::new(NUM_REGS).map_err(|e| {
+        CompileError::EmissionVerificationFailed(format!(
+            "VarMap construction failed for '{}': {e}",
+            def.forward_name
+        ))
+    })?;
+
+    // Collect the set of operand register indices for fast lookup.
+    let operand_set: std::collections::BTreeSet<usize> =
+        operand_regs.iter().map(|&r| r as usize).collect();
+
+    // Collect BDD variable indices for operand registers (all bits).
+    let operand_bdd_vars: std::collections::BTreeSet<bveq::biodivine_lib_bdd::BddVariable> = {
+        let mut s = std::collections::BTreeSet::new();
+        for &r in operand_regs {
+            for bit in 0..bveq::BITS {
+                s.insert(map.var(r as usize, bit));
+            }
+        }
+        s
+    };
+
+    // Step 2: Frame closure.
+    for reg in 0..NUM_REGS {
+        for bit in 0..bveq::BITS {
+            let bdd = bveq::expr_to_bdd(&transfer.regs[reg][bit], &map).map_err(|e| {
+                CompileError::EmissionVerificationFailed(format!(
+                    "expr_to_bdd failed for '{}' reg {} bit {}: {e}",
+                    def.forward_name, reg, bit
+                ))
+            })?;
+
+            if !operand_set.contains(&reg) {
+                // Non-operand register: output must equal identity (its own input variable).
+                let identity = map.bdd_vars().mk_var(map.var(reg, bit));
+                if bdd != identity {
+                    return Err(CompileError::EmissionVerificationFailed(format!(
+                        "frame closure: non-operand reg {} bit {} is not identity for '{}'",
+                        reg, bit, def.forward_name
+                    )));
+                }
+            } else {
+                // Operand register: support_set must be ⊆ operand variables.
+                let support = bdd.support_set();
+                for var in support.into_iter() {
+                    if !operand_bdd_vars.contains(&var) {
+                        return Err(CompileError::EmissionVerificationFailed(format!(
+                            "frame closure: operand reg {} bit {} depends on non-operand \
+                             variable for '{}'",
+                            reg, bit, def.forward_name
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 3: Pointwise over the table.
+    for (in_val, out_val) in &def.forward {
+        let in_bytes = value_to_leaf_bytes(in_val, &def.input_ty);
+        let out_bytes = value_to_leaf_bytes(out_val, &def.output_ty);
+
+        // Build input register state: operand regs get their leaf bytes,
+        // all other regs are zero (they are unconstrained by step 2's closure,
+        // so any fixed value works — zero is canonical).
+        let mut input_regs = [0u8; NUM_REGS];
+        for (leaf_idx, &r) in operand_regs.iter().enumerate() {
+            if leaf_idx < in_bytes.len() {
+                input_regs[r as usize] = in_bytes[leaf_idx];
+            }
+        }
+
+        let result_regs = bveq::eval_transfer(&transfer, &input_regs);
+
+        // Check operand registers against expected output.
+        for (leaf_idx, &r) in operand_regs.iter().enumerate() {
+            let expected = if leaf_idx < out_bytes.len() {
+                out_bytes[leaf_idx]
+            } else {
+                0
+            };
+            if result_regs[r as usize] != expected {
+                return Err(CompileError::EmissionVerificationFailed(format!(
+                    "pointwise mismatch for '{}': input={:?}, reg {} (leaf {}): \
+                     got {} expected {}",
+                    def.forward_name, in_bytes, r, leaf_idx,
+                    result_regs[r as usize], expected
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // ── Prim recognition ─────────────────────────────────────────────────
 
 use theseus_core::prim::{enumerate_values, PrimDef};
@@ -860,7 +992,7 @@ use theseus_core::prim::{enumerate_values, PrimDef};
 /// Try to recognize a PrimDef as a known TISC-1 instruction pattern.
 /// All register accesses are routed through `with_registers` so that
 /// scratch-resident operands are paged in/out correctly.
-fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> {
+pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> {
     let n_in = num_leaves(&def.input_ty)?;
     let n_out = num_leaves(&def.output_ty)?;
     let leaves: Vec<usize> = (0..n_in).collect();
@@ -873,30 +1005,36 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
         // addInto: (a, b) ↦ (a, a + b mod 256)
         if check_pattern_2reg(&def.forward, &vals, |a, b| (a, a.wrapping_add(b))) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Add {
+                let body = vec![Instr::Add {
                     rd: regs[1],
                     rs: regs[0],
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
         // subFrom: (a, b) ↦ (a, b - a mod 256)
         if check_pattern_2reg(&def.forward, &vals, |a, b| (a, b.wrapping_sub(a))) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Sub {
+                let body = vec![Instr::Sub {
                     rd: regs[1],
                     rs: regs[0],
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
         // xorInto: (a, b) ↦ (a, a ^ b)
         if check_pattern_2reg(&def.forward, &vals, |a, b| (a, a ^ b)) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Xor {
+                let body = vec![Instr::Xor {
                     rd: regs[1],
                     rs: regs[0],
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
@@ -908,10 +1046,12 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
                         instr: "EXCH".into(),
                     });
                 }
-                Ok(vec![Instr::Exch {
+                let body = vec![Instr::Exch {
                     rd: regs[0],
                     rs: regs[1],
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
@@ -920,10 +1060,12 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
             (a, b.rotate_left((a & 7) as u32))
         }) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Rotl {
+                let body = vec![Instr::Rotl {
                     rd: regs[1],
                     rs: regs[0],
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
@@ -932,10 +1074,12 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
             (a, b.rotate_right((a & 7) as u32))
         }) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Rotr {
+                let body = vec![Instr::Rotr {
                     rd: regs[1],
                     rs: regs[0],
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
@@ -953,12 +1097,14 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
             (a ^ b ^ 1, a)
         }) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![
+                let body = vec![
                     Instr::Xor { rd: regs[0], rs: regs[1] },
                     Instr::Xori { rd: regs[0], imm: 1 },
                     Instr::Xor { rd: regs[1], rs: regs[0] },
                     Instr::Xori { rd: regs[1], imm: 1 },
-                ])
+                ];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
@@ -967,12 +1113,14 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
             (b, a ^ b ^ 1)
         }) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![
+                let body = vec![
                     Instr::Xor { rd: regs[1], rs: regs[0] },
                     Instr::Xori { rd: regs[1], imm: 1 },
                     Instr::Xor { rd: regs[0], rs: regs[1] },
                     Instr::Xori { rd: regs[0], imm: 1 },
-                ])
+                ];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
     }
@@ -990,11 +1138,13 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
             }
         }) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Cswap {
+                let body = vec![Instr::Cswap {
                     rd: regs[0],
                     rs: regs[1],
                     rt: regs[2],
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
@@ -1004,11 +1154,13 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
             (t ^ (c1 & c2), c1, c2)
         }) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Ccnot {
+                let body = vec![Instr::Ccnot {
                     rd: regs[0],
                     rs: regs[1],
                     rt: regs[2],
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
@@ -1017,11 +1169,13 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
             (c1, c2, t ^ (c1 & c2))
         }) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Ccnot {
+                let body = vec![Instr::Ccnot {
                     rd: regs[2],
                     rs: regs[0],
                     rt: regs[1],
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
     }
@@ -1033,30 +1187,36 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
         // addi_K: a ↦ a + K
         if let Some(k) = find_constant_1reg(&def.forward, &vals, |a, k| a.wrapping_add(k)) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Addi {
+                let body = vec![Instr::Addi {
                     rd: regs[0],
                     imm: k,
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
         // subi_K: a ↦ a - K
         if let Some(k) = find_constant_1reg(&def.forward, &vals, |a, k| a.wrapping_sub(k)) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Subi {
+                let body = vec![Instr::Subi {
                     rd: regs[0],
                     imm: k,
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
 
         // xori_K: a ↦ a ^ K
         if let Some(k) = find_constant_1reg(&def.forward, &vals, |a, k| a ^ k) {
             return with_registers(ctx, &leaves, |regs| {
-                Ok(vec![Instr::Xori {
+                let body = vec![Instr::Xori {
                     rd: regs[0],
                     imm: k,
-                }])
+                }];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
     }
@@ -1142,7 +1302,7 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
             // one page-out at exit), NOT per-instruction.
             return with_registers(ctx, &leaves, |regs| {
                 let (t, p1, p2, p3, p4) = (regs[0], regs[1], regs[2], regs[3], regs[4]);
-                Ok(vec![
+                let body = vec![
                     Instr::Xor { rd: t, rs: p1 },
                     Instr::Xori { rd: t, imm: 1 },
                     Instr::Xori { rd: p1, imm: 1 },
@@ -1156,7 +1316,9 @@ fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> 
                     Instr::Xor { rd: p3, rs: p4 },
                     Instr::Xor { rd: p2, rs: p3 },
                     Instr::Xor { rd: p1, rs: p2 },
-                ])
+                ];
+                bveq_verify_emission(&body, def, regs)?;
+                Ok(body)
             });
         }
     }
