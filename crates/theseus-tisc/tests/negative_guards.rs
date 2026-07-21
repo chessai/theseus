@@ -98,6 +98,7 @@ fn compile_unrecognized_prim() {
         output_ty: Type::One,
         forward,
         backward,
+        symbolic: None,
     };
     let iso = Iso::Prim(Box::new(def));
     let result = compile(&iso);

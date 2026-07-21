@@ -265,6 +265,7 @@ pub fn prim_from_bits(
         output_ty,
         forward,
         backward,
+        symbolic: None,
     };
     assert_eq!(
         admit(&def),
@@ -2052,6 +2053,7 @@ mod tests {
             output_ty: wide,
             forward,
             backward,
+            symbolic: None,
         };
         match lower_iso(&Iso::Prim(Box::new(def))) {
             Err(LowerError::UnsupportedPrim { name }) => assert_eq!(name, "too_wide"),

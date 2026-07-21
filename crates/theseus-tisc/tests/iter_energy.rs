@@ -60,6 +60,7 @@ fn rot3() -> Iso {
         output_ty: three_ty(),
         forward: fwd,
         backward: bwd,
+        symbolic: None,
     }))
 }
 

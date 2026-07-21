@@ -266,16 +266,37 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
             other => Err(domain_err("Unfold", &other)),
         },
 
-        Iso::Prim(def) => def
-            .forward
-            .get(&value)
-            .cloned()
-            .ok_or_else(|| {
-                EvalError::DomainError(format!(
-                    "prim '{}': value not in forward map: {:?}",
-                    def.forward_name, value
-                ))
-            }),
+        Iso::Prim(def) => {
+            // I1 PRECEDENCE: table WINS when both table and spec are present.
+            if let Some(result) = def.forward.get(&value) {
+                return Ok(result.clone());
+            }
+            // Eval-via-spec: decompose → eval_expr per bit → recompose.
+            if let Some(spec) = &def.symbolic {
+                let width = spec.forward.width as usize;
+                let in_bytes = theseus_core::prim::value_to_leaf_bytes(&value, &def.input_ty);
+                let num_out_leaves = spec.forward.leaves.len();
+                let mut out_bytes = vec![0u8; num_out_leaves];
+                for (leaf, ob) in out_bytes.iter_mut().enumerate() {
+                    for b in 0..width {
+                        if theseus_core::bvexpr::eval_expr(
+                            &spec.forward.leaves[leaf][b],
+                            &in_bytes,
+                        ) {
+                            *ob |= 1 << b;
+                        }
+                    }
+                }
+                return Ok(theseus_core::prim::value_from_leaf_bytes(
+                    &out_bytes,
+                    &def.output_ty,
+                ));
+            }
+            Err(EvalError::DomainError(format!(
+                "prim '{}': value not in forward map and no symbolic spec: {:?}",
+                def.forward_name, value
+            )))
+        }
     }
 }
 
@@ -679,6 +700,7 @@ mod tests {
             output_ty: ty,
             forward: fwd,
             backward: bwd,
+            symbolic: None,
         }))
     }
 
@@ -776,6 +798,7 @@ mod tests {
             output_ty: bit_ty(),
             forward: fwd.clone(),
             backward: fwd,
+            symbolic: None,
         }))
     }
 
@@ -914,6 +937,7 @@ mod tests {
             output_ty: ty,
             forward: fwd.clone(),
             backward: fwd,
+            symbolic: None,
         }))
     }
 

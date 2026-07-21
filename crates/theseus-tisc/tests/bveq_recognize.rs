@@ -75,6 +75,7 @@ fn prim_2reg(name: &str, ty: &Type, f: impl Fn(u8, u8) -> (u8, u8)) -> PrimDef {
         output_ty: prod_ty,
         forward,
         backward,
+        symbolic: None,
     }
 }
 
@@ -105,6 +106,7 @@ fn prim_3reg(name: &str, ty: &Type, f: impl Fn(u8, u8, u8) -> (u8, u8, u8)) -> P
         output_ty: prod_ty,
         forward,
         backward,
+        symbolic: None,
     }
 }
 
@@ -127,6 +129,7 @@ fn prim_1reg(name: &str, ty: &Type, f: impl Fn(u8) -> u8) -> PrimDef {
         output_ty: ty.clone(),
         forward,
         backward,
+        symbolic: None,
     }
 }
 
@@ -189,6 +192,7 @@ fn build_walk_prim() -> PrimDef {
         output_ty: carrier,
         forward,
         backward,
+        symbolic: None,
     }
 }
 
@@ -324,6 +328,7 @@ fn t_suite_agree_3cycle_fwd() {
         output_ty: carrier,
         forward,
         backward,
+        symbolic: None,
     };
     let regs: &[u8] = &[0, 1];
     let body = [
@@ -499,6 +504,7 @@ fn t_aliased_home_swap_rejected_by_recognize() {
         output_ty: ty,
         forward,
         backward,
+        symbolic: None,
     };
     let ctx = Ctx {
         homes: vec![Location::Reg(0), Location::Reg(0)],

@@ -225,6 +225,7 @@ fn t5_f3_forged_table_rejected() {
         output_ty: full_ty,
         forward,
         backward,
+        symbolic: None,
     };
     let iso = Iso::Prim(Box::new(def));
     let result = compile_with_metadata_resident(&iso, 2);

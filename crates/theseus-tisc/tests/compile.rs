@@ -1261,6 +1261,7 @@ fn build_3cycle_body() -> (Iso, Type) {
         output_ty: carrier_ty.clone(),
         forward,
         backward,
+        symbolic: None,
     };
 
     (Iso::Prim(Box::new(prim)), bit)
@@ -1312,6 +1313,7 @@ fn build_informative_trace_body() -> (Iso, Type) {
         output_ty: carrier_ty.clone(),
         forward,
         backward,
+        symbolic: None,
     };
 
     (Iso::Prim(Box::new(prim)), bit)
@@ -1677,6 +1679,7 @@ fn mdd_reject_leaf_count_mismatch() {
         output_ty: out_ty,
         forward,
         backward,
+        symbolic: None,
     };
     let iso = Iso::trace(one, Iso::Prim(Box::new(prim)));
     let result = compile(&iso);

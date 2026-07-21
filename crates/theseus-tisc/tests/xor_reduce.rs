@@ -104,6 +104,7 @@ fn xor_prim() -> Iso {
         output_ty: ty,
         forward,
         backward,
+        symbolic: None,
     };
     Iso::Prim(Box::new(def))
 }

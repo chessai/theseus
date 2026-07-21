@@ -29,70 +29,9 @@ pub use biodivine_lib_bdd;
 /// Bits per register (byte-wide ISA).
 pub const BITS: usize = 8;
 
-// ── BvExpr AST ──────────────────────────────────────────────────────
+// ── BvExpr AST (canonical home: theseus-core/src/bvexpr.rs) ─────────
 
-/// Per-bit boolean expression over w-bit operand lanes (w ≤ 8).
-///
-/// No `Mul` variant — kept unrepresentable so BDDs stay polynomial (r2 I3).
-/// The enum makes multiply impossible by omission.
-#[derive(Clone, Debug)]
-pub enum BvExpr {
-    /// Input variable: bit `bit` of operand (register) `operand`.
-    Var { operand: usize, bit: usize },
-    /// Boolean constant.
-    Const(bool),
-    /// Bitwise NOT.
-    Not(Box<BvExpr>),
-    /// Bitwise XOR.
-    Xor(Box<BvExpr>, Box<BvExpr>),
-    /// Bitwise AND.
-    And(Box<BvExpr>, Box<BvExpr>),
-    /// Bitwise OR (needed for ripple-carry and barrel mux).
-    Or(Box<BvExpr>, Box<BvExpr>),
-    /// 2:1 multiplexer: if `sel` then `then_` else `else_`.
-    /// Used by Cswap (bit-0 mux) and variable-rotate (barrel network).
-    Mux {
-        sel: Box<BvExpr>,
-        then_: Box<BvExpr>,
-        else_: Box<BvExpr>,
-    },
-}
-
-impl BvExpr {
-    pub fn var(operand: usize, bit: usize) -> Self {
-        BvExpr::Var { operand, bit }
-    }
-
-    pub fn constant(b: bool) -> Self {
-        BvExpr::Const(b)
-    }
-
-    // Fluent builder consistent with `.xor()/.and()/.or()`; not the std trait.
-    #[allow(clippy::should_implement_trait)]
-    pub fn not(self) -> Self {
-        BvExpr::Not(Box::new(self))
-    }
-
-    pub fn xor(self, other: Self) -> Self {
-        BvExpr::Xor(Box::new(self), Box::new(other))
-    }
-
-    pub fn and(self, other: Self) -> Self {
-        BvExpr::And(Box::new(self), Box::new(other))
-    }
-
-    pub fn or(self, other: Self) -> Self {
-        BvExpr::Or(Box::new(self), Box::new(other))
-    }
-
-    pub fn mux(sel: Self, then_: Self, else_: Self) -> Self {
-        BvExpr::Mux {
-            sel: Box::new(sel),
-            then_: Box::new(then_),
-            else_: Box::new(else_),
-        }
-    }
-}
+pub use theseus_core::bvexpr::{BvExpr, eval_expr};
 
 // ── RegTransfer ─────────────────────────────────────────────────────
 
@@ -261,26 +200,7 @@ pub fn expr_to_bdd_shifted(
     }
 }
 
-// ── Concrete evaluator (for reconciliation tests) ───────────────────
-
-/// Evaluate a `BvExpr` at concrete operand byte values.
-pub fn eval_expr(expr: &BvExpr, operands: &[u8]) -> bool {
-    match expr {
-        BvExpr::Var { operand, bit } => (operands[*operand] >> *bit) & 1 == 1,
-        BvExpr::Const(b) => *b,
-        BvExpr::Not(a) => !eval_expr(a, operands),
-        BvExpr::Xor(a, b) => eval_expr(a, operands) ^ eval_expr(b, operands),
-        BvExpr::And(a, b) => eval_expr(a, operands) & eval_expr(b, operands),
-        BvExpr::Or(a, b) => eval_expr(a, operands) | eval_expr(b, operands),
-        BvExpr::Mux { sel, then_, else_ } => {
-            if eval_expr(sel, operands) {
-                eval_expr(then_, operands)
-            } else {
-                eval_expr(else_, operands)
-            }
-        }
-    }
-}
+// ── Concrete evaluator (re-exported from theseus-core::bvexpr) ──────
 
 /// Evaluate a full register transfer at concrete register values.
 pub fn eval_transfer(transfer: &RegTransfer, regs: &[u8; NUM_REGS]) -> [u8; NUM_REGS] {
@@ -1116,6 +1036,145 @@ mod z3_tests {
                 z3_equal, bveq_equal,
                 "Z3 disagrees with bveq on {name}: z3={z3_result}, bveq_equal={bveq_equal}"
             );
+        }
+    }
+}
+
+// ── Symbolic admission (BDD mutual-inverse certificate) ─────────────
+
+/// Certify that a `PrimSpec`'s forward and backward are mutual inverses
+/// via BDD composition: `backward ∘ forward == id` AND `forward ∘ backward == id`,
+/// checked per output bit.
+///
+/// This is the symbolic bijectivity certificate for prims that have no table.
+/// Core stays BDD-free; this function lives in tisc.
+///
+/// `num_operands` is the number of leaf operands (e.g. 3 for a 3-op prim).
+/// `width` is the bit-width per leaf (from the spec).
+pub fn admit_symbolic(spec: &theseus_core::prim::PrimSpec) -> Result<(), BveqError> {
+    let width = spec.forward.width as usize;
+    let num_operands = spec.forward.leaves.len();
+
+    if width == 0 || width > BITS {
+        return Err(BveqError::WidthOutOfRange { w: width });
+    }
+
+    // Validate backward shape matches forward.
+    if spec.backward.width as usize != width {
+        return Err(BveqError::WidthOutOfRange { w: spec.backward.width as usize });
+    }
+    if spec.backward.leaves.len() != num_operands {
+        return Err(BveqError::FrameSizeMismatch {
+            side: "backward spec",
+            len: spec.backward.leaves.len(),
+        });
+    }
+
+    let map = VarMap::new(num_operands)?;
+
+    // Check backward ∘ forward == id:
+    // For each operand `op` and bit `b`:
+    //   substitute forward's outputs into backward's expression and check == Var(op, b).
+    check_composition_is_identity(&spec.forward, &spec.backward, &map, width, num_operands, "backward∘forward")?;
+
+    // Check forward ∘ backward == id:
+    check_composition_is_identity(&spec.backward, &spec.forward, &map, width, num_operands, "forward∘backward")?;
+
+    Ok(())
+}
+
+/// Check that `second ∘ first == id` via BDD: for each output operand/bit,
+/// substitute first's output expressions into second's input variables and
+/// verify the result equals the original input variable.
+fn check_composition_is_identity(
+    first: &theseus_core::prim::SpecTransfer,
+    second: &theseus_core::prim::SpecTransfer,
+    map: &VarMap,
+    width: usize,
+    num_operands: usize,
+    _direction: &str,
+) -> Result<(), BveqError> {
+    // Build BDDs for first's output expressions.
+    let mut first_bdds: Vec<Vec<Bdd>> = Vec::with_capacity(num_operands);
+    for leaf in 0..num_operands {
+        let mut bits = Vec::with_capacity(width);
+        for b in 0..width {
+            bits.push(expr_to_bdd(&first.leaves[leaf][b], map)?);
+        }
+        first_bdds.push(bits);
+    }
+
+    // For each output (operand, bit) of second: substitute first's BDDs
+    // into second's expression and check == identity BDD for that variable.
+    for op in 0..num_operands {
+        for b in 0..width {
+            let composed = substitute_bdd(&second.leaves[op][b], &first_bdds, map, width)?;
+            let identity = map.bdd_vars().mk_var(map.var(op, b));
+            if composed != identity {
+                // Build a counterexample from the BDD disagreement.
+                let diff = composed.xor(&identity);
+                let witness = diff.sat_witness();
+                if let Some(valuation) = witness {
+                    let mut operand_values = [0u8; NUM_REGS];
+                    for oper in 0..num_operands.min(NUM_REGS) {
+                        for bit in 0..width {
+                            if valuation.value(map.var(oper, bit)) {
+                                operand_values[oper] |= 1 << bit;
+                            }
+                        }
+                    }
+                    return Err(BveqError::NotEquivalent(Counterexample {
+                        operand_values,
+                        register: op,
+                        bit: b,
+                    }));
+                }
+                // Fallback: should be unreachable since diff is non-false.
+                return Err(BveqError::NotEquivalent(Counterexample {
+                    operand_values: [0u8; NUM_REGS],
+                    register: op,
+                    bit: b,
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Substitute BDDs for input variables in a `BvExpr`, producing a composed BDD.
+/// `first_bdds[operand][bit]` replaces `Var { operand, bit }`.
+fn substitute_bdd(
+    expr: &BvExpr,
+    first_bdds: &[Vec<Bdd>],
+    map: &VarMap,
+    width: usize,
+) -> Result<Bdd, BveqError> {
+    match expr {
+        BvExpr::Var { operand, bit } => {
+            if *operand < first_bdds.len() && *bit < width {
+                Ok(first_bdds[*operand][*bit].clone())
+            } else {
+                Err(BveqError::VarOutOfRange {
+                    operand: *operand,
+                    bit: *bit,
+                    num_operands: first_bdds.len(),
+                })
+            }
+        }
+        BvExpr::Const(true) => Ok(map.bdd_vars().mk_true()),
+        BvExpr::Const(false) => Ok(map.bdd_vars().mk_false()),
+        BvExpr::Not(a) => Ok(substitute_bdd(a, first_bdds, map, width)?.not()),
+        BvExpr::Xor(a, b) => Ok(substitute_bdd(a, first_bdds, map, width)?
+            .xor(&substitute_bdd(b, first_bdds, map, width)?)),
+        BvExpr::And(a, b) => Ok(substitute_bdd(a, first_bdds, map, width)?
+            .and(&substitute_bdd(b, first_bdds, map, width)?)),
+        BvExpr::Or(a, b) => Ok(substitute_bdd(a, first_bdds, map, width)?
+            .or(&substitute_bdd(b, first_bdds, map, width)?)),
+        BvExpr::Mux { sel, then_, else_ } => {
+            let s = substitute_bdd(sel, first_bdds, map, width)?;
+            let t = substitute_bdd(then_, first_bdds, map, width)?;
+            let e = substitute_bdd(else_, first_bdds, map, width)?;
+            Ok(s.and(&t).or(&s.not().and(&e)))
         }
     }
 }

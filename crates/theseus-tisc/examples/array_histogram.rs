@@ -76,6 +76,7 @@ fn xor_prim() -> Iso {
     Iso::Prim(Box::new(theseus_core::prim::PrimDef {
         forward_name: "xor".into(), backward_name: "xor".into(),
         input_ty: ty.clone(), output_ty: ty, forward, backward,
+        symbolic: None,
     }))
 }
 fn reduce_iso(d: usize) -> Iso {

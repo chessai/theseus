@@ -751,6 +751,7 @@ fn elab_clauses_label(
                 output_ty: ext_rhs.clone(),
                 forward: phi,
                 backward,
+                symbolic: None,
             };
             if theseus_core::prim::admit(&def).is_err() {
                 return unsupported();

@@ -257,6 +257,7 @@ mod tests {
             output_ty: bool_t,
             forward: fwd,
             backward: bwd,
+            symbolic: None,
         };
         let iso = Iso::Prim(Box::new(def));
         assert_round_trip(&iso);
@@ -330,6 +331,7 @@ mod tests {
             output_ty: three_ty(),
             forward: fwd,
             backward: bwd,
+            symbolic: None,
         }))
     }
 
@@ -469,6 +471,7 @@ mod tests {
             output_ty: ty,
             forward: fwd.clone(),
             backward: fwd,
+            symbolic: None,
         }))
     }
 
@@ -738,6 +741,7 @@ mod tests {
             output_ty: ty,
             forward: fwd.clone(),
             backward: fwd,
+            symbolic: None,
         };
         let iso = Iso::Prim(Box::new(def));
         assert_round_trip(&iso);

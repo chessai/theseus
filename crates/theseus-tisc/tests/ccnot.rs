@@ -64,6 +64,7 @@ fn ccnot_prim_iso() -> Iso {
         output_ty: ty,
         forward,
         backward,
+        symbolic: None,
     };
     Iso::Prim(Box::new(def))
 }
@@ -267,6 +268,7 @@ fn t_neg_xor_not_ccnot() {
         output_ty: ty,
         forward,
         backward,
+        symbolic: None,
     };
     let iso = Iso::Prim(Box::new(def));
     let lowered = compile_with_metadata(&iso).expect("compile xor prim");

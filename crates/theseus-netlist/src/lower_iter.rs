@@ -118,6 +118,7 @@ fn gate_safe_body(body: &TypedNode) -> Result<Cow<'_, TypedNode>, LowerError> {
         output_ty: body.output.clone(),
         forward,
         backward,
+        symbolic: None,
     };
     Ok(Cow::Owned(TypedNode {
         input: body.input.clone(),

@@ -69,6 +69,7 @@ fn add_prim_def() -> PrimDef {
         output_ty: ty,
         forward,
         backward,
+        symbolic: None,
     }
 }
 
@@ -99,6 +100,7 @@ fn xor_prim_def(w: u8) -> PrimDef {
         output_ty: ty,
         forward,
         backward,
+        symbolic: None,
     }
 }
 
@@ -664,6 +666,7 @@ fn t_neg_flat4_add_rejected() {
         output_ty: ty,
         forward,
         backward,
+        symbolic: None,
     };
 
     let result = admit(&def);

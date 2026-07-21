@@ -136,6 +136,7 @@ mod tests {
             output_ty: bool_ty(),
             forward: fwd.clone(),
             backward: fwd,
+            symbolic: None,
         }
     }
 

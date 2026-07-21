@@ -881,6 +881,17 @@ pub fn bveq_verify_emission(
     def: &PrimDef,
     operand_regs: &[u8],
 ) -> Result<(), CompileError> {
+    // VACUITY GUARD: reject an empty/absent table BEFORE the pointwise loop.
+    // An empty table means the `for (in,out) in &def.forward` loop below
+    // returns Ok having verified NOTHING (the f3.5 vacuous-oracle class).
+    if def.forward.is_empty() {
+        return Err(CompileError::EmissionVerificationFailed(format!(
+            "prim '{}': forward table is empty — cannot verify emission \
+             (symbolic-only prims are not recognized in 3a)",
+            def.forward_name
+        )));
+    }
+
     // Step 1: symbolic_exec — fail closed.
     let transfer = bveq::symbolic_exec(body).map_err(|e| {
         CompileError::EmissionVerificationFailed(format!(
@@ -993,6 +1004,16 @@ use theseus_core::prim::{enumerate_values, PrimDef};
 /// All register accesses are routed through `with_registers` so that
 /// scratch-resident operands are paged in/out correctly.
 pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> {
+    // HANG GUARD: reject symbolic-only prims BEFORE any enumerate_values call.
+    // The k-leaf arms call enumerate_values(input_ty) — for a Flat(8)^3 prim
+    // that's 2^24 thermometer Values = OOM/hang. Symbolic recognition is 3b.
+    if def.forward.is_empty() && def.symbolic.is_some() {
+        return Err(CompileError::Deferred(format!(
+            "prim '{}': symbolic-only prim — recognition not yet implemented (3b)",
+            def.forward_name
+        )));
+    }
+
     let n_in = num_leaves(&def.input_ty)?;
     let n_out = num_leaves(&def.output_ty)?;
     let leaves: Vec<usize> = (0..n_in).collect();
@@ -1602,6 +1623,7 @@ pub fn memexch_prim_idx(elem_ty: &Type, idx_ty: &Type, n: usize) -> Result<PrimD
         output_ty: full_ty,
         forward,
         backward,
+        symbolic: None,
     })
 }
 
@@ -3321,6 +3343,7 @@ mod tests {
             output_ty: ty,
             forward,
             backward,
+            symbolic: None,
         }
     }
 

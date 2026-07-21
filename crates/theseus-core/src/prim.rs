@@ -6,6 +6,7 @@
 //! `forward ∘ backward = id_B` over the finite domains — not merely that
 //! each is individually bijective.
 
+use crate::bvexpr::BvExpr;
 use crate::ty::Type;
 use std::collections::BTreeMap;
 
@@ -76,6 +77,30 @@ pub fn enumerate_values(ty: &Type) -> Vec<Value> {
     }
 }
 
+/// A symbolic bit-level transfer for one direction of a prim.
+///
+/// `leaves[i][b]` is the `BvExpr` for bit `b` of output leaf `i`, expressed
+/// over `(operand, bit)` input variables. `width` is the bit-width of each
+/// leaf (1..=8, matching `Flat(width)`). Bit convention: LSB-first leaf byte
+/// (identical to `value_to_leaf_bytes` / `VarMap`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpecTransfer {
+    /// Per-output-leaf, per-bit expressions. `leaves[leaf_idx][bit_idx]`.
+    pub leaves: Vec<Vec<BvExpr>>,
+    /// Bit-width of each leaf (1..=8).
+    pub width: u8,
+}
+
+/// A symbolic prim spec: a `(forward, backward)` pair of `SpecTransfer`.
+///
+/// Both directions are mandatory because `adjoint()` is total and infallible —
+/// a symbolic prim MUST carry a constructive inverse so adjoint can swap them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrimSpec {
+    pub forward: SpecTransfer,
+    pub backward: SpecTransfer,
+}
+
 /// Definition of a primitive iso: a named `(forward, backward)` pair of
 /// finite functions together with their domain and codomain types.
 ///
@@ -89,6 +114,9 @@ pub struct PrimDef {
     pub output_ty: Type,
     pub forward: BTreeMap<Value, Value>,
     pub backward: BTreeMap<Value, Value>,
+    /// Optional symbolic spec. When present, the prim can be evaluated/admitted
+    /// without materializing a full table (breaks the 2^24 wall for wide ops).
+    pub symbolic: Option<PrimSpec>,
 }
 
 impl PrimDef {
@@ -101,6 +129,10 @@ impl PrimDef {
             output_ty: self.input_ty.clone(),
             forward: self.backward.clone(),
             backward: self.forward.clone(),
+            symbolic: self.symbolic.as_ref().map(|spec| PrimSpec {
+                forward: spec.backward.clone(),
+                backward: spec.forward.clone(),
+            }),
         }
     }
 }
@@ -116,13 +148,37 @@ pub enum AdmitError {
     BackwardOfForward { input: Value },
     /// `forward(backward(w)) ≠ w`.
     ForwardOfBackward { input: Value },
+    /// The prim has a symbolic spec but no table — core::admit cannot certify
+    /// bijectivity (no BDD machinery here). The caller should use
+    /// `bveq::admit_symbolic` in theseus-tisc instead.
+    SymbolicOnly,
+    /// The prim has both a table and a spec, but eval-via-spec disagrees with
+    /// the table on at least one input.
+    SpecTableMismatch {
+        /// The input value where the spec and table disagree.
+        input: Value,
+    },
 }
 
 /// Check that a [`PrimDef`] is admissible: the `(forward, backward)` pair
 /// are mutual inverses over the finite domain.
 ///
 /// Checks both `backward ∘ forward = id_A` and `forward ∘ backward = id_B`.
+///
+/// **Symbolic-only prims** (table empty, spec present) return
+/// `Err(AdmitError::SymbolicOnly)` BEFORE any `enumerate_values` call —
+/// this is the HANG GUARD (enumerate_values on Flat(8)^3 = 2^24 Values = OOM).
+///
+/// **Both-present prims** (table AND spec) verify spec==table over the table
+/// domain after the mutual-inverse check.
 pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
+    // HANG GUARD: symbolic-only prim — early-return BEFORE enumerate_values.
+    // core::admit cannot certify bijectivity without BDD; the caller must
+    // use bveq::admit_symbolic in theseus-tisc.
+    if def.forward.is_empty() && def.symbolic.is_some() {
+        return Err(AdmitError::SymbolicOnly);
+    }
+
     let domain = enumerate_values(&def.input_ty);
     let codomain = enumerate_values(&def.output_ty);
 
@@ -158,7 +214,142 @@ pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
         }
     }
 
+    // Both-present: verify spec==table over the table domain (forward direction).
+    if let Some(spec) = &def.symbolic {
+        let width = spec.forward.width as usize;
+        let num_leaves = spec.forward.leaves.len();
+        for (in_val, table_out) in &def.forward {
+            // Decompose the input value to leaf bytes.
+            let in_bytes = value_to_leaf_bytes(in_val, &def.input_ty);
+            // Evaluate the spec per output leaf, per bit.
+            let mut out_bytes = vec![0u8; num_leaves];
+            for (leaf, ob) in out_bytes.iter_mut().enumerate() {
+                for b in 0..width {
+                    if crate::bvexpr::eval_expr(&spec.forward.leaves[leaf][b], &in_bytes) {
+                        *ob |= 1 << b;
+                    }
+                }
+            }
+            // Recompose to a Value and compare.
+            let spec_out = value_from_leaf_bytes(&out_bytes, &def.output_ty);
+            if &spec_out != table_out {
+                return Err(AdmitError::SpecTableMismatch {
+                    input: in_val.clone(),
+                });
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Decompose a Value into leaf bytes (LSB-first, matching VarMap convention).
+/// Core-native: no BDD dependency.
+pub fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
+    match ty {
+        Type::Zero => panic!("value_to_leaf_bytes: Zero type"),
+        Type::One => vec![],
+        Type::Sum(a, b) => {
+            let la = count_leaves(a);
+            let lb = count_leaves(b);
+            let max_payload = la.max(lb);
+            let total = 1 + max_payload;
+            match v {
+                Value::Left(inner) => {
+                    let mut bytes = vec![0u8]; // tag = 0 (Left)
+                    bytes.extend(value_to_leaf_bytes(inner, a));
+                    bytes.resize(total, 0);
+                    bytes
+                }
+                Value::Right(inner) => {
+                    let mut bytes = vec![1u8]; // tag = 1 (Right)
+                    bytes.extend(value_to_leaf_bytes(inner, b));
+                    bytes.resize(total, 0);
+                    bytes
+                }
+                _ => panic!("value_to_leaf_bytes: expected Left/Right for Sum, got {v:?}"),
+            }
+        }
+        Type::Prod(a, b) => {
+            let Value::Pair(va, vb) = v else {
+                panic!("value_to_leaf_bytes: expected Pair for Prod, got {v:?}");
+            };
+            let mut bytes = value_to_leaf_bytes(va, a);
+            bytes.extend(value_to_leaf_bytes(vb, b));
+            bytes
+        }
+        Type::Flat(n) => {
+            // thermometer Right^k(Left(Unit)) → k as byte
+            let mut k = 0u8;
+            let mut cur = v;
+            loop {
+                match cur {
+                    Value::Left(u) if u.as_ref() == &Value::Unit => break,
+                    Value::Right(rest) => {
+                        k += 1;
+                        cur = rest;
+                    }
+                    _ => panic!("value_to_leaf_bytes: not a Flat leaf: {v:?}"),
+                }
+            }
+            debug_assert!((k as u64) < (1u64 << n), "leaf byte {k} out of range for Flat({n})");
+            vec![k]
+        }
+    }
+}
+
+/// Recompose leaf bytes into a Value (inverse of `value_to_leaf_bytes`).
+/// Core-native: no BDD dependency.
+pub fn value_from_leaf_bytes(bytes: &[u8], ty: &Type) -> Value {
+    value_from_leaf_bytes_inner(bytes, ty).0
+}
+
+fn value_from_leaf_bytes_inner(bytes: &[u8], ty: &Type) -> (Value, usize) {
+    match ty {
+        Type::Zero => panic!("value_from_leaf_bytes: Zero type"),
+        Type::One => (Value::Unit, 0),
+        Type::Sum(a, b) => {
+            let la = count_leaves(a);
+            let lb = count_leaves(b);
+            let max_payload = la.max(lb);
+            let tag = bytes[0];
+            if tag == 0 {
+                let (v, _) = value_from_leaf_bytes_inner(&bytes[1..], a);
+                (Value::Left(Box::new(v)), 1 + max_payload)
+            } else {
+                let (v, _) = value_from_leaf_bytes_inner(&bytes[1..], b);
+                (Value::Right(Box::new(v)), 1 + max_payload)
+            }
+        }
+        Type::Prod(a, b) => {
+            let (va, na) = value_from_leaf_bytes_inner(bytes, a);
+            let (vb, nb) = value_from_leaf_bytes_inner(&bytes[na..], b);
+            (Value::pair(va, vb), na + nb)
+        }
+        Type::Flat(n) => {
+            let byte = bytes[0];
+            debug_assert!(
+                (byte as u64) < (1u64 << n),
+                "value_from_leaf_bytes: byte {byte} out of range for Flat({n})"
+            );
+            let mut v = Value::left(Value::Unit);
+            for _ in 0..byte {
+                v = Value::right(v);
+            }
+            (v, 1)
+        }
+    }
+}
+
+/// Count the number of leaves in a type (for Sum padding).
+fn count_leaves(ty: &Type) -> usize {
+    match ty {
+        Type::Zero => 0,
+        Type::One => 0,
+        Type::Sum(a, b) => 1 + count_leaves(a).max(count_leaves(b)),
+        Type::Prod(a, b) => count_leaves(a) + count_leaves(b),
+        Type::Flat(_) => 1,
+    }
 }
 
 #[cfg(test)]
@@ -191,6 +382,7 @@ mod tests {
             output_ty: bool_ty(),
             forward: fwd.clone(),
             backward: fwd,
+            symbolic: None,
         };
         assert!(admit(&def).is_ok());
     }
@@ -208,6 +400,7 @@ mod tests {
             output_ty: bool_ty(),
             forward: fwd.clone(),
             backward: fwd,
+            symbolic: None,
         };
         assert!(admit(&def).is_ok());
     }
@@ -231,6 +424,7 @@ mod tests {
             output_ty: bool_ty(),
             forward: fwd,
             backward: bwd,
+            symbolic: None,
         };
         assert!(admit(&def).is_err());
     }
@@ -251,6 +445,7 @@ mod tests {
             output_ty: bool_ty(),
             forward: fwd,
             backward: bwd,
+            symbolic: None,
         };
         let err = admit(&def).unwrap_err();
         assert!(matches!(err, AdmitError::ForwardNotTotal(_)));
@@ -301,6 +496,7 @@ mod tests {
             output_ty: bool_ty(),
             forward: fwd.clone(),
             backward: fwd,
+            symbolic: None,
         };
         assert_eq!(def.adjoint().adjoint(), def);
     }

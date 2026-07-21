@@ -13,6 +13,7 @@
 
 pub mod ty;
 pub mod prim;
+pub mod bvexpr;
 pub mod iso;
 pub mod typing;
 pub mod adjoint;
@@ -20,6 +21,6 @@ pub mod rewrite;
 
 pub use adjoint::adjoint;
 pub use iso::Iso;
-pub use prim::{admit, enumerate_values, PrimDef, Value};
+pub use prim::{admit, enumerate_values, PrimDef, PrimSpec, SpecTransfer, Value};
 pub use ty::Type;
 pub use typing::{is_numeral_ty, list_spine_elem_ty, type_of, TypeError};

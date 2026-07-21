@@ -100,6 +100,7 @@ fn xor_prim_def(w: u8) -> PrimDef {
         output_ty: ty,
         forward,
         backward,
+        symbolic: None,
     }
 }
 

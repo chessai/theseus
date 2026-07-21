@@ -86,6 +86,7 @@ fn build_walk_body() -> (Iso, Type, Type) {
         output_ty: carrier.clone(),
         forward,
         backward,
+        symbolic: None,
     };
     (Iso::Prim(Box::new(prim)), n5, carrier)
 }
