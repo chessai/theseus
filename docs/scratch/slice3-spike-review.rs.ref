@@ -1,0 +1,152 @@
+//! DESIGN-REVIEW SPIKE for BVEQ slice-3 (symbolic prim specs).
+//! NOT for merge — evidence for docs/reviews/bveq-slice3-design-review.md.
+//! Q3: eval-via-spec == eval-via-table over the whole Flat(4) 3-op domain.
+//! Q5: 3-op Flat(8) masked-accumulate represented as a spec RegTransfer and
+//!     recognized (bveq::equiv vs symbolic_exec(Ccnot)) at full width.
+
+use std::collections::BTreeMap;
+use std::time::Instant;
+
+use theseus_core::prim::{enumerate_values, PrimDef, Value};
+use theseus_core::ty::Type;
+use theseus_tisc::asm::Instr;
+use theseus_tisc::bveq::{self, BvExpr, RegTransfer};
+
+// thermometer Right^k(Left(Unit)) -> k
+fn leaf_u8(v: &Value) -> u8 {
+    let mut k = 0u8;
+    let mut cur = v;
+    loop {
+        match cur {
+            Value::Left(u) if u.as_ref() == &Value::Unit => return k,
+            Value::Right(rest) => {
+                k += 1;
+                cur = rest;
+            }
+            _ => panic!("not a thermometer leaf: {cur:?}"),
+        }
+    }
+}
+
+fn u8_leaf(k: u8) -> Value {
+    let mut v = Value::left(Value::Unit);
+    for _ in 0..k {
+        v = Value::right(v);
+    }
+    v
+}
+
+/// Q3 spike: build the 3-op masked-accumulate table prim at Flat(4)
+/// (acc, (key, elem)) -> (acc ^ (key & elem), (key, elem)), 4096 rows,
+/// and a bit-level spec (per output leaf-bit BvExpr over (leaf, bit) input
+/// vars). Evaluate BOTH over the whole domain and require exact agreement.
+#[test]
+fn q3_eval_via_spec_matches_table_flat4() {
+    let w = 4usize;
+    let f = Type::Flat(w as u8);
+    let ty = Type::prod(f.clone(), Type::prod(f.clone(), f.clone()));
+    let card = 1u16 << w;
+
+    // Table prim.
+    let mut fwd = BTreeMap::new();
+    for a in 0..card as u8 {
+        for k in 0..card as u8 {
+            for e in 0..card as u8 {
+                let inp = Value::pair(u8_leaf(a), Value::pair(u8_leaf(k), u8_leaf(e)));
+                let out = Value::pair(
+                    u8_leaf(a ^ (k & e)),
+                    Value::pair(u8_leaf(k), u8_leaf(e)),
+                );
+                fwd.insert(inp, out);
+            }
+        }
+    }
+    let bwd: BTreeMap<Value, Value> = fwd.iter().map(|(x, y)| (y.clone(), x.clone())).collect();
+    let def = PrimDef {
+        forward_name: "maskacc4".into(),
+        backward_name: "maskacc4_inv".into(),
+        input_ty: ty.clone(),
+        output_ty: ty.clone(),
+        forward: fwd,
+        backward: bwd,
+    };
+    theseus_core::prim::admit(&def).expect("table prim admissible");
+
+    // The symbolic spec, as the design intends a core-native PrimSpec:
+    // out_leaf[i].bit[b] = BvExpr over input (leaf, bit) variables.
+    // leaf 0 = acc, 1 = key, 2 = elem.  out0 = acc ^ (key & elem).
+    let spec_leaf_bit = |leaf: usize, b: usize| -> BvExpr {
+        match leaf {
+            0 => BvExpr::var(0, b).xor(BvExpr::var(1, b).and(BvExpr::var(2, b))),
+            i => BvExpr::var(i, b),
+        }
+    };
+
+    // eval-via-spec: decompose Value -> leaf bytes -> bits, eval each output
+    // bit with bveq::eval_expr, recompose. Compare vs the table for the WHOLE
+    // 4096-value domain.
+    let domain = enumerate_values(&ty);
+    assert_eq!(domain.len(), 4096);
+    for v in &domain {
+        let Value::Pair(a, rest) = v else { panic!() };
+        let Value::Pair(k, e) = rest.as_ref() else { panic!() };
+        let operands: [u8; 3] = [leaf_u8(a), leaf_u8(k), leaf_u8(e)];
+
+        // spec eval per leaf, bits 0..w (upper bits must stay 0 at Flat(w)).
+        let mut out_bytes = [0u8; 3];
+        for (leaf, ob) in out_bytes.iter_mut().enumerate() {
+            for b in 0..w {
+                if bveq::eval_expr(&spec_leaf_bit(leaf, b), &operands) {
+                    *ob |= 1 << b;
+                }
+            }
+        }
+        let spec_out = Value::pair(
+            u8_leaf(out_bytes[0]),
+            Value::pair(u8_leaf(out_bytes[1]), u8_leaf(out_bytes[2])),
+        );
+        let table_out = def.forward.get(v).expect("total");
+        assert_eq!(&spec_out, table_out, "spec/table divergence at {operands:?}");
+    }
+}
+
+/// Q5 spike: the wall-break. A 3-op Flat(8) masked-accumulate CANNOT be
+/// table-built (2^24 = 16.7M rows). Represent it as a spec RegTransfer and
+/// check bveq::equiv against symbolic_exec([Ccnot]) at FULL Flat(8) width.
+/// Plus a non-vacuity control: a wrong spec (OR instead of AND) must yield
+/// a counterexample.
+#[test]
+fn q5_flat8_3op_spec_recognized_via_equiv() {
+    let (rd, rs, rt) = (1usize, 2usize, 3usize);
+
+    // Spec side: full-frame RegTransfer, identity except
+    // rd.bit[b] = rd.bit[b] XOR (rs.bit[b] AND rt.bit[b]).
+    let mut spec = RegTransfer::identity();
+    for b in 0..8 {
+        spec.regs[rd][b] = BvExpr::var(rd, b)
+            .xor(BvExpr::var(rs, b).and(BvExpr::var(rt, b)));
+    }
+
+    // Body side: the emitted instruction, symbolically executed.
+    let body = [Instr::Ccnot {
+        rd: rd as u8,
+        rs: rs as u8,
+        rt: rt as u8,
+    }];
+    let exec = bveq::symbolic_exec(&body).expect("register-pure");
+
+    let t0 = Instant::now();
+    bveq::equiv(&exec, &spec, 8, &[rd, rs, rt]).expect("Flat(8) 3-op recognized");
+    let dt = t0.elapsed();
+    eprintln!("Q5 equiv at full Flat(8), 3 operands: {dt:?}");
+    assert!(dt.as_secs() < 5, "must be enumeration-free fast, got {dt:?}");
+
+    // Non-vacuity: corrupt the spec (OR for AND) -> must NOT be equivalent.
+    let mut bad = RegTransfer::identity();
+    for b in 0..8 {
+        bad.regs[rd][b] = BvExpr::var(rd, b)
+            .xor(BvExpr::var(rs, b).or(BvExpr::var(rt, b)));
+    }
+    let err = bveq::equiv(&exec, &bad, 8, &[rd, rs, rt]);
+    assert!(err.is_err(), "corrupted spec must produce a counterexample");
+}

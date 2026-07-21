@@ -1,9 +1,46 @@
 # BVEQ slice-3 — symbolic prim specs (break Wall 2: wide-op recognition without a table)
 
-**Status:** design r1 (pre-review). Author: advisor. Target: `PrimDef` in **theseus-core** + eval/admit/
-the recognizer — the MOST INVASIVE BVEQ slice (it changes the prim representation the whole compiler
-depends on). Highest bar. Builds on slice-1/2b/2 (all merged): `bveq::equiv`, `symbolic_exec`,
-`bveq_verify_emission` (the decomposed check now live in `recognize_prim`).
+**Status:** design **r2** (post design-review + spike). Author: advisor. Target: `PrimDef` in
+**theseus-core** + eval/admit/recognizer — the MOST INVASIVE BVEQ slice. Highest bar.
+
+---
+
+## r2 revision — folding the design-review + spike (`docs/reviews/bveq-slice3-design-review.md`)
+
+Verdict **RE-SLICE**. The mechanism is SOUND and both load-bearing claims are SPIKE-PROVEN (eval-via-spec
+exact over the whole Flat(4) domain; full-Flat(8) 3-op recognition via `equiv` in **610µs**, non-vacuous —
+the 2^24 table never built). Spike preserved: `docs/scratch/slice3-spike-review.rs.ref`. But the full slice
+is "unsafe as ONE delegation" (3-crate blast radius + a 72-site/27-file struct ripple + 4 under-specified
+gaps + 2 enumeration-HANG hazards + a silent-VACUITY vector). **Split into 3a → 3b:**
+
+**Slice 3a — representation + eval + admit** (theseus-core + theseus-eval + tisc guards; NO new recognition):
+1. Move `BvExpr`+`eval_expr` to theseus-core (re-export from bveq; +PartialEq/Eq). 2. `PrimSpec` = a
+`(forward, backward)` PAIR (adjoint() is total+infallible → needs a constructive inverse) in core;
+`PrimDef.symbolic: Option<PrimSpec>`; the 72-site `symbolic: None` ripple (27 files → the allowlist).
+3. `adjoint()` swaps specs + involution test. 4. `core::admit` spec-presence early-return (new `AdmitError`
+variant) **BEFORE** `enumerate_values` (else 2^24 OOM at wide types); both-present ⇒ verify spec==table over
+the table domain (table WINS in eval = I1 zero-behavior-change). 5. `bveq::admit_symbolic` BDD mutual-inverse
+(core stays bdd-free). 6. eval-via-spec in `interp.rs` (core-native decompose/recompose — `bits_of` has no
+Flat arm) + the I2 whole-domain agreement test at Flat(4). 7. Fail-closed guards + tests: `bveq_verify_
+emission` HARD-REJECTS an empty table (silent-vacuity vector — the f3.5 vacuous-oracle class); `recognize_
+prim` rejects symbolic-only prims EXPLICITLY before any `enumerate_values` (hang guard).
+
+**Slice 3b — symbolic recognition** (tisc only): the design's §2 recognizer path was silent on SELECTION —
+fix = **selection-by-equiv** (iterate the finite arm library, `symbolic_exec` each candidate, `equiv` vs the
+spec transfer, first pass wins, ~15×1ms). Spec→RegTransfer shim (shared VarMap, type-derived operand_regs =
+N5). Payoff test = compile `Iso::Prim`(Flat(8)³ masked-accum) → `[Ccnot]` + ring-run vs eval-via-spec on a
+BOUNDED sample (never 2^24 — gate-no-timeout).
+
+**Delegation hazards:** file_allowlist must include all 27 `PrimDef{` files (near-workspace-wide); forbid
+touching `bveq::equiv`/`VarMap` internals (TCB); bound every test domain; the hang-guards + vacuity-guard
+ship with fast-explicit-rejection teeth tests.
+
+**This slice is DEFERRED for a go/no-go** — it is the first change touching theseus-core's foundational
+`PrimDef` + theseus-eval (semantic ground truth) with a near-workspace-wide allowlist; advanced to
+fully-designed + adversarially-reviewed + spike-proven + re-sliced, awaiting greenlight vs. pivoting to
+M-D.e widen-PC (the next queue item). The r1 body below is superseded by the 3a/3b plan above.
+
+---
 
 ## 1. The wall this breaks
 
