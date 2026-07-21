@@ -16,6 +16,9 @@
 //! - Convention test (T1): pins bits_of/Left=1 leaf-order convention.
 //! - Negative controls: non-vacuous mismatch assertions.
 
+// Bit-indexed loops read clearer as range loops in these BDD-per-bit tests.
+#![allow(clippy::needless_range_loop)]
+
 use theseus_tisc::asm::{self, Instr};
 use theseus_tisc::bveq::{biodivine_lib_bdd, expr_to_bdd, instr_semantics, BITS};
 use theseus_tisc::bveq_netlist::{
@@ -33,8 +36,8 @@ use theseus_tisc::types::{MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_REGS, W
 /// adjoint() recursion overflow the 2 MiB cargo-test worker stack).
 fn big_stack<F, R>(f: F) -> R
 where
-    F: FnOnce() -> R + Send,
-    R: Send,
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
 {
     let builder = std::thread::Builder::new().stack_size(1024 * 1024 * 1024);
     let handle = builder.spawn(f).expect("spawn big-stack thread");
