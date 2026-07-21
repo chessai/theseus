@@ -1,8 +1,61 @@
 # BVEQ slice-2b — the symbolic netlist walk (un-ignore the netlist reconciliation)
 
-**Status:** design r1 (pre-review). Author: advisor. Target: a NEW netlist→BDD encoder = new trust core →
-CLAUDE.md non-negotiable (fresh-context adversarial design-review that BUILDS a spike, then impl-review,
-reproducing tests) before merge. Builds on slice-1 (`bveq`, merged `5154522`).
+**Status:** design **r2** (post design-review + spike). Author: advisor. Target: a NEW netlist→BDD encoder
+= new trust core → CLAUDE.md non-negotiable. Builds on slice-1 (`bveq`, merged `5154522`).
+
+---
+
+## r2 revision — folding the adversarial design-review + spike (`docs/reviews/bveq-slice2b-design-review.md`)
+
+Verdict **SHIP-WITH-FIXES**. The spike walked **all 13 register-pure instructions** symbolically and got
+exact equality with `instr_semantics` — one-arm, full `decode_execute`, AND the full 8-phase `system_step`
+— ground-truthed against real `run_rom_on_cpu` (3/3 agree). BDDs trivially small (≤26 nodes). The r1 body
+below stands EXCEPT these overrides. **The spike test source is ~90% of the slice — resurrect it.**
+
+- **T3 ELIMINATED:** walk the full `system_step([word])` (not just one arm) as the authoritative tier —
+  3.4–3.6 s/op, exact equality + clean frame (PC=1, IR=0, bus=0, mem restored, ancillas 0) for all 13.
+  This proves the theorem about the REAL machine's step, so §5 Q1's assumption list is no longer assumed.
+  One-arm `instruction(op)` walks (62–394 ms) are the fast DEFAULT tier but NOT sole authority (can't see
+  predicate-overlap / surrounding-phase regressions).
+- **MAJOR-1 (perf claim corrected — the §1/§7 "ms, complete, default" was wrong by ~2 orders).** Adopt the
+  **4-tier** test structure (replaces §3's single default test):
+  1. `bveq_netlist_walk_reconcile` — DEFAULT (~5–15 s): one-arm, 13 ops, 2–3 selector/imm configs each
+     (cover rs=0, high rt, a carry op, a rotate, both 3-ops), full-frame. **This is the un-ignore win**:
+     complete in operand VALUES, in the default gate.
+  2. `bveq_netlist_walk_system` — DEFAULT-slow / short `#[ignore]` (~46 s): full `system_step`, 13 ops,
+     1 config each — the whole-step authority (discharges T3); runs in CI.
+  3. `bveq_netlist_walk_full_sweep` — `#[ignore]` (~19 min): one-arm, EVERY selector pair/triple + every
+     immediate — **RETIRES `bveq_reconciliation_lb_netlist_wide` (2.6 h)** with strictly greater coverage.
+  4. `bveq_netlist_walk_bootstrap` — short `#[ignore]` / default-slow (~30–40 s): 3–5 concrete
+     walk-vs-`run_rom_on_cpu` samples (T2 real-machine anchor — mandatory, the walk shares a convention
+     surface with `instr_semantics`). Keep existing default `bveq_reconciliation_lb_netlist_sampled`.
+- **MAJOR-2 (init state):** regs, s0, BR (+ mem in the system tier) SYMBOLIC — proves the strong
+  content-agnostic contract at zero cost (≤26 nodes). s1–s7 = 0; PC = 0; IR = concrete word (one-arm) or
+  0 with `rom=[word]` (system tier); BR = 0 in the system tier (PC_out=BR+PC+1). **EXCEPT Addi/Subi
+  require s0 = 0** (unpredicated immediate mask, decoder.rs:720 — spike E2: symbolic-s0 correctly REJECTS
+  Addi); pin s0=0 for the two I-format adds only + document why (terminal invariant / P-checker).
+- **MAJOR-3 (no equiv reuse):** `equiv` takes `RegTransfer`(BvExpr) both sides + builds its own internal
+  `VarMap` → unusable. Use **direct canonical-BDD `==` under ONE shared extended `VarMap`** (regs + s0 +
+  BR + mem operands = the single TCB mapping; encode `instr_semantics` through it; cex via
+  `xor().sat_witness()`), OR refactor `equiv` to expose an inner `equiv_bdds(&[Bdd],&[Bdd],&VarMap)`.
+  Netlist reconcile is w=8 → I4 vacuous, `operand_regs`/N5 is a RED HERRING here; full-frame is what
+  matters (check the WIDER frame: regs + scratch + PC + IR + BR + mem + bus).
+- **MAJOR-4 (gate builders):** do NOT hand-write gate BDDs. SYNTHESIZE each gate's BDD by minterm
+  expansion of the prim's own admission-checked `PrimDef::forward` (≤16 rows × ≤4 wires — the identical
+  table `theseus_eval::eval` runs). Collapses T1 to a bit-order/`Left=1` convention test, and covers the
+  two the r1 gate list forgot: `gfredkin` (K2, decoder.rs:106) and NOT (= `SwapSum(One,One)`, a STRUCTURAL
+  case, not a prim).
+- **MINOR-5:** run the shipped test in a spawned BIG-STACK thread (~1 GiB) — Iso trees + `adjoint()`
+  recursion overflow the 2 MiB cargo-test worker stack (passes on main thread, blows up under `cargo test`).
+- **MINOR-6:** `eval_bdd` fails CLOSED (Err, not panic) outside the loop-free product fragment {Id, Sym,
+  Seq, Times, SwapProd, AssocL/RProd, UniteProd, UnitiProd, SwapSum(1,1), Prim}.
+- **MINOR-7:** scope — per-instruction claim is for `rom=[word]` at PC=0 (multi-entry fetch = whole-program
+  oracles); keep ≥1 carry-chain + 1 rotate + 1 3-op per tier.
+
+**SV representation:** `SV = Unit | Bit(Bdd) | Pair(SV,SV)` mirroring `Value`; bit convention pinned by
+`theseus_netlist::bits_of` (`Left(Unit)=true=1`). The interpreter mirrors `theseus_eval::eval` structure.
+
+---
 
 ## 1. Goal & deliverable
 
