@@ -6,6 +6,7 @@
 
 pub mod asm;
 pub mod bveq;
+pub mod bveq_netlist;
 pub mod compile;
 pub mod types;
 pub mod addressing;
