@@ -10,7 +10,7 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`5154522` (**BVEQ slice-1 — the symbolic-equivalence trust core — MERGED**). A new `bveq` module
+`0d348e6` (**BVEQ slices 1 + 2b — the symbolic-equivalence trust core + symbolic netlist walk — MERGED**). A new `bveq` module
 (`crates/theseus-tisc/src/bveq.rs`) proves two fixed-width bit-vector functions equal via **canonical
 BDD** (`biodivine-lib-bdd`, pure Rust): a `BvExpr` AST (no Mul, so BDDs stay polynomial), a single
 pinned variable mapping (TCB), a symbolic model of every register-pure `Instr` (`instr_semantics`), and
@@ -24,8 +24,16 @@ model-divergence risk. Highest-bar trust core: design-review + impl-review (5 MA
 re-review (**DO-NOT-SHIP**, caught an unconditional-I4 bug that rejected every reversible model at `w<8`) +
 advisor-fix + r3 review (**SHIP**, a 13-probe false-accept campaign confirmed the under-constraint I4 is
 sound). Reviews `docs/reviews/bveq-{design-review,impl-review,impl-review-r2,impl-review-r3}.md`; design
-`docs/scratch/bveq-recognizer-design.md` (r2). **Next: slice-2b** (a symbolic *netlist* walk that
-un-ignores the netlist reconciliation), then slice-2 (rewire `recognize_prim`) and slice-3 (symbolic prim
+`docs/scratch/bveq-recognizer-design.md` (r2). **slice-2b — the symbolic NETLIST walk — MERGED**
+(`0d348e6`, the current tip): `bveq_netlist.rs` symbolically evaluates the decoder's per-instruction
+netlist over BDDs (gates synthesized from each prim's `PrimDef` truth table) to prove `netlist(instr) ≡
+instr_semantics(instr)` at full `Flat(8)`. **The netlist reconciliation is now a fast DEFAULT check**
+(`bveq_netlist_walk_reconcile`, all 13 register-pure instrs, ~11.6 s) — the 2.6-hour `#[ignore]` pointwise
+sweep is RETIRED. Authority tiers (advisor-ran, all pass): `_system` (full 8-phase `system_step`, all 13
+ops, clean frame — a theorem about the real machine, discharging the decode-vs-step gap), `_full_sweep`
+(every selector/immediate config), `_bootstrap` (walk vs real `run_rom_on_cpu` — the convention anchor).
+Reviews `docs/reviews/bveq-slice2b-{design-review,impl-review}.md`. **Next: slice-2** (rewire
+`recognize_prim` to `bveq::equiv`, deriving `operand_regs` from the prim type) then slice-3 (symbolic prim
 specs). The prior tip `8f49741` (**M-D.e slice-1 — loop-carrier scratch-spill — MERGED** `7be4a82`, atop
 the completed byte-wide value-width ladder): a reversible `Trace` (while-loop) can now carry a 4th payload leaf by
 **paging it to scratch across the backward jump**: `MAX_LEAVES_LOOP` 3→4, the loop guard replaced with
