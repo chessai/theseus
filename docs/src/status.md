@@ -10,8 +10,24 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`8f49741` (**M-D.e slice-1 — loop-carrier scratch-spill — MERGED** `7be4a82`, atop the completed
-byte-wide value-width ladder). A reversible `Trace` (while-loop) can now carry a 4th payload leaf by
+`5154522` (**BVEQ slice-1 — the symbolic-equivalence trust core — MERGED**). A new `bveq` module
+(`crates/theseus-tisc/src/bveq.rs`) proves two fixed-width bit-vector functions equal via **canonical
+BDD** (`biodivine-lib-bdd`, pure Rust): a `BvExpr` AST (no Mul, so BDDs stay polynomial), a single
+pinned variable mapping (TCB), a symbolic model of every register-pure `Instr` (`instr_semantics`), and
+`equiv(a, b, w, operand_regs)` deciding equality per-output-bit with an I4 upper-bits obligation checked
+**under the operand-scoped Flat(w) constraint** (invariant preservation). It **breaks the recognizer's
+2-operand enumeration wall**: a 3-operand `Ccnot` at full `Flat(8)` (2^24 domain) is proven in ~113 µs —
+a proof the current thermometer-`Value`+`BTreeMap` representation cannot construct at any cost (≈750 s +
+100 GB). ADDITIVE (no `recognize_prim` change yet); a **tri-model reconciliation** (symbolic ≡ `exec_instr`
+full-domain; ≡ real netlist by stratified sampling + an `#[ignore]` wide sweep) retires the
+model-divergence risk. Highest-bar trust core: design-review + impl-review (5 MAJORs) + hardening +
+re-review (**DO-NOT-SHIP**, caught an unconditional-I4 bug that rejected every reversible model at `w<8`) +
+advisor-fix + r3 review (**SHIP**, a 13-probe false-accept campaign confirmed the under-constraint I4 is
+sound). Reviews `docs/reviews/bveq-{design-review,impl-review,impl-review-r2,impl-review-r3}.md`; design
+`docs/scratch/bveq-recognizer-design.md` (r2). **Next: slice-2b** (a symbolic *netlist* walk that
+un-ignores the netlist reconciliation), then slice-2 (rewire `recognize_prim`) and slice-3 (symbolic prim
+specs). The prior tip `8f49741` (**M-D.e slice-1 — loop-carrier scratch-spill — MERGED** `7be4a82`, atop
+the completed byte-wide value-width ladder): a reversible `Trace` (while-loop) can now carry a 4th payload leaf by
 **paging it to scratch across the backward jump**: `MAX_LEAVES_LOOP` 3→4, the loop guard replaced with
 `n_input+1 ≤ carrier_reg_budget(4)` (tag + all *live* input leaves stay register-resident — the sole
 barrier against live-input silent corruption; only a zero-init **padding** leaf may spill), and a pinned
