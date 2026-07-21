@@ -1,10 +1,71 @@
 # BVEQ slice-2 — rewire `recognize_prim` to `bveq` (retire recognizer transcription divergence)
 
-**Status:** design r1 (pre-review). Author: advisor. Target: `recognize_prim` — the LIVE recognizer that
-decides every lowering. A bug corrupts all compiled programs → highest bar (CLAUDE.md non-negotiable:
-fresh-context adversarial design-review + impl-review + reproducing tests). Builds on slice-1 (`bveq`
-`equiv`/`symbolic_exec`, merged) and slice-2b (`bveq_netlist`, merged — which proved `symbolic_exec` ≡
-the real netlist for all 13 register-pure instructions).
+**Status:** design **r2** (post design-review + spike). Author: advisor. Target: `recognize_prim` — the
+LIVE recognizer that decides every lowering. Highest bar. Builds on slice-1 (`bveq`) + slice-2b
+(`bveq_netlist`, which proved `symbolic_exec` ≡ the real netlist for all 13 register-pure instructions).
+
+---
+
+## r2 revision — folding the design-review + spike (`docs/reviews/bveq-slice2-design-review.md`)
+
+Verdict **SHIP-WITH-FIXES**. Q1 fully affirmative: the bveq check **agrees with enumeration 18/18** on the
+representative arms (incl. the pinned `mde_spill_walk` kleaf) — no lambda bug, no `symbolic_exec` bug. AND
+bveq catches what enumeration is structurally blind to: enumeration validates the TABLE vs the lambda but
+NEVER looks at the emitted instructions — spike teeth: `Add` emitted for a xorInto table → bveq REJECT;
+**transposed rd/rs** (`Xor r0,r1` for `Xor r1,r0`) → bveq REJECT; both sail through `check_pattern_2reg`.
+That unverified lambda↔instruction edge is exactly what this slice closes.
+
+**But §2's minterm mechanism must NOT ship** — three spike-proven reasons — REPLACED by the reviewer's
+measured **decomposed check** (286 ms debug vs the minterm build's 17–21 s; *cheaper than today's
+enumeration*; NO `equiv` refactor). This r2 overrides §2/§3/§4 below; §5/§6/§7 stand as amended here.
+
+**THE CORRECTED CONSTRUCTION — the decomposed check** (inside each arm's `with_registers` closure):
+1. **Location (MAJOR-1):** check the closure's **`body`** (the register-pure instruction sequence the arm
+   proposes), NOT the returned `page_in ++ body ++ page_out` — the paging `Xchg`/`Mexch` are
+   non-register-pure and `symbolic_exec` (correctly) rejects them. As r1 drew it (`symbolic_exec(proposed_
+   instrs)`), every spilled/resident-operand recognition would fail closed on CORRECT code. Do the check
+   inside the closure where `regs` (the TYPE-derived leaf→register map) is in scope.
+2. `symbolic_exec(body)` — fail closed (reject, don't emit) on non-register-pure / aliased / out-of-range.
+3. **Frame closure, table-free:** every non-operand register bit's BDD equals its identity variable; every
+   operand OUTPUT bit's `Bdd::support_set()` ⊆ the operand-register variables (no dependence on any other
+   wire). (This is what makes step 4 a TOTAL proof over the frame.)
+4. **Pointwise over the table:** for every `(in,out)` row of `prim.forward`, `eval_transfer(candidate,
+   row_input_bytes)` equals the row's output bytes. (Given step 3's support closure, agreement on the
+   table's rows ⇒ agreement everywhere on the frame.)
+5. **No `w`, no Flat(w) constraint, no domain-BDD conjunction, no minterm build, no `equiv` reuse.** Uses
+   only existing pub API: `symbolic_exec`, `expr_to_bdd`, `eval_transfer`, `Bdd::support_set`. (Do NOT
+   encode the table as a `BvExpr` DNF — a 32 768-term Or-chain is the one documented `expr_to_bdd`
+   stack-overflow, made reachable from the live recognizer.)
+
+**MAJOR-2 (why the domain, not Flat(w)):** the r1 "operand-scoped Flat(w) constraint" is wrong for
+sum-carrier arms — spike: a correct 3-cycle Trace-carrier candidate is REJECTED under a Flat(1) constraint,
+ACCEPTED under the table's domain. The decomposed check sidesteps this entirely (it enumerates the table's
+actual rows), and subsumes I4 (upper-output-bits) via the support-set closure — no width parameter, and it
+handles mixed-width prims (`input_ty ≠ output_ty` is legal; only `n_in == n_out` is gated).
+
+**MAJOR-4 (cross-check semantics):** enumeration proves `table ≡ lambda`; bveq proves `candidate ≡ table`
+— DIFFERENT propositions. §3's "both must agree" is really **"enumeration-accept ⇒ bveq-accept"**. A
+bveq-REJECT is how a real emission bug surfaces (transposed operands, wrong arm) — on disagreement, raise
+a hard `CompileError` immediately with the counterexample, **NO fall-through to later pattern arms**
+(the recognizer is a first-match chain; falling through would emit a different, unvalidated arm).
+
+**Slice by REGISTER-PURITY, not arm shape (Q4):** ALL register-pure arms convert (2reg/3reg/2leaf/kleaf —
+all spike-verified, incl. sum carriers). The ONLY non-convertible arm is **memexch** (`MexchReg` is
+non-register-pure; `symbolic_exec` rejects) — it keeps its existing F-3 semantic verify. 3-op `Flat(8)`
+needs no policy (its table is unconstructible, so it never reaches recognition).
+
+**I3 corrected (MEDIUM-1):** "zero codegen change" is not literally true — aliased homes (e.g. `Xor r0,r0`,
+today emitted and caught downstream by `asm::encode` as `AsmError`) become recognize-time REJECTS
+(strictly better, fail-closed earlier). Claim **"zero codegen change on the ACCEPT path"** (all 18
+agreement cases confirm identical emission) + pin the aliased-home behavior change.
+
+**Tests (r2):** (a) a scratch-homed-leaf recognition PASSES (MAJOR-1 — proves the check is inside the
+closure on `body`); (b) the Q2b over-declaration false-accept is REJECTED with TYPE-derived operands
+(I2/N5, L20); (c) transposed-operand emission is REJECTED (teeth — the edge enumeration misses); (d) the
+enumeration cross-check agrees on the whole suite; (e) suite wall-time delta measured + bounded before
+merge (the decomposed check is ~cheaper than enumeration, so the delta should be ~zero or negative).
+
+---
 
 ## 1. Goal
 
