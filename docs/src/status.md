@@ -10,7 +10,7 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`94b4994` (**BVEQ slices 1 + 2b + 2 — the symbolic-equivalence trust core + symbolic netlist walk — MERGED**). A new `bveq` module
+`6513f4b` (**BVEQ slices 1 + 2b + 2 + 3a — the symbolic-equivalence trust core + symbolic netlist walk — MERGED**). A new `bveq` module
 (`crates/theseus-tisc/src/bveq.rs`) proves two fixed-width bit-vector functions equal via **canonical
 BDD** (`biodivine-lib-bdd`, pure Rust): a `BvExpr` AST (no Mul, so BDDs stay polynomial), a single
 pinned variable mapping (TCB), a symbolic model of every register-pure `Instr` (`instr_semantics`), and
