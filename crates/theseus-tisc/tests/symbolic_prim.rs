@@ -885,3 +885,57 @@ fn non_vacuity_wrong_spec_rejected() {
         "rejection must be bounded (arm library iteration), not a hang; took {dt:?}"
     );
 }
+
+// ── A-1: teeth on the spec→register remap shim (impl-review MAJOR) ─────
+
+/// Every other selection test homes the operands at the IDENTITY mapping
+/// Reg(0),Reg(1),Reg(2), so the suite is blind to a bug in
+/// `remap_expr_operands` (disabling the remap leaves them all green — the
+/// exact attack-A coverage hole the impl-review found). This test homes the
+/// three Flat(8) operands at SCRAMBLED, non-identity registers Reg(4),Reg(2),
+/// Reg(7) and asserts selection recognizes the masked-accum prim as exactly
+/// `Ccnot{rd:4, rs:2, rt:7}` — the assignment the TYPE-derived homes dictate.
+///
+/// Teeth (both proven in the impl-review): at HEAD this passes; disabling the
+/// operand→register remap makes selection over-reject (Deferred) so the
+/// `.expect` fails, and neutering the `equiv` gate selects the wrong body so
+/// the `matches!` fails.
+#[test]
+fn selection_non_identity_register_mapping() {
+    use theseus_tisc::asm::Instr;
+
+    let w = 8u8;
+    let spec = masked_accum_spec(w);
+    let f = Type::Flat(w);
+    let ty = Type::prod(f.clone(), Type::prod(f.clone(), f));
+    let def = PrimDef {
+        forward_name: "maskacc8_scrambled".into(),
+        backward_name: "maskacc8_scrambled_inv".into(),
+        input_ty: ty.clone(),
+        output_ty: ty,
+        forward: BTreeMap::new(),
+        backward: BTreeMap::new(),
+        symbolic: Some(spec),
+    };
+    // Scrambled homes: leaf0→r4, leaf1→r2, leaf2→r7 (NON-identity).
+    let ctx = theseus_tisc::compile::Ctx {
+        homes: vec![
+            theseus_tisc::compile::Location::Reg(4),
+            theseus_tisc::compile::Location::Reg(2),
+            theseus_tisc::compile::Location::Reg(7),
+        ],
+        occ: theseus_tisc::compile::OccSet::from_locations(&[
+            theseus_tisc::compile::Location::Reg(4),
+            theseus_tisc::compile::Location::Reg(2),
+            theseus_tisc::compile::Location::Reg(7),
+        ]),
+    };
+    let body = theseus_tisc::compile::recognize_prim(&def, &ctx)
+        .expect("scrambled-home masked-accum must still be recognized");
+    assert_eq!(body.len(), 1, "expected single instr, got {body:?}");
+    assert!(
+        matches!(body[0], Instr::Ccnot { rd: 4, rs: 2, rt: 7 }),
+        "expected Ccnot{{rd:4, rs:2, rt:7}}, got {:?}",
+        body[0]
+    );
+}

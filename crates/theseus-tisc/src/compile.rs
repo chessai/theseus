@@ -1363,6 +1363,16 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
 /// `equiv` against the spec-derived `RegTransfer`. First pass wins (sound
 /// by construction: equiv is canonical and complete). If no candidate
 /// verifies, returns `Deferred` (no enumeration, bounded).
+///
+/// ADMIT-FIRST CONTRACT (impl-review E-1): for a partial-table+spec prim,
+/// selection compares the emitted body only against the SPEC (via `equiv`),
+/// not against the partial table. `core::admit` (which every prim passes
+/// through before it can be recognized) rejects a partial-table+spec prim
+/// whose table and spec disagree (`SpecTableMismatch`) — so a recognized
+/// symbolic prim is always one whose table (if any) is spec-consistent, and
+/// eval's table-wins-else-spec path (interp.rs) cannot diverge from the
+/// emitted code. This function assumes that contract: it does NOT itself
+/// re-check the table against the spec.
 fn selection_by_equiv(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> {
     let spec = def.symbolic.as_ref().unwrap();
     let n_in = num_leaves(&def.input_ty)?;
