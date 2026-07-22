@@ -103,10 +103,18 @@
 > and SIGKILL'd the gate — fixed via `MALLOC_ARENA_MAX=1` in flake.nix (→48 GB). The full tisc suite also
 > exceeds the gate's 3000 s window; **gate TIERING (`#[ignore]` heavy binaries, fast-tier iteration gate,
 > advisor `--ignored` pre-merge) is the next task.**
-> **Next after gate tiering:** **TP-5 S-box** (cashes in the BVEQ unlock — the first useful program on the
-> GF(2)⁸ bilinear class; USER-PRIORITIZED over widen-PC). Then **widen-PC + typed iteration bounds** (unlock
-> variable-T loops GCD/Collatz; DEFERRED behind S-box); OR live-input relocation spill (a SEPARATE slice, its
-> own review). Design docs `docs/scratch/{md*,valwidth-flat,bveq-*}.md`; reviews `docs/reviews/` (L21).
+> **TP-5 slice-1 (`012aecb`, MERGED — FIRST NONLINEAR CRYPTO LAYER):** Keccak-χ
+> (`A_i = a_i ⊕ (¬a_{i+1} ∧ a_{i+2})`, SHA-3's nonlinear step) bit-sliced over Flat(8) — 5 lanes × Flat(8),
+> one byte-parallel `Ccnot` (the BVEQ-delivered masked-AND) does the χ gate for 8 Keccak rows at once.
+> Hand-composed 17-instr in-place ROM (NEVER lowers — no recognizer/lower change). **8× bit-slicing:
+> 5.25e-9 J/row-χ.** Rev-A (garbage-free UNDER-ADJOINT — honest; forward-only leaves ancillas dirty, an L20
+> assertion; χ is a bijection not an involution). Fable design-review BUILT a POC + caught the garbage-free
+> error; delegated productionization verified (fast tier + heavy system-ring L19 authority, advisor-run
+> single-threaded 3/3 green). Reviews `docs/reviews/sbox-chi-design-review.md`, `docs/scratch/sbox-chi-*`.
+> **Next:** gate tiering (fast/heavy split so delegations aren't gated on the ~50-min full suite); then
+> follow-ups — Rev-B true-in-place χ⁻¹ cleanup, the AES S-box, multi-round Keccak-f (θ/ρ/π/ι); **widen-PC +
+> typed iteration bounds** (variable-T loops GCD/Collatz) still deferred. Design docs
+> `docs/scratch/{md*,valwidth-flat,bveq-*,sbox-chi-*}.md`; reviews `docs/reviews/` (L21).
 > See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`

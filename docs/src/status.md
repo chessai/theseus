@@ -10,7 +10,22 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`604936a` (**BVEQ LADDER COMPLETE — slices 1 + 2b + 2 + 3a + 3b MERGED**). slice-3b
+`012aecb` (**TP-5 slice-1: Keccak-χ — the FIRST NONLINEAR CRYPTO LAYER in theseus — MERGED**).
+χ (`A_i = a_i ⊕ (¬a_{i+1} ∧ a_{i+2})`, the nonlinear step of SHA-3/Keccak-f) is bit-sliced over
+Flat(8): each of the 5 lanes is a Flat(8) register = the same lane across 8 independent Keccak rows,
+so one **byte-parallel `Ccnot`** (the masked-AND the value-width ladder + BVEQ made byte-wide) computes
+the χ gate for all 8 rows at once. A hand-composed 17-instruction in-place ROM (Rust-composed, so it
+NEVER enters the lowering path — zero recognizer/lower change). **Perf win: 8× bit-slicing — 5.25e-9
+J/row-χ vs 4.20e-8 J un-sliced (identical ROM).** Ships **Rev-A** (garbage-free UNDER THE ADJOINT: the
+17 forward cycles leave ancillas r5/r6 = old a0/a1 in 24/32 cases — an honest L20 regression assertion —
+and the reverse run zeroes them; χ is a bijection, NOT an involution). Verified: fast tier (whole per-row
+2^5 domain ×8-packed + discriminating packing + Keccak golden + injectivity, all vs INDEPENDENT scalar/
+byte refs) + heavy tier (`#[ignore]`: system-ring L19 real-run authority, eval adjoint-reversibility,
+energy) — advisor ran the heavy tier single-threaded (concurrent heavy tests OOM), 3/3 green @ 50.6 GB.
+Design + Fable design-review-with-POC + delegation reviews: `docs/reviews/sbox-chi-design-review.md`,
+`docs/scratch/sbox-chi-design.md`, POC `docs/scratch/chi_poc.rs.ref`. Follow-ups: Rev-B true-in-place
+χ⁻¹ cleanup; AES S-box; multi-round Keccak-f. The prior tip `604936a`
+(**BVEQ LADDER COMPLETE — slices 1 + 2b + 2 + 3a + 3b MERGED**). slice-3b
 (`recognize_prim` symbolic-prim RECOGNITION via **selection-by-equiv**: iterate the finite arm library,
 `symbolic_exec` each candidate, `equiv` vs the spec-derived `RegTransfer`, first pass wins — sound by
 construction) is the payoff: a 3-operand `Flat(8)` masked-accum prim (`acc.b ^= key.b & elem.b`, the
