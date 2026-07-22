@@ -91,14 +91,22 @@
 > netlist-reconciled model (`bveq_verify_emission`) — closes the lambda↔instruction edge enumeration was
 > blind to. **slice-3a** (`6513f4b`): symbolic `PrimSpec` (Wall-2 REPRESENTATION broken — a `Flat(8)³` prim
 > is representable/evaluable/admissible without a 16.7M table; `BvExpr` moved to theseus-core, eval-via-spec,
-> `admit_symbolic` BDD mutual-inverse). **slice-3b (IN FLIGHT):** symbolic-prim RECOGNITION via
-> selection-by-equiv — the `Flat(8)³` wall-break payoff. Every slice: full L19/L20/L21; reviews
-> `docs/reviews/bveq-*`; design `docs/scratch/bveq-*`. Two lessons: a worker who can't run cargo can't catch
-> a semantic bug (advisor finishes those); "tests pass" ≠ "tests have teeth" (flip-verify every reproducer).
-> **Next after BVEQ:** the rest of the M-D.e cluster — **widen-PC + typed iteration bounds** (unlock useful
-> variable-T loops GCD/Collatz; USER-PRIORITIZED); OR live-input relocation spill (a SEPARATE slice, its own
-> review); OR TP-5 S-box. Design docs `docs/scratch/{md*,valwidth-flat,bveq-*}.md`; reviews
-> `docs/reviews/` (L21).
+> `admit_symbolic` BDD mutual-inverse). **slice-3b (`604936a`, MERGED — BVEQ LADDER COMPLETE):**
+> symbolic-prim RECOGNITION via selection-by-equiv (iterate the finite arm library, `symbolic_exec` each
+> candidate, `equiv` vs the spec-derived `RegTransfer`, first pass wins — sound by construction) — the
+> `Flat(8)³` wall-break payoff: a masked-accum prim is recognized to `[Ccnot]` at full `Flat(8)` with the
+> 2²⁴ table never built. Fable impl-review SHIP-WITH-FIXES (A-1 remap teeth test + E-1 admit-first doc
+> applied, teeth-verified; `docs/reviews/bveq-slice3b-impl-review.md`). Every slice: full L19/L20/L21;
+> reviews `docs/reviews/bveq-*`; design `docs/scratch/bveq-*`. Two lessons: a worker who can't run cargo
+> can't catch a semantic bug (advisor finishes those); "tests pass" ≠ "tests have teeth" (flip-verify every
+> reproducer). **Gate infra (`76fd4ca` + tiering next):** the energy tests fragmented glibc arenas to ~86 GB
+> and SIGKILL'd the gate — fixed via `MALLOC_ARENA_MAX=1` in flake.nix (→48 GB). The full tisc suite also
+> exceeds the gate's 3000 s window; **gate TIERING (`#[ignore]` heavy binaries, fast-tier iteration gate,
+> advisor `--ignored` pre-merge) is the next task.**
+> **Next after gate tiering:** **TP-5 S-box** (cashes in the BVEQ unlock — the first useful program on the
+> GF(2)⁸ bilinear class; USER-PRIORITIZED over widen-PC). Then **widen-PC + typed iteration bounds** (unlock
+> variable-T loops GCD/Collatz; DEFERRED behind S-box); OR live-input relocation spill (a SEPARATE slice, its
+> own review). Design docs `docs/scratch/{md*,valwidth-flat,bveq-*}.md`; reviews `docs/reviews/` (L21).
 > See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`

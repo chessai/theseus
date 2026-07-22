@@ -10,7 +10,22 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
-`75ff066` (**BVEQ slices 1 + 2b + 2 + 3a — the symbolic-equivalence trust core + symbolic netlist walk — MERGED**). A new `bveq` module
+`604936a` (**BVEQ LADDER COMPLETE — slices 1 + 2b + 2 + 3a + 3b MERGED**). slice-3b
+(`recognize_prim` symbolic-prim RECOGNITION via **selection-by-equiv**: iterate the finite arm library,
+`symbolic_exec` each candidate, `equiv` vs the spec-derived `RegTransfer`, first pass wins — sound by
+construction) is the payoff: a 3-operand `Flat(8)` masked-accum prim (`acc.b ^= key.b & elem.b`, the
+GF(2)⁸ bilinear op) is **recognized to `[Ccnot{rd,rs,rt}]` at full `Flat(8)` with the 2²⁴ table never
+built** (<2 s; whole `symbolic_prim` suite 24 tests incl. two Flat(8)³ recognitions in 0.12 s). Fresh-context
+Fable impl-review **SHIP-WITH-FIXES** (mechanism sound, 5 tests flip under a neutered equiv gate, TCB
+untouched, I1 preserved); A-1 (non-identity operand→register remap teeth test) + E-1 (admit-first contract
+doc) applied and teeth-re-verified; review `docs/reviews/bveq-slice3b-impl-review.md` (L21). This makes 3-op
+byte-width prims (the GF(2)⁸ bilinear class — bit-sliced crypto / TP-5 S-box, GF(2) dot products, keyed
+LFSR) first-class — proven machinery, not yet cashed into a useful program. **Also `76fd4ca` fix(flake):
+`MALLOC_ARENA_MAX=1` in `targetToolsEnv`** — the energy tests fragmented glibc per-thread arenas to ~86 GB
+peak and SIGKILL'd the maestro gate; one arena drops peak to ~48 GB (no wall regression). NOTE: the full
+theseus-tisc suite is now too slow to finish in the gate's 3000 s window (measured — several binaries 448–733 s);
+**gate TIERING is the next task** (`#[ignore]` the heavy binaries; fast tier gates iteration, advisor runs
+`--ignored` pre-merge). The prior tip `75ff066` (**BVEQ slices 1 + 2b + 2 + 3a — MERGED**). A new `bveq` module
 (`crates/theseus-tisc/src/bveq.rs`) proves two fixed-width bit-vector functions equal via **canonical
 BDD** (`biodivine-lib-bdd`, pure Rust): a `BvExpr` AST (no Mul, so BDDs stay polynomial), a single
 pinned variable mapping (TCB), a symbolic model of every register-pure `Instr` (`instr_semantics`), and
@@ -32,9 +47,9 @@ instr_semantics(instr)` at full `Flat(8)`. **The netlist reconciliation is now a
 sweep is RETIRED. Authority tiers (advisor-ran, all pass): `_system` (full 8-phase `system_step`, all 13
 ops, clean frame — a theorem about the real machine, discharging the decode-vs-step gap), `_full_sweep`
 (every selector/immediate config), `_bootstrap` (walk vs real `run_rom_on_cpu` — the convention anchor).
-Reviews `docs/reviews/bveq-slice2b-{design-review,impl-review}.md`. **Next: slice-2** (rewire
-`recognize_prim` to `bveq::equiv`, deriving `operand_regs` from the prim type) then slice-3 (symbolic prim
-specs). The prior tip `8f49741` (**M-D.e slice-1 — loop-carrier scratch-spill — MERGED** `7be4a82`, atop
+Reviews `docs/reviews/bveq-slice2b-{design-review,impl-review}.md`. (slice-2 rewired `recognize_prim`'s
+emission-verifier to `bveq`; slice-3a made symbolic prim specs representable; slice-3b — above — closed the
+ladder with recognition. **Next: gate tiering, then the TP-5 S-box** to cash in the BVEQ unlock.) The prior tip `8f49741` (**M-D.e slice-1 — loop-carrier scratch-spill — MERGED** `7be4a82`, atop
 the completed byte-wide value-width ladder): a reversible `Trace` (while-loop) can now carry a 4th payload leaf by
 **paging it to scratch across the backward jump**: `MAX_LEAVES_LOOP` 3→4, the loop guard replaced with
 `n_input+1 ≤ carrier_reg_budget(4)` (tag + all *live* input leaves stay register-resident — the sole
