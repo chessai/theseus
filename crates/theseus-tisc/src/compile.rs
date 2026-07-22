@@ -2090,7 +2090,8 @@ pub struct Lowered {
     /// the loop's backward bracket contributes 0).
     pub forward_skip_total: usize,
     /// Loop terms: `(k_max, iter_len)` for each Trace loop emitted.
-    /// `k_max = |u| + 1` (the corrected ADR-0007 bound).
+    /// `k_max = min(k_exact, |u| + 1)` — trajectory-derived exact bound,
+    /// falling back to `|u| + 1` if any trajectory is inconclusive.
     /// `iter_len = |body| + LOOP_OVERHEAD` (one full iteration).
     pub loop_terms: Vec<(usize, usize)>,
 }
@@ -2484,7 +2485,9 @@ fn lower_data_dependent_iter(
 /// ```
 ///
 /// `δu = 256 − (L + LOOP_OVERHEAD)` is the backward jump distance.
-/// `k_max = |u| + 1` (corrected ADR-0007 bound).
+/// `k_max = min(k_exact, |u| + 1)` where `k_exact` is the trajectory-derived
+/// exact bound (max body applications to exit over all real inputs, +1 safety),
+/// falling back to `|u| + 1` if any trajectory is inconclusive.
 fn lower_trace(
     u: &Type,
     body: &Iso,
@@ -2531,14 +2534,13 @@ fn lower_trace(
         )));
     }
 
-    // |u| = number of inhabitants of u (for k_max).
+    // |u| = number of inhabitants of u (for k_max fallback).
     let u_inhabitants = enumerate_values(u).len();
     if u_inhabitants == 0 {
         return Err(CompileError::Deferred(
             "Trace with uninhabited carrier type u".into(),
         ));
     }
-    let k_max = u_inhabitants + 1; // corrected ADR-0007 bound
 
     // ── Reject-don't-corrupt guards ────────────────────────────────
 
@@ -2677,6 +2679,54 @@ fn lower_trace(
 
     let body_len = body_instrs.len();
     let iter_len = body_len + LOOP_OVERHEAD;
+
+    // ── Trajectory-derived exact k_max ────────────────────────────────
+    // Walk the lowered body (via exec_instr — the same byte-semantics the
+    // real CPU executes) from every real input Right(a) to compute the
+    // maximum number of body applications until the tag reaches exit (Right).
+    // k_exact = max(T over all inputs) + 1 (+1 safety: exit-check application).
+    // SOUNDNESS FALLBACK: if any trajectory does not exit within |u|
+    // applications, or if k_exact > |u|+1, use k_max = |u|+1 (the prior
+    // full-cardinality bound). So k_exact is NEVER looser than today.
+    let k_max = {
+        let k_fallback = u_inhabitants + 1;
+        let mut max_t: usize = 0;
+        let mut use_fallback = false;
+        for a_val in enumerate_values(&a_ty) {
+            // Set up carrier state: Right(a) = tag 1, payload = a's leaf bytes.
+            // marshal(a, a_ty) places a's leaves in Reg(0..n_input-1) — exactly
+            // where body_homes[1..1+n_input] maps them. Set tag register to 1.
+            let mut state = marshal(&a_val, &a_ty);
+            state.regs[tag_reg_idx as usize] = 1; // Right tag (input arm)
+            let mut t: usize = 0;
+            loop {
+                // Apply the lowered body once (exec_instr = real CPU semantics).
+                for &instr in &body_instrs {
+                    exec_instr(instr, &mut state);
+                }
+                t += 1;
+                // Right (tag != 0) = exit arm.
+                if state.regs[tag_reg_idx as usize] != 0 {
+                    break;
+                }
+                // Soundness: if trajectory exceeds |u| applications, fallback.
+                if t >= u_inhabitants {
+                    use_fallback = true;
+                    break;
+                }
+            }
+            if use_fallback {
+                break;
+            }
+            max_t = max_t.max(t);
+        }
+        if use_fallback {
+            k_fallback
+        } else {
+            // k_exact = max(T) + 1; never looser than the cardinality bound.
+            (max_t + 1).min(k_fallback)
+        }
+    };
 
     // Guard: P2 — wcet + S_max must fit in 256.
     // prologue(2) + iter_len + epilogue(2) = 4 + iter_len = rom_len for the Trace.
@@ -3169,7 +3219,7 @@ pub fn max_skip_distance(instrs: &[Instr]) -> usize {
 /// Compositional: `B = |instrs| + Σ (k_max − 1)·iter_len` where the
 /// first iteration is already counted in `|instrs|`. For monotone
 /// programs (no loops) `B == rom.len()`. The invariant `B >= rom.len()`
-/// always holds. `k_max = |u| + 1` (corrected ADR-0007 bound).
+/// always holds. `k_max = min(k_exact, |u| + 1)` (trajectory-derived exact bound).
 pub fn wcet(iso: &Iso) -> Result<usize, CompileError> {
     let lowered = compile_with_metadata(iso)?;
     let b = lowered.wcet();

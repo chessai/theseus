@@ -1558,13 +1558,14 @@ fn mdd_reject_wcet_overflow() {
         "Trace with large carrier must be rejected (payload or register limit)"
     );
 
-    // Also test WCET overflow: u = Bit, body = 76 NOPs (Seq of SwapSum pairs).
-    // k_max = 3, iter_len = 76 + 10 = 86, spine = 4. wcet = 4 + 3*86 = 262 > 256.
+    // Also test WCET overflow: u = Bit, body = 126 NOPs (Seq of SwapSum pairs).
+    // exact-k_max: body ≡ Id ⇒ T=1, k_exact=2, k_max=min(2,3)=2.
+    // iter_len = 126 + 10 = 136, spine = 4. wcet = 4 + 2*136 = 276 > 256.
     let bit = Type::sum(Type::One, Type::One);
     let carrier_b = Type::sum(bit.clone(), Type::One);
-    // Build body = 38 × Seq(SwapSum(Bit, One), SwapSum(One, Bit)) = 76 NOPs.
+    // Build body = 63 × Seq(SwapSum(Bit, One), SwapSum(One, Bit)) = 126 NOPs.
     let mut body_b: Iso = Iso::Id(carrier_b.clone());
-    for _ in 0..38 {
+    for _ in 0..63 {
         body_b = Iso::seq(
             body_b,
             Iso::seq(
@@ -1577,7 +1578,7 @@ fn mdd_reject_wcet_overflow() {
     let result_b = compile(&iso_b);
     assert!(
         result_b.is_err(),
-        "Trace with wcet=262 > 256 must be rejected"
+        "Trace with wcet=276 > 256 must be rejected"
     );
     let err_b = result_b.unwrap_err();
     let msg_b = format!("{err_b}");
