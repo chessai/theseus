@@ -81,9 +81,23 @@
 > `lower_trace` change: full L19/L20/L21, Fable impl-review SHIP, **real `system_step`==eval across 5
 > back-edges with the spilled leaf live** + `validate()==Ok`/eval^R. Machinery-proof (like M-D.d), not
 > yet a useful program. Reviews `docs/reviews/mde-spill-{design-review-r2,impl-review}.md`.
-> **Next:** the rest of the M-D.e cluster — **widen-PC + typed iteration bounds** (unlock useful
-> variable-T loops GCD/Collatz); OR live-input relocation spill (a SEPARATE slice, its own review);
-> OR TP-5 S-box. Design docs `docs/scratch/{md*,valwidth-flat}.md`; reviews
+> **BVEQ arc — symbolic-BDD recognizer trust core (2026-07-21/22, tip ~`75ff066`+):** a `bveq` module
+> proves two fixed-width bit-vector functions equal via canonical BDD (`biodivine-lib-bdd`, pure Rust),
+> breaking the recognizer's "2-operand enumeration wall". **slice-1** (`5eeca29`): `equiv` + `symbolic_exec`
+> + `instr_semantics` (a 3-op `Ccnot` proven at full `Flat(8)` in ~113µs — unbuildable as a table). **slice-2b**
+> (`0d348e6`): a symbolic NETLIST walk (`bveq_netlist`) proving `netlist(instr) ≡ instr_semantics` — **the
+> netlist reconciliation is now a fast DEFAULT check; the 2.6h `#[ignore]` pointwise sweep is RETIRED**.
+> **slice-2** (`94b4994`): `recognize_prim` now verifies every emission against the prim table via the
+> netlist-reconciled model (`bveq_verify_emission`) — closes the lambda↔instruction edge enumeration was
+> blind to. **slice-3a** (`6513f4b`): symbolic `PrimSpec` (Wall-2 REPRESENTATION broken — a `Flat(8)³` prim
+> is representable/evaluable/admissible without a 16.7M table; `BvExpr` moved to theseus-core, eval-via-spec,
+> `admit_symbolic` BDD mutual-inverse). **slice-3b (IN FLIGHT):** symbolic-prim RECOGNITION via
+> selection-by-equiv — the `Flat(8)³` wall-break payoff. Every slice: full L19/L20/L21; reviews
+> `docs/reviews/bveq-*`; design `docs/scratch/bveq-*`. Two lessons: a worker who can't run cargo can't catch
+> a semantic bug (advisor finishes those); "tests pass" ≠ "tests have teeth" (flip-verify every reproducer).
+> **Next after BVEQ:** the rest of the M-D.e cluster — **widen-PC + typed iteration bounds** (unlock useful
+> variable-T loops GCD/Collatz; USER-PRIORITIZED); OR live-input relocation spill (a SEPARATE slice, its own
+> review); OR TP-5 S-box. Design docs `docs/scratch/{md*,valwidth-flat,bveq-*}.md`; reviews
 > `docs/reviews/` (L21).
 > See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
