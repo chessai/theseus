@@ -1,0 +1,434 @@
+//! T-loops slice-1b POC: 2-bit subtractive GCD — body + pinned recognizer.
+//!
+//! FAST tier only: run_on_cpu_fast + eval; no ring/energy.
+
+use std::collections::{BTreeMap, BTreeSet};
+use theseus_core::prim::{admit, enumerate_values, PrimDef};
+use theseus_core::{Iso, Type, Value};
+use theseus_tisc::compile::{compile_with_metadata, marshal, run_on_cpu_fast, CompileError};
+
+const W: u8 = 2; // input width: a,b in 0..4
+const HW: u8 = 3; // history width: sentinel + up to 2 branch bits (T_max=3)
+
+fn ref_gcd(a: u8, b: u8) -> u8 {
+    if b == 0 { a } else { ref_gcd(b, a % b) }
+}
+
+/// carrier payload P = (a: Flat2, b: Flat2, h: Flat3); u = io = P.
+fn gcd2_types() -> (Type, Type) {
+    let p = Type::prod(Type::flat(W), Type::prod(Type::flat(W), Type::flat(HW)));
+    (p.clone(), p)
+}
+
+/// byte-vector <-> Value maps for a type with `n` leaves.
+fn byte_maps(ty: &Type, n: usize) -> (BTreeMap<Vec<u8>, Value>, BTreeMap<Value, Vec<u8>>) {
+    let mut b2v = BTreeMap::new();
+    let mut v2b = BTreeMap::new();
+    for v in enumerate_values(ty) {
+        let bytes = marshal(&v, ty).regs[..n].to_vec();
+        assert!(
+            b2v.insert(bytes.clone(), v.clone()).is_none(),
+            "marshal not injective on {ty}"
+        );
+        v2b.insert(v, bytes);
+    }
+    (b2v, v2b)
+}
+
+/// Bijective GCD-with-history body on Sum(u, P) — POC-style: meaningful
+/// arms + leftover-paired junk. Returns (body, u_ty, io_ty, T-per-input).
+fn build_gcd2_body() -> (Iso, Type, Type, BTreeMap<(u8, u8), usize>) {
+    let (u_ty, io_ty) = gcd2_types();
+    let carrier = Type::sum(u_ty.clone(), io_ty.clone());
+    let (cb2v, cv2b) = byte_maps(&carrier, 4); // [tag, a, b, h]
+
+    let mut forward: BTreeMap<Value, Value> = BTreeMap::new();
+    let insert = |from: Vec<u8>, to: Vec<u8>, forward: &mut BTreeMap<Value, Value>| {
+        let fv = cb2v[&from].clone();
+        let tv = cb2v[&to].clone();
+        if let Some(prev) = forward.get(&fv) {
+            assert_eq!(prev, &tv, "conflicting transition from {from:?}");
+        } else {
+            forward.insert(fv, tv);
+        }
+    };
+
+    let mut t_of: BTreeMap<(u8, u8), usize> = BTreeMap::new();
+    for a in 0..(1 << W) as u8 {
+        for b in 0..(1 << W) as u8 {
+            if a == 0 || b == 0 {
+                insert(vec![1, a, b, 0], vec![1, a, b, 0], &mut forward);
+                t_of.insert((a, b), 0);
+                continue;
+            }
+            if a == b {
+                insert(vec![1, a, b, 0], vec![1, a, a, 1], &mut forward);
+                t_of.insert((a, b), 0);
+                continue;
+            }
+            insert(vec![1, a, b, 0], vec![0, a, b, 1], &mut forward);
+            let (mut x, mut y, mut h) = (a, b, 1u8);
+            let mut t = 0usize;
+            loop {
+                if x == y {
+                    insert(vec![0, x, y, h], vec![1, x, x, h], &mut forward);
+                    break;
+                }
+                t += 1;
+                let (nx, ny, nh) = if x > y {
+                    (x - y, y, (h << 1) | 1)
+                } else {
+                    (x, y - x, h << 1)
+                };
+                assert!(nh < (1 << HW), "history overflow: T_max exceeded");
+                insert(vec![0, x, y, h], vec![0, nx, ny, nh], &mut forward);
+                (x, y, h) = (nx, ny, nh);
+            }
+            t_of.insert((a, b), t + 1);
+        }
+    }
+
+    // Injectivity of meaningful arms, then leftover-pair the junk.
+    let used_out: BTreeSet<Value> = forward.values().cloned().collect();
+    assert_eq!(used_out.len(), forward.len(), "meaningful arms not injective");
+    let all: Vec<Value> = cv2b.keys().cloned().collect();
+    let free_in: Vec<Value> = all.iter().filter(|v| !forward.contains_key(v)).cloned().collect();
+    let free_out: Vec<Value> = all.iter().filter(|v| !used_out.contains(v)).cloned().collect();
+    assert_eq!(free_in.len(), free_out.len());
+    for (i, o) in free_in.into_iter().zip(free_out.into_iter()) {
+        forward.insert(i, o);
+    }
+    let mut backward = BTreeMap::new();
+    for (i, o) in &forward {
+        assert!(
+            backward.insert(o.clone(), i.clone()).is_none(),
+            "forward not injective after junk pairing"
+        );
+    }
+    let def = PrimDef {
+        forward_name: "gcd2_hist_step".into(),
+        backward_name: "gcd2_hist_step_inv".into(),
+        input_ty: carrier.clone(),
+        output_ty: carrier,
+        forward,
+        backward,
+        symbolic: None,
+    };
+    (Iso::Prim(Box::new(def)), u_ty, io_ty, t_of)
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// G1 — the w=2 Bennett-paid body: admit()==Ok, eval(Trace)==gcd on all
+// 16 pairs, outputs injective, T varies (variable-T signature).
+// ═════════════════════════════════════════════════════════════════════
+
+#[test]
+fn g1_body_admits_and_evals() {
+    let (body, u_ty, io_ty, t_of) = build_gcd2_body();
+
+    let Iso::Prim(def) = &body else { panic!() };
+    admit(def).expect("gcd2+history body must be admissible (total bijection)");
+    eprintln!("G1: admit(gcd2_hist_step) = Ok");
+
+    let trace = Iso::trace(u_ty, body.clone());
+    let (iob2v, _) = byte_maps(&io_ty, 3);
+    let mut outputs = BTreeSet::new();
+    let mut t_hist: BTreeMap<usize, usize> = BTreeMap::new();
+    for a in 0..(1 << W) as u8 {
+        for b in 0..(1 << W) as u8 {
+            let input = iob2v[&vec![a, b, 0]].clone();
+            let mut fuel = 100_000u64;
+            let out = theseus_eval::eval(&trace, input, &mut fuel).expect("eval");
+            let ob = marshal(&out, &io_ty).regs[..3].to_vec();
+            if a == 0 || b == 0 {
+                assert_eq!(ob, vec![a, b, 0], "degenerate zero arm");
+            } else {
+                assert_eq!(ob[0], ref_gcd(a, b), "gcd({a},{b})");
+                assert_eq!(ob[1], ref_gcd(a, b), "exit state a==b==gcd");
+                assert!(ob[2] >= 1, "sentinel history");
+            }
+            assert!(outputs.insert(ob), "trace output not injective at ({a},{b})");
+            *t_hist.entry(t_of[&(a, b)]).or_default() += 1;
+        }
+    }
+    eprintln!("G1: eval(Trace gcd2) == gcd on all 16 inputs; outputs injective");
+    eprintln!("G1: T histogram (T -> #inputs): {t_hist:?}");
+    let t_max = *t_hist.keys().max().unwrap();
+    let t_min = *t_hist.keys().min().unwrap();
+    assert!(t_max > t_min, "T must vary with input");
+    assert_eq!(t_max, 3, "worst case gcd(3,1)/(2,3): 2 subtractions + exit check");
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// G3 — the TOTAL byte-rule the recognizer walk must implement ("v4"):
+// entry + subtract + exits + junk arms, TOTAL on the 256 canonical
+// carrier byte-states. Machine-checked: closed, injective, terminating
+// from every Right state, meaningful arms == GCD semantics.
+// ═════════════════════════════════════════════════════════════════════
+
+/// The v4 total rule: [t, a, b, h] -> [t', a', b', h'].
+/// Arms: A1 entry (all payloads, h==0), A2-(1,1) scatter, A2 park,
+/// A3 exits (zE at h==1; (1,1) h-preserving at h>=2), A4 gated subtract,
+/// Y-remap for the 8 junk Left states that would collide with A4 images.
+fn rule_v4(s: [u8; 4]) -> [u8; 4] {
+    let [t, a, b, h] = s;
+    let d = a != b && a != 0 && b != 0;
+    let ze = !d; // a==b or a==0 or b==0
+    if t == 1 {
+        // A1: every entry with h==0 goes Left with sentinel h=1.
+        if h == 0 {
+            return [0, a, b, 1];
+        }
+        // A2-(1,1) scatter: vacate (1,(1,1),{2..7}) into the (1,D,0)
+        // slots A1 freed, so the h-preserving (1,1)-exits fit.
+        if a == 1 && b == 1 && h >= 2 {
+            let p: [(u8, u8); 6] = [(1, 2), (2, 1), (1, 3), (3, 1), (2, 3), (3, 2)];
+            let (x, y) = p[(h - 2) as usize];
+            return [1, x, y, 0];
+        }
+        return s; // A2: junk entries park
+    }
+    // t == 0 (Left):
+    if ze && h == 1 {
+        return [1, a, b, 0]; // A3: zE exit (inverse of A1 on zE)
+    }
+    if a == 1 && b == 1 && h >= 2 {
+        return [1, a, b, h]; // A3: real gcd exit, h-preserving
+    }
+    if d && (1..=3).contains(&h) {
+        // A4: normalize-subtract, shift branch bit into history.
+        let (x, y, sf) = if a > b { (a - b, b, 0) } else { (b - a, a, 1) };
+        return [0, x, y, 2 * h + sf];
+    }
+    if ((a, b) == (2, 1) || (a, b) == (1, 2)) && h >= 4 {
+        // Y-remap: these 8 junk states' id-slots are A4 images; move
+        // them to the 8 free (0,{(1,3),(3,1),(2,3),(3,2)},{2,3}) slots.
+        let (x, y) = if (a, b) == (2, 1) {
+            if h < 6 { (1, 3) } else { (3, 1) }
+        } else {
+            if h < 6 { (2, 3) } else { (3, 2) }
+        };
+        return [0, x, y, 2 + (h & 1)];
+    }
+    s // id
+}
+
+fn canonical_states() -> Vec<[u8; 4]> {
+    let mut v = Vec::new();
+    for t in 0..2u8 {
+        for a in 0..4u8 {
+            for b in 0..4u8 {
+                for h in 0..8u8 {
+                    v.push([t, a, b, h]);
+                }
+            }
+        }
+    }
+    v
+}
+
+#[test]
+fn g3_rule_v4_total_closed_injective_terminating() {
+    let states = canonical_states();
+    assert_eq!(states.len(), 256);
+    let mut images = BTreeSet::new();
+    for &s in &states {
+        let o = rule_v4(s);
+        // closure
+        assert!(o[0] < 2 && o[1] < 4 && o[2] < 4 && o[3] < 8, "not closed: {s:?} -> {o:?}");
+        // injectivity
+        assert!(images.insert(o), "collision at image {o:?} (from {s:?})");
+    }
+    eprintln!("G3: rule_v4 is TOTAL, CLOSED, INJECTIVE on all 256 canonical states");
+
+    // Termination from every Right state (k_exact walks all 128).
+    let mut max_t = 0usize;
+    for a in 0..4u8 {
+        for b in 0..4u8 {
+            for h in 0..8u8 {
+                let mut s = [1u8, a, b, h];
+                let mut t = 0usize;
+                loop {
+                    s = rule_v4(s);
+                    t += 1;
+                    if s[0] == 1 {
+                        break;
+                    }
+                    assert!(t < 20, "non-terminating from (1,{a},{b},{h})");
+                }
+                max_t = max_t.max(t);
+            }
+        }
+    }
+    eprintln!("G3: all 128 Right states terminate; max T = {max_t} => k_exact = {}", max_t + 1);
+    assert_eq!(max_t, 4, "k_exact must be 5");
+
+    // Meaningful semantics on the 16 real inputs (h=0 entries).
+    let mut t_hist: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut outs = BTreeSet::new();
+    for a in 0..4u8 {
+        for b in 0..4u8 {
+            let mut s = [1u8, a, b, 0];
+            let mut t = 0usize;
+            loop {
+                s = rule_v4(s);
+                t += 1;
+                if s[0] == 1 {
+                    break;
+                }
+            }
+            let [_, x, y, h] = s;
+            if a == 0 || b == 0 || a == b {
+                assert_eq!([x, y, h], [a, b, 0], "degenerate/equal arm is identity");
+            } else {
+                assert_eq!(x, ref_gcd(a, b), "gcd({a},{b}) in byte0");
+                assert_eq!(y, ref_gcd(a, b), "exit state (g,g)");
+                assert!(h >= 2, "history: sentinel + >=1 branch bit");
+            }
+            assert!(outs.insert([x, y, h]), "outputs not injective at ({a},{b})");
+            *t_hist.entry(t).or_default() += 1;
+        }
+    }
+    eprintln!("G3: 16/16 inputs correct; T histogram (apps -> #inputs): {t_hist:?}");
+    assert_eq!(t_hist, BTreeMap::from([(2, 10), (3, 2), (4, 4)]));
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// G4 — the body BUILT FROM rule_v4 (table == walk-spec, mde pattern):
+// admit()==Ok and eval(Trace)==gcd. This is the exact PrimDef a future
+// gcd2_hist_step recognizer would semantic-check against.
+// ═════════════════════════════════════════════════════════════════════
+
+fn build_gcd2_body_v4() -> (Iso, Type, Type) {
+    let (u_ty, io_ty) = gcd2_types();
+    let carrier = Type::sum(u_ty.clone(), io_ty.clone());
+    let (cb2v, _) = byte_maps(&carrier, 4);
+    let mut forward = BTreeMap::new();
+    let mut backward = BTreeMap::new();
+    for s in canonical_states() {
+        // NOTE: carrier tag byte: Left(u)=0, Right(io)=1 — same as rule_v4.
+        let i = cb2v[&s.to_vec()].clone();
+        let o = cb2v[&rule_v4(s).to_vec()].clone();
+        assert!(backward.insert(o.clone(), i.clone()).is_none());
+        forward.insert(i, o);
+    }
+    let def = PrimDef {
+        forward_name: "gcd2_hist_step".into(),
+        backward_name: "gcd2_hist_step_inv".into(),
+        input_ty: carrier.clone(),
+        output_ty: carrier,
+        forward,
+        backward,
+        symbolic: None,
+    };
+    (Iso::Prim(Box::new(def)), u_ty, io_ty)
+}
+
+#[test]
+fn g4_v4_body_admits_and_evals() {
+    let (body, u_ty, io_ty) = build_gcd2_body_v4();
+    let Iso::Prim(def) = &body else { panic!() };
+    admit(def).expect("v4 body must admit (total bijection)");
+    eprintln!("G4: admit(v4 gcd2_hist_step) = Ok");
+
+    let trace = Iso::trace(u_ty, body.clone());
+    let (iob2v, _) = byte_maps(&io_ty, 3);
+    let mut outs = BTreeSet::new();
+    for a in 0..4u8 {
+        for b in 0..4u8 {
+            let input = iob2v[&vec![a, b, 0]].clone();
+            let mut fuel = 100_000u64;
+            let out = theseus_eval::eval(&trace, input, &mut fuel).expect("eval");
+            let ob = marshal(&out, &io_ty).regs[..3].to_vec();
+            if a == 0 || b == 0 || a == b {
+                assert_eq!(ob, vec![a, b, 0]);
+            } else {
+                assert_eq!(ob[0], ref_gcd(a, b), "gcd({a},{b})");
+            }
+            assert!(outs.insert(ob));
+        }
+    }
+    eprintln!("G4: eval(Trace v4) == gcd on all 16 inputs; outputs injective");
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// G5 — exact-k_max IS live for this carrier: an Id-body probe of the
+// same u compiles (pre-merge this was the k_max=129 wall, E3).
+// ═════════════════════════════════════════════════════════════════════
+
+#[test]
+fn g5_exact_kmax_id_probe_compiles() {
+    let (u_ty, _) = gcd2_types();
+    let probe = Iso::trace(u_ty.clone(), Iso::Id(Type::sum(u_ty.clone(), u_ty)));
+    match compile_with_metadata(&probe) {
+        Ok(l) => {
+            eprintln!(
+                "G5: Id-body probe COMPILES: ROM {} instrs, loop_terms {:?}, WCET {}",
+                l.instrs.len(),
+                l.loop_terms,
+                l.wcet()
+            );
+            for v in enumerate_values(&Type::prod(
+                Type::flat(W),
+                Type::prod(Type::flat(W), Type::flat(HW)),
+            )) {
+                let out = run_on_cpu_fast(&probe, &v).expect("run");
+                assert_eq!(out, v, "Id-body trace is identity");
+            }
+            eprintln!("G5: 128/128 fast-oracle green on the Id probe");
+        }
+        Err(e) => panic!("G5: Id probe must compile post-exact-k_max, got {e}"),
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// G2 — compile today: with no recognizer arm this is UnrecognizedPrim.
+// (Flipped to the end-to-end success test once the recognizer lands.)
+// ═════════════════════════════════════════════════════════════════════
+
+#[test]
+fn g2_recognizer_verifies_v4_and_rejects_mismatch() {
+    // Pin: the test-local rule and the shipped pinned byte fn must agree
+    // on every canonical state (L20-style: the oracle is the shipped fn).
+    for s in canonical_states() {
+        let mut bytes = s.to_vec();
+        theseus_tisc::compile::gcd2_hist_bytes(&mut bytes);
+        assert_eq!(bytes, rule_v4(s).to_vec(), "rule_v4 != gcd2_hist_bytes at {s:?}");
+    }
+    eprintln!("G2: test rule_v4 == pinned compile::gcd2_hist_bytes on all 256 states");
+
+    // POSITIVE path: the v4 body is RECOGNIZED (name + full-domain
+    // semantic check green) — the arm fires and reports the precise
+    // emission wall as Deferred, not UnrecognizedPrim.
+    let (body, u_ty, _) = build_gcd2_body_v4();
+    let trace = Iso::trace(u_ty, body);
+    match compile_with_metadata(&trace) {
+        Err(CompileError::Deferred(m)) => {
+            assert!(m.contains("gcd2_hist_step"), "wrong Deferred: {m}");
+            eprintln!("G2: v4 body -> recognizer VERIFIED table; emission wall: {m}");
+        }
+        Err(e) => panic!("G2: expected Deferred(gcd2 wall), got {e}"),
+        Ok(l) => {
+            // If emission ever lands, this becomes the success path.
+            eprintln!(
+                "G2: COMPILES: ROM {} instrs, loop_terms {:?}, WCET {}",
+                l.instrs.len(),
+                l.loop_terms,
+                l.wcet()
+            );
+        }
+    }
+
+    // NEGATIVE path (reject-don't-corrupt): the g1 body has the same
+    // name/shape but leftover-paired junk arms != v4 rule — the semantic
+    // check must REJECT it (fall through to UnrecognizedPrim).
+    let (body_lp, u_ty2, _io, _t) = build_gcd2_body();
+    let trace_lp = Iso::trace(u_ty2, body_lp);
+    match compile_with_metadata(&trace_lp) {
+        Err(CompileError::UnrecognizedPrim(m)) => {
+            eprintln!("G2: leftover-paired body correctly REJECTED: UnrecognizedPrim({m})");
+        }
+        Err(e) => panic!("G2: mismatching table must be UnrecognizedPrim, got {e}"),
+        Ok(_) => panic!("G2: mismatching table must NOT compile"),
+    }
+}
