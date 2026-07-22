@@ -18,9 +18,10 @@ pub mod iso;
 pub mod typing;
 pub mod adjoint;
 pub mod rewrite;
+pub mod enumerate;
 
 pub use adjoint::adjoint;
 pub use iso::Iso;
-pub use prim::{admit, enumerate_values, PrimDef, PrimSpec, SpecTransfer, Value};
+pub use prim::{admit, count_leaves, enumerate_values, try_value_from_leaf_bytes, PrimDef, PrimSpec, SpecTransfer, Value};
 pub use ty::Type;
 pub use typing::{is_numeral_ty, list_spine_elem_ty, type_of, TypeError};

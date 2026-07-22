@@ -158,6 +158,11 @@ pub enum AdmitError {
         /// The input value where the spec and table disagree.
         input: Value,
     },
+    /// The symbolic spec is invalid w.r.t. the prim's types (F3).
+    InvalidSpec(String),
+    /// The prim has a spec AND a partial table (not covering the full domain),
+    /// which would bypass the hang guard (F2).
+    PartialTableWithSpec,
 }
 
 /// Check that a [`PrimDef`] is admissible: the `(forward, backward)` pair
@@ -165,18 +170,32 @@ pub enum AdmitError {
 ///
 /// Checks both `backward ∘ forward = id_A` and `forward ∘ backward = id_B`.
 ///
-/// **Symbolic-only prims** (table empty, spec present) return
-/// `Err(AdmitError::SymbolicOnly)` BEFORE any `enumerate_values` call —
-/// this is the HANG GUARD (enumerate_values on Flat(8)^3 = 2^24 Values = OOM).
+/// **Pre-checks** (before any enumeration):
+/// - F3: validates the symbolic spec against the prim's types.
+/// - F2: arithmetic domain-cardinality precheck — rejects symbolic prims
+///   with an incomplete table (the partial-table+spec hang bypass).
+/// - Symbolic-only (table empty, spec present) → `SymbolicOnly`.
 ///
 /// **Both-present prims** (table AND spec) verify spec==table over the table
-/// domain after the mutual-inverse check.
+/// domain (forward AND backward) after the mutual-inverse check.
 pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
-    // HANG GUARD: symbolic-only prim — early-return BEFORE enumerate_values.
-    // core::admit cannot certify bijectivity without BDD; the caller must
-    // use bveq::admit_symbolic in theseus-tisc.
-    if def.forward.is_empty() && def.symbolic.is_some() {
-        return Err(AdmitError::SymbolicOnly);
+    // F3: validate spec against the prim's types FIRST (before any enumeration).
+    if let Some(spec) = &def.symbolic {
+        spec.validate_against(&def.input_ty, &def.output_ty)
+            .map_err(AdmitError::InvalidSpec)?;
+    }
+
+    // F2: arithmetic domain-cardinality precheck. If the prim has a spec
+    // but the table is not the complete domain, reject BEFORE enumerate_values.
+    // This catches the partial-table+spec bypass of the old hang guard.
+    if def.symbolic.is_some() {
+        let card = crate::enumerate::cardinality_u64(&def.input_ty);
+        if def.forward.len() as u64 != card {
+            if def.forward.is_empty() {
+                return Err(AdmitError::SymbolicOnly);
+            }
+            return Err(AdmitError::PartialTableWithSpec);
+        }
     }
 
     let domain = enumerate_values(&def.input_ty);
@@ -214,24 +233,24 @@ pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
         }
     }
 
-    // Both-present: verify spec==table over the table domain (forward direction).
+    // Both-present: verify spec==table over the table domain.
     if let Some(spec) = &def.symbolic {
-        let width = spec.forward.width as usize;
-        let num_leaves = spec.forward.leaves.len();
+        // Forward spec vs forward table.
         for (in_val, table_out) in &def.forward {
-            // Decompose the input value to leaf bytes.
             let in_bytes = value_to_leaf_bytes(in_val, &def.input_ty);
-            // Evaluate the spec per output leaf, per bit.
-            let mut out_bytes = vec![0u8; num_leaves];
-            for (leaf, ob) in out_bytes.iter_mut().enumerate() {
-                for b in 0..width {
-                    if crate::bvexpr::eval_expr(&spec.forward.leaves[leaf][b], &in_bytes) {
-                        *ob |= 1 << b;
-                    }
-                }
-            }
-            // Recompose to a Value and compare.
+            let out_bytes = spec.forward.eval_bytes(&in_bytes);
             let spec_out = value_from_leaf_bytes(&out_bytes, &def.output_ty);
+            if &spec_out != table_out {
+                return Err(AdmitError::SpecTableMismatch {
+                    input: in_val.clone(),
+                });
+            }
+        }
+        // F4: backward spec vs backward table.
+        for (in_val, table_out) in &def.backward {
+            let in_bytes = value_to_leaf_bytes(in_val, &def.output_ty);
+            let out_bytes = spec.backward.eval_bytes(&in_bytes);
+            let spec_out = value_from_leaf_bytes(&out_bytes, &def.input_ty);
             if &spec_out != table_out {
                 return Err(AdmitError::SpecTableMismatch {
                     input: in_val.clone(),
@@ -292,7 +311,7 @@ pub fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
                     _ => panic!("value_to_leaf_bytes: not a Flat leaf: {v:?}"),
                 }
             }
-            debug_assert!((k as u64) < (1u64 << n), "leaf byte {k} out of range for Flat({n})");
+            assert!((k as u64) < (1u64 << n), "leaf byte {k} out of range for Flat({n})");
             vec![k]
         }
     }
@@ -300,49 +319,145 @@ pub fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
 
 /// Recompose leaf bytes into a Value (inverse of `value_to_leaf_bytes`).
 /// Core-native: no BDD dependency.
+///
+/// Panics (in all build modes) if a leaf byte is out of range for its
+/// `Flat(n)` type. Use [`try_value_from_leaf_bytes`] for a non-panicking
+/// version that returns a `Result`.
 pub fn value_from_leaf_bytes(bytes: &[u8], ty: &Type) -> Value {
-    value_from_leaf_bytes_inner(bytes, ty).0
+    try_value_from_leaf_bytes(bytes, ty)
+        .expect("value_from_leaf_bytes: out-of-range byte")
 }
 
-fn value_from_leaf_bytes_inner(bytes: &[u8], ty: &Type) -> (Value, usize) {
+/// Non-panicking version of [`value_from_leaf_bytes`]: returns `Err` if a
+/// leaf byte is out of range for its `Flat(n)` type (F3 hardening).
+pub fn try_value_from_leaf_bytes(bytes: &[u8], ty: &Type) -> Result<Value, String> {
+    try_value_from_leaf_bytes_inner(bytes, ty).map(|(v, _)| v)
+}
+
+fn try_value_from_leaf_bytes_inner(bytes: &[u8], ty: &Type) -> Result<(Value, usize), String> {
     match ty {
-        Type::Zero => panic!("value_from_leaf_bytes: Zero type"),
-        Type::One => (Value::Unit, 0),
+        Type::Zero => Err("value_from_leaf_bytes: Zero type".into()),
+        Type::One => Ok((Value::Unit, 0)),
         Type::Sum(a, b) => {
             let la = count_leaves(a);
             let lb = count_leaves(b);
             let max_payload = la.max(lb);
             let tag = bytes[0];
             if tag == 0 {
-                let (v, _) = value_from_leaf_bytes_inner(&bytes[1..], a);
-                (Value::Left(Box::new(v)), 1 + max_payload)
+                let (v, _) = try_value_from_leaf_bytes_inner(&bytes[1..], a)?;
+                Ok((Value::Left(Box::new(v)), 1 + max_payload))
             } else {
-                let (v, _) = value_from_leaf_bytes_inner(&bytes[1..], b);
-                (Value::Right(Box::new(v)), 1 + max_payload)
+                let (v, _) = try_value_from_leaf_bytes_inner(&bytes[1..], b)?;
+                Ok((Value::Right(Box::new(v)), 1 + max_payload))
             }
         }
         Type::Prod(a, b) => {
-            let (va, na) = value_from_leaf_bytes_inner(bytes, a);
-            let (vb, nb) = value_from_leaf_bytes_inner(&bytes[na..], b);
-            (Value::pair(va, vb), na + nb)
+            let (va, na) = try_value_from_leaf_bytes_inner(bytes, a)?;
+            let (vb, nb) = try_value_from_leaf_bytes_inner(&bytes[na..], b)?;
+            Ok((Value::pair(va, vb), na + nb))
         }
         Type::Flat(n) => {
             let byte = bytes[0];
-            debug_assert!(
-                (byte as u64) < (1u64 << n),
-                "value_from_leaf_bytes: byte {byte} out of range for Flat({n})"
-            );
+            if (byte as u64) >= (1u64 << n) {
+                return Err(format!(
+                    "value_from_leaf_bytes: byte {byte} out of range for Flat({n})"
+                ));
+            }
             let mut v = Value::left(Value::Unit);
             for _ in 0..byte {
                 v = Value::right(v);
             }
-            (v, 1)
+            Ok((v, 1))
         }
     }
 }
 
+impl SpecTransfer {
+    /// Evaluate this transfer on concrete leaf bytes (the shared
+    /// decompose→eval_expr→recompose core).
+    ///
+    /// `in_bytes` is the leaf-byte decomposition of the input value
+    /// (from `value_to_leaf_bytes`). Returns the output leaf bytes
+    /// (suitable for `value_from_leaf_bytes`).
+    pub fn eval_bytes(&self, in_bytes: &[u8]) -> Vec<u8> {
+        let width = self.width as usize;
+        let num_leaves = self.leaves.len();
+        let mut out = vec![0u8; num_leaves];
+        for (leaf, ob) in out.iter_mut().enumerate() {
+            for b in 0..width {
+                if crate::bvexpr::eval_expr(&self.leaves[leaf][b], in_bytes) {
+                    *ob |= 1 << b;
+                }
+            }
+        }
+        out
+    }
+
+    /// Validate this transfer against the type it operates on (F3).
+    /// Checks: width vs Flat(w), leaves.len() vs leaf count, each row len == width.
+    fn validate_against_type(&self, ty: &Type, direction: &str) -> Result<(), String> {
+        let expected_leaves = count_leaves(ty);
+        if self.leaves.len() != expected_leaves {
+            return Err(format!(
+                "{direction} spec: leaves.len()={} but type has {expected_leaves} leaves",
+                self.leaves.len()
+            ));
+        }
+        let w = self.width as usize;
+        // Check each leaf has exactly `width` bits.
+        for (i, row) in self.leaves.iter().enumerate() {
+            if row.len() != w {
+                return Err(format!(
+                    "{direction} spec: leaf[{i}] has {} bits but width={w}",
+                    row.len()
+                ));
+            }
+        }
+        // Check width vs each Flat leaf in the type.
+        validate_width_vs_type(ty, self.width, direction)?;
+        Ok(())
+    }
+}
+
+/// Walk the type and check that every Flat(n) leaf has n == width.
+fn validate_width_vs_type(ty: &Type, width: u8, direction: &str) -> Result<(), String> {
+    match ty {
+        Type::Zero | Type::One => Ok(()),
+        Type::Sum(a, b) => {
+            validate_width_vs_type(a, width, direction)?;
+            validate_width_vs_type(b, width, direction)
+        }
+        Type::Prod(a, b) => {
+            validate_width_vs_type(a, width, direction)?;
+            validate_width_vs_type(b, width, direction)
+        }
+        Type::Flat(n) => {
+            if *n != width {
+                Err(format!(
+                    "{direction} spec: width={width} but type has Flat({n})"
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
+impl PrimSpec {
+    /// Validate the spec against the prim's input and output types (F3).
+    pub fn validate_against(&self, input_ty: &Type, output_ty: &Type) -> Result<(), String> {
+        // Forward: leaves match output type, width matches both types.
+        self.forward.validate_against_type(output_ty, "forward")?;
+        validate_width_vs_type(input_ty, self.forward.width, "forward (input side)")?;
+        // Backward: leaves match input type, width matches both types.
+        self.backward.validate_against_type(input_ty, "backward")?;
+        validate_width_vs_type(output_ty, self.backward.width, "backward (output side)")?;
+        Ok(())
+    }
+}
+
 /// Count the number of leaves in a type (for Sum padding).
-fn count_leaves(ty: &Type) -> usize {
+pub fn count_leaves(ty: &Type) -> usize {
     match ty {
         Type::Zero => 0,
         Type::One => 0,

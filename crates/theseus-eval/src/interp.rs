@@ -273,24 +273,15 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
             }
             // Eval-via-spec: decompose → eval_expr per bit → recompose.
             if let Some(spec) = &def.symbolic {
-                let width = spec.forward.width as usize;
                 let in_bytes = theseus_core::prim::value_to_leaf_bytes(&value, &def.input_ty);
-                let num_out_leaves = spec.forward.leaves.len();
-                let mut out_bytes = vec![0u8; num_out_leaves];
-                for (leaf, ob) in out_bytes.iter_mut().enumerate() {
-                    for b in 0..width {
-                        if theseus_core::bvexpr::eval_expr(
-                            &spec.forward.leaves[leaf][b],
-                            &in_bytes,
-                        ) {
-                            *ob |= 1 << b;
-                        }
-                    }
-                }
-                return Ok(theseus_core::prim::value_from_leaf_bytes(
+                let out_bytes = spec.forward.eval_bytes(&in_bytes);
+                return theseus_core::prim::try_value_from_leaf_bytes(
                     &out_bytes,
                     &def.output_ty,
-                ));
+                ).map_err(|msg| EvalError::DomainError(format!(
+                    "prim '{}': eval-via-spec recompose failed: {msg}",
+                    def.forward_name
+                )));
             }
             Err(EvalError::DomainError(format!(
                 "prim '{}': value not in forward map and no symbolic spec: {:?}",

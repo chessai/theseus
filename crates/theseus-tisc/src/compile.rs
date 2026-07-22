@@ -1004,14 +1004,17 @@ use theseus_core::prim::{enumerate_values, PrimDef};
 /// All register accesses are routed through `with_registers` so that
 /// scratch-resident operands are paged in/out correctly.
 pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> {
-    // HANG GUARD: reject symbolic-only prims BEFORE any enumerate_values call.
-    // The k-leaf arms call enumerate_values(input_ty) — for a Flat(8)^3 prim
-    // that's 2^24 thermometer Values = OOM/hang. Symbolic recognition is 3b.
-    if def.forward.is_empty() && def.symbolic.is_some() {
-        return Err(CompileError::Deferred(format!(
-            "prim '{}': symbolic-only prim — recognition not yet implemented (3b)",
-            def.forward_name
-        )));
+    // HANG GUARD (F2-hardened): reject any symbolic prim whose table does NOT
+    // cover the full domain BEFORE any enumerate_values call.
+    if def.symbolic.is_some() {
+        let card = theseus_core::enumerate::cardinality_u64(&def.input_ty);
+        if def.forward.len() as u64 != card {
+            return Err(CompileError::Deferred(format!(
+                "prim '{}': symbolic prim with incomplete table ({}/{}) — \
+                 recognition not yet implemented (3b)",
+                def.forward_name, def.forward.len(), card
+            )));
+        }
     }
 
     let n_in = num_leaves(&def.input_ty)?;
