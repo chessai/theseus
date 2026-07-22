@@ -1,6 +1,24 @@
 # Toward T-loops (variable-T loops): slice-1 = the first genuine variable-T program — DESIGN (draft r1)
 
-**Status:** advisor draft for Fable design-review-with-POC. HIGHEST BAR if it touches lowering/decoder
+> **REFUTED + RESOLVED (see `docs/reviews/tloops-slice1-design-review.md`, verdict NEEDS-MINIMAL-CHANGE,
+> with a 7/7-green POC `docs/scratch/tloop_poc.rs.ref`):** the §0 reframing "4-bit GCD fits today, WCET
+> ≈ 252, no change" is **FALSE by 10×** — four measured walls: (0) no `trace`/`while` surface syntax
+> (Rust-built `Iso::trace` only); (1) the naive `(a,b)` step is **2-to-1** (Bennett — 105/256 collisions;
+> honest carrier is `(a,b,hist)` with a self-delimiting sentinel history, T_max bits: w2→3,w3→7,w4→15);
+> (2) **k_max = |u|+1 is carrier-cardinality, NOT a measure** — the binding wall (2-bit GCD: k_max=129,
+> WCET=1294; 3-bit: k_max=8193). **widen-PC is NOT the first wall** and alone buys nothing (it would "fit"
+> a 99.97%-park-tax program while k_max-looseness remains — a category error). (3) the GCD body has no
+> lowering path (recognizer-only). BUT the bijective GCD **EXISTS at eval level today** (admit()==Ok,
+> eval(Trace)==gcd over all 64 pairs, T varies 0..7).
+> **REVISED slice-1 = "exact-k_max + 2-bit GCD":** (a) trajectory-derived k_max in `lower_trace`
+> (fallback |u|+1) — SOUNDNESS-CRITICAL WCET tightening; (b) a pinned `gcd2_hist_step` k-leaf recognizer
+> (mde pattern); (c) the 2-bit GCD (|u|=128, Flat(3) history) as the whole-domain `run_on_cpu==eval==gcd`
+> + T/park-tax-histogram demo — the first genuine variable-T ALGORITHM, zero energy tax. Both (a),(b)
+> touch lower_trace/recognize_prim → **HIGHEST BAR** (adversarial impl-review + behavioral round-trip).
+> **widen-PC = the follow-on** (w=4 genuinely needs it even post-exact-k_max; ~+10–15% step_j per PC bit —
+> permanent tax, must come AFTER exact-k_max). exact-k_max unlocks w=2 (body ≤53 instrs) and marginally w=3.
+
+**Status:** advisor draft for Fable design-review-with-POC (SUPERSEDED by the review above). HIGHEST BAR if it touches lowering/decoder
 (control-flow). Grounded on a thorough Explore map of the PC/WCET/loop machinery (file:line below).
 Prior GCD thinking: `docs/scratch/tp1-gcd-design.md`; TP roadmap `docs/src/test-program-roadmap.md`
 (TP-1 GCD, TP-2 bounded Collatz — both marked blocked by the "sizing wall").

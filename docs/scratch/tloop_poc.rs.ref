@@ -1,0 +1,470 @@
+//! T-loops slice-1 DESIGN-REVIEW POC (docs/scratch/tloops-slice1-design.md).
+//!
+//! Resolves, by experiment, whether a small subtractive GCD compiles and runs
+//! today, and if not, which wall it hits (Bennett bijectivity / k_max=|u|+1 /
+//! body lowering / WCET-256), plus the variable-T ceiling that DOES fit today.
+//!
+//! FAST tier: no ring/energy, bounded domains (<= 2^14 enumerations).
+
+use std::collections::{BTreeMap, BTreeSet};
+use theseus_core::prim::{admit, enumerate_values, PrimDef};
+use theseus_core::{Iso, Type, Value};
+use theseus_tisc::compile::{
+    compile_with_metadata, marshal, mde_walk_bytes, run_on_cpu_fast, unmarshal, CompileError,
+};
+use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+
+// ── helpers ─────────────────────────────────────────────────────────
+
+fn state_with_regs(bytes: &[u8]) -> StateVals {
+    let mut r = [0u8; NUM_REGS];
+    r[..bytes.len()].copy_from_slice(bytes);
+    StateVals {
+        regs: r,
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: [0; NUM_SCRATCH],
+        mem: [0; MEM_WORDS],
+    }
+}
+
+/// byte-vector <-> Value maps for a type with `n` leaves.
+fn byte_maps(ty: &Type, n: usize) -> (BTreeMap<Vec<u8>, Value>, BTreeMap<Value, Vec<u8>>) {
+    let mut b2v = BTreeMap::new();
+    let mut v2b = BTreeMap::new();
+    for v in enumerate_values(ty) {
+        let bytes = marshal(&v, ty).regs[..n].to_vec();
+        assert!(
+            b2v.insert(bytes.clone(), v.clone()).is_none(),
+            "marshal not injective on {ty}"
+        );
+        v2b.insert(v, bytes);
+    }
+    (b2v, v2b)
+}
+
+fn ref_gcd(a: u8, b: u8) -> u8 {
+    if b == 0 { a } else { ref_gcd(b, a % b) }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// E1 — Bennett: the naive (history-free) subtractive-Euclid step is 2-to-1.
+// The design's "carrier = (a,b) + tag" body CANNOT be a PrimDef.
+// ═════════════════════════════════════════════════════════════════════
+
+#[test]
+fn e1_naive_gcd_step_is_not_a_bijection() {
+    // step(a,b) = if a>b {(a-b,b)} else if b>a {(a,b-a)} else {(a,b)} on 4-bit pairs.
+    let step = |a: u8, b: u8| -> (u8, u8) {
+        if a > b {
+            (a - b, b)
+        } else if b > a {
+            (a, b - a)
+        } else {
+            (a, b)
+        }
+    };
+    let mut preimages: BTreeMap<(u8, u8), Vec<(u8, u8)>> = BTreeMap::new();
+    for a in 0..16u8 {
+        for b in 0..16u8 {
+            preimages.entry(step(a, b)).or_default().push((a, b));
+        }
+    }
+    let collisions: Vec<_> = preimages.iter().filter(|(_, v)| v.len() > 1).collect();
+    eprintln!(
+        "E1: naive 4-bit GCD step: {} of 256 outputs have >1 preimage",
+        collisions.len()
+    );
+    assert!(!collisions.is_empty(), "step must be non-injective (Bennett)");
+    // The canonical collision from tp1-gcd-design §1:
+    assert_eq!(step(5, 3), (2, 3));
+    assert_eq!(step(2, 5), (2, 3));
+    eprintln!("E1: (5,3) -> (2,3) and (2,5) -> (2,3): branch bit MUST be stored");
+
+    // As a PrimDef on Prod(Flat4,Flat4), admit() must reject it.
+    let p44 = Type::prod(Type::flat(4), Type::flat(4));
+    let (b2v, v2b) = byte_maps(&p44, 2);
+    let mut forward = BTreeMap::new();
+    let mut backward = BTreeMap::new();
+    for (v, bytes) in &v2b {
+        let (x, y) = step(bytes[0], bytes[1]);
+        let out = b2v[&vec![x, y]].clone();
+        forward.insert(v.clone(), out.clone());
+        backward.insert(out, v.clone()); // last-writer-wins: lossy
+    }
+    let def = PrimDef {
+        forward_name: "gcd_step_naive".into(),
+        backward_name: "gcd_step_naive_inv".into(),
+        input_ty: p44.clone(),
+        output_ty: p44,
+        forward,
+        backward,
+        symbolic: None,
+    };
+    let res = admit(&def);
+    eprintln!("E1: admit(naive GCD step) = {res:?}");
+    assert!(res.is_err(), "non-injective step must fail admission");
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// E2 — the bijective 3-bit GCD (Bennett paid: self-delimiting 7-bit history)
+// EXISTS at the core level: admit()==Ok, eval(Trace)==gcd over the whole
+// 64-pair domain, T varies 0..6. Then compile: the walls, in firing order.
+// ═════════════════════════════════════════════════════════════════════
+
+const W: u8 = 3; // input width
+const HW: u8 = 7; // history width: sentinel + up to 6 branch bits (T_max=6)
+
+/// carrier payload P = (a: Flat3, b: Flat3, h: Flat7); u = P, io = P.
+fn gcd3_types() -> (Type, Type) {
+    let p = Type::prod(
+        Type::flat(W),
+        Type::prod(Type::flat(W), Type::flat(HW)),
+    );
+    (p.clone(), p)
+}
+
+/// Build the bijective GCD-with-history body on Sum(u, P):
+///   entry  Right(a,b,0): a==0||b==0 -> Right(a,b,0) [degenerate exit]
+///                        a==b       -> Right(a,a,1) [T=0 exit, sentinel]
+///                        else       -> Left(a,b,1)  [enter, h=sentinel]
+///   step   Left(a,b,h):  a>b -> Left(a-b,b,h<<1|1); a<b -> Left(a,b-a,h<<1)
+///                        a==b -> Right(a,a,h)       [exit, h self-delimiting]
+///   junk: all unreached carrier values leftover-paired (never visited by eval).
+fn build_gcd3_body() -> (Iso, Type, Type, BTreeMap<(u8, u8), usize>) {
+    let (u_ty, io_ty) = gcd3_types();
+    let carrier = Type::sum(u_ty.clone(), io_ty.clone());
+    let (cb2v, cv2b) = byte_maps(&carrier, 4); // [tag, a, b, h]
+
+    let mut forward: BTreeMap<Value, Value> = BTreeMap::new();
+    let insert = |from: Vec<u8>, to: Vec<u8>, forward: &mut BTreeMap<Value, Value>| {
+        let fv = cb2v[&from].clone();
+        let tv = cb2v[&to].clone();
+        if let Some(prev) = forward.get(&fv) {
+            assert_eq!(prev, &tv, "conflicting transition from {from:?}");
+        } else {
+            forward.insert(fv, tv);
+        }
+    };
+
+    let mut t_of: BTreeMap<(u8, u8), usize> = BTreeMap::new();
+    for a in 0..(1 << W) as u8 {
+        for b in 0..(1 << W) as u8 {
+            // entry
+            if a == 0 || b == 0 {
+                insert(vec![1, a, b, 0], vec![1, a, b, 0], &mut forward);
+                t_of.insert((a, b), 0);
+                continue;
+            }
+            if a == b {
+                insert(vec![1, a, b, 0], vec![1, a, a, 1], &mut forward);
+                t_of.insert((a, b), 0);
+                continue;
+            }
+            insert(vec![1, a, b, 0], vec![0, a, b, 1], &mut forward);
+            // closure: walk the loop, recording each step transition
+            let (mut x, mut y, mut h) = (a, b, 1u8);
+            let mut t = 0usize;
+            loop {
+                if x == y {
+                    insert(vec![0, x, y, h], vec![1, x, x, h], &mut forward);
+                    break;
+                }
+                t += 1;
+                let (nx, ny, nh) = if x > y {
+                    (x - y, y, (h << 1) | 1)
+                } else {
+                    (x, y - x, h << 1)
+                };
+                assert!(nh as u32 <= 127, "history overflow: T_max exceeded");
+                insert(vec![0, x, y, h], vec![0, nx, ny, nh], &mut forward);
+                (x, y, h) = (nx, ny, nh);
+            }
+            t_of.insert((a, b), t + 1); // +1: the exit-check application on x==y
+        }
+    }
+
+    // Injectivity so far, then leftover-pair the junk states.
+    let used_out: BTreeSet<Value> = forward.values().cloned().collect();
+    assert_eq!(used_out.len(), forward.len(), "meaningful arms not injective");
+    let all: Vec<Value> = cv2b.keys().cloned().collect();
+    let free_in: Vec<Value> = all
+        .iter()
+        .filter(|v| !forward.contains_key(v))
+        .cloned()
+        .collect();
+    let free_out: Vec<Value> = all
+        .iter()
+        .filter(|v| !used_out.contains(v))
+        .cloned()
+        .collect();
+    assert_eq!(free_in.len(), free_out.len());
+    for (i, o) in free_in.into_iter().zip(free_out.into_iter()) {
+        forward.insert(i, o);
+    }
+    let mut backward = BTreeMap::new();
+    for (i, o) in &forward {
+        assert!(
+            backward.insert(o.clone(), i.clone()).is_none(),
+            "forward not injective after junk pairing"
+        );
+    }
+    let def = PrimDef {
+        forward_name: "gcd3_hist_step".into(),
+        backward_name: "gcd3_hist_step_inv".into(),
+        input_ty: carrier.clone(),
+        output_ty: carrier,
+        forward,
+        backward,
+        symbolic: None,
+    };
+    (Iso::Prim(Box::new(def)), u_ty, io_ty, t_of)
+}
+
+#[test]
+fn e2a_bijective_gcd3_body_admits_and_evals() {
+    let (body, u_ty, io_ty, t_of) = build_gcd3_body();
+
+    // The Bennett-paid body IS a total bijection.
+    let Iso::Prim(def) = &body else { panic!() };
+    admit(def).expect("gcd3+history body must be admissible (total bijection)");
+    eprintln!("E2a: admit(gcd3_hist_step) = Ok — the bijective body EXISTS");
+
+    // eval-level Trace == gcd over the WHOLE 64-pair domain.
+    let trace = Iso::trace(u_ty, body.clone());
+    let (iob2v, _iov2b) = byte_maps(&io_ty, 3);
+    let mut outputs = BTreeSet::new();
+    let mut t_hist: BTreeMap<usize, usize> = BTreeMap::new();
+    for a in 0..(1 << W) as u8 {
+        for b in 0..(1 << W) as u8 {
+            let input = iob2v[&vec![a, b, 0]].clone();
+            let mut fuel = 100_000u64;
+            let out = theseus_eval::eval(&trace, input, &mut fuel).expect("eval");
+            let ob = marshal(&out, &io_ty).regs[..3].to_vec();
+            if a == 0 || b == 0 {
+                assert_eq!(ob, vec![a, b, 0], "degenerate zero arm");
+            } else {
+                assert_eq!(ob[0], ref_gcd(a, b), "gcd({a},{b})");
+                assert_eq!(ob[1], ref_gcd(a, b), "exit state a==b==gcd");
+                assert!(ob[2] >= 1, "sentinel history");
+            }
+            assert!(outputs.insert(ob), "trace output not injective at ({a},{b})");
+            *t_hist.entry(t_of[&(a, b)]).or_default() += 1;
+        }
+    }
+    eprintln!("E2a: eval(Trace gcd3) == gcd on all 64 inputs; outputs injective");
+    eprintln!("E2a: T histogram (T -> #inputs): {t_hist:?}");
+    let t_max = *t_hist.keys().max().unwrap();
+    let t_min = *t_hist.keys().min().unwrap();
+    assert!(t_max > t_min, "T must vary with input (variable-T signature)");
+    // T = body applications = subtract-steps + 1 exit-check; gcd(7,1) = 6+1.
+    assert_eq!(t_max, 7, "worst case gcd(7,1): 6 subtractions + exit check");
+}
+
+#[test]
+fn e2b_gcd3_compile_walls_in_firing_order() {
+    let (body, u_ty, _io_ty, _t) = build_gcd3_body();
+    // Wall A (fires first): the body has NO lowering path — recognizer-only.
+    let trace = Iso::trace(u_ty.clone(), body);
+    let err = compile_with_metadata(&trace).expect_err("gcd3 trace must not compile");
+    eprintln!("E2b: compile(Trace gcd3) = {err}");
+    assert!(
+        matches!(err, CompileError::UnrecognizedPrim(_)),
+        "expected UnrecognizedPrim, got {err:?}"
+    );
+
+    // Wall B (behind A): k_max = |u|+1 = 8193. Probe with a lowerable Id body.
+    let id_probe = Iso::trace(u_ty.clone(), Iso::Id(Type::sum(u_ty.clone(), u_ty)));
+    let err = compile_with_metadata(&id_probe).expect_err("id probe must not compile");
+    let msg = format!("{err}");
+    eprintln!("E2b: compile(Trace(u_gcd3, Id)) = {msg}");
+    assert!(msg.contains("k_max=8193"), "k_max = |u|+1 = 2^13+1: {msg}");
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// E3 — the design's §0 arithmetic, tested verbatim: 4-bit historyless
+// carrier (the impossible best case) and the smallest honest (2-bit) GCD.
+// ═════════════════════════════════════════════════════════════════════
+
+#[test]
+fn e3_design_arithmetic_refuted() {
+    // Design claim: "4-bit: k_max ≈ 31, WCET ≈ 252 < 256 — FITS".
+    // Reality: k_max = |u|+1 = 257 even for the (non-bijective!) historyless
+    // carrier, and iter_len >= LOOP_OVERHEAD = 10 even for an EMPTY body.
+    let u44 = Type::prod(Type::flat(4), Type::flat(4));
+    let probe = Iso::trace(u44.clone(), Iso::Id(Type::sum(u44.clone(), u44)));
+    let msg = format!("{}", compile_with_metadata(&probe).expect_err("4-bit"));
+    eprintln!("E3: 4-bit historyless Id-body probe: {msg}");
+    assert!(msg.contains("k_max=257"), "{msg}");
+
+    // Smallest honest GCD: 2-bit + 3-bit self-delimiting history.
+    let u223 = Type::prod(
+        Type::flat(2),
+        Type::prod(Type::flat(2), Type::flat(3)),
+    );
+    let probe = Iso::trace(u223.clone(), Iso::Id(Type::sum(u223.clone(), u223)));
+    let msg = format!("{}", compile_with_metadata(&probe).expect_err("2-bit"));
+    eprintln!("E3: 2-bit GCD-with-history Id-body probe: {msg}");
+    assert!(msg.contains("k_max=129"), "{msg}");
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// E4 — what DOES fit under 256 today: |u| <= 21 (k_max*(10+L) <= 252).
+// A 4-bit historyless SHELL (|u|=16) compiles — but its Id body exits
+// immediately: T == 0 for every input. Fits != variable-T.
+// ═════════════════════════════════════════════════════════════════════
+
+#[test]
+fn e4_fitting_shell_is_trivial() {
+    let u22 = Type::prod(Type::flat(2), Type::flat(2));
+    let probe = Iso::trace(u22.clone(), Iso::Id(Type::sum(u22.clone(), u22.clone())));
+    let lowered = compile_with_metadata(&probe).expect("|u|=16 shell must compile");
+    eprintln!(
+        "E4: Trace(Flat2xFlat2, Id): ROM {} instrs, loop_terms {:?}, WCET {}",
+        lowered.instrs.len(),
+        lowered.loop_terms,
+        lowered.wcet()
+    );
+    assert_eq!(lowered.loop_terms, vec![(17, 10)]);
+    assert!(lowered.wcet() <= 256);
+    // Whole-domain fast oracle: output == input (Right(x) exits immediately, T=0).
+    for v in enumerate_values(&u22) {
+        let out = run_on_cpu_fast(&probe, &v).expect("run");
+        assert_eq!(out, v, "Id-body trace is the identity, T=0 everywhere");
+    }
+    eprintln!("E4: 16/16 fast-oracle green — but T == 0 for ALL inputs (no variable T)");
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// E5 — the variable-T ceiling that ships TODAY: the M-D.e walk (|u|=5).
+// T(0)=6, T(1)=1 on a compiled ROM; Σ(T−1) = 5 = |u| — TH-1b SATURATED.
+// ═════════════════════════════════════════════════════════════════════
+
+fn nat_chain(n: usize) -> Type {
+    assert!(n >= 2);
+    let mut t = Type::sum(Type::One, Type::One);
+    for _ in 2..n {
+        t = Type::sum(Type::One, t);
+    }
+    t
+}
+
+fn build_walk_body() -> (Iso, Type, Type) {
+    let n5 = nat_chain(5);
+    let bit = Type::sum(Type::One, Type::One);
+    let carrier = Type::sum(n5.clone(), bit.clone());
+    let vals = enumerate_values(&carrier);
+    let mut forward = BTreeMap::new();
+    let mut backward = BTreeMap::new();
+    for v in &vals {
+        let sv = marshal(v, &carrier);
+        let mut bytes: Vec<u8> = sv.regs[..5].to_vec();
+        mde_walk_bytes(&mut bytes);
+        let out_val = unmarshal(&state_with_regs(&bytes), &carrier);
+        forward.insert(v.clone(), out_val.clone());
+        assert!(backward.insert(out_val, v.clone()).is_none());
+    }
+    let prim = PrimDef {
+        forward_name: "mde_spill_walk".into(),
+        backward_name: "mde_spill_walk_inv".into(),
+        input_ty: carrier.clone(),
+        output_ty: carrier.clone(),
+        forward,
+        backward,
+        symbolic: None,
+    };
+    (Iso::Prim(Box::new(prim)), n5, carrier)
+}
+
+fn trajectory_len(body: &Iso, carrier: &Type, input_bit: u8) -> usize {
+    let Iso::Prim(def) = body else { panic!() };
+    let vals = enumerate_values(carrier);
+    let mut cur = vals
+        .iter()
+        .find(|v| {
+            let b = marshal(v, carrier).regs;
+            b[0] == 1 && b[1] == input_bit
+        })
+        .unwrap()
+        .clone();
+    for step in 1..=100 {
+        cur = def.forward.get(&cur).unwrap().clone();
+        if marshal(&cur, carrier).regs[0] == 1 {
+            return step;
+        }
+    }
+    panic!("no exit");
+}
+
+#[test]
+fn e5_todays_variable_t_ceiling_mde_walk() {
+    let (body, u_ty, carrier) = build_walk_body();
+    let t0 = trajectory_len(&body, &carrier, 0);
+    let t1 = trajectory_len(&body, &carrier, 1);
+    let trace = Iso::trace(u_ty, body);
+    let lowered = compile_with_metadata(&trace).expect("mde walk compiles");
+    let b_wcet = lowered.wcet();
+    eprintln!(
+        "E5: mde walk: ROM {} instrs, loop_terms {:?}, B(WCET) = {}",
+        lowered.instrs.len(),
+        lowered.loop_terms,
+        b_wcet
+    );
+    // Whole-domain (2 inputs) fast oracle vs eval.
+    let bit = Type::sum(Type::One, Type::One);
+    for v in enumerate_values(&bit) {
+        let cpu = run_on_cpu_fast(&trace, &v).expect("run");
+        let mut fuel = 10_000u64;
+        let ev = theseus_eval::eval(&trace, v.clone(), &mut fuel).expect("eval");
+        assert_eq!(cpu, ev, "fast-oracle == eval on {v:?}");
+    }
+    let (k_max, iter_len) = lowered.loop_terms[0];
+    eprintln!(
+        "E5: T histogram: input0 -> T={t0}, input1 -> T={t1}; park surplus \
+         (B - spine - T*iter_len): in0 {} steps, in1 {} steps of B={b_wcet}",
+        b_wcet - (lowered.instrs.len() - iter_len) - t0 * iter_len,
+        b_wcet - (lowered.instrs.len() - iter_len) - t1 * iter_len,
+    );
+    assert!(t0 != t1, "variable T on a compiled ROM exists TODAY (bimodal toy)");
+    // TH-1b saturation: Σ(T−1) over inputs (= Left states visited) = |u| exactly.
+    assert_eq!((t0 - 1) + (t1 - 1), k_max - 1, "Σ(T−1) == |u| == 5");
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// E6 — the exact-k_max what-if table: what a trajectory-derived bound
+// (replacing |u|+1) would unlock under the EXISTING 256 cap / 8-bit PC.
+// ═════════════════════════════════════════════════════════════════════
+
+#[test]
+fn e6_exact_kmax_what_if() {
+    eprintln!("E6: w | T_max | k_exact | |u| (a,b,hist) | k_today | body budget (252/k_exact - 10)");
+    for w in [2u8, 3, 4] {
+        let n = 1u16 << w;
+        let mut t_max = 0usize;
+        for a in 1..n {
+            for b in 1..n {
+                let (mut x, mut y, mut t) = (a, b, 0usize);
+                while x != y {
+                    if x > y {
+                        x -= y;
+                    } else {
+                        y -= x;
+                    }
+                    t += 1;
+                }
+                t_max = t_max.max(t + 1); // + exit-check iteration
+            }
+        }
+        let hist_bits = t_max as u32; // sentinel + (t_max-1) branch bits
+        let u_card = (n as u64) * (n as u64) * (1u64 << hist_bits);
+        let k_exact = t_max + 1;
+        let budget = 252 / k_exact;
+        eprintln!(
+            "E6: {w} |  {t_max}  |   {k_exact}   | {u_card} | {} | iter_len<={budget} => body <= {} instrs{}",
+            u_card + 1,
+            budget.saturating_sub(10),
+            if budget >= 11 { " — FITS post-exact-k_max" } else { " — needs widen-PC even then" }
+        );
+    }
+}
