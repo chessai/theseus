@@ -2696,6 +2696,15 @@ fn lower_trace(
             // Set up carrier state: Right(a) = tag 1, payload = a's leaf bytes.
             // marshal(a, a_ty) places a's leaves in Reg(0..n_input-1) — exactly
             // where body_homes[1..1+n_input] maps them. Set tag register to 1.
+            //
+            // SOUNDNESS (impl-review A): this marshal-layout == body-home-layout
+            // equality is the ENTIRE reason the walk simulates the same registers
+            // the real CPU does. It holds ONLY because the F-1 canonical/occupied
+            // guard above rejects any Trace whose ctx.homes != Ctx::new(n).homes,
+            // and both marshal() and body_homes derive from the same sole
+            // placement fn `home_of`. **A future relaxation of the F-1 guard
+            // (allowing relocated/resident input homes under Trace) would silently
+            // invalidate this walk → an unsound k_exact.** Keep F-1 before this.
             let mut state = marshal(&a_val, &a_ty);
             state.regs[tag_reg_idx as usize] = 1; // Right tag (input arm)
             let mut t: usize = 0;
@@ -2705,7 +2714,12 @@ fn lower_trace(
                     exec_instr(instr, &mut state);
                 }
                 t += 1;
-                // Right (tag != 0) = exit arm.
+                // Right (tag != 0) = exit arm. NOTE (impl-review C): the walk
+                // tests the whole tag BYTE, but the hardware routes on bit 0 only
+                // (Cswap tests ctrl&1, ctrl = tag^1). Safe because every lowered
+                // body maps canonical encodings to canonical encodings, so the tag
+                // is ∈ {0,1} at every iteration boundary (a tag byte ≥ 2 was already
+                // fatal under the old bound — infinite loop / wrong output).
                 if state.regs[tag_reg_idx as usize] != 0 {
                     break;
                 }
