@@ -31,6 +31,8 @@
 //! ancilla fact as an L20 regression test: it must FAIL if someone later
 //! wrongly forces the ancillas to zero in the forward path.
 
+#![allow(clippy::needless_range_loop)]
+
 use std::sync::OnceLock;
 
 use theseus_core::Iso;
@@ -109,9 +111,7 @@ fn state_with_lanes(a: [u8; 5]) -> StateVals {
         scratch: [0; 8],
         mem: [0; MEM_WORDS],
     };
-    for i in 0..5 {
-        s.regs[i] = a[i];
-    }
+    s.regs[..5].copy_from_slice(&a);
     s
 }
 
