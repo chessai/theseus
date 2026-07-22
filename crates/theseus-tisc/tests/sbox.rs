@@ -175,7 +175,7 @@ fn sbox_whole_domain_packed() {
             assert_eq!(
                 out_nibble(&out, b),
                 PRESENT_SBOX[x as usize],
-                "x={x:#03X} lane {b}: ROM {:#03X} != table {:#03X}",
+                "x={x:#04X} lane {b}: ROM {:#04X} != table {:#04X}",
                 out_nibble(&out, b),
                 PRESENT_SBOX[x as usize]
             );
@@ -183,15 +183,15 @@ fn sbox_whole_domain_packed() {
         // Whole parked bytes are 0x00/0xFF (uniform packing).
         for i in 0..4 {
             let want = if (PRESENT_SBOX[x as usize] >> i) & 1 == 1 { 0xFF } else { 0x00 };
-            assert_eq!(out.scratch[2 + i], want, "x={x:#03X} output byte y{i}");
+            assert_eq!(out.scratch[2 + i], want, "x={x:#04X} output byte y{i}");
         }
         // STANDALONE garbage-free: inputs preserved, acc + temp back to 0.
         for i in 0..4 {
             let inp = if (x >> i) & 1 == 1 { 0xFF } else { 0x00 };
-            assert_eq!(out.regs[i], inp, "x={x:#03X}: input r{i} must be preserved");
+            assert_eq!(out.regs[i], inp, "x={x:#04X}: input r{i} must be preserved");
         }
-        assert_eq!(out.regs[ACC as usize], 0, "x={x:#03X}: acc r4 not clean");
-        assert_eq!(out.regs[TMP as usize], 0, "x={x:#03X}: temp r5 not clean");
+        assert_eq!(out.regs[ACC as usize], 0, "x={x:#04X}: acc r4 not clean");
+        assert_eq!(out.regs[TMP as usize], 0, "x={x:#04X}: temp r5 not clean");
     }
     eprintln!(
         "PRESENT S-box correct on all 16 inputs (packed x8); inputs preserved, \
@@ -226,7 +226,7 @@ fn sbox_discriminating_packing() {
         assert_eq!(
             out_nibble(&out, b),
             PRESENT_SBOX[inp as usize],
-            "discriminating: lane {b} input {inp:#03X} → got {:#03X}, table {:#03X}",
+            "discriminating: lane {b} input {inp:#04X} → got {:#04X}, table {:#04X}",
             out_nibble(&out, b),
             PRESENT_SBOX[inp as usize]
         );
@@ -376,8 +376,8 @@ fn sbox_system_ring_authority() {
     // the FIRST step of the ring genuinely closes (ancillas restored, bus quiescent).
     for &x in &[0x0u8, 0x5, 0xA, 0xF] {
         let start = state_packed(x);
-        assert!(ring.ancillas_restored(&start), "x={x:#03X}: ring ancillas not restored");
-        assert!(ring.bus_quiescent(&start), "x={x:#03X}: bus not quiescent");
+        assert!(ring.ancillas_restored(&start), "x={x:#04X}: ring ancillas not restored");
+        assert!(ring.bus_quiescent(&start), "x={x:#04X}: bus not quiescent");
     }
 
     // Whole-program authority: run all 47 revolutions, output == published table.
@@ -387,14 +387,14 @@ fn sbox_system_ring_authority() {
         assert_eq!(
             out_nibble(&out, 0),
             PRESENT_SBOX[x as usize],
-            "system-ring: S({x:#03X}) real-CPU {:#03X} != table {:#03X}",
+            "system-ring: S({x:#04X}) real-CPU {:#04X} != table {:#04X}",
             out_nibble(&out, 0),
             PRESENT_SBOX[x as usize]
         );
         // Inputs preserved on the real ring too.
         for i in 0..4 {
             let inp = if (x >> i) & 1 == 1 { 0xFF } else { 0x00 };
-            assert_eq!(out.regs[i], inp, "system-ring x={x:#03X}: input r{i} not preserved");
+            assert_eq!(out.regs[i], inp, "system-ring x={x:#04X}: input r{i} not preserved");
         }
     }
     eprintln!(
