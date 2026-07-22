@@ -1,5 +1,18 @@
 # TP-5 next: a real byte S-box (AES vs 4-bit PRESENT), bit-sliced — DESIGN (draft r1)
 
+> **RESOLVED (see `docs/reviews/sbox-aes-design-review.md`, verdict BUILD-PRESENT-4-FIRST + a built POC):**
+> **AES-8 is INFEASIBLE on the current machine.** The reviewer reconstructed the full 115-gate
+> Boyar–Peralta circuit (validated against an independent GF-inversion table, 256/256) and found a
+> **peak of 30 simultaneously-live signals** vs the machine's **18 addressable slots** (8 regs + 6
+> usable scratch [s0/s1 decoder-reserved] + 4 mem). It's not "expensive paging" — the live set
+> exceeds total storage; AES-8 needs a recomputation-bounded schedule or a wider machine (its own
+> research-grade slice). **PRESENT-4** (the 4→4 PRESENT S-box) fits in **6 registers, zero paging**,
+> and is **STANDALONE garbage-free** (inputs r0-r3 preserved ⇒ every temp uncomputed in the forward
+> pass — stronger than χ's under-adjoint-only). POC 8/8 green (`docs/scratch/sbox_present_poc.rs.ref`):
+> whole-domain==table, discriminating, goldens, bijection, eval-adjoint reversibility, system-ring L19
+> authority, **8× bit-slicing at 2.82e-7 J (3.52e-8 J/S-box sliced), 47 instrs = 31 Ccnot+10 Xor+2
+> Xori+4 Xchg**. Zero src/recognizer change. Slice-1 = PRESENT-4; AES-8 = documented follow-up.
+
 **Status:** advisor draft for Fable design-review-with-POC. Builds directly on the merged
 Keccak-χ slice (`012aecb`) — same bit-sliced-over-Flat(8) lane model, same Rust-composed
 `Vec<Instr>` (never lowers), same run_on_cpu==eval + system-ring authority pattern. See
