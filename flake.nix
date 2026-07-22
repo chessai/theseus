@@ -51,6 +51,19 @@
           # both find the harness's simulator AND let a worker invoke `ngspice`
           # directly during circuit iteration (allowlisted in .claude/settings.json).
           THESEUS_NGSPICE = "${pkgs.ngspice}/bin/ngspice";
+          # Cap glibc malloc to ONE arena for every process in this seam (the
+          # maestro daemon, its workers, the gate's `cargo test`, and dev
+          # shells all inherit it). The energy tests
+          # (crates/theseus-tisc/tests/energy.rs) elaborate CPU-step netlists
+          # (~GB) into `OnceLock` statics while building large `balance()`
+          # transients; libtest's default `--test-threads=ncpu` × glibc's
+          # per-thread arenas keep freed pages unshared, fragmenting peak RSS
+          # to ~86 GB and SIGKILL-ing the gate under memory pressure. One arena
+          # lets the threads share freed memory: peak ~48 GB (measured), no
+          # wall-clock regression. Neither `.cargo/config.toml [env]` (build
+          # only) nor a target `runner` (not applied to the host target without
+          # `--target`) reaches the test runtime — this env seam does.
+          MALLOC_ARENA_MAX = "1";
         };
       in {
         packages.default = theseus;
