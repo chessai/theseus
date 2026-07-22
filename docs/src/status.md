@@ -10,6 +10,22 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
+`9e41e6e` (**TP-5 slice-2: the PRESENT 4-bit S-box — theseus's first full byte-substitution crypto
+S-box — MERGED**). A bit-sliced ANF circuit of the PRESENT block cipher's 4→4 S-box over Flat(8) (each
+of the 4 input bits a Flat(8) register = 8 parallel S-box evals; nonlinear = byte-parallel `Ccnot`,
+linear = `Xor`, const = `Xori`, outputs parked via `Xchg` to scratch). 47-instr hand-composed ROM (31
+`Ccnot` + 10 `Xor` + 2 `Xori` + 4 `Xchg`), Rust-composed so it NEVER lowers (zero recognizer/lower
+change). **STANDALONE garbage-free** — strictly stronger than χ's under-adjoint-only: because the inputs
+r0–r3 are never mutated, every product temp is uncomputed in the forward pass (acc r4 = temp r5 = 0,
+inputs preserved, outputs in scratch s2–s5, asserted over the whole domain — the L20 guard). **8×
+bit-slicing: 3.52e-8 J/S-box vs 2.82e-7 J un-sliced.** Verified vs the published 16-entry table (the
+independent oracle) over the whole domain + discriminating packing + golden vectors + bijectivity (fast
+tier) and the system-ring L19 authority + eval-adjoint reversibility + energy (heavy tier, advisor-run
+single-threaded 3/3 green @ 71 GB). Design-review-with-POC established this AND proved **AES-8 infeasible
+on the current 18-slot machine** (peak-live 30 signals; reconstructed 115-gate Boyar–Peralta circuit
+validated vs an independent GF-inversion table) — AES-8 is a follow-up needing a recomputation-bounded
+schedule or a wider register file. Reviews `docs/reviews/sbox-aes-design-review.md`, POC
+`docs/scratch/sbox_present_poc.rs.ref`. The prior tip
 `012aecb` (**TP-5 slice-1: Keccak-χ — the FIRST NONLINEAR CRYPTO LAYER in theseus — MERGED**).
 χ (`A_i = a_i ⊕ (¬a_{i+1} ∧ a_{i+2})`, the nonlinear step of SHA-3/Keccak-f) is bit-sliced over
 Flat(8): each of the 5 lanes is a Flat(8) register = the same lane across 8 independent Keccak rows,

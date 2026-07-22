@@ -111,10 +111,22 @@
 > assertion; χ is a bijection not an involution). Fable design-review BUILT a POC + caught the garbage-free
 > error; delegated productionization verified (fast tier + heavy system-ring L19 authority, advisor-run
 > single-threaded 3/3 green). Reviews `docs/reviews/sbox-chi-design-review.md`, `docs/scratch/sbox-chi-*`.
-> **Next:** gate tiering (fast/heavy split so delegations aren't gated on the ~50-min full suite); then
-> follow-ups — Rev-B true-in-place χ⁻¹ cleanup, the AES S-box, multi-round Keccak-f (θ/ρ/π/ι); **widen-PC +
-> typed iteration bounds** (variable-T loops GCD/Collatz) still deferred. Design docs
-> `docs/scratch/{md*,valwidth-flat,bveq-*,sbox-chi-*}.md`; reviews `docs/reviews/` (L21).
+> **Gate tiering DONE** (`7c78692`): 23 heavy `theseus-tisc` binaries feature-gated (`heavy-tests`) by
+> MEASURED runtime so the delegation gate is seconds not ~50 min; advisor runs `--features heavy-tests --
+> test-threads=1` pre-merge (CONTRIBUTING + maestro-advisor SKILL updated).
+>
+> **TP-5 slice-2 (`9e41e6e`, MERGED — first full byte-substitution S-box):** the **PRESENT 4-bit S-box**,
+> bit-sliced over Flat(8) — a 47-instr ANF circuit (31 `Ccnot` + 10 `Xor` + 2 `Xori` + 4 `Xchg`), Rust-
+> composed (never lowers). **STANDALONE garbage-free** (inputs preserved ⇒ temps uncomputed; stronger than
+> χ's under-adjoint). 8× bit-slicing (3.52e-8 J/S-box). Verified vs the published table + system-ring L19
+> authority. Design-review also proved **AES-8 INFEASIBLE** on the current 18-slot machine (peak-live 30 >
+> 18; 115-gate Boyar–Peralta circuit validated vs an independent GF-inversion table). Reviews
+> `docs/reviews/sbox-aes-design-review.md`.
+> **Next (follow-ups, each its own slice + review):** AES-8 S-box (needs a recomputation-bounded schedule
+> to keep <18 live, or a wider register file); a factored fewer-`Ccnot` PRESENT schedule; Rev-B true-in-
+> place χ⁻¹ cleanup; multi-round Keccak-f (θ/ρ/π/ι); **widen-PC + typed iteration bounds** (variable-T
+> loops GCD/Collatz) still deferred. Design docs `docs/scratch/{md*,valwidth-flat,bveq-*,sbox-*}.md`;
+> reviews `docs/reviews/` (L21).
 > See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
