@@ -10,6 +10,23 @@ characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
+`e918e33` (**T-loops slice-1a: EXACT-K_MAX in `lower_trace` — MERGED**). A reversible `Trace`
+(while-loop) parks the CPU for a static budget B = spine + k_max·iter_len; historically
+`k_max = |u|+1` (the FULL carrier-type cardinality) — grossly loose, so a ≤7-iteration loop over an
+8192-value carrier was budgeted for 8193 iterations (~99.97% park tax) and blew past the 256 WCET cap.
+Now `k_max = min(k_exact, |u|+1)` where **k_exact is trajectory-derived**: after lowering the body, the
+compiler walks it (`exec_instr` — the real CPU byte-semantics) from every real input `Right(a)` and
+takes `max(applications-to-exit) + 1`, falling back to `|u|+1` if any trajectory is inconclusive — so
+k_exact is NEVER looser than before and is always a sound upper bound (no park-wrap). This is the
+foundational enabler for **variable-T loops** (a large-carrier fast-exit `Trace` now fits under the
+existing 8-bit PC with ZERO energy tax). SOUNDNESS-CRITICAL `lower_trace` change (a too-small budget =
+silent corruption) — HIGHEST BAR: fresh-context Fable adversarial impl-review **SHIP** (the prime
+register-layout attack is structurally closed by the pre-walk F-1 canonical-homes guard, verified with
+built composed/Times/permuted/spill/Zero Traces; the fast oracle proven to detect a `k_max−1` park-wrap),
++ the real-`system_step` H1 authority (2/2, ~2h) + compile-heavy regression 65/0. Reviews
+`docs/reviews/tloops-slice1a-impl-review.md` + `tloops-slice1-design-review.md`. **NEXT: slice-1b** =
+a pinned `gcd2_hist_step` recognizer + the 2-bit GCD (the first genuine variable-T ALGORITHM) on top of
+exact-k_max; then widen-PC (to scale past w=3). The prior tip
 `9e41e6e` (**TP-5 slice-2: the PRESENT 4-bit S-box — theseus's first full byte-substitution crypto
 S-box — MERGED**). A bit-sliced ANF circuit of the PRESENT block cipher's 4→4 S-box over Flat(8) (each
 of the 4 input bits a Flat(8) register = 8 parallel S-box evals; nonlinear = byte-parallel `Ccnot`,

@@ -122,11 +122,22 @@
 > authority. Design-review also proved **AES-8 INFEASIBLE** on the current 18-slot machine (peak-live 30 >
 > 18; 115-gate Boyar–Peralta circuit validated vs an independent GF-inversion table). Reviews
 > `docs/reviews/sbox-aes-design-review.md`.
-> **Next (follow-ups, each its own slice + review):** AES-8 S-box (needs a recomputation-bounded schedule
-> to keep <18 live, or a wider register file); a factored fewer-`Ccnot` PRESENT schedule; Rev-B true-in-
-> place χ⁻¹ cleanup; multi-round Keccak-f (θ/ρ/π/ι); **widen-PC + typed iteration bounds** (variable-T
-> loops GCD/Collatz) still deferred. Design docs `docs/scratch/{md*,valwidth-flat,bveq-*,sbox-*}.md`;
-> reviews `docs/reviews/` (L21).
+> **T-LOOPS ARC (variable-T loops).** slice-1a **EXACT-K_MAX (`e918e33`, MERGED):** the Trace WCET bound
+> `k_max=|u|+1` (full carrier cardinality — the BINDING wall, NOT the PC) is now trajectory-derived
+> (`k_exact = max applications-to-exit + 1` via an `exec_instr` walk from every real input, `|u|+1`
+> fallback) so a large-carrier fast-exit `Trace` fits under the existing 8-bit PC with ZERO energy tax.
+> SOUNDNESS-CRITICAL `lower_trace` change — HIGHEST BAR; Fable adversarial review SHIP (register-layout
+> attack closed by the pre-walk F-1 guard; fast oracle proven to detect park-wrap) + real-`system_step`
+> H1 authority (2/2, ~2h). The design-review had REFUTED the naive "small GCD fits today" hypothesis
+> (4 walls; widen-PC is NOT the first wall — alone it just fits a 99.97%-park program). Reviews
+> `docs/reviews/tloops-slice1{,a}-*`. **NEXT: slice-1b** = a pinned `gcd2_hist_step` recognizer + the
+> 2-bit GCD (self-delimiting history) = the first genuine variable-T ALGORITHM (`run_on_cpu==eval==gcd`
+> + T/park-tax histogram), plus the impl-review's compile-time-blowup guard. **THEN widen-PC** (w=4 GCD
+> genuinely needs it; ~+10-15% step_j PER PC bit permanent tax — must come AFTER exact-k_max).
+> **Other follow-ups (each its own slice + review):** AES-8 S-box (recomputation-bounded schedule / wider
+> register file); factored fewer-`Ccnot` PRESENT; Rev-B true-in-place χ⁻¹ cleanup; multi-round Keccak-f
+> (θ/ρ/π/ι). Design docs `docs/scratch/{md*,valwidth-flat,bveq-*,sbox-*,tloops-*}.md`; reviews
+> `docs/reviews/` (L21).
 > See [Project status](status.md). The post-v1
 > DAG below is largely realized — the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`
