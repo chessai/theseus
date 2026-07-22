@@ -1116,10 +1116,11 @@ fn check_composition_is_identity(
                 let witness = diff.sat_witness();
                 if let Some(valuation) = witness {
                     let mut operand_values = [0u8; NUM_REGS];
-                    for oper in 0..num_operands.min(NUM_REGS) {
+                    let n_op = num_operands.min(NUM_REGS);
+                    for (oper, ov) in operand_values.iter_mut().enumerate().take(n_op) {
                         for bit in 0..width {
                             if valuation.value(map.var(oper, bit)) {
-                                operand_values[oper] |= 1 << bit;
+                                *ov |= 1 << bit;
                             }
                         }
                     }
