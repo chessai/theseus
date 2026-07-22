@@ -1040,6 +1040,70 @@ mod z3_tests {
     }
 }
 
+// ── Spec → RegTransfer shim (3b selection-by-equiv) ───────────────────
+
+/// Convert a `SpecTransfer` into a full-frame `RegTransfer` given the
+/// operand-to-register mapping (the leaf homes from `with_registers`).
+///
+/// `operand_regs[i]` is the register index for spec operand (leaf) `i`.
+/// Non-operand registers get identity; operand registers' bits `0..w` get
+/// the spec's expressions (remapped from leaf-space to register-space),
+/// and bits `w..BITS` get `Const(false)` (Flat(w) zero-extension).
+///
+/// Uses the same operand→register remapping pattern as `expr_to_bdd_shifted`
+/// but with an arbitrary mapping (not just a cyclic shift).
+pub fn spec_to_reg_transfer(
+    spec: &theseus_core::prim::SpecTransfer,
+    operand_regs: &[usize],
+) -> RegTransfer {
+    let w = spec.width as usize;
+    let mut transfer = RegTransfer::identity();
+
+    for (leaf_idx, &reg) in operand_regs.iter().enumerate() {
+        // Low bits: from the spec, with operand indices remapped to registers.
+        for bit in 0..w {
+            transfer.regs[reg][bit] =
+                remap_expr_operands(&spec.leaves[leaf_idx][bit], operand_regs);
+        }
+        // High bits: zero (Flat(w) invariant preservation).
+        for bit in w..BITS {
+            transfer.regs[reg][bit] = BvExpr::Const(false);
+        }
+    }
+
+    transfer
+}
+
+/// Remap a `BvExpr`'s operand indices from leaf-space to register-space.
+/// `operand_regs[leaf_idx]` → register index.
+fn remap_expr_operands(expr: &BvExpr, operand_regs: &[usize]) -> BvExpr {
+    match expr {
+        BvExpr::Var { operand, bit } => BvExpr::Var {
+            operand: operand_regs[*operand],
+            bit: *bit,
+        },
+        BvExpr::Const(b) => BvExpr::Const(*b),
+        BvExpr::Not(a) => BvExpr::Not(Box::new(remap_expr_operands(a, operand_regs))),
+        BvExpr::Xor(a, b) => BvExpr::Xor(
+            Box::new(remap_expr_operands(a, operand_regs)),
+            Box::new(remap_expr_operands(b, operand_regs)),
+        ),
+        BvExpr::And(a, b) => BvExpr::And(
+            Box::new(remap_expr_operands(a, operand_regs)),
+            Box::new(remap_expr_operands(b, operand_regs)),
+        ),
+        BvExpr::Or(a, b) => BvExpr::Or(
+            Box::new(remap_expr_operands(a, operand_regs)),
+            Box::new(remap_expr_operands(b, operand_regs)),
+        ),
+        BvExpr::Mux { sel, then_, else_ } => BvExpr::Mux {
+            sel: Box::new(remap_expr_operands(sel, operand_regs)),
+            then_: Box::new(remap_expr_operands(then_, operand_regs)),
+            else_: Box::new(remap_expr_operands(else_, operand_regs)),
+        },
+    }
+}
+
 // ── Symbolic admission (BDD mutual-inverse certificate) ─────────────
 
 /// Certify that a `PrimSpec`'s forward and backward are mutual inverses

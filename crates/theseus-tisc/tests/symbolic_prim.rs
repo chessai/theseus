@@ -197,10 +197,12 @@ fn admit_symbolic_rejects_non_inverse() {
     assert!(err.is_err(), "corrupted backward must be rejected");
 }
 
-// ── recognize_prim: symbolic-only → fast explicit rejection ─────────
+// ── recognize_prim: symbolic-only → selection-by-equiv (3b) ─────────
 
 #[test]
-fn recognize_prim_rejects_symbolic_only_instantly() {
+fn recognize_prim_selects_ccnot_for_symbolic_only() {
+    use theseus_tisc::asm::Instr;
+
     let w = 8u8;
     let spec = masked_accum_spec(w);
     let f = Type::Flat(w);
@@ -216,7 +218,7 @@ fn recognize_prim_rejects_symbolic_only_instantly() {
         symbolic: Some(spec),
     };
 
-    // This must complete FAST (not hang enumerating 2^24 values).
+    // Must complete FAST via selection-by-equiv (not hang enumerating 2^24).
     let t0 = std::time::Instant::now();
     let ctx = theseus_tisc::compile::Ctx {
         homes: vec![
@@ -233,10 +235,18 @@ fn recognize_prim_rejects_symbolic_only_instantly() {
     let result = theseus_tisc::compile::recognize_prim(&def, &ctx);
     let dt = t0.elapsed();
 
-    assert!(result.is_err(), "symbolic-only prim must be rejected");
+    let body = result.expect("selection-by-equiv must recognize masked-accum");
     assert!(
         dt.as_secs() < 2,
-        "rejection must be instant, not a hang; took {dt:?}"
+        "selection must be fast, not a hang; took {dt:?}"
+    );
+
+    // The selected body must be [Ccnot{rd:0, rs:1, rt:2}].
+    assert_eq!(body.len(), 1, "expected single Ccnot instruction");
+    assert!(
+        matches!(body[0], Instr::Ccnot { rd: 0, rs: 1, rt: 2 }),
+        "expected Ccnot{{rd:0, rs:1, rt:2}}, got {:?}",
+        body[0]
     );
 }
 
@@ -563,4 +573,315 @@ fn f5_cross_crate_decompose_agreement() {
             "F5: core vs tisc decompose disagree at {v:?}"
         );
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SLICE 3b — SELECTION-BY-EQUIV TESTS
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── R1: validate_against rejects out-of-range Var indices ─────────────
+
+#[test]
+fn r1_operand_index_out_of_range_rejected() {
+    let w = 4u8;
+    let mut spec = masked_accum_spec(w);
+    // Corrupt forward leaf[0][0]: reference operand 5 (only 3 input leaves).
+    spec.forward.leaves[0][0] = BvExpr::var(5, 0);
+    let def = masked_accum_table_prim(w);
+
+    let err = spec.validate_against(&def.input_ty, &def.output_ty);
+    assert!(
+        err.is_err(),
+        "R1: operand index >= input leaf count must be rejected"
+    );
+    let msg = err.unwrap_err();
+    assert!(
+        msg.contains("operand index 5"),
+        "R1: error should mention the out-of-range operand, got: {msg}"
+    );
+}
+
+#[test]
+fn r1_bit_index_out_of_range_rejected() {
+    let w = 4u8;
+    let mut spec = masked_accum_spec(w);
+    // Corrupt forward leaf[1][0]: reference bit 8 (width=4, so max bit=3).
+    spec.forward.leaves[1][0] = BvExpr::var(1, 8);
+    let def = masked_accum_table_prim(w);
+
+    let err = spec.validate_against(&def.input_ty, &def.output_ty);
+    assert!(
+        err.is_err(),
+        "R1: bit index >= width must be rejected"
+    );
+    let msg = err.unwrap_err();
+    assert!(
+        msg.contains("bit index 8"),
+        "R1: error should mention the out-of-range bit, got: {msg}"
+    );
+}
+
+// ── R2: Sum zero-padding cross-crate decompose agreement ──────────────
+
+#[test]
+fn r2_f5_sum_type_decompose_agreement() {
+    // Sum(Flat(4), Flat(4)): tag + max(1,1) = 2 leaves. Tests the Sum
+    // zero-padding arm that R2 identified as untested.
+    let w = 4u8;
+    let f = Type::Flat(w);
+    let ty = Type::Sum(Box::new(f.clone()), Box::new(f));
+    let domain = enumerate_values(&ty);
+    // Sum(Flat(4), Flat(4)) has 16 + 16 = 32 values.
+    assert_eq!(domain.len(), 32);
+
+    for v in &domain {
+        let core_bytes = prim::value_to_leaf_bytes(v, &ty);
+        let tisc_bytes = theseus_tisc::compile::value_to_leaf_bytes_pub(v, &ty);
+        assert_eq!(
+            core_bytes, tisc_bytes,
+            "R2: core vs tisc Sum decompose disagree at {v:?}"
+        );
+    }
+}
+
+// ── R3: timed partial-table+spec test for recognize_prim ──────────────
+
+#[test]
+fn r3_partial_table_spec_recognize_prim_fast() {
+    use theseus_tisc::asm::Instr;
+
+    let w = 8u8;
+    let spec = masked_accum_spec(w);
+    let f = Type::Flat(w);
+    let ty = Type::prod(f.clone(), Type::prod(f.clone(), f));
+
+    // Build a prim with 1 table entry + spec (partial-table+spec).
+    let single_input = Value::pair(u8_leaf(0), Value::pair(u8_leaf(0), u8_leaf(0)));
+    let single_output = single_input.clone();
+    let mut fwd = BTreeMap::new();
+    fwd.insert(single_input.clone(), single_output.clone());
+    let mut bwd = BTreeMap::new();
+    bwd.insert(single_output, single_input);
+
+    let def = PrimDef {
+        forward_name: "maskacc8_partial".into(),
+        backward_name: "maskacc8_partial_inv".into(),
+        input_ty: ty.clone(),
+        output_ty: ty,
+        forward: fwd,
+        backward: bwd,
+        symbolic: Some(spec),
+    };
+
+    // recognize_prim must complete FAST (selection-by-equiv, no enumeration).
+    let t0 = std::time::Instant::now();
+    let ctx = theseus_tisc::compile::Ctx {
+        homes: vec![
+            theseus_tisc::compile::Location::Reg(0),
+            theseus_tisc::compile::Location::Reg(1),
+            theseus_tisc::compile::Location::Reg(2),
+        ],
+        occ: theseus_tisc::compile::OccSet::from_locations(&[
+            theseus_tisc::compile::Location::Reg(0),
+            theseus_tisc::compile::Location::Reg(1),
+            theseus_tisc::compile::Location::Reg(2),
+        ]),
+    };
+    let result = theseus_tisc::compile::recognize_prim(&def, &ctx);
+    let dt = t0.elapsed();
+
+    // Must succeed (spec matches Ccnot) and be fast (no 2^24 enumeration).
+    let body = result.expect("partial-table+spec must be recognized via selection-by-equiv");
+    assert!(
+        dt.as_secs() < 2,
+        "R3: must complete fast, not hang; took {dt:?}"
+    );
+    assert_eq!(body.len(), 1);
+    assert!(
+        matches!(body[0], Instr::Ccnot { rd: 0, rs: 1, rt: 2 }),
+        "R3: expected Ccnot, got {:?}",
+        body[0]
+    );
+}
+
+// ── PAYOFF TEST: Flat(8)^3 masked-accum recognized + bounded oracle ───
+
+#[test]
+fn payoff_flat8_masked_accum_recognized_as_ccnot() {
+    use theseus_tisc::asm::Instr;
+
+    let w = 8u8;
+    let spec = masked_accum_spec(w);
+    let f = Type::Flat(w);
+    let ty = Type::prod(f.clone(), Type::prod(f.clone(), f));
+
+    // Build a symbolic-only prim (no table — the 2^24 table NEVER built).
+    let def = PrimDef {
+        forward_name: "maskacc8".into(),
+        backward_name: "maskacc8_inv".into(),
+        input_ty: ty.clone(),
+        output_ty: ty.clone(),
+        forward: BTreeMap::new(),
+        backward: BTreeMap::new(),
+        symbolic: Some(spec.clone()),
+    };
+
+    // 1. Admit via admit_symbolic (BDD mutual-inverse certificate).
+    bveq::admit_symbolic(&spec).expect("masked-accum self-inverse must pass");
+
+    // 2. Recognize via selection-by-equiv → assert [Ccnot{rd,rs,rt}].
+    let ctx = theseus_tisc::compile::Ctx {
+        homes: vec![
+            theseus_tisc::compile::Location::Reg(0),
+            theseus_tisc::compile::Location::Reg(1),
+            theseus_tisc::compile::Location::Reg(2),
+        ],
+        occ: theseus_tisc::compile::OccSet::from_locations(&[
+            theseus_tisc::compile::Location::Reg(0),
+            theseus_tisc::compile::Location::Reg(1),
+            theseus_tisc::compile::Location::Reg(2),
+        ]),
+    };
+    let t0 = std::time::Instant::now();
+    let body = theseus_tisc::compile::recognize_prim(&def, &ctx)
+        .expect("selection-by-equiv must recognize Flat(8)^3 masked-accum");
+    let dt = t0.elapsed();
+
+    assert_eq!(body.len(), 1, "expected single Ccnot instruction");
+    let Instr::Ccnot { rd, rs, rt } = body[0] else {
+        panic!("expected Ccnot, got {:?}", body[0]);
+    };
+    assert_eq!((rd, rs, rt), (0, 1, 2), "register assignment");
+    assert!(
+        dt.as_secs() < 2,
+        "recognition at full Flat(8) must be fast; took {dt:?}"
+    );
+
+    // 3. Bounded oracle check: exec the emitted Ccnot on concrete inputs,
+    //    compare with eval-via-spec. NEVER the 2^24 domain (gate-no-timeout).
+    let sym_iso = theseus_core::Iso::Prim(Box::new(def));
+
+    // A handful of representative inputs covering corners.
+    let test_inputs: [(u8, u8, u8); 8] = [
+        (0, 0, 0),
+        (1, 2, 3),
+        (255, 255, 255),
+        (0, 255, 0),
+        (128, 64, 32),
+        (7, 13, 42),
+        (200, 100, 50),
+        (1, 1, 1),
+    ];
+
+    for (acc, key, elem) in test_inputs {
+        // Eval-via-spec (the ground truth for symbolic-only prims).
+        let input = Value::pair(u8_leaf(acc), Value::pair(u8_leaf(key), u8_leaf(elem)));
+        let spec_out = theseus_eval::eval(&sym_iso, input, &mut 1000)
+            .expect("eval-via-spec");
+
+        // Exec the emitted Ccnot directly.
+        let mut regs = [0u8; 8];
+        regs[rd as usize] = acc;
+        regs[rs as usize] = key;
+        regs[rt as usize] = elem;
+        let mut state = theseus_tisc::types::StateVals {
+            regs,
+            pc: 0,
+            br: 0,
+            ir: 0,
+            scratch: [0u8; 8],
+            mem: [0u8; 4],
+        };
+        theseus_tisc::compile::exec_instr(body[0], &mut state);
+
+        let exec_acc = state.regs[rd as usize];
+        let exec_key = state.regs[rs as usize];
+        let exec_elem = state.regs[rt as usize];
+
+        // Decompose the spec output.
+        let Value::Pair(out_a, rest) = spec_out else {
+            panic!("expected pair");
+        };
+        let Value::Pair(out_k, out_e) = *rest else {
+            panic!("expected pair");
+        };
+        let spec_acc = leaf_u8(&out_a);
+        let spec_key = leaf_u8(&out_k);
+        let spec_elem = leaf_u8(&out_e);
+
+        assert_eq!(
+            (exec_acc, exec_key, exec_elem),
+            (spec_acc, spec_key, spec_elem),
+            "bounded oracle mismatch at input ({acc}, {key}, {elem}): \
+             exec=({exec_acc},{exec_key},{exec_elem}) vs spec=({spec_acc},{spec_key},{spec_elem})"
+        );
+    }
+}
+
+// ── NON-VACUITY: wrong spec is rejected (no false selection) ──────────
+
+#[test]
+fn non_vacuity_wrong_spec_rejected() {
+    let w = 8u8;
+    let f = Type::Flat(w);
+    let ty = Type::prod(f.clone(), Type::prod(f.clone(), f));
+
+    // Build a deliberately-wrong spec: OR instead of AND (no arm computes this).
+    let make_wrong_transfer = || -> theseus_core::SpecTransfer {
+        let ww = w as usize;
+        let mut leaves = Vec::with_capacity(3);
+        for leaf in 0..3usize {
+            let mut bits = Vec::with_capacity(ww);
+            for b in 0..ww {
+                let expr = if leaf == 0 {
+                    // WRONG: OR instead of AND
+                    BvExpr::var(0, b).xor(BvExpr::var(1, b).or(BvExpr::var(2, b)))
+                } else {
+                    BvExpr::var(leaf, b)
+                };
+                bits.push(expr);
+            }
+            leaves.push(bits);
+        }
+        theseus_core::SpecTransfer { leaves, width: w }
+    };
+    let wrong_spec = PrimSpec {
+        forward: make_wrong_transfer(),
+        backward: make_wrong_transfer(),
+    };
+
+    let def = PrimDef {
+        forward_name: "wrong_spec".into(),
+        backward_name: "wrong_spec_inv".into(),
+        input_ty: ty.clone(),
+        output_ty: ty,
+        forward: BTreeMap::new(),
+        backward: BTreeMap::new(),
+        symbolic: Some(wrong_spec),
+    };
+
+    let ctx = theseus_tisc::compile::Ctx {
+        homes: vec![
+            theseus_tisc::compile::Location::Reg(0),
+            theseus_tisc::compile::Location::Reg(1),
+            theseus_tisc::compile::Location::Reg(2),
+        ],
+        occ: theseus_tisc::compile::OccSet::from_locations(&[
+            theseus_tisc::compile::Location::Reg(0),
+            theseus_tisc::compile::Location::Reg(1),
+            theseus_tisc::compile::Location::Reg(2),
+        ]),
+    };
+    let t0 = std::time::Instant::now();
+    let result = theseus_tisc::compile::recognize_prim(&def, &ctx);
+    let dt = t0.elapsed();
+
+    assert!(
+        result.is_err(),
+        "NON-VACUITY: wrong spec must NOT be selected by any arm"
+    );
+    assert!(
+        dt.as_secs() < 5,
+        "rejection must be bounded (arm library iteration), not a hang; took {dt:?}"
+    );
 }

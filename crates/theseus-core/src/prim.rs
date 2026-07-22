@@ -449,10 +449,65 @@ impl PrimSpec {
         // Forward: leaves match output type, width matches both types.
         self.forward.validate_against_type(output_ty, "forward")?;
         validate_width_vs_type(input_ty, self.forward.width, "forward (input side)")?;
+        // R1: validate Var indices in forward exprs (reference input leaves).
+        let n_input_leaves = count_leaves(input_ty);
+        let fw = self.forward.width as usize;
+        for (i, row) in self.forward.leaves.iter().enumerate() {
+            for (b, expr) in row.iter().enumerate() {
+                validate_expr_var_indices(expr, n_input_leaves, fw)
+                    .map_err(|e| format!("forward spec leaf[{i}][{b}]: {e}"))?;
+            }
+        }
         // Backward: leaves match input type, width matches both types.
         self.backward.validate_against_type(input_ty, "backward")?;
         validate_width_vs_type(output_ty, self.backward.width, "backward (output side)")?;
+        // R1: validate Var indices in backward exprs (reference output leaves).
+        let n_output_leaves = count_leaves(output_ty);
+        let bw = self.backward.width as usize;
+        for (i, row) in self.backward.leaves.iter().enumerate() {
+            for (b, expr) in row.iter().enumerate() {
+                validate_expr_var_indices(expr, n_output_leaves, bw)
+                    .map_err(|e| format!("backward spec leaf[{i}][{b}]: {e}"))?;
+            }
+        }
         Ok(())
+    }
+}
+
+/// Walk a `BvExpr` tree and validate that all `Var` indices are in range (R1).
+/// Rejects `operand >= max_operand` (would index-panic in eval_expr) and
+/// `bit >= max_bit` (release-masked silent wrong-bit).
+fn validate_expr_var_indices(
+    expr: &crate::bvexpr::BvExpr,
+    max_operand: usize,
+    max_bit: usize,
+) -> Result<(), String> {
+    use crate::bvexpr::BvExpr;
+    match expr {
+        BvExpr::Var { operand, bit } => {
+            if *operand >= max_operand {
+                return Err(format!(
+                    "Var operand index {operand} >= input leaf count {max_operand}"
+                ));
+            }
+            if *bit >= max_bit {
+                return Err(format!(
+                    "Var bit index {bit} >= width {max_bit}"
+                ));
+            }
+            Ok(())
+        }
+        BvExpr::Const(_) => Ok(()),
+        BvExpr::Not(a) => validate_expr_var_indices(a, max_operand, max_bit),
+        BvExpr::Xor(a, b) | BvExpr::And(a, b) | BvExpr::Or(a, b) => {
+            validate_expr_var_indices(a, max_operand, max_bit)?;
+            validate_expr_var_indices(b, max_operand, max_bit)
+        }
+        BvExpr::Mux { sel, then_, else_ } => {
+            validate_expr_var_indices(sel, max_operand, max_bit)?;
+            validate_expr_var_indices(then_, max_operand, max_bit)?;
+            validate_expr_var_indices(else_, max_operand, max_bit)
+        }
     }
 }
 

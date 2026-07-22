@@ -1004,16 +1004,17 @@ use theseus_core::prim::{enumerate_values, PrimDef};
 /// All register accesses are routed through `with_registers` so that
 /// scratch-resident operands are paged in/out correctly.
 pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> {
-    // HANG GUARD (F2-hardened): reject any symbolic prim whose table does NOT
-    // cover the full domain BEFORE any enumerate_values call.
+    // HANG GUARD (F2-hardened): for symbolic prims whose table does NOT
+    // cover the full domain, use SELECTION-BY-EQUIV (3b) instead of
+    // table-based pattern matching. NO enumerate_values call.
     if def.symbolic.is_some() {
         let card = theseus_core::enumerate::cardinality_u64(&def.input_ty);
         if def.forward.len() as u64 != card {
-            return Err(CompileError::Deferred(format!(
-                "prim '{}': symbolic prim with incomplete table ({}/{}) — \
-                 recognition not yet implemented (3b)",
-                def.forward_name, def.forward.len(), card
-            )));
+            // Selection-by-equiv: iterate the finite arm library,
+            // symbolic_exec each candidate, equiv vs the spec RegTransfer.
+            // First pass wins. Sound by construction: a wrong selection
+            // cannot pass equiv. Bounded: ~arm-library-size × ~1ms.
+            return selection_by_equiv(def, ctx);
         }
     }
 
@@ -1351,6 +1352,139 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
         "prim '{}' not recognized as a TISC-1 pattern",
         def.forward_name
     )))
+}
+
+// ── Selection-by-equiv (3b: symbolic prim recognition) ─────────────────
+
+/// Recognize a symbolic-spec prim by iterating the finite arm library and
+/// finding a candidate instruction body that provably computes the spec.
+///
+/// For each candidate body: `symbolic_exec(body)` → `RegTransfer`, then
+/// `equiv` against the spec-derived `RegTransfer`. First pass wins (sound
+/// by construction: equiv is canonical and complete). If no candidate
+/// verifies, returns `Deferred` (no enumeration, bounded).
+fn selection_by_equiv(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> {
+    let spec = def.symbolic.as_ref().unwrap();
+    let n_in = num_leaves(&def.input_ty)?;
+    let n_out = num_leaves(&def.output_ty)?;
+
+    if n_in != n_out {
+        return Err(CompileError::Deferred(format!(
+            "prim '{}': symbolic selection requires n_in == n_out ({n_in} vs {n_out})",
+            def.forward_name
+        )));
+    }
+
+    let leaves: Vec<usize> = (0..n_in).collect();
+    let w = spec.forward.width as usize;
+
+    with_registers(ctx, &leaves, |regs| {
+        // Build operand_regs (usize) for the spec→RegTransfer shim and equiv.
+        let operand_regs: Vec<usize> = regs.iter().map(|&r| r as usize).collect();
+
+        // Build the spec-derived RegTransfer (N5: operand_regs from the TYPE,
+        // via with_registers' leaf homes — never from the candidate body).
+        let spec_transfer = bveq::spec_to_reg_transfer(&spec.forward, &operand_regs);
+
+        // Generate and try every candidate in the finite arm library.
+        let candidates = generate_arm_candidates(n_in, regs);
+
+        for body in &candidates {
+            let exec_transfer = match bveq::symbolic_exec(body) {
+                Ok(t) => t,
+                Err(_) => continue, // skip ISA-invalid candidates (aliased regs, etc.)
+            };
+
+            if bveq::equiv(&exec_transfer, &spec_transfer, w, &operand_regs).is_ok() {
+                // Sound by construction: equiv ensures body computes the spec.
+                // Verification IS the selection (not bveq_verify_emission, which
+                // is for table prims — the empty-table hard-reject stays intact).
+                return Ok(body.clone());
+            }
+        }
+
+        Err(CompileError::Deferred(format!(
+            "prim '{}': no arm-library candidate matches the symbolic spec \
+             ({} candidates tried)",
+            def.forward_name,
+            candidates.len()
+        )))
+    })
+}
+
+/// Generate the finite arm library of candidate instruction bodies for a
+/// given arity and register assignment.
+///
+/// 2-op: Add/Sub/Xor/Exch/Rotl/Rotr (all rd/rs permutations) + 3-cycle bodies.
+/// 3-op: Cswap/Ccnot (all rd/rs/rt permutations).
+/// 1-op: Addi/Subi/Xori (imm 0..=255) + Rotli/Rotri (imm 0..=7).
+fn generate_arm_candidates(n_leaves: usize, regs: &[u8]) -> Vec<Vec<Instr>> {
+    let mut candidates = Vec::new();
+
+    match n_leaves {
+        1 => {
+            let r = regs[0];
+            for k in 0..=255u8 {
+                candidates.push(vec![Instr::Addi { rd: r, imm: k }]);
+                candidates.push(vec![Instr::Subi { rd: r, imm: k }]);
+                candidates.push(vec![Instr::Xori { rd: r, imm: k }]);
+            }
+            // Rotli/Rotri: only imm & 7 matters, so 8 distinct values each.
+            for k in 0..=7u8 {
+                candidates.push(vec![Instr::Rotli { rd: r, imm: k }]);
+                candidates.push(vec![Instr::Rotri { rd: r, imm: k }]);
+            }
+        }
+        2 => {
+            // All (rd, rs) permutations of the two registers.
+            let perms: [(u8, u8); 2] = [(regs[0], regs[1]), (regs[1], regs[0])];
+            for &(rd, rs) in &perms {
+                // symbolic_exec rejects rd==rs, so skip (continue in the loop).
+                candidates.push(vec![Instr::Add { rd, rs }]);
+                candidates.push(vec![Instr::Sub { rd, rs }]);
+                candidates.push(vec![Instr::Xor { rd, rs }]);
+                candidates.push(vec![Instr::Rotl { rd, rs }]);
+                candidates.push(vec![Instr::Rotr { rd, rs }]);
+            }
+            // Exch is symmetric; one ordering suffices.
+            candidates.push(vec![Instr::Exch {
+                rd: regs[0],
+                rs: regs[1],
+            }]);
+            // 3-cycle multi-instruction bodies (Trace witness patterns).
+            candidates.push(vec![
+                Instr::Xor { rd: regs[0], rs: regs[1] },
+                Instr::Xori { rd: regs[0], imm: 1 },
+                Instr::Xor { rd: regs[1], rs: regs[0] },
+                Instr::Xori { rd: regs[1], imm: 1 },
+            ]);
+            candidates.push(vec![
+                Instr::Xor { rd: regs[1], rs: regs[0] },
+                Instr::Xori { rd: regs[1], imm: 1 },
+                Instr::Xor { rd: regs[0], rs: regs[1] },
+                Instr::Xori { rd: regs[0], imm: 1 },
+            ]);
+        }
+        3 => {
+            // All 3! = 6 permutations of the three registers.
+            let r = [regs[0], regs[1], regs[2]];
+            let perms = [
+                (r[0], r[1], r[2]),
+                (r[0], r[2], r[1]),
+                (r[1], r[0], r[2]),
+                (r[1], r[2], r[0]),
+                (r[2], r[0], r[1]),
+                (r[2], r[1], r[0]),
+            ];
+            for &(rd, rs, rt) in &perms {
+                candidates.push(vec![Instr::Cswap { rd, rs, rt }]);
+                candidates.push(vec![Instr::Ccnot { rd, rs, rt }]);
+            }
+        }
+        _ => {} // No candidates for other arities.
+    }
+
+    candidates
 }
 
 /// Byte semantics of the pinned 13-instruction walk (M-D.e slice 1).
