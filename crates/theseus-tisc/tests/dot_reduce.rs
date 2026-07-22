@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Masked-XOR REDUCE tests: `acc ⊕= key ∧ arr[i]` (M-D.b2.f3.5).
 //!
 //! The program uses the Ccnot instruction (byte-parallel Toffoli) inside a borrow-swap

@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Tests for the `bveq` symbolic bit-vector equivalence module.
 //!
 //! T1–T8 cover the full trust-core surface: equiv correctness, the Ccnot

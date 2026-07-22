@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! TwoBodyRing closure certificate (M-C2 Stage 2a).
 //!
 //! Proves the two-body value decomposition:

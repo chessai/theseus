@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Run-on-CPU differential oracle for the M-A/M-B compiler
 //! (ADR-0042 §6, ADR-0043 §5).
 //!

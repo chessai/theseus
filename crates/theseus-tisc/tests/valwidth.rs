@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Value-width slice-1: Type::Flat(n) foundation + bare byte-Xor.
 //!
 //! T1: structural properties (num_leaves, cardinality, enumerate, round-trip).

@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! M4-v2 HEADLINE DEMO: the TISC-1 CPU computes Fibonacci by
 //! RECIRCULATING one compact-balanced step — not by unrolling.
 //!

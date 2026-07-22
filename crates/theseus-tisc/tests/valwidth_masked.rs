@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Value-width slice-4 (final rung): byte-parallel masked accumulate
 //! `acc ^= key & arr[i]` at Flat(4) via `fold` over a Flat(4) list spine.
 //!

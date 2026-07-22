@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! ADR-0034 branching tests: SWAPBR rd + offset-BR PC update.
 //!
 //! Verifies that the TISC-1 step iso implements data-dependent branching

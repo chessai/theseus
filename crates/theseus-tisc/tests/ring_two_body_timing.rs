@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Two-body timing realizability certificate (M-C2 Stage 2b-lite).
 //!
 //! Proves the two-body ring (cpu_pre / mem_body / cpu_post) can be

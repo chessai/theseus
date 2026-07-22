@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! BVEQ emission-verifier tests (slice-2: decomposed check).
 //!
 //! T-suite-agree: the verifier ACCEPTs every currently-recognized prim.

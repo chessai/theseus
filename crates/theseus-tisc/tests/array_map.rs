@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Reversible in-memory array map tests (M-D.b2.f2).
 //!
 //! Proves: `arrayMap = iter Nat_4 BODY` (d=4, n=2, g=notb) compiles via

@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! MEXCHR compiler emission tests (M-D.b2.f1).
 //!
 //! Proves: a `memexch` primitive (Bit-indexed, 2-word resident array)

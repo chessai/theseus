@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! M-C2 Stage 1a-B acceptance tests: composite (CpuState, MemState) carrier.
 //!
 //! (a) COMPOSITE ORACLE: run_on_cpu(system_step) == eval(surface iso)

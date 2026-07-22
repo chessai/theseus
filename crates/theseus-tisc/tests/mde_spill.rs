@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! M-D.e slice 1 — loop-carrier scratch-spill machinery proof.
 //!
 //! Trace(u=N5, walk) with a 5-leaf carrier (4 payload leaves) so payload

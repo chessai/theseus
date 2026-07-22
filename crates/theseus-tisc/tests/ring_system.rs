@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! SystemRing closure certificate (M-C2 Stage 1b-B).
 //!
 //! Recirculates `system_step` through a [`SystemRing`] and proves the

@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Differential-oracle tests for the TISC-1 decoder
 //! (`decode_execute : State <-> State`).
 //!

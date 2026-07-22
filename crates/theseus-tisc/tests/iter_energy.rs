@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Energy-pricing tests for compiled iter/fold/unfold programs (M3b → v0.2).
 //!
 //! Constructs concrete iter and fold programs, lowers them via

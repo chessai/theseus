@@ -19,11 +19,40 @@ A component or compiler pass ships only when **all** of the following hold:
 
 ## Test tiers
 
-- **Fast (every commit):** units, small-type exhaustive sweeps, fixed-seed
-  properties, snapshot tests. Minutes.
+- **Fast (every commit / the per-attempt maestro gate):** units, small-type
+  exhaustive sweeps, fixed-seed properties, snapshot tests. Seconds–low minutes.
+- **Heavy (`--features heavy-tests`, advisor pre-merge):** integration-test
+  binaries dominated by netlist lowering, system-ring simulation, whole-domain
+  BDD/energy, or large whole-domain sweeps — each 30 s to many minutes.
 - **Nightly:** large property budgets, fuzzing, SAT lemma checks
   (`--verify-lowering`), Verilator differentials, mutation testing. Hours.
   Nightly failures auto-minimize into the regression corpus.
+
+### The `heavy-tests` gate (why the default `cargo test` is fast)
+
+The full `theseus-tisc` integration suite exceeds ~50 min and cannot finish in a
+delegation gate's window; several binaries run 4–12 min each (measured:
+`compile` 723 s, `bveq_recognize` 460 s, `energy`/`decoder`/ring family, the
+whole-domain `valwidth*`/`branching`). So every such binary carries
+`#![cfg(feature = "heavy-tests")]` at the top — **off by default**, so a plain
+`cargo test -p theseus-tisc` compiles them empty and the fast tier runs in
+seconds. Two rules:
+
+1. **Per-attempt maestro gate** (`check_commands` in a delegation spec): run only
+   the fast tier, and prefer scoping to the change — e.g. `cargo test -p
+   theseus-tisc --test <the_relevant_binary>` (like the χ task's `--test chi`).
+   Never gate a delegation on the whole suite.
+2. **Advisor pre-merge** (and whenever a change touches the energy / netlist /
+   decoder / ring / recognizer path): run the heavy tier
+   **`cargo test -p theseus-tisc --features heavy-tests -- --test-threads=1`**.
+   The `--test-threads=1` is mandatory — concurrent heavy tests each hold GB-scale
+   resident structures and stack past RAM (SIGKILL) even with the flake's
+   `MALLOC_ARENA_MAX=1`. A `#[ignore]`d heavy test *within* an otherwise-fast
+   binary (e.g. `chi.rs`'s system-ring authority) is run with `--test <bin> --
+   --ignored --test-threads=1`.
+
+Quality is retained because the complete suite still gates the **merge** (advisor,
+above); only the fast-iteration loop is trimmed.
 
 ## Code policies
 

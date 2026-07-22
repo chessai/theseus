@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! CPU money-plot mechanics (ADR-0028/0030).
 //!
 //! The *headline* numbers (the full TISC-1 step: active logic below the

@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! MEXCHR (data-dependent memory addressing) tests (M-D.b).
 //!
 //! Proves:

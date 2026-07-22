@@ -1,3 +1,4 @@
+#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Tests for the analytic per-clause energy model (M4-v1).
 //!
 //! (a) analytic_buffer_count matches balance()'s actual K0 count on >=2
