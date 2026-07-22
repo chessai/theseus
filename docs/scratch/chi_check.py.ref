@@ -1,0 +1,39 @@
+# Independent scalar check of the in-place 2-ancilla schedule vs chi definition
+def chi_ref(a):
+    return [a[i] ^ ((1-a[(i+1)%5]) & a[(i+2)%5]) for i in range(5)]
+
+def schedule(a):
+    # registers r0..r6 ; r5,r6 ancilla start 0
+    r = list(a) + [0,0]   # r0..r4 = a, r5=r6=0
+    # save
+    r[5] ^= r[0]   # r5 = a0
+    r[6] ^= r[1]   # r6 = a1
+    # g0: r0 ^= ~r1 & r2   (negate r1, ccnot, restore)
+    r[0] ^= ((1-r[1]) & r[2])
+    # g1: r1 ^= ~r2 & r3
+    r[1] ^= ((1-r[2]) & r[3])
+    # g2: r2 ^= ~r3 & r4
+    r[2] ^= ((1-r[3]) & r[4])
+    # g3: r3 ^= ~r4 & r5(a0)
+    r[3] ^= ((1-r[4]) & r[5])
+    # g4: r4 ^= ~r5(a0) & r6(a1)
+    r[4] ^= ((1-r[5]) & r[6])
+    return r  # r0..r4 result, r5,r6 ancilla
+
+bad=0
+for s in range(32):
+    a=[(s>>i)&1 for i in range(5)]
+    ref=chi_ref(a)
+    got=schedule(a)
+    if got[:5]!=ref:
+        bad+=1
+        print("MISMATCH",a,ref,got[:5])
+    anc=(got[5],got[6])
+    if anc!=(0,0) and (a[0],a[1])!=(0,0):
+        pass # expected dirty
+print("transform mismatches:",bad,"of 32")
+# show ancilla dirtiness
+dirty=sum(1 for s in range(32) for a in [[(s>>i)&1 for i in range(5)]] if schedule(a)[5:]!=[0,0])
+print("inputs leaving ancilla nonzero:",dirty,"of 32 (== a0 or a1 set)")
+# golden
+print("golden chi(1,0,1,1,0)=",chi_ref([1,0,1,1,0]))
