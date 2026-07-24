@@ -51,8 +51,18 @@ for **two distinct root causes**, and both must be fixed:
 - *Storage:* the come-from skeleton (`SWAPBR rc` join, `CSWAP` disambiguation, token `δu`) hand-assigns
   fixed aux registers `rc/rb/temp/ctrl`; an inner loop aliases the outer's in-flight come-from state.
   **Fix:** draw each loop level's `{rc,rb,temp,ctrl,δu}` from an Axis-2 frame → per-level storage,
-  disjoint by depth. BR itself is *time-multiplexed* (returns to 0 every step; only one level's SWAPBR
-  is at the PC at a time), so it is not fundamentally aliased once the *token storage* is per-frame.
+  disjoint by depth. Only one level's SWAPBR is at the PC at any step, so BR is a *time-shared* channel.
+  - **[REVIEW FINDING — A5's crux obligation, do NOT gloss]:** the first draft claimed "BR returns to 0
+    every step" — IMPRECISE. BR is carried into PC every step (`PC += BR + 1`) and is only zeroed by
+    SWAPBR at the end of *straight-line* execution; the come-from token `δu = 256 − iter_len` is an
+    **8-bit backward-jump distance tied to the 256 PC wrap** (compile.rs:2763; minted `ADDI temp,δu`,
+    burned `SUBI temp,δu`). Two obligations A5 MUST discharge (and a re-run review must verify): (i) **δu
+    widens with W_pc** — a nested body whose `iter_len` is a multiplied cost can exceed 256, so δu, the BR
+    field, and the mint/burn arithmetic must be W_pc-wide and the wrap constant → `2^W_pc`; (ii) the
+    **outer loop's pending δu/come-from must be provably preserved across the ENTIRE inner loop** (it lives
+    in the outer frame, but the inner loop's SWAPBR touches the shared BR every inner step — prove the
+    outer δu in-frame is untouched and correctly re-loaded at the outer back-edge). This is THE highest-risk
+    correctness obligation in the design.
 - *Accounting (the deep bug P3 found):* `wcet()` is a **flat sum over sibling loops**
   (`compile.rs:2103`); a nested loop's body must be **multiplied** by the outer count. The flat sum
   *under-counts* `B` for nested programs → breaks park-safety and the total-bijection park invariant.
