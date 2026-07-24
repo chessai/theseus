@@ -73,18 +73,26 @@ use theseus_core::Iso;
 
 use crate::decoder::{self, cnot_prim, on_fields, toffoli_prim, Op, AUX_PRED_FIELD};
 use crate::plumbing::{at_wire, gate_at, not_iso, seq_balanced};
-use crate::types::{state_ty, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD, PC_FIELD, W};
+use crate::types::{
+    state_ty, BR_FIELD, IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, PC_FIELD, W,
+};
 
 // ── Fetch ──────────────────────────────────────────────────────────
 //
-// Wire layout of the fetch core [PC, IR_lo, IR_hi, s1] (n = 32):
-// PC bit i = wire i; IR bit b = wire 8 + b; s1 bit j = wire 24 + j.
+// Wire layout of the fetch core [PC, IR_b0, IR_b1, IR_b2, IR_b3, s1]
+// (A-0, 32-bit IR; n = 48):
+// PC bit i = wire i; IR bit b (0..32) = wire 8 + b; s1 bit j = wire 40 + j.
 
-const FETCH_N: usize = 4 * W;
+const FETCH_N: usize = 6 * W;
 /// Predicate (PC == p) lands in s1 bit 0.
-const FETCH_PRED_WIRE: usize = 3 * W;
+const FETCH_PRED_WIRE: usize = 5 * W;
 /// Toffoli-chain intermediates in s1 bits 1..=6.
-const FETCH_CHAIN0: usize = 3 * W + 1;
+const FETCH_CHAIN0: usize = 5 * W + 1;
+
+/// The fields the fetch core lifts over: PC, the four IR bytes, and s1.
+fn fetch_fields() -> [usize; 6] {
+    [PC_FIELD, IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, AUX_PRED_FIELD]
+}
 
 /// Compute the predicate `PC == addr` into s1 bit 0 (8-literal AND:
 /// NOTs on the zero literals, 7-Toffoli chain through s1 bits 1..=6,
@@ -106,17 +114,17 @@ fn pc_pred(addr: u8) -> Iso {
         acc = tgt;
     }
     gates.extend(nots);
-    on_fields(&[PC_FIELD, IR_LO_FIELD, IR_HI_FIELD, AUX_PRED_FIELD], gates)
+    on_fields(&fetch_fields(), gates)
 }
 
-/// One ROM entry: iff PC == addr, XOR the constant `word` into IR.
-fn fetch_entry(addr: u8, word: u16) -> Iso {
+/// One ROM entry: iff PC == addr, XOR the constant 32-bit `word` into IR.
+fn fetch_entry(addr: u8, word: u32) -> Iso {
     let pred = pc_pred(addr);
-    let cnots: Vec<Iso> = (0..16usize)
+    let cnots: Vec<Iso> = (0..32usize)
         .filter(|&b| (word >> b) & 1 == 1)
         .map(|b| gate_at(FETCH_N, &[FETCH_PRED_WIRE, W + b], cnot_prim()))
         .collect();
-    let body = on_fields(&[PC_FIELD, IR_LO_FIELD, IR_HI_FIELD, AUX_PRED_FIELD], cnots);
+    let body = on_fields(&fetch_fields(), cnots);
     Iso::seq(pred.clone(), Iso::seq(body, Iso::sym(pred)))
 }
 
@@ -124,7 +132,7 @@ fn fetch_entry(addr: u8, word: u16) -> Iso {
 /// per P4). Addresses ≥ `rom.len()` and zero words leave IR unchanged.
 /// Self-inverse for a fixed PC, so it doubles as the unfetch.
 /// Requires s1 = 0 on entry (restored on exit).
-pub fn fetch(rom: &[u16]) -> Iso {
+pub fn fetch(rom: &[u32]) -> Iso {
     assert!(rom.len() <= 1 << W, "ROM exceeds the 8-bit PC address space");
     let entries: Vec<Iso> = rom
         .iter()
@@ -219,7 +227,7 @@ pub fn pc_inc() -> Iso {
 /// across E = fetch;execute;unfetch (D1: no instruction writes PC),
 /// so the unfetch always XORs the same ROM word the fetch did, and
 /// IR returns to 0 unconditionally (D3).
-pub fn step_ops(rom: &[u16], ops: &[Op]) -> Iso {
+pub fn step_ops(rom: &[u32], ops: &[Op]) -> Iso {
     let f = fetch(rom);
     let phases = vec![
         f.clone(),                        // fetch
@@ -234,7 +242,7 @@ pub fn step_ops(rom: &[u16], ops: &[Op]) -> Iso {
 /// `step(rom) : CpuState <-> CpuState` — the ring machine cycle
 /// (decode_execute′, 15 non-MEXCH/MEXCHR ops). Total bijection on CpuState;
 /// SWAPBR is functional, branching works via `PC += BR + 1`.
-pub fn step(rom: &[u16]) -> Iso {
+pub fn step(rom: &[u32]) -> Iso {
     step_ops(rom, &Op::ALL)
 }
 
@@ -256,7 +264,7 @@ pub fn step(rom: &[u16]) -> Iso {
 /// `(cpu_phase ⊗ id_Mem) ⊗ id_Bus`. The decode+execute phase (composite,
 /// non-MEXCH/MEXCHR only) is lifted via `composite_phase ⊗ id_Bus`.
 /// emit/mem/absorb operate natively on system_state_ty.
-pub fn system_step(rom: &[u16]) -> Iso {
+pub fn system_step(rom: &[u32]) -> Iso {
     let mem_id = Iso::Id(crate::types::mem_state_ty());
     let bus_id = Iso::Id(crate::types::bus_state_ty());
 
@@ -290,7 +298,7 @@ pub fn system_step(rom: &[u16]) -> Iso {
 ///   3. `emit_on_cpu_bus`
 ///
 /// No MemState lines exist in this iso's netlist.
-pub fn cpu_pre(rom: &[u16]) -> Iso {
+pub fn cpu_pre(rom: &[u32]) -> Iso {
     let bus_id = Iso::Id(crate::types::bus_state_ty());
     let f = fetch(rom);
     let phases = vec![
@@ -311,7 +319,7 @@ pub fn cpu_pre(rom: &[u16]) -> Iso {
 ///   4. `pc_inc ⊗ id_Bus`
 ///
 /// No MemState lines exist in this iso's netlist.
-pub fn cpu_post(rom: &[u16]) -> Iso {
+pub fn cpu_post(rom: &[u32]) -> Iso {
     let bus_id = Iso::Id(crate::types::bus_state_ty());
     let f = fetch(rom); // unfetch == fetch (self-inverse XOR mask)
     let phases = vec![

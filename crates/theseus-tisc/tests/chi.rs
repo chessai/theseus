@@ -116,8 +116,8 @@ fn state_with_lanes(a: [u8; 5]) -> StateVals {
 }
 
 /// Cached χ ROM for tests.
-fn chi_rom() -> &'static Vec<u16> {
-    static ROM: OnceLock<Vec<u16>> = OnceLock::new();
+fn chi_rom() -> &'static Vec<u32> {
+    static ROM: OnceLock<Vec<u32>> = OnceLock::new();
     ROM.get_or_init(|| assemble(&chi_instrs()).expect("assemble χ"))
 }
 

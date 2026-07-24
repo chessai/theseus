@@ -1,16 +1,20 @@
-//! TISC-1 assembler: typed instruction mnemonics → 16-bit ROM words
-//! (tisc-1-spec §3).
+//! TISC-1 assembler: typed instruction mnemonics → 32-bit ROM words
+//! (tisc-1-spec §3; A-0 instruction-format reformat).
 //!
 //! [`Instr`] covers the 17 architected instructions; [`encode`] emits
-//! the exact bit layout the decoder dispatches on:
+//! the exact 32-bit bit layout the decoder dispatches on (A-0):
 //!
-//! - **R-format** (bit 15 = 1): `[1 | opcode[14:11] | rd[10:8] |
-//!   rs[7:5] | rt[4:2] | pad[1:0] = 0]`
-//! - **I-format** (bit 15 = 0): `[0 | opc[14:12] | rd[11:9] |
-//!   imm8[8:1] | pad[0] = 0]`
+//! - **R-format** (bit 31 = 1):
+//!   `[1 | opcode[30:25] | rd[24:20] | rs[19:15] | rt[14:10] | spare[9:0] = 0]`
+//! - **I-format** (bit 31 = 0):
+//!   `[0 | opcode[30:25] | rd[24:20] | imm20[19:0]]`
 //!
-//! Pad bits are always zero — the decoder's predicates (e.g. XCHG's
-//! gate keyed on IR bit 0) require it.
+//! Operand fields (rd/rs/rt) are **5 bits** = 32 locations; index
+//! `0..8 → r0..r7`, `8..16 → s0..s7`, `16..32 → reserved` (the
+//! scratch-addressable operand crossbar, A-0). The opcode is 6 bits;
+//! the immediate is 20 bits.
+//!
+//! Spare bits are always zero.
 //!
 //! `encode` also enforces the datapath's legality conventions (the
 //! P1-checker rules the iso semantics assume), rejecting programs the
@@ -30,10 +34,35 @@ use std::fmt;
 
 use crate::types::{MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
+// ── A-0 32-bit instruction-word layout ─────────────────────────────
+//
+// Shared:  fmt = bit 31 (1 = R, 0 = I); opcode = bits 30..25 (6 bits).
+// R:       rd = bits 24..20, rs = bits 19..15, rt = bits 14..10 (5 bits
+//          each); spare = bits 9..0 (always 0).
+// I:       rd = bits 24..20 (5 bits); imm = bits 19..0 (20 bits).
+
+/// LSB position of the format bit (1 = R-format, 0 = I-format).
+const FMT_SHIFT: u32 = 31;
+/// LSB position of the 6-bit opcode field.
+const OPCODE_SHIFT: u32 = 25;
+/// LSB position of the 5-bit rd operand field.
+const RD_SHIFT: u32 = 20;
+/// LSB position of the 5-bit rs operand field (R-format).
+const RS_SHIFT: u32 = 15;
+/// LSB position of the 5-bit rt operand field (R-format).
+const RT_SHIFT: u32 = 10;
+/// I-format immediate occupies bits 19..0 (20 bits).
+const IMM_BITS: u32 = 20;
+
+/// Number of operand-addressable locations: `reg ∪ scratch` = 16
+/// (`0..8 → r0..r7`, `8..16 → s0..s7`; `16..32` reserved).
+const NUM_OPERAND_LOCS: usize = NUM_REGS + NUM_SCRATCH;
+
 /// Assembler error: an instruction or program violates a legality rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AsmError {
-    /// A register index is out of range (must be < NUM_REGS).
+    /// An operand index is out of range (must be < 16 = `reg ∪ scratch`;
+    /// A-0). `which` is "rd"/"rs"/"rd".
     RegOutOfRange { which: &'static str, val: u8 },
     /// A two-operand instruction has `rd == rs` (non-injective datapath).
     AliasedOperands { mnemonic: &'static str, rd: u8, rs: u8 },
@@ -102,9 +131,13 @@ impl std::error::Error for AsmError {}
 
 /// One TISC-1 instruction with typed operands.
 ///
-/// `rd`, `rs`, `rt` are general-register indices (0..8); `sx` is a
-/// scratch-word index (0..8, but 0 and 1 are decoder-reserved and
-/// rejected); `imm` is the full 8-bit immediate.
+/// `rd`, `rs`, `rt` are operand indices over `reg ∪ scratch` (A-0):
+/// `0..8 → r0..r7`, `8..16 → s0..s7` (the scratch-addressable operand
+/// crossbar); `16..32` are reserved and rejected by [`encode`]. The
+/// architected programs still name registers (0..8); a scratch operand
+/// (8..16) is legal to encode. `sx` is a scratch-word index (0..8, but
+/// 0 and 1 are decoder-reserved and rejected); `imm` is the 8-bit
+/// immediate (zero-extended into the 20-bit I-format immediate field).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Instr {
     /// `r[rd] += r[rs]` (mod 256). Requires `rd != rs`.
@@ -148,24 +181,36 @@ pub enum Instr {
     Rotri { rd: u8, imm: u8 },
 }
 
-fn r_word(opcode: u16, rd: u8, rs: u8, rt: u8) -> Result<u16, AsmError> {
-    if (rd as usize) >= NUM_REGS {
-        return Err(AsmError::RegOutOfRange { which: "rd", val: rd });
+/// Validate one 5-bit operand index against `reg ∪ scratch` (0..16).
+/// Rejects `≥ 16` (the reserved locations, which no crossbar routes).
+fn check_operand(which: &'static str, val: u8) -> Result<(), AsmError> {
+    if (val as usize) >= NUM_OPERAND_LOCS {
+        return Err(AsmError::RegOutOfRange { which, val });
     }
-    if (rs as usize) >= NUM_REGS {
-        return Err(AsmError::RegOutOfRange { which: "rs", val: rs });
-    }
-    if (rt as usize) >= NUM_REGS {
-        return Err(AsmError::RegOutOfRange { which: "rt", val: rt });
-    }
-    Ok((1 << 15) | (opcode << 11) | (u16::from(rd) << 8) | (u16::from(rs) << 5) | (u16::from(rt) << 2))
+    Ok(())
 }
 
-fn i_word(opc: u16, rd: u8, imm: u8) -> Result<u16, AsmError> {
-    if (rd as usize) >= NUM_REGS {
-        return Err(AsmError::RegOutOfRange { which: "rd", val: rd });
-    }
-    Ok((opc << 12) | (u16::from(rd) << 9) | (u16::from(imm) << 1))
+/// Build a 32-bit R-format word (A-0). Operand fields are 5-bit indices
+/// over `reg ∪ scratch` (0..16); the 6-bit opcode occupies bits 30..25.
+fn r_word(opcode: u32, rd: u8, rs: u8, rt: u8) -> Result<u32, AsmError> {
+    check_operand("rd", rd)?;
+    check_operand("rs", rs)?;
+    check_operand("rt", rt)?;
+    Ok((1 << FMT_SHIFT)
+        | (opcode << OPCODE_SHIFT)
+        | (u32::from(rd) << RD_SHIFT)
+        | (u32::from(rs) << RS_SHIFT)
+        | (u32::from(rt) << RT_SHIFT))
+}
+
+/// Build a 32-bit I-format word (A-0). `rd` is a 5-bit `reg ∪ scratch`
+/// index; `imm` occupies the low 20 bits (only the low 8 are used by
+/// the current I-ops — the high 12 are zero-extended headroom for A-2).
+fn i_word(opc: u32, rd: u8, imm: u8) -> Result<u32, AsmError> {
+    check_operand("rd", rd)?;
+    // imm is currently 8-bit; zero-extend into the 20-bit I-field.
+    let imm20 = u32::from(imm) & ((1u32 << IMM_BITS) - 1);
+    Ok((opc << OPCODE_SHIFT) | (u32::from(rd) << RD_SHIFT) | imm20)
 }
 
 fn check_distinct(name: &'static str, rd: u8, rs: u8) -> Result<(), AsmError> {
@@ -175,12 +220,12 @@ fn check_distinct(name: &'static str, rd: u8, rs: u8) -> Result<(), AsmError> {
     Ok(())
 }
 
-/// Encode one instruction as its 16-bit ROM word (spec §3).
+/// Encode one instruction as its 32-bit ROM word (A-0).
 ///
 /// Returns `Err(AsmError)` on out-of-range operands, aliased register
 /// operands, or XCHG naming the decoder-reserved scratch words s0/s1 —
 /// all programs the datapath isos do not implement faithfully.
-pub fn encode(instr: Instr) -> Result<u16, AsmError> {
+pub fn encode(instr: Instr) -> Result<u32, AsmError> {
     match instr {
         Instr::Add { rd, rs } => {
             check_distinct("ADD", rd, rs)?;
@@ -253,19 +298,21 @@ pub fn encode(instr: Instr) -> Result<u16, AsmError> {
     }
 }
 
-/// Decode a ROM word back to its instruction (inverse of [`encode`]).
+/// Decode a 32-bit ROM word back to its instruction (inverse of
+/// [`encode`], A-0).
 ///
-/// Returns `None` for reserved opcodes and for words with nonzero pad
-/// bits (which `encode` never emits and the decoder does not accept).
-pub fn decode(word: u16) -> Option<Instr> {
-    if word & 0x8000 != 0 {
-        if word & 0b11 != 0 {
-            return None; // R-format pad bits must be zero
+/// Returns `None` for reserved opcodes and for R-format words with
+/// nonzero spare bits (which `encode` never emits).
+pub fn decode(word: u32) -> Option<Instr> {
+    let opcode = (word >> OPCODE_SHIFT) & 0x3F; // 6-bit opcode
+    let rd = ((word >> RD_SHIFT) & 0x1F) as u8; // 5-bit operand
+    if word & (1 << FMT_SHIFT) != 0 {
+        // R-format: spare bits 9..0 must be zero.
+        if word & ((1u32 << RT_SHIFT) - 1) != 0 {
+            return None;
         }
-        let opcode = (word >> 11) & 0xF;
-        let rd = ((word >> 8) & 7) as u8;
-        let rs = ((word >> 5) & 7) as u8;
-        let rt = ((word >> 2) & 7) as u8;
+        let rs = ((word >> RS_SHIFT) & 0x1F) as u8;
+        let rt = ((word >> RT_SHIFT) & 0x1F) as u8;
         match opcode {
             0b0000 => Some(Instr::Add { rd, rs }),
             0b0001 => Some(Instr::Sub { rd, rs }),
@@ -282,12 +329,8 @@ pub fn decode(word: u16) -> Option<Instr> {
             _ => None, // reserved
         }
     } else {
-        if word & 1 != 0 {
-            return None; // I-format pad bit must be zero
-        }
-        let opc = (word >> 12) & 7;
-        let rd = ((word >> 9) & 7) as u8;
-        let imm = ((word >> 1) & 0xFF) as u8;
+        let opc = opcode;
+        let imm = (word & 0xFF) as u8; // low 8 bits of the 20-bit imm
         match opc {
             0b000 => Some(Instr::Addi { rd, imm }),
             0b001 => Some(Instr::Subi { rd, imm }),
@@ -305,7 +348,7 @@ pub fn decode(word: u16) -> Option<Instr> {
 ///
 /// Returns `Err(AsmError)` if the program exceeds 256 instructions or
 /// any instruction fails [`encode`]'s legality checks.
-pub fn assemble(prog: &[Instr]) -> Result<Vec<u16>, AsmError> {
+pub fn assemble(prog: &[Instr]) -> Result<Vec<u32>, AsmError> {
     if prog.len() > 256 {
         return Err(AsmError::ProgramTooLong { len: prog.len() });
     }

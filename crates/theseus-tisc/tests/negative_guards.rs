@@ -12,75 +12,67 @@ use theseus_tisc::compile::{compile, CompileError};
 
 // ── asm::decode: reserved opcodes → None ────────────────────────────
 
+// A-0 32-bit word layout:
+//   R: fmt(31)=1 | opcode[30:25] | rd[24:20] | rs[19:15] | rt[14:10] | spare[9:0]
+//   I: fmt(31)=0 | opcode[30:25] | rd[24:20] | imm[19:0]
+
 #[test]
 fn decode_reserved_r_format_opcode() {
-    // R-format: bit15=1, opcode 0b1111 (reserved), rd=rs=rt=0, pad=0.
-    // Layout: [1 | 1111 | 000 | 000 | 000 | 00] = 0xF800
-    assert_eq!(decode(0xF800), None);
+    // R-format, reserved opcode 0b1111 (=15): fmt=1, op=15 = 0x9E00_0000.
+    assert_eq!(decode(0x9E00_0000), None);
 }
 
 #[test]
 fn decode_mexchr_opcode_1010() {
-    // R-format opcode 0b1010 is MEXCHR (M-D.b: data-dependent memory addressing).
-    // [1 | 1010 | 000 | 000 | 000 | 00] = 0x8000 | (0b1010 << 11) = 0xD000
-    // rd=0, rs=0 (=ra), rt=0 — decodes to MexchReg{rd:0, ra:0}.
-    assert_eq!(decode(0xD000), Some(Instr::MexchReg { rd: 0, ra: 0 }));
+    // R-format opcode 0b1010 (=10) is MEXCHR: fmt=1, op=10, rd=rs=rt=0 = 0x9400_0000.
+    assert_eq!(decode(0x9400_0000), Some(Instr::MexchReg { rd: 0, ra: 0 }));
 }
 
 #[test]
 fn decode_r_format_opcode_1011_is_ccnot() {
-    // R-format opcode 0b1011 is CCNOT (byte-parallel Toffoli).
-    // [1 | 1011 | 000 | 000 | 000 | 00] = 0x8000 | (0b1011 << 11) = 0xD800
-    // rd=0, rs=0, rt=0
-    assert_eq!(decode(0xD800), Some(Instr::Ccnot { rd: 0, rs: 0, rt: 0 }));
-    // With distinct operands: rd=1, rs=2, rt=3
-    // [1 | 1011 | 001 | 010 | 011 | 00] = 0xD94C
-    let word = 0x8000 | (0b1011 << 11) | (1 << 8) | (2 << 5) | (3 << 2);
+    // R-format opcode 0b1011 (=11) is CCNOT: fmt=1, op=11, rd=rs=rt=0 = 0x9600_0000.
+    assert_eq!(decode(0x9600_0000), Some(Instr::Ccnot { rd: 0, rs: 0, rt: 0 }));
+    // With distinct operands: rd=1, rs=2, rt=3.
+    let word = (1u32 << 31) | (0b1011 << 25) | (1 << 20) | (2 << 15) | (3 << 10);
     assert_eq!(decode(word), Some(Instr::Ccnot { rd: 1, rs: 2, rt: 3 }));
 }
 
 #[test]
 fn decode_reserved_i_format_opcode_101() {
-    // I-format: bit15=0, opc 0b101, rd=0, imm=0, pad=0.
-    // Layout: [0 | 101 | 000 | 00000000 | 0] = 0x5000
-    assert_eq!(decode(0x5000), None);
+    // I-format reserved opcode 0b101 (=5): fmt=0, op=5 = 0x0A00_0000.
+    assert_eq!(decode(0x0A00_0000), None);
 }
 
 #[test]
 fn decode_reserved_i_format_opcode_110() {
-    // I-format: opc 0b110.
-    // [0 | 110 | 000 | 00000000 | 0] = 0x6000
-    assert_eq!(decode(0x6000), None);
+    // I-format reserved opcode 0b110 (=6): fmt=0, op=6 = 0x0C00_0000.
+    assert_eq!(decode(0x0C00_0000), None);
 }
 
 #[test]
 fn decode_reserved_i_format_opcode_111() {
-    // I-format: opc 0b111.
-    // [0 | 111 | 000 | 00000000 | 0] = 0x7000
-    assert_eq!(decode(0x7000), None);
+    // I-format reserved opcode 0b111 (=7): fmt=0, op=7 = 0x0E00_0000.
+    assert_eq!(decode(0x0E00_0000), None);
 }
 
 #[test]
-fn decode_r_format_nonzero_pad_bits() {
-    // R-format word with pad bits [1:0] set.
-    // 0x8000 (minimal valid R-format header) | 0b11 = 0x8003.
-    // decode checks `word & 0b11 != 0` and returns None.
-    assert_eq!(decode(0x8003), None);
+fn decode_r_format_nonzero_spare_bits() {
+    // R-format word (opcode 0b0000 = Add) with spare bits [9:0] set.
+    // fmt=1, op=0, rd=rs=rt=0, spare = 0b11 → decode returns None.
+    assert_eq!(decode(0x8000_0003), None);
 }
 
 #[test]
-fn decode_r_format_single_pad_bit() {
-    // R-format word with only pad bit 0 set.
-    // 0x8000 | 0b01 = 0x8001.
-    assert_eq!(decode(0x8001), None);
+fn decode_r_format_single_spare_bit() {
+    // R-format Add with only spare bit 0 set → None.
+    assert_eq!(decode(0x8000_0001), None);
 }
 
 #[test]
-fn decode_i_format_nonzero_pad_bit() {
-    // I-format word with pad bit [0] set.
-    // 0x0001: bit15=0 (I-format), opc=0b000, rd=0, imm=0, pad=1.
-    // decode checks `word & 1 != 0` and returns None.
-    assert_eq!(decode(0x0001), None);
+fn decode_i_format_bit0_is_imm_lsb() {
+    // A-0: the old I-format pad bit is gone; bit 0 is the immediate LSB.
+    // 0x0000_0001: fmt=0, op=0 (Addi), rd=0, imm=1 → Addi{rd:0, imm:1}.
+    assert_eq!(decode(0x0000_0001), Some(Instr::Addi { rd: 0, imm: 1 }));
 }
 
 // ── compile: UnrecognizedPrim ───────────────────────────────────────
@@ -167,22 +159,28 @@ fn at_fields_n_out_of_range() {
 // ── asm::encode: AsmError negative tests ───────────────────────────
 
 #[test]
-fn encode_reg_out_of_range() {
-    // rd=9 is out of range (NUM_REGS=8, valid: 0..7).
+fn encode_operand_out_of_range() {
+    // A-0: operand fields address `reg ∪ scratch` = 16 locations (0..16);
+    // indices 8..16 name scratch words. Only `≥ 16` (the reserved
+    // locations) are rejected.
+    // rd=16 is out of range.
     assert!(matches!(
-        encode(Instr::Add { rd: 9, rs: 0 }),
-        Err(AsmError::RegOutOfRange { which: "rd", val: 9 })
+        encode(Instr::Add { rd: 16, rs: 0 }),
+        Err(AsmError::RegOutOfRange { which: "rd", val: 16 })
     ));
-    // rs=8 is out of range.
+    // rs=20 is out of range.
     assert!(matches!(
-        encode(Instr::Sub { rd: 0, rs: 8 }),
-        Err(AsmError::RegOutOfRange { which: "rs", val: 8 })
+        encode(Instr::Sub { rd: 0, rs: 20 }),
+        Err(AsmError::RegOutOfRange { which: "rs", val: 20 })
     ));
     // I-format: rd out of range.
     assert!(matches!(
-        encode(Instr::Addi { rd: 10, imm: 0 }),
-        Err(AsmError::RegOutOfRange { which: "rd", val: 10 })
+        encode(Instr::Addi { rd: 31, imm: 0 }),
+        Err(AsmError::RegOutOfRange { which: "rd", val: 31 })
     ));
+    // A scratch operand (8..16) is now ACCEPTED (scratch-addressable, A-0).
+    assert!(encode(Instr::Add { rd: 0, rs: 8 }).is_ok(), "rs=8 (s0) is a valid operand");
+    assert!(encode(Instr::Add { rd: 10, rs: 0 }).is_ok(), "rd=10 (s2) is a valid operand");
 }
 
 #[test]

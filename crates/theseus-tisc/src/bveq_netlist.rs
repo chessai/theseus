@@ -443,7 +443,7 @@ pub fn extended_varmap() -> VarMap {
 ///
 /// Fields: r0-r7 symbolic, PC=0, BR symbolic, IR=concrete word,
 /// s0 symbolic (or 0 if `pin_s0_zero`), s1-s7=0.
-pub fn build_cpu_init(map: &VarMap, ir_word: u16, pin_s0_zero: bool) -> SV {
+pub fn build_cpu_init(map: &VarMap, ir_word: u32, pin_s0_zero: bool) -> SV {
     let vs = map.bdd_vars();
     let mut fields = Vec::with_capacity(NUM_CPU_FIELDS);
 
@@ -455,12 +455,13 @@ pub fn build_cpu_init(map: &VarMap, ir_word: u16, pin_s0_zero: bool) -> SV {
     fields.push(sv_word8_const(0, vs));
     // Field 9: BR symbolic
     fields.push(sv_word8_symbolic(map, OP_BR));
-    // Field 10: IR_lo
+    // Fields 10-13: IR_b0..IR_b3 (32-bit IR, A-0), LSB byte first.
     fields.push(sv_word8_const(ir_word as u8, vs));
-    // Field 11: IR_hi
     fields.push(sv_word8_const((ir_word >> 8) as u8, vs));
-    // Field 12: s0 — symbolic or pinned to 0 for Addi/Subi
-    // (unpredicated immediate mask at decoder.rs:720 requires s0=0)
+    fields.push(sv_word8_const((ir_word >> 16) as u8, vs));
+    fields.push(sv_word8_const((ir_word >> 24) as u8, vs));
+    // Field 14: s0 — symbolic or pinned to 0 for Addi/Subi
+    // (unpredicated immediate mask requires s0=0)
     if pin_s0_zero {
         fields.push(sv_word8_const(0, vs));
     } else {
@@ -491,8 +492,11 @@ pub fn build_system_init(map: &VarMap, pin_s0_zero: bool) -> SV {
     }
     cpu_fields.push(sv_word8_const(0, vs)); // PC = 0
     cpu_fields.push(sv_word8_const(0, vs)); // BR = 0 (MINOR-7)
-    cpu_fields.push(sv_word8_const(0, vs)); // IR_lo = 0 (will be fetched)
-    cpu_fields.push(sv_word8_const(0, vs)); // IR_hi = 0
+    // IR_b0..IR_b3 = 0 (fetched from ROM); 32-bit IR (A-0).
+    cpu_fields.push(sv_word8_const(0, vs));
+    cpu_fields.push(sv_word8_const(0, vs));
+    cpu_fields.push(sv_word8_const(0, vs));
+    cpu_fields.push(sv_word8_const(0, vs));
     if pin_s0_zero {
         cpu_fields.push(sv_word8_const(0, vs)); // s0 = 0 for Addi/Subi
     } else {

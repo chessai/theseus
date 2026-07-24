@@ -134,9 +134,9 @@ fn t3_encode_decode_roundtrip() {
                 }
                 let instr = Instr::Ccnot { rd, rs, rt };
                 let word = encode(instr).expect("encode Ccnot");
-                // Verify opcode is 0b1011.
-                assert_eq!((word >> 11) & 0xF, 0b1011, "opcode must be 0b1011");
-                assert_eq!(word & 0x8000, 0x8000, "must be R-format");
+                // Verify opcode is 0b1011 (A-0: 6-bit opcode at bits 25..30).
+                assert_eq!((word >> 25) & 0x3F, 0b1011, "opcode must be 0b1011");
+                assert_eq!(word & 0x8000_0000, 0x8000_0000, "must be R-format (fmt bit 31)");
                 // Round-trip.
                 let decoded = decode(word).expect("decode Ccnot");
                 assert_eq!(decoded, instr, "round-trip failed for rd={rd} rs={rs} rt={rt}");

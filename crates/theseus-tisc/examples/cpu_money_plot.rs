@@ -20,9 +20,10 @@ fn main() {
     // A tiny ROM: `decode_execute` (all 14 predicated instructions,
     // lowered every step) dominates the step, so the exact program
     // barely moves the machine-level energy.
-    let rom: Vec<u16> = vec![
-        (3u16 << 12) | (1 << 1),          // ROTLI r0, #1 (opc 0b011 = ROTLI)
-        (5u16 << 12) | (1 << 9) | (0xFF << 1), // reserved I-format opc 0b101 (decodes None)
+    // A-0 32-bit words: I-format = fmt(31)=0 | opcode[30:25] | rd[24:20] | imm[19:0].
+    let rom: Vec<u32> = vec![
+        (0b011u32 << 25) | 1,             // ROTLI r0, #1 (opc 0b011 = ROTLI)
+        (0b101u32 << 25) | (1 << 20) | 0xFF, // reserved I-format opc 0b101 (decodes None)
     ];
 
     eprintln!("lowering the TISC-1 step (~2 min, unbalanced)...");

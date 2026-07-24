@@ -32,14 +32,16 @@ const EVAL_FUEL: u64 = 4_000_000_000;
 
 // ── Instruction encoders (F1 spec §3) ──────────────────────────────
 
-fn r_ins(opcode: u16, rd: u16, rs: u16, rt: u16) -> u16 {
-    assert!(opcode < 16 && rd < 8 && rs < 8 && rt < 8);
-    (1 << 15) | (opcode << 11) | (rd << 8) | (rs << 5) | (rt << 2)
+// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
+//                  I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
+fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
+    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
+    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
 }
 
-fn i_ins(opc: u16, rd: u16, imm: u8) -> u16 {
-    assert!(opc < 8 && rd < 8);
-    (opc << 12) | (rd << 9) | (u16::from(imm) << 1)
+fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
+    assert!(opc < 64 && rd < 16);
+    (opc << 25) | (rd << 20) | u32::from(imm)
 }
 
 // ── Reference model of the ISA ─────────────────────────────────────
@@ -47,11 +49,11 @@ fn i_ins(opc: u16, rd: u16, imm: u8) -> u16 {
 fn reference(s: &StateVals) -> StateVals {
     let mut out = s.clone();
     let ir = s.ir;
-    if ir & 0x8000 != 0 {
-        let opcode = (ir >> 11) & 0xF;
-        let rd = ((ir >> 8) & 7) as usize;
-        let rs = ((ir >> 5) & 7) as usize;
-        let rt = ((ir >> 2) & 7) as usize;
+    if ir & (1 << 31) != 0 {
+        let opcode = (ir >> 25) & 0x3F;
+        let rd = ((ir >> 20) & 0x1F) as usize;
+        let rs = ((ir >> 15) & 0x1F) as usize;
+        let rt = ((ir >> 10) & 0x1F) as usize;
         match opcode {
             0b0000 => out.regs[rd] = out.regs[rd].wrapping_add(out.regs[rs]),
             0b0001 => out.regs[rd] = out.regs[rd].wrapping_sub(out.regs[rs]),
@@ -74,9 +76,9 @@ fn reference(s: &StateVals) -> StateVals {
             _ => {} // reserved: identity
         }
     } else {
-        let opc = (ir >> 12) & 7;
-        let rd = ((ir >> 9) & 7) as usize;
-        let imm = ((ir >> 1) & 0xFF) as u8;
+        let opc = (ir >> 25) & 0x3F;
+        let rd = ((ir >> 20) & 0x1F) as usize;
+        let imm = (ir & 0xFF) as u8;
         match opc {
             0b000 => out.regs[rd] = out.regs[rd].wrapping_add(imm),
             0b001 => out.regs[rd] = out.regs[rd].wrapping_sub(imm),
@@ -99,7 +101,7 @@ fn regs_b() -> [u8; 8] {
     [0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87]
 }
 
-fn st(regs: [u8; 8], ir: u16) -> StateVals {
+fn st(regs: [u8; 8], ir: u32) -> StateVals {
     // mem is zero: CpuState (state_ty()) doesn't include memory fields;
     // encode/decode drops mem. MEXCH tests are on the composite carrier.
     StateVals {
@@ -236,7 +238,7 @@ fn select_reg_crossbar_isolated() {
 
     // Semantics for every field value: r[rd] lands at slot 0, the rest
     // are permuted per the documented model, all other fields preserved.
-    for rd in 0..8u16 {
+    for rd in 0..8u32 {
         let s = st(regs_b(), r_ins(0, rd, 0, 0)); // R_RD reads IR bits 10-8
         let got = eval_state("select_reg", &iso, &s);
         let mut expected = s.clone();
@@ -258,7 +260,7 @@ fn select_reg_crossbar_isolated() {
 #[test]
 fn select_scratch_crossbar_isolated() {
     let iso = decoder::select_scratch(decoder::R_RT);
-    for sx in 0..8u16 {
+    for sx in 0..8u32 {
         let s = st(regs_b(), r_ins(0, 0, 0, sx)); // R_RT reads IR bits 4-2
         let got = eval_state("select_scratch", &iso, &s);
         let mut expected = s.clone();

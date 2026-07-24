@@ -47,7 +47,7 @@ fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 }
 
 /// Apply `step(rom)` `t` times: run the machine `t` cycles forward.
-fn run(rom: &[u16], start: &StateVals, t: usize) -> StateVals {
+fn run(rom: &[u32], start: &StateVals, t: usize) -> StateVals {
     let iso = step(rom);
     let mut cur = start.clone();
     for k in 0..t {
@@ -59,7 +59,7 @@ fn run(rom: &[u16], start: &StateVals, t: usize) -> StateVals {
 /// Run `t` cycles forward, then `t` cycles of the adjoint
 /// `Iso::sym(step(rom))`. Returns (forward endpoint, state after the
 /// backward run); the latter must equal `start` (reversibility).
-fn run_and_reverse(rom: &[u16], start: &StateVals, t: usize) -> (StateVals, StateVals) {
+fn run_and_reverse(rom: &[u32], start: &StateVals, t: usize) -> (StateVals, StateVals) {
     let iso = step(rom);
     let back = Iso::sym(iso.clone());
     let mut cur = start.clone();
@@ -117,15 +117,17 @@ fn fib_pairs() -> Vec<(u8, u8)> {
 
 #[test]
 fn assembler_encode_roundtrip() {
-    // Exact bit patterns (spec §3).
-    // ADD r1, r2: 1 | 0000 | 001 | 010 | 000 | 00 = 0x8140.
-    assert_eq!(encode(Instr::Add { rd: 1, rs: 2 }).unwrap(), 0x8140);
-    // EXCH r1, r2: 1 | 0011 | 001 | 010 | 000 | 00 = 0x9940.
-    assert_eq!(encode(Instr::Exch { rd: 1, rs: 2 }).unwrap(), 0x9940);
-    // ADDI r3, 0x5A: 0 | 000 | 011 | 0101_1010 | 0 = 0x06B4.
-    assert_eq!(encode(Instr::Addi { rd: 3, imm: 0x5A }).unwrap(), 0x06B4);
-    // SWAPBR r0: 1 | 1000 | 000 | 000 | 000 | 00 = 0xC000.
-    assert_eq!(encode(Instr::Swapbr { rd: 0 }).unwrap(), 0xC000);
+    // Exact bit patterns (A-0 32-bit word):
+    //   R: fmt(31) | opcode[30:25] | rd[24:20] | rs[19:15] | rt[14:10] | spare[9:0]
+    //   I: fmt(31) | opcode[30:25] | rd[24:20] | imm[19:0]
+    // ADD r1, r2: fmt=1, op=0, rd=1, rs=2 = 0x8011_0000.
+    assert_eq!(encode(Instr::Add { rd: 1, rs: 2 }).unwrap(), 0x8011_0000);
+    // EXCH r1, r2: fmt=1, op=3, rd=1, rs=2 = 0x8611_0000.
+    assert_eq!(encode(Instr::Exch { rd: 1, rs: 2 }).unwrap(), 0x8611_0000);
+    // ADDI r3, 0x5A: fmt=0, op=0, rd=3, imm=0x5A = 0x0030_005A.
+    assert_eq!(encode(Instr::Addi { rd: 3, imm: 0x5A }).unwrap(), 0x0030_005A);
+    // SWAPBR r0: fmt=1, op=8, rd=0 = 0x9000_0000.
+    assert_eq!(encode(Instr::Swapbr { rd: 0 }).unwrap(), 0x9000_0000);
 
     // Round-trip across the whole instruction set.
     let samples = [
@@ -149,17 +151,19 @@ fn assembler_encode_roundtrip() {
         assert_eq!(decode(word), Some(ins), "round-trip failed for {ins:?}");
     }
 
-    // Pad-bit and reserved-opcode words don't decode.
-    assert_eq!(decode(0x8141), None, "R-format pad bit set");
-    assert_eq!(decode(0x06B5), None, "I-format pad bit set");
-    // R opcode 0b1001 is now MEXCH (M-C2 Layer 1).
-    assert_eq!(decode(0xC800), Some(Instr::Mexch { rd: 0, addr: 0 }), "MEXCH r0, m0");
+    // R-format spare bits (bits 9:0) must be zero, else decode → None.
+    // ADD r1,r2 with spare bit 0 set = 0x8011_0001.
+    assert_eq!(decode(0x8011_0001), None, "R-format spare bit set");
+    // R opcode 0b1001 is now MEXCH (M-C2 Layer 1): fmt=1, op=9, rd=0 = 0x9200_0000.
+    assert_eq!(decode(0x9200_0000), Some(Instr::Mexch { rd: 0, addr: 0 }), "MEXCH r0, m0");
+    // R opcode 0b1010 is MEXCHR (M-D.b): fmt=1, op=10, rd=1, rs=0 = 0x9410_0000.
     assert_eq!(
-        decode(0xD100),
+        decode(0x9410_0000),
         Some(Instr::MexchReg { rd: 1, ra: 0 }),
         "R opcode 1010 is now MEXCHR (M-D.b)"
     );
-    assert_eq!(decode(0x5000), None, "reserved I opc 101");
+    // Reserved I-format opcode 0b101 (=5): fmt=0, op=5 = 0x0A00_0000.
+    assert_eq!(decode(0x0A00_0000), None, "reserved I opc 101");
 
     // assemble = per-word encode.
     let prog = fib_prog();

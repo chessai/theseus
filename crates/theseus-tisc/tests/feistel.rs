@@ -76,7 +76,7 @@ fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 }
 
 /// Apply `step(rom)` `t` times: run the machine `t` cycles forward.
-fn run(rom: &[u16], start: &StateVals, t: usize) -> StateVals {
+fn run(rom: &[u32], start: &StateVals, t: usize) -> StateVals {
     let iso = step(rom);
     let mut cur = start.clone();
     for k in 0..t {
@@ -88,7 +88,7 @@ fn run(rom: &[u16], start: &StateVals, t: usize) -> StateVals {
 /// Run `t` cycles forward, then `t` cycles of the adjoint
 /// `Iso::sym(step(rom))`. Returns (forward endpoint, state after the
 /// backward run); the latter must equal `start` (reversibility).
-fn run_and_reverse(rom: &[u16], start: &StateVals, t: usize) -> (StateVals, StateVals) {
+fn run_and_reverse(rom: &[u32], start: &StateVals, t: usize) -> (StateVals, StateVals) {
     let iso = step(rom);
     let back = Iso::sym(iso.clone());
     let mut cur = start.clone();

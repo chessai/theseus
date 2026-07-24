@@ -229,7 +229,7 @@ impl fmt::Display for ClauseReport {
 /// shared decode dominates); per-clause attribution = the shared
 /// fetch/decode/unfetch overhead + each instruction's own gates.
 pub fn clause_report(
-    rom: &[u16],
+    rom: &[u32],
     char_db: &CharDb,
     t_ramp: f64,
     step_net: Option<&PhasedCellNetlist>,
@@ -335,7 +335,7 @@ pub struct RomTrace {
 ///
 /// T is defined by PC entering the dead zone, NOT by `decode() == None`
 /// (idle decodes to `Some(Addi r0, #0)` — F4).
-pub fn rom_trace(rom: &[u16], init: StateVals, budget: usize) -> RomTrace {
+pub fn rom_trace(rom: &[u32], init: StateVals, budget: usize) -> RomTrace {
     let rom_len = rom.len();
     let mut steps_t = budget; // default: never entered dead zone
 

@@ -68,7 +68,7 @@ pub struct StepRing {
 ///
 /// Calls `step(rom)`, lowers with ancillas, and compact-balances —
 /// O(active cells) memory, no K0 materialization.
-pub fn step_ring(rom: &[u16]) -> StepRing {
+pub fn step_ring(rom: &[u32]) -> StepRing {
     let iso = step(rom);
     let (net, ancilla_init) =
         lower_iso_with_ancillas(&iso).expect("step lowers");
@@ -219,7 +219,7 @@ pub struct ClosedStepRing {
 /// `[0, n_forward)` the forward ancillas (restored to init after every
 /// revolution, data-independently) and `[n_forward, n_forward + 2·w)`
 /// the boundary pairs with fixed inits `(1, 0)` per data bit.
-pub fn closed_step_ring(rom: &[u16]) -> ClosedStepRing {
+pub fn closed_step_ring(rom: &[u32]) -> ClosedStepRing {
     let iso = step(rom);
     let (net, ancilla_init) =
         lower_iso_bennett(&iso).expect("step lowers via bennett");
@@ -366,7 +366,7 @@ pub struct SystemRing {
 ///
 /// Calls `system_step(rom)`, lowers with ancillas, and compact-balances —
 /// O(active cells) memory, no K0 materialization.
-pub fn system_ring(rom: &[u16]) -> SystemRing {
+pub fn system_ring(rom: &[u32]) -> SystemRing {
     let iso = system_step(rom);
     let (net, ancilla_init) =
         lower_iso_with_ancillas(&iso).expect("system_step lowers");
@@ -546,7 +546,7 @@ pub struct TwoBodyRing {
 ///
 /// Lowers and compact-balances `cpu_pre`, `mem_body`, and `cpu_post` as
 /// three separate bodies. Asserts data widths and input types loudly (F4).
-pub fn two_body_ring(rom: &[u16]) -> TwoBodyRing {
+pub fn two_body_ring(rom: &[u32]) -> TwoBodyRing {
     use crate::types::bus_state_ty;
     use theseus_core::Type;
 
@@ -1110,7 +1110,7 @@ impl TwoBodyTiming {
 /// the lockstep arrival equations per §4b steps 1-6.
 ///
 /// No lowering mutation, no machine-semantics change, no padder materialization.
-pub fn two_body_timing_certificate(rom: &[u16]) -> Result<TwoBodyTiming, CellNetError> {
+pub fn two_body_timing_certificate(rom: &[u32]) -> Result<TwoBodyTiming, CellNetError> {
     let p = u32::from(PHASE_COUNT);
 
     // --- Lower each body and compute checked output arrivals ---

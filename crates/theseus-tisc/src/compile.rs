@@ -3515,7 +3515,7 @@ pub fn run_on_cpu_fast_resident(
 
 /// Fast-sim helper: run a pre-assembled ROM for an explicit number of steps.
 /// Used by park-liveness tests (T2a/T2b) to verify the dead zone is inert.
-pub fn run_rom_fast(rom: &[u16], mut state: StateVals, steps: usize) -> StateVals {
+pub fn run_rom_fast(rom: &[u32], mut state: StateVals, steps: usize) -> StateVals {
     for _ in 0..steps {
         let pc = state.pc as usize;
         let word = if pc < rom.len() { rom[pc] } else { 0 };

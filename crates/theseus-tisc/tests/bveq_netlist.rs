@@ -169,34 +169,32 @@ fn walk_one_arm_and_check(instr: Instr, label: &str) {
         &br_entry, &format!("{label}: BR"),
     );
 
-    // IR unchanged (concrete word).
-    assert_word8_const(
-        extract_field(&out_sv, 10, NUM_CPU_FIELDS),
-        word as u8, vs, &format!("{label}: IR_lo"),
-    );
-    assert_word8_const(
-        extract_field(&out_sv, 11, NUM_CPU_FIELDS),
-        (word >> 8) as u8, vs, &format!("{label}: IR_hi"),
-    );
+    // IR unchanged (concrete 32-bit word, A-0: bytes at fields 10..14).
+    for byte in 0..4 {
+        assert_word8_const(
+            extract_field(&out_sv, 10 + byte, NUM_CPU_FIELDS),
+            (word >> (8 * byte)) as u8, vs, &format!("{label}: IR_b{byte}"),
+        );
+    }
 
-    // s0 restored to entry (symbolic or 0).
+    // s0 restored to entry (symbolic or 0). A-0: s0 at field 14.
     if pin_s0 {
         assert_word8_zero(
-            extract_field(&out_sv, 12, NUM_CPU_FIELDS),
+            extract_field(&out_sv, 14, NUM_CPU_FIELDS),
             vs, &format!("{label}: s0"),
         );
     } else {
         let s0_entry = sv_word8_symbolic(&map, OP_S0);
         assert_word8_identity(
-            extract_field(&out_sv, 12, NUM_CPU_FIELDS),
+            extract_field(&out_sv, 14, NUM_CPU_FIELDS),
             &s0_entry, &format!("{label}: s0"),
         );
     }
 
-    // s1-s7 = 0 (ancilla clean, T5).
+    // s1-s7 = 0 (ancilla clean, T5). A-0: s1..s7 at fields 15..22.
     for i in 1..8 {
         assert_word8_zero(
-            extract_field(&out_sv, 12 + i, NUM_CPU_FIELDS),
+            extract_field(&out_sv, 14 + i, NUM_CPU_FIELDS),
             vs, &format!("{label}: s{i}"),
         );
     }
@@ -326,32 +324,30 @@ fn bveq_netlist_walk_system() {
                 extract_field(cpu_sv, 9, NUM_CPU_FIELDS),
                 vs, &format!("{label}: BR"),
             );
-            // IR = 0 (unfetched).
-            assert_word8_zero(
-                extract_field(cpu_sv, 10, NUM_CPU_FIELDS),
-                vs, &format!("{label}: IR_lo"),
-            );
-            assert_word8_zero(
-                extract_field(cpu_sv, 11, NUM_CPU_FIELDS),
-                vs, &format!("{label}: IR_hi"),
-            );
-            // s0 restored.
+            // IR = 0 (unfetched). A-0: 4 IR bytes at fields 10..14.
+            for byte in 0..4 {
+                assert_word8_zero(
+                    extract_field(cpu_sv, 10 + byte, NUM_CPU_FIELDS),
+                    vs, &format!("{label}: IR_b{byte}"),
+                );
+            }
+            // s0 restored. A-0: s0 at field 14.
             if pin_s0 {
                 assert_word8_zero(
-                    extract_field(cpu_sv, 12, NUM_CPU_FIELDS),
+                    extract_field(cpu_sv, 14, NUM_CPU_FIELDS),
                     vs, &format!("{label}: s0"),
                 );
             } else {
                 let s0_entry = sv_word8_symbolic(&map, OP_S0);
                 assert_word8_identity(
-                    extract_field(cpu_sv, 12, NUM_CPU_FIELDS),
+                    extract_field(cpu_sv, 14, NUM_CPU_FIELDS),
                     &s0_entry, &format!("{label}: s0"),
                 );
             }
-            // s1-s7 = 0.
+            // s1-s7 = 0. A-0: s1..s7 at fields 15..22.
             for i in 1..8 {
                 assert_word8_zero(
-                    extract_field(cpu_sv, 12 + i, NUM_CPU_FIELDS),
+                    extract_field(cpu_sv, 14 + i, NUM_CPU_FIELDS),
                     vs, &format!("{label}: s{i}"),
                 );
             }

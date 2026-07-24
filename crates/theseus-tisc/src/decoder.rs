@@ -82,17 +82,41 @@ use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_balanced, seq_list,
 };
 use crate::types::{
-    flat, reg_field, scratch_field, word8, BR_FIELD, IR_HI_FIELD, IR_LO_FIELD,
-    MemWidth, MEM_WIDTH, MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_FIELDS, W,
+    flat, reg_field, scratch_field, word8, BR_FIELD,
+    IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, IR_LO_FIELD,
+    MemWidth, MEM_WIDTH, MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_FIELDS,
+    NUM_REGS, W,
     BUS_ADDR_FIELD, BUS_ENABLE_FIELD, BUS_WORD_FIELD,
 };
 
 // ── Aux-field conventions ──────────────────────────────────────────
 
 /// State field used as the operand/immediate buffer (s0).
-pub const AUX_OPERAND_FIELD: usize = 12;
+/// A-0: scratch base shifted 12 → 14 (32-bit IR added two byte fields).
+pub const AUX_OPERAND_FIELD: usize = 14;
 /// State field holding the predicate bit + chain intermediates (s1).
-pub const AUX_PRED_FIELD: usize = 13;
+pub const AUX_PRED_FIELD: usize = 15;
+
+// ── A-0 32-bit IR bit layout (global IR bit → (byte-field, bit)) ────
+//
+// fmt = bit 31; opcode = bits 25..30 (6 bits); rd = bits 20..24;
+// rs = bits 15..19; rt = bits 10..14 (all 5-bit); I-imm = bits 0..19.
+
+/// Global IR-bit index → the (byte-field, bit-within-byte) it lives at.
+/// IR byte `k` (k=0..4) is field `IR_B0_FIELD + k`, holding bits 8k..8k+8.
+pub const fn ir_bit(b: usize) -> (usize, usize) {
+    (IR_B0_FIELD + b / W, b % W)
+}
+
+/// IR bit index of the format bit (1 = R-format).
+const FMT_BIT: usize = 31;
+/// IR bit index of opcode bit `k` (k = 0..6); opcode occupies bits 25..30.
+const fn opcode_bit(k: usize) -> usize {
+    25 + k
+}
+// Operand fields (rd/rs/rt at IR bits 20..24 / 15..19 / 10..14) and the
+// I-format immediate (bits 0..19) are addressed directly by the RegSel
+// constants and the immediate-mask cores below.
 
 // Bit-level plumbing (not_iso, flatten, gate_at, seq_balanced, seq_list,
 // at_wire, fredkin_prim, rot_transpositions, …) lives in `crate::plumbing`
@@ -175,32 +199,51 @@ pub(crate) fn on_fields(field_idxs: &[usize], gates: Vec<Iso>) -> Iso {
 // Register selection: the crossbar
 // ══════════════════════════════════════════════════════════════════════
 
-/// A 3-bit register-index field inside one IR byte: `bits[i]` is the
-/// bit position (within that byte) of field bit `i` (LSB-first).
+/// A 5-bit operand-index field of the A-0 word. `bits[i]` is the
+/// (byte-field, bit-within-byte) of operand-field bit `i`, LSB-first.
+///
+/// The operand crossbar routes over `reg ∪ scratch` = 16 locations, so
+/// only the low **4** field bits are used to steer the 4-level select
+/// tree; the 5th operand bit (selecting reserved locations 16..32) is
+/// never set by a live instruction and is carried only for reference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegSel {
-    pub ir_field: usize,
-    pub bits: [usize; 3],
+    /// (byte-field, bit) of the 5 operand-field bits, LSB-first.
+    pub bits: [(usize, usize); 5],
 }
 
-/// R-format rd: IR bits 10–8 → IR_hi bits 2..0.
-pub const R_RD: RegSel = RegSel { ir_field: IR_HI_FIELD, bits: [0, 1, 2] };
-/// R-format rs: IR bits 7–5 → IR_lo bits 7..5.
-pub const R_RS: RegSel = RegSel { ir_field: IR_LO_FIELD, bits: [5, 6, 7] };
-/// R-format rt: IR bits 4–2 → IR_lo bits 4..2.
-pub const R_RT: RegSel = RegSel { ir_field: IR_LO_FIELD, bits: [2, 3, 4] };
-/// I-format rd: IR bits 11–9 → IR_hi bits 3..1.
-pub const I_RD: RegSel = RegSel { ir_field: IR_HI_FIELD, bits: [1, 2, 3] };
+/// Build a `RegSel` from the five global IR-bit indices of a 5-bit
+/// operand field (LSB-first).
+const fn regsel(b: [usize; 5]) -> RegSel {
+    RegSel {
+        bits: [
+            ir_bit(b[0]),
+            ir_bit(b[1]),
+            ir_bit(b[2]),
+            ir_bit(b[3]),
+            ir_bit(b[4]),
+        ],
+    }
+}
 
-/// Controlled word-swap: swap the Word8 fields `fa` and `fb` iff bit
-/// `ctrl_bit` of `ir_field` is set. 8 K1 Fredkins; the control threads
-/// through each cell (no fanout).
-fn ctrl_word_swap(ir_field: usize, ctrl_bit: usize, fa: usize, fb: usize) -> Iso {
+/// R-format / I-format rd: IR bits 20..24 (5-bit operand).
+pub const R_RD: RegSel = regsel([20, 21, 22, 23, 24]);
+/// R-format rs: IR bits 15..19 (5-bit operand).
+pub const R_RS: RegSel = regsel([15, 16, 17, 18, 19]);
+/// R-format rt: IR bits 10..14 (5-bit operand).
+pub const R_RT: RegSel = regsel([10, 11, 12, 13, 14]);
+/// I-format rd: same field as R-format rd (IR bits 20..24).
+pub const I_RD: RegSel = regsel([20, 21, 22, 23, 24]);
+
+/// Controlled word-swap: swap the Word8 fields `fa` and `fb` iff the
+/// control bit at `(ctrl_field, ctrl_bit)` is set. 8 K1 Fredkins; the
+/// control threads through each cell (no fanout).
+fn ctrl_word_swap(ctrl_field: usize, ctrl_bit: usize, fa: usize, fb: usize) -> Iso {
     let n = 3 * W;
     let gates = (0..W)
         .map(|i| gate_at(n, &[ctrl_bit, W + i, 2 * W + i], fredkin_prim()))
         .collect();
-    on_fields(&[ir_field, fa, fb], gates)
+    on_fields(&[ctrl_field, fa, fb], gates)
 }
 
 /// Controlled swap of two W-bit words across a 2-factor product boundary.
@@ -248,16 +291,63 @@ pub fn cross_ctrl_fredkin(
     Iso::seq(Iso::sym(split.clone()), Iso::seq(core, split))
 }
 
-/// The 1-of-8 select tree over the fields `base(0)..base(7)`.
+/// The 1-of-8 select tree over the fields `base(0)..base(7)`, steered
+/// by the low 3 bits of the operand field (`sel.bits[0..3]`).
 fn select_fields(sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
+    let (f2, b2) = sel.bits[2];
+    let (f1, b1) = sel.bits[1];
+    let (f0, b0) = sel.bits[0];
     let mut steps = Vec::new();
     for i in 0..4 {
-        steps.push(ctrl_word_swap(sel.ir_field, sel.bits[2], base(i), base(i + 4)));
+        steps.push(ctrl_word_swap(f2, b2, base(i), base(i + 4)));
     }
     for i in 0..2 {
-        steps.push(ctrl_word_swap(sel.ir_field, sel.bits[1], base(i), base(i + 2)));
+        steps.push(ctrl_word_swap(f1, b1, base(i), base(i + 2)));
     }
-    steps.push(ctrl_word_swap(sel.ir_field, sel.bits[0], base(0), base(1)));
+    steps.push(ctrl_word_swap(f0, b0, base(0), base(1)));
+    seq_balanced(steps)
+}
+
+/// Map an operand index `0..16` to its State field: `i<8 → r[i]`,
+/// `8 ≤ i < 16 → s[i−8]` (the A-0 scratch-addressable operand space).
+pub fn operand_field(i: usize) -> usize {
+    if i < NUM_REGS {
+        reg_field(i)
+    } else {
+        scratch_field(i - NUM_REGS)
+    }
+}
+
+/// The 1-of-16 operand select tree over `reg ∪ scratch` (A-0), steered
+/// by the low **4** bits of the operand field. `base(i)` maps operand
+/// index `i` (0..16) to a State field; the selected location lands at
+/// `base(0)`. Composing with `Iso::sym(select_operand(...))` restores
+/// the permutation exactly.
+///
+/// This is the coverage-critical generalization of `select_reg`
+/// (`select_reg` = the low-8 sub-tree). The extra top level (bit 3)
+/// swaps `base(i) ↔ base(i+8)` for i = 0..8, bringing a scratch word
+/// into the register half when the operand names scratch.
+pub fn select_operand(sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
+    let (f3, b3) = sel.bits[3];
+    let (f2, b2) = sel.bits[2];
+    let (f1, b1) = sel.bits[1];
+    let (f0, b0) = sel.bits[0];
+    let mut steps = Vec::new();
+    // Level 3 (bit 3): reg half ↔ scratch half.
+    for i in 0..8 {
+        steps.push(ctrl_word_swap(f3, b3, base(i), base(i + 8)));
+    }
+    // Level 2 (bit 2): quarter swaps within the low 8.
+    for i in 0..4 {
+        steps.push(ctrl_word_swap(f2, b2, base(i), base(i + 4)));
+    }
+    // Level 1 (bit 1).
+    for i in 0..2 {
+        steps.push(ctrl_word_swap(f1, b1, base(i), base(i + 2)));
+    }
+    // Level 0 (bit 0).
+    steps.push(ctrl_word_swap(f0, b0, base(0), base(1)));
     seq_balanced(steps)
 }
 
@@ -268,7 +358,7 @@ pub fn select_reg(sel: RegSel) -> Iso {
     select_fields(sel, reg_field)
 }
 
-/// Bring scratch word `s[sel]` to the fixed slot s0 (field 12).
+/// Bring scratch word `s[sel]` to the fixed slot s0 (field 14).
 pub fn select_scratch(sel: RegSel) -> Iso {
     select_fields(sel, scratch_field)
 }
@@ -296,9 +386,10 @@ fn select_mem_composite_n_inner(sel: RegSel, n_cpu: usize, n_mem: usize) -> Iso 
         let stride = 1usize << level;
         for i in 0..stride {
             if i + stride < n_mem {
+                let (ctrl_field, ctrl_bit) = sel.bits[level];
                 steps.push(cross_ctrl_fredkin(
-                    sel.ir_field,
-                    sel.bits[level],
+                    ctrl_field,
+                    ctrl_bit,
                     i,
                     i + stride,
                     n_cpu,
@@ -336,17 +427,25 @@ pub fn crossbar_model(field: usize, regs: &mut [u8; 8]) {
 // Predicates
 // ══════════════════════════════════════════════════════════════════════
 
-// Wire layout of the predicate core [IR_lo, IR_hi, s1]:
-// IR bit b (0..16) = wire b; s1 bit j = wire 16 + j.
-const PRED_WIRE: usize = 16; // s1 bit 0
-const CHAIN0_WIRE: usize = 17; // s1 bits 1..3: Toffoli-chain intermediates
+// Wire layout of the predicate core [IR_b0, IR_b1, IR_b2, IR_b3, s1]
+// (A-0, 32-bit IR): IR bit b (0..32) = wire b; s1 bit j = wire 32 + j.
+const PRED_WIRE: usize = 32; // s1 bit 0
+const CHAIN0_WIRE: usize = 33; // s1 bits 1..3: Toffoli-chain intermediates
 const CSWAP_CTRL_WIRE_IN_S1: usize = 4; // s1 bit 4: CSWAP rd[0] copy
+
+/// The five fields the predicate core lifts over (four IR bytes + s1).
+fn pred_fields() -> [usize; 5] {
+    [IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, AUX_PRED_FIELD]
+}
 
 /// Compute the AND of the given IR-bit literals into s1 bit 0.
 /// `controls` are `(ir_bit, expected)` pairs; chain intermediates land
 /// in s1 bits 1..3 and stay set until the adjoint uncomputes them.
+///
+/// A-0: the core spans four IR byte-fields (32 wires) + s1 (wires
+/// 32..40); IR-bit literals index the flat 32-wire IR directly.
 fn pred_compute(controls: &[(usize, bool)]) -> Iso {
-    let n = 3 * W;
+    let n = 5 * W;
     let k = controls.len();
     assert!((2..=5).contains(&k));
     let nots: Vec<Iso> = controls
@@ -362,27 +461,31 @@ fn pred_compute(controls: &[(usize, bool)]) -> Iso {
         acc = tgt;
     }
     gates.extend(nots);
-    on_fields(&[IR_LO_FIELD, IR_HI_FIELD, AUX_PRED_FIELD], gates)
+    on_fields(&pred_fields(), gates)
 }
 
-/// Predicate literals for R-format opcode `op` (bit 15 = 1, bits 14–11).
+/// Predicate literals for R-format opcode `op` (fmt bit = 1; the four
+/// low opcode bits discriminate the live R-ops — the two high opcode
+/// bits are 0 for every architected op and are not tested, exactly as
+/// the pre-A-0 4-bit opcode).
 fn r_pred(op: u8) -> Vec<(usize, bool)> {
     vec![
-        (15, true),
-        (14, (op >> 3) & 1 == 1),
-        (13, (op >> 2) & 1 == 1),
-        (12, (op >> 1) & 1 == 1),
-        (11, op & 1 == 1),
+        (FMT_BIT, true),
+        (opcode_bit(3), (op >> 3) & 1 == 1),
+        (opcode_bit(2), (op >> 2) & 1 == 1),
+        (opcode_bit(1), (op >> 1) & 1 == 1),
+        (opcode_bit(0), op & 1 == 1),
     ]
 }
 
-/// Predicate literals for I-format opc `op` (bit 15 = 0, bits 14–12).
+/// Predicate literals for I-format opc `op` (fmt bit = 0; the three low
+/// opcode bits discriminate the live I-ops).
 fn i_pred(op: u8) -> Vec<(usize, bool)> {
     vec![
-        (15, false),
-        (14, (op >> 2) & 1 == 1),
-        (13, (op >> 1) & 1 == 1),
-        (12, op & 1 == 1),
+        (FMT_BIT, false),
+        (opcode_bit(2), (op >> 2) & 1 == 1),
+        (opcode_bit(1), (op >> 1) & 1 == 1),
+        (opcode_bit(0), op & 1 == 1),
     ]
 }
 
@@ -715,14 +818,14 @@ fn swapbr_instr() -> Iso {
     predicated(&r_pred(0b1000), body)
 }
 
-/// ADDI core on [r0-slot, s0, IR_lo, IR_hi, s1]: CNOT-mask the imm8
-/// (IR bits 8..1) onto s0, gated TK add, unmask. Requires s0 = 0.
+/// ADDI core on [r0-slot, s0, IR_b0, s1] (A-0): CNOT-mask the imm8
+/// (IR bits 0..8, all in byte 0) onto s0, gated TK add, unmask.
+/// Requires s0 = 0.
 fn addi_core() -> Iso {
-    let n = 5 * W;
-    let pred = 4 * W;
-    // imm bit j = IR bit j+1: j<7 → IR_lo bit j+1 (wire 2W+1+j);
-    // j=7 → IR_hi bit 0 (wire 3W).
-    let imm_wire = |j: usize| if j < 7 { 2 * W + 1 + j } else { 3 * W };
+    let n = 4 * W;
+    let pred = 3 * W;
+    // imm bit j = IR bit j = IR_b0 bit j = wire 2W + j.
+    let imm_wire = |j: usize| 2 * W + j;
     let mask: Vec<Iso> = (0..W)
         .map(|j| gate_at(n, &[imm_wire(j), W + j], cnot_prim()))
         .collect();
@@ -730,13 +833,7 @@ fn addi_core() -> Iso {
     gates.extend(gated_tk_gates(n, pred, 0, W));
     gates.extend(mask);
     on_fields(
-        &[
-            reg_field(0),
-            AUX_OPERAND_FIELD,
-            IR_LO_FIELD,
-            IR_HI_FIELD,
-            AUX_PRED_FIELD,
-        ],
+        &[reg_field(0), AUX_OPERAND_FIELD, IR_B0_FIELD, AUX_PRED_FIELD],
         gates,
     )
 }
@@ -749,30 +846,33 @@ fn subi_instr() -> Iso {
     predicated(&i_pred(0b001), with_target(I_RD, Iso::sym(addi_core())))
 }
 
-/// XORI core on [r0-slot, IR_lo, IR_hi, s1]: gated CNOTs straight from
-/// the IR immediate bits (IR bits act as controls — the legal fanout).
+/// XORI core on [r0-slot, IR_b0, s1] (A-0): gated CNOTs straight from
+/// the IR immediate bits (IR bits 0..8, all in byte 0, act as controls
+/// — the legal fanout).
 fn xori_instr() -> Iso {
-    let n = 4 * W;
-    let pred = 3 * W;
-    let imm_wire = |j: usize| if j < 7 { W + 1 + j } else { 2 * W };
+    let n = 3 * W;
+    let pred = 2 * W;
+    // imm bit j = IR bit j = IR_b0 bit j = wire W + j.
+    let imm_wire = |j: usize| W + j;
     let gates: Vec<Iso> = (0..W)
         .map(|j| gate_at(n, &[pred, imm_wire(j), j], toffoli_prim()))
         .collect();
     let core = on_fields(
-        &[reg_field(0), IR_LO_FIELD, IR_HI_FIELD, AUX_PRED_FIELD],
+        &[reg_field(0), IR_B0_FIELD, AUX_PRED_FIELD],
         gates,
     );
     predicated(&i_pred(0b010), with_target(I_RD, core))
 }
 
-/// ROTLI core on [r0-slot, IR_lo, s1]: barrel rotate controlled
-/// directly by IR imm bits 0..2 (IR bits 3..1).
+/// ROTLI core on [r0-slot, IR_b0, s1] (A-0): barrel rotate controlled
+/// directly by IR imm bits 0..2 (IR bits 0..2, byte 0).
 fn rotli_core() -> Iso {
     let n = 3 * W;
     let pred = 2 * W;
+    // rotate-amount bit k = IR bit k = IR_b0 bit k = wire W + k.
     on_fields(
-        &[reg_field(0), IR_LO_FIELD, AUX_PRED_FIELD],
-        gated_rotl_gates(n, pred, 0, |k| W + 1 + k),
+        &[reg_field(0), IR_B0_FIELD, AUX_PRED_FIELD],
+        gated_rotl_gates(n, pred, 0, |k| W + k),
     )
 }
 
@@ -1127,9 +1227,10 @@ pub fn emit_on_cpu_bus() -> Iso {
         // 2. addr ^= IR.rt bits (unpredicated — contributes 0 for MEXCHR since rt=0)
         let mut addr_cnots: Vec<Iso> = Vec::new();
         for i in 0..n_addr {
+            let (rt_field, rt_b) = R_RT.bits[i];
             addr_cnots.push(cross_cnot(
-                R_RT.ir_field,
-                R_RT.bits[i],
+                rt_field,
+                rt_b,
                 BUS_ADDR_FIELD,
                 i,
                 n_cpu,

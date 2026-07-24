@@ -12,8 +12,9 @@
 //!   `(CpuState, MemState)` — carrier for `system_step`.
 //!
 //! Each general register, PC, BR, scratch word, and memory word is a
-//! Word8 (8 bits, right-nested product, index 0 = LSB). IR is a Word16
-//! (two Word8s: IR_lo x IR_hi).
+//! Word8 (8 bits, right-nested product, index 0 = LSB). IR is a Word32
+//! (four Word8s: IR_b0 x IR_b1 x IR_b2 x IR_b3, LSB byte first) — A-0
+//! widened the instruction word 16 → 32 bits.
 //!
 //! The product nesting is right-associated at the field level within
 //! each factor.
@@ -92,8 +93,8 @@ impl TryFrom<usize> for MemWidth {
 }
 
 /// Number of Word8-sized fields in CpuState:
-/// 8 regs + PC + BR + IR_lo + IR_hi + 8 scratch = 20.
-pub const NUM_CPU_FIELDS: usize = 20;
+/// 8 regs + PC + BR + IR_b0..IR_b3 (32-bit IR) + 8 scratch = 22.
+pub const NUM_CPU_FIELDS: usize = 22;
 
 /// Total number of Word8-sized fields in CpuState (= `NUM_CPU_FIELDS`).
 /// The ring step and all non-MEXCH instructions operate on this carrier.
@@ -140,9 +141,15 @@ pub fn word8() -> Type {
     flat(W)
 }
 
-/// Word16 type: `(Word8, Word8)` = IR_lo x IR_hi.
+/// Word16 type: `(Word8, Word8)`.
 pub fn word16() -> Type {
     Type::prod(word8(), word8())
+}
+
+/// Word32 type: right-nested product of 4 Word8s = the 32-bit IR
+/// (IR_b0 x IR_b1 x IR_b2 x IR_b3, LSB byte first).
+pub fn word32() -> Type {
+    Type::prod(word8(), Type::prod(word8(), word16()))
 }
 
 /// Right-nested product of the given types.
@@ -155,15 +162,14 @@ fn right_nested(types: &[Type]) -> Type {
     }
 }
 
-/// CpuState type: right-nested product of 20 Word8 fields.
+/// CpuState type: right-nested product of 22 Word8 fields.
 ///
 /// Field order (index):
 ///   0..8   = r0..r7    (general registers)
 ///   8      = PC
 ///   9      = BR
-///   10     = IR_lo     (low byte of 16-bit IR)
-///   11     = IR_hi     (high byte of 16-bit IR)
-///   12..20 = s0..s7    (scratch words)
+///   10..14 = IR_b0..IR_b3 (four bytes of the 32-bit IR, LSB byte first)
+///   14..22 = s0..s7    (scratch words)
 ///
 /// The ring step and all non-MEXCH instructions operate on this carrier.
 pub fn state_ty() -> Type {
@@ -215,22 +221,30 @@ pub const PC_FIELD: usize = 8;
 /// Field index of BR.
 pub const BR_FIELD: usize = 9;
 
-/// Field index of IR_lo.
-pub const IR_LO_FIELD: usize = 10;
+/// Field index of IR byte 0 (bits 0..8 of the 32-bit IR).
+pub const IR_B0_FIELD: usize = 10;
+/// Field index of IR byte 1 (bits 8..16).
+pub const IR_B1_FIELD: usize = 11;
+/// Field index of IR byte 2 (bits 16..24).
+pub const IR_B2_FIELD: usize = 12;
+/// Field index of IR byte 3 (bits 24..32).
+pub const IR_B3_FIELD: usize = 13;
 
-/// Field index of IR_hi.
-pub const IR_HI_FIELD: usize = 11;
+/// Legacy alias: IR byte 0 (was `IR_lo` of the 16-bit IR).
+pub const IR_LO_FIELD: usize = IR_B0_FIELD;
+/// Legacy alias: IR byte 1 (was `IR_hi` of the 16-bit IR).
+pub const IR_HI_FIELD: usize = IR_B1_FIELD;
 
 /// Field index of scratch word `i` (0..8).
 pub fn scratch_field(i: usize) -> usize {
     assert!(i < NUM_SCRATCH);
-    12 + i
+    14 + i
 }
 
 /// Field index of memory word `i` (0..MEM_WORDS).
 pub fn mem_field(i: usize) -> usize {
     assert!(i < MEM_WORDS);
-    20 + i
+    NUM_CPU_FIELDS + i
 }
 
 // ── StateVals encode / decode ──────────────────────────────────────
@@ -241,9 +255,27 @@ pub struct StateVals {
     pub regs: [u8; NUM_REGS],
     pub pc: u8,
     pub br: u8,
-    pub ir: u16,
+    pub ir: u32,
     pub scratch: [u8; NUM_SCRATCH],
     pub mem: [u8; MEM_WORDS],
+}
+
+/// Push the four bytes of a 32-bit IR word onto `bits` (LSB byte first).
+fn push_ir_bits(bits: &mut Vec<bool>, ir: u32) {
+    push_u8_bits(bits, ir as u8);
+    push_u8_bits(bits, (ir >> 8) as u8);
+    push_u8_bits(bits, (ir >> 16) as u8);
+    push_u8_bits(bits, (ir >> 24) as u8);
+}
+
+/// Read the four IR bytes back into a `u32` at the given bit offset
+/// (LSB byte first — matches [`push_ir_bits`]).
+fn read_ir_bits(bits: &[bool], offset: usize) -> u32 {
+    let b0 = read_u8_bits(bits, offset);
+    let b1 = read_u8_bits(bits, offset + W);
+    let b2 = read_u8_bits(bits, offset + 2 * W);
+    let b3 = read_u8_bits(bits, offset + 3 * W);
+    u32::from(b0) | (u32::from(b1) << 8) | (u32::from(b2) << 16) | (u32::from(b3) << 24)
 }
 
 impl StateVals {
@@ -259,8 +291,7 @@ impl StateVals {
         }
         push_u8_bits(&mut all_bits, self.pc);
         push_u8_bits(&mut all_bits, self.br);
-        push_u8_bits(&mut all_bits, self.ir as u8);       // IR_lo
-        push_u8_bits(&mut all_bits, (self.ir >> 8) as u8); // IR_hi
+        push_ir_bits(&mut all_bits, self.ir); // IR_b0..IR_b3 (32-bit)
         for &s in &self.scratch {
             push_u8_bits(&mut all_bits, s);
         }
@@ -281,12 +312,10 @@ impl StateVals {
         }
         let pc = read_u8_bits(&all_bits, 8 * W);
         let br = read_u8_bits(&all_bits, 9 * W);
-        let ir_lo = read_u8_bits(&all_bits, 10 * W);
-        let ir_hi = read_u8_bits(&all_bits, 11 * W);
-        let ir = u16::from(ir_lo) | (u16::from(ir_hi) << 8);
+        let ir = read_ir_bits(&all_bits, 10 * W);
         let mut scratch = [0u8; NUM_SCRATCH];
         for (i, s) in scratch.iter_mut().enumerate() {
-            *s = read_u8_bits(&all_bits, (12 + i) * W);
+            *s = read_u8_bits(&all_bits, (14 + i) * W);
         }
 
         StateVals { regs, pc, br, ir, scratch, mem: [0; MEM_WORDS] }
@@ -307,8 +336,7 @@ pub fn encode_composite(s: &StateVals) -> Value {
     }
     push_u8_bits(&mut cpu_bits, s.pc);
     push_u8_bits(&mut cpu_bits, s.br);
-    push_u8_bits(&mut cpu_bits, s.ir as u8);
-    push_u8_bits(&mut cpu_bits, (s.ir >> 8) as u8);
+    push_ir_bits(&mut cpu_bits, s.ir);
     for &sc in &s.scratch {
         push_u8_bits(&mut cpu_bits, sc);
     }
@@ -341,12 +369,10 @@ pub fn decode_composite(val: &Value) -> StateVals {
     }
     let pc = read_u8_bits(&cpu_bits, 8 * W);
     let br = read_u8_bits(&cpu_bits, 9 * W);
-    let ir_lo = read_u8_bits(&cpu_bits, 10 * W);
-    let ir_hi = read_u8_bits(&cpu_bits, 11 * W);
-    let ir = u16::from(ir_lo) | (u16::from(ir_hi) << 8);
+    let ir = read_ir_bits(&cpu_bits, 10 * W);
     let mut scratch = [0u8; NUM_SCRATCH];
     for (i, s) in scratch.iter_mut().enumerate() {
-        *s = read_u8_bits(&cpu_bits, (12 + i) * W);
+        *s = read_u8_bits(&cpu_bits, (14 + i) * W);
     }
 
     let mem_bits = bits_of(mem_val, &mem_ty).expect("decode_composite: mem bits");
