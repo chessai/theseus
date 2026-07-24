@@ -1,10 +1,20 @@
 # TISC-2 Roadmap — the CPU that runs arbitrary well-formed theseus programs
 
-> **Status (2026-07-24):** Design **complete, adversarially reviewed (3 passes), and its
-> keystone empirically validated**. Beginning **Phase A**. This roadmap supersedes the
-> earlier "T-loops → widen-PC → GCD" retrofit plan (which was symptom-chasing; see the pivot
-> below). TISC-1's execution paradigm is **kept and proven**; TISC-2 is a *provisioning +
-> compiler + datapath* redesign, not a new machine.
+> **Status (2026-07-24):** Design complete + adversarially reviewed (3 passes) + keystone
+> validated. **Phase A underway; re-sequenced after the A-1 POC.** This roadmap supersedes the
+> earlier "T-loops → widen-PC → GCD" retrofit plan (symptom-chasing; see the pivot below).
+> TISC-1's execution paradigm is **kept and proven**; TISC-2 is a *provisioning + compiler +
+> datapath* redesign, not a new machine.
+>
+> **⇒ RE-SEQUENCE (2026-07-24, from the A-1 POC + Opus-5 operand-datapath investigation):** the
+> A-1 POC proved a *scratch frame does NOT cure register pressure* — TISC ops can only name the 8
+> **registers** as operands; scratch (s0..s7) is reachable only via `Xchg`, so it is spill
+> storage, not working registers (measured GCD body ~200–300 instrs, not ≤40). The cure is to make
+> the operand **crossbar** address scratch — which is the *same mechanism* as the B-1 shared-ALU
+> crossbar. So **the operand-datapath is shared foundation for coverage AND efficiency**, and the
+> "coverage-first / efficiency-second" split was wrong on this point. A new foundation slice
+> **A-0 (shared, scratch-addressable operand crossbar + instruction-word reformat)** is inserted
+> before the frame slice; with it, the GCD body returns to ~28 (B=194) exactly as first estimated.
 
 ## Why (the mandate)
 Run **any well-formed theseus program** — the closed 22-combinator Iso algebra over finite
@@ -37,20 +47,43 @@ closure, and the differential oracle.
 ---
 
 ## Phase A — COVERAGE: run every well-formed program *correctly*
-Slices in dependency order (value front-loaded). Every slice is gated by the differential
-oracle (`run_on_cpu == eval`); control-flow / lowering slices (the highest bar) additionally
-require a **fresh-context adversarial review + a real-worktree behavioral test** that reproduces
-the specific scenario (CLAUDE.md / L15 / L19–L21). Numbering maps to the synthesis doc's A-labels.
+Slices in **dependency order (re-sequenced 2026-07-24: A-0 promoted to a foundation)**. Every slice
+is gated by the differential oracle (`run_on_cpu == eval`); control-flow / lowering / datapath
+slices (the highest bar) additionally require a **fresh-context adversarial review + a real-worktree
+behavioral test** (CLAUDE.md / L15 / L19–L21). Execution order:
+**A-2 (width) → A-0 (operand crossbar) → A-1 (frame → GCD) → A-3 → A-4 → A-5 → A-6 → A-7.**
 
-**A-1 · Loop-body scratch frame → the first variable-T loop (GCD).** [synthesis A2]
+**A-0 · Shared, scratch-addressable operand crossbar + instruction-word reformat.** [NEW — the
+coverage-enabling foundation; the crossbar half of B-1 pulled forward] The A-1 POC proved TISC ops
+can only name the 8 **registers** as operands (`select_reg`, decoder.rs:252-274), and scratch is
+Xchg-only spill — so a scratch "frame" is not working store. **Make the operand crossbar address
+`reg ∪ scratch`** (generalize the existing `base: impl Fn(usize)->usize` seam) so ops can name
+scratch words as `rd/rs/rt` — cheaper than adding registers (scratch is *already* plumbed in the
+state; only the crossbar/encoding widens, **no new energized state**). This forces an
+**instruction-word reformat**: the R-format is full (asm.rs:161, 2 pad bits, 3-bit operand fields);
+a 4th operand bit (16 operand locations) needs a freed bit — obtained by shrinking the opcode field,
+which is *also* what B-1's O(log|ISA|) shared decode does. So this slice **co-designs the 16-bit (or
+wider) instruction layout once**: opcode / three operand fields / immediate, with headroom for A-2's
+wider PC/imm. *This is the same operand crossbar B-1 shares across ops — building it here delivers the
+register-pressure cure (coverage) now; the gated ALU-core sharing (efficiency) stays in Phase B.*
+*Gate:* fresh adversarial review (datapath + encoding = highest bar) + every existing program
+`run_on_cpu == eval` at the new format + a test that an op names a scratch operand + energy re-pin.
+*Risk:* HIGHEST BAR (decoder + instruction encoding). **The one design choice to get right: the
+instruction-word bit allocation.**
+
+**A-1 · Loop-body frame → the first variable-T loop (GCD).** [synthesis A2; **depends on A-0**]
 Generalize the proven `with_registers` net-zero page-in/out bracket into a recursive
-`with_scratch_frame(K)` (K private scratch words per context, `body_occ`-aware, zero at
-entry/exit). Fill the `gcd2_hist_step` emission against the pinned `gcd2_hist_bytes` oracle. The
-2-bit subtractive GCD body shrinks 60→28 instrs ⇒ **B=194 < 256 ⇒ ships with NO widen-PC, no new
-op, zero standing energy tax**. *Gate:* POC (body ≤ 40, `run_on_cpu_fast == eval` on all inputs,
-B < 256) → adversarial review → real-worktree `system_step == eval` across the GCD trajectory
-(≤5 back-edges) → full heavy-tier suite → energy/ring golden re-pin → merge. *Value:* the
-original goal; validates the register-pressure cure. *Risk:* HIGHEST BAR (`lower_trace`).
+`with_frame(K)` giving each context K private **operand-addressable** working words (from scratch,
+now nameable via A-0; `body_occ`-aware, zero at entry/exit). Fill the `gcd2_hist_step` emission
+against the pinned `gcd2_hist_bytes` oracle. With K=3 operand-addressable words the 2-bit GCD body
+is ~28 instrs ⇒ **B=194 < 256 ⇒ ships with NO widen-PC, no new op**. *(Note: the earlier "zero
+energy tax via a compile-time scratch frame" claim was corrected by the A-1 POC — the enabling cost
+is A-0's crossbar widening, paid once and shared with B-1; the frame itself remains compile-time.)*
+*Gate:* POC (body ≤ 40, `run_on_cpu_fast == eval` on all inputs, B < 256) → adversarial review →
+real-worktree `system_step == eval` across the GCD trajectory (≤5 back-edges) → full heavy-tier
+suite → energy/ring golden re-pin → merge. *Value:* the original goal. *Risk:* HIGH (`lower_trace`).
+*Existing worktree `a1-scratch-frame` (commit dbd4c2a) has the frame infra + verifier + the derived
+walk algorithm (256/256 verified) — re-target it onto operand-addressable working words post-A-0.*
 
 **A-2 · Coordinated address-width widen (B > 256).** [synthesis A1, corrected per review BLOCKER-3]
 **Decouple two different quantities the first draft conflated:** the come-from token `δu` is a
@@ -116,14 +149,15 @@ Each slice **gated on a real `lower_iso → joules` measurement before commit** 
 means no ops are ever added); Phase B is a further, optional efficiency optimization of an
 already-fixed machine.
 
-**B-1 · Shared configurable ALU.** Replace `decode_execute = seq_balanced(Op::ALL.map(instruction))`
-(all ~15 op-netlists run masked every step, `step_j = O(|ISA|)`) with one shared 3-slot crossbar +
-O(log|ISA|) control decode + gated **shared** cores (add±dir sharing one adder, xor, rotl±dir,
-and-family), reusing the verified gated cores. Take the **all-blocks-gated form** (preserves the
-single fixed `step` iso the ring-closure proof depends on; honest ~2–4× step_j + kills the
-ISA-growth tax). *Gate:* **measured** step_j drop via `lower_iso → joules` **before commit** +
-full adversarial review (datapath = daemon-equivalent control surface) + whole-domain per-opcode
-oracle. *Risk:* HIGH.
+**B-1 · Shared configurable ALU cores.** *(The shared operand **crossbar** half of the original B-1
+moved to A-0 as a coverage foundation — see the re-sequence. What remains here is the **core-sharing**
+half.)* Replace `decode_execute = seq_balanced(Op::ALL.map(instruction))` (all ~15 op-netlists run
+masked every step, `step_j = O(|ISA|)`) with gated **shared** cores fed by A-0's shared crossbar
+(add±dir sharing one adder, xor, rotl±dir, and-family), reusing the verified gated cores. Take the
+**all-blocks-gated form** (preserves the single fixed `step` iso the ring-closure proof depends on;
+honest ~2–4× step_j + kills the ISA-growth tax). *Gate:* **measured** step_j drop via
+`lower_iso → joules` **before commit** (user directive) + full adversarial review (datapath =
+daemon-equivalent control surface) + whole-domain per-opcode oracle. *Risk:* HIGH.
 
 **B-2 · Per-program widths.** Per-program data-word `W` and per-program-effective PC width
 (pay-for-live-width; fib keeps its 5-bit-effective PC). *Gate:* measured reduction + oracle green.
