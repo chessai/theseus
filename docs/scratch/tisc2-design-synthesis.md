@@ -250,3 +250,56 @@ Phase B. Coverage honest scope: complete EXCEPT wide symbolic prims, which need 
 (the one precisely-characterized open hard problem). The nested-control slices (A3+A5) are the highest-risk
 and need the full CLAUDE.md adversarial-review + real-worktree-round-trip discipline, with the specific
 counterexamples above (nested Iter/Trace under-count; Times(Trace,·) aliasing) as mandatory regression tests.
+
+## 8. Investigation of BLOCKER-1 (wide symbolic prims) — it INVERTS from "hard open problem" to keystone
+Investigated the wide-symbolic-prim gap in the actual machinery. Conclusion: **it is not a research
+problem; it is a mechanical, polynomial, already-verifiable `BvExpr → reversible-gates` transcription —
+and building it UNIFIES prim-lowering / recognizer / ISA into one mechanism.**
+
+**Why it's mechanical (not the truth-table-reverse-engineering I mis-framed):** a symbolic prim is admitted
+WITH a `PrimSpec` = per-output-bit `BvExpr` for `forward` AND per-input-bit `BvExpr` for `backward`
+(prim.rs:82-101; both mandatory). A `BvExpr` (bvexpr.rs:13) IS a boolean circuit (Var/Const/Not/Xor/And/
+Or/Mux). Transcribing a *given* circuit to reversible gates is textbook Bennett compute-uncompute:
+  1. compute each output bit's forward `BvExpr` into a fresh ancilla (Xor→CNOT, And→Toffoli=Ccnot,
+     Not→X, Or→Toffoli+X, Mux→Fredkin=Cswap — i.e. the EXACT basis {Ccnot,Cswap,Xor,Xori,X} the design
+     named), Bennett-uncomputing sub-expression scratch;
+  2. uncompute (zero) the input register using the `backward` `BvExpr`s (inputs as functions of the
+     now-computed outputs — exact because admission guarantees backward∘forward=id);
+  3. rewire output-ancillas → output register (free permutation); input register returns clean.
+Result: an in-place, ancilla-clean reversible bijection of size **O(|forward BvExpr|+|backward BvExpr|)**.
+
+**Why it's POLYNOMIAL (the keystone invariant, already in the codebase):** `BvExpr` DELIBERATELY omits
+`Mul` — bvexpr.rs:10 "No Mul variant — kept unrepresentable so BDDs stay polynomial. The enum makes
+multiply impossible by omission." That exact constraint (made for BDD-*verification*) ALSO guarantees the
+transcribed *circuit* is polynomial. Any prim with a compact `BvExpr` spec ⟺ a structured function ⟺ a
+polynomial reversible circuit. The only prims WITHOUT a compact circuit are unstructured random
+permutations — information-theoretically 2^n gates by ANY method, and not something real programs use.
+
+**Why it needs NO enumeration and has NO width cap:** unlike `synthesize_prim` (enumerates the table,
+capped 12 rails), transcription works from the `BvExpr` spec directly and is verified by the EXISTING
+symbolic `bveq` (apply_instr → RegTransfer → expr_to_bdd → BDD-equal vs the spec; no enumeration). So it
+covers 100% of symbolically-admitted prims at any width.
+
+**The illuminating consequences:**
+- **The recognizer/synthesizer/ISA trichotomy DISSOLVES into one mechanism.** Today: a hardcoded
+  recognizer (selection_by_equiv), an enumeration synthesizer (≤12 rails), and nothing for wide symbolic.
+  With `BvExpr→gates`: ONE universal synthesizer; the recognizer becomes an OPTIONAL peephole cache of
+  tuned lowerings for common `BvExpr` patterns (Add,Xor) — an optimization, not a correctness requirement.
+  Instructions are ALREADY modeled as `BvExpr` (RegTransfer), so the ISA is just "blessed `BvExpr`
+  patterns with tuned gate lowerings," and the shared configurable ALU (Axis 4 efficiency) is literally
+  **a hardware `BvExpr` evaluator.** Prim-lowering, the recognizer, and the ISA become the SAME thing.
+- **Coverage flips from "complete except one hard open problem" to "complete for every structured prim."**
+  The residual is only information-theoretically-hard random permutations (no method helps; no real
+  program uses them). "Arbitrary well-formed program" is fully achievable.
+- **It DE-RISKS the redesign and REMOVES code** (the hardcoded recognizer arms become optional) instead of
+  adding special cases — the opposite of whack-a-mole. The correctness burden is discharged by the
+  existing bveq oracle.
+- **The Mul-free `BvExpr` invariant is the load-bearing design decision** — already made (for verification),
+  now revealed as the thing that makes general reversible-prim synthesis tractable. Guard it: keep prims
+  in the `BvExpr` algebra and every prim lowers, polynomially, verified.
+
+**Revised BLOCKER-1 status:** downgraded from "the one unbuilt hard problem" to **the keystone
+simplification.** A6 becomes: build the `BvExpr→gates` transcriber (mechanical; emits into the existing
+ISA basis; verified by existing bveq), replacing BOTH the enumeration cap and the recognizer's completeness
+role. Residual work: derive-a-spec-from-table for the narrow band of table-only-admitted wide prims (a
+table that admitted-by-enumeration is enumerable → extract a BvExpr), or require wide prims to carry a spec.
