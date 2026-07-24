@@ -1,0 +1,389 @@
+//! Slice A POC: narrow the fetch address-compare to A = ceil(log2(B+S_max))
+//! bits (docs/scratch/fetch-narrow-compare-design.md).
+//!
+//! Correctness tier (fast, default):
+//!   c1  fib     — whole-domain fast==eval + real-CPU (narrow system_step) == eval
+//!   c2  lfsr    — whole-domain fast==eval + real-CPU (narrow) on the k=5 trajectory
+//!   c3  sbox    — straight-line PRESENT S-box ROM on the real narrow step vs
+//!                 fast-sim + the independent S-box table
+//!   c4  teeth   — tiny park-phase ROM: unguarded A-1 corrupts (park PC aliases a
+//!                 live entry), guarded A-1-equivalent + correct A do not
+//!   c5  fib narrow variants — guarded A / unguarded A == eval on the real step
+//!
+//! Energy tier (#[ignore], run one at a time, release, ~GB per lowering):
+//!   energy_step_baseline_fullw — balanced_energy(lower_iso(step(fib_rom)))
+//!   energy_step_narrow         — balanced_energy(lower_iso(step_a(fib_rom, A)))
+
+use theseus_core::{enumerate_values, type_of, Iso, Value};
+use theseus_tisc::asm::{assemble, Instr};
+use theseus_tisc::compile::{
+    compile_with_metadata, marshal, run_on_cpu, run_on_cpu_fast, run_rom_fast, unmarshal,
+};
+use theseus_tisc::step::{fetch_addr_bits, step, step_a, step_a_unguarded};
+use theseus_tisc::types::{StateVals, MEM_WORDS, W};
+
+const FIB_SRC: &str = include_str!("../../../conformance/programs/0022-fib.thse");
+const LFSR_SRC: &str = include_str!("../../../conformance/programs/0026-lfsr.thse");
+
+const EVAL_FUEL: u64 = 8_000_000_000;
+
+fn elaborate(src: &str, iso_name: &str) -> Iso {
+    let program = theseus_syntax::parse(src).expect("parse");
+    let diags = theseus_check::check(&program);
+    assert!(diags.is_empty(), "check diagnostics: {diags:?}");
+    let env = theseus_check::env::resolve(&program);
+    let isos = theseus_check::elaborate::elaborate_program(&program, &env);
+    isos.get(iso_name)
+        .unwrap_or_else(|| panic!("iso {iso_name:?} not found"))
+        .clone()
+        .unwrap_or_else(|e| panic!("elaboration of {iso_name:?} failed: {e:?}"))
+}
+
+fn eval_iso(iso: &Iso, v: Value) -> Value {
+    let mut fuel = EVAL_FUEL;
+    theseus_eval::eval(iso, v, &mut fuel).expect("eval")
+}
+
+/// Run `t` machine cycles of the given step iso (CPU carrier) via core eval.
+fn run_steps(step_iso: &Iso, start: &StateVals, t: usize) -> StateVals {
+    let mut cur = start.clone();
+    for k in 0..t {
+        let mut fuel = EVAL_FUEL;
+        let ev = theseus_eval::eval(step_iso, cur.encode(), &mut fuel)
+            .unwrap_or_else(|e| panic!("step eval failed at cycle {k}: {e:?}"));
+        cur = StateVals::decode(&ev);
+    }
+    cur
+}
+
+fn empty_state() -> StateVals {
+    StateVals {
+        regs: [0; 8],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: [0; 8],
+        mem: [0; MEM_WORDS],
+    }
+}
+
+// ── fib metadata + input ────────────────────────────────────────────
+
+struct Prog {
+    iso: Iso,
+    rom: Vec<u16>,
+    b: usize,
+    s_max: usize,
+    a: usize,
+}
+
+fn compiled(iso: Iso) -> Prog {
+    let lowered = compile_with_metadata(&iso).expect("compile");
+    let rom = assemble(&lowered.instrs).expect("assemble");
+    let b = lowered.wcet();
+    let s_max = lowered.s_max();
+    let a = fetch_addr_bits(b, s_max);
+    Prog { iso, rom, b, s_max, a }
+}
+
+/// fib k=1 input (parks: T < B) — same as energy.rs fib_input().
+fn fib_input() -> Value {
+    let nat1 = Value::right(Value::left(Value::Unit));
+    let pair = Value::pair(Value::right(Value::Unit), Value::left(Value::Unit));
+    Value::pair(nat1, pair)
+}
+
+// ══════════════════════════════════════════════════════════════════
+// c1: fib — whole-domain fast==eval, real narrow CPU == eval
+// ══════════════════════════════════════════════════════════════════
+
+#[test]
+fn c1_fib_whole_domain_fast_and_real_cpu() {
+    let p = compiled(elaborate(FIB_SRC, "fib"));
+    eprintln!(
+        "fib: N={} B={} S_max={} -> A={} (W={W})",
+        p.rom.len(),
+        p.b,
+        p.s_max,
+        p.a
+    );
+
+    // Whole domain: fast-sim == eval (compile pipeline unchanged).
+    let (in_ty, _) = type_of(&p.iso).unwrap();
+    let vals = enumerate_values(&in_ty);
+    let mut checked = 0;
+    for v in &vals {
+        let fast = run_on_cpu_fast(&p.iso, v).expect("fast");
+        let ev = eval_iso(&p.iso, v.clone());
+        assert_eq!(fast, ev, "fib fast != eval on {v:?}");
+        checked += 1;
+    }
+    eprintln!("fib: fast-sim == eval on all {checked} domain values");
+
+    // Real CPU (run_on_cpu drives system_step_a — the NARROW fetch) on a
+    // spread: first, the parking k=1 input, and the last domain value.
+    let mut reals = vec![vals[0].clone(), fib_input()];
+    reals.push(vals[vals.len() - 1].clone());
+    let mut tally = 0;
+    for v in &reals {
+        let cpu = run_on_cpu(&p.iso, v, theseus_eval::eval).expect("real cpu");
+        let ev = eval_iso(&p.iso, v.clone());
+        assert_eq!(cpu, ev, "fib real-CPU(narrow) != eval on {v:?}");
+        tally += 1;
+    }
+    eprintln!("fib: real-CPU (A={}-bit fetch) == eval on {tally} inputs", p.a);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// c2: lfsr — whole-domain fast==eval, real narrow CPU on k=5 seed=1
+// ══════════════════════════════════════════════════════════════════
+
+fn encode_reg4(val: u8) -> Value {
+    // Reg = 4-bit: pair of pairs of bits, LSB-first (mirrors lfsr.rs).
+    let bit = |b: u8| {
+        if b == 1 {
+            Value::right(Value::Unit)
+        } else {
+            Value::left(Value::Unit)
+        }
+    };
+    Value::pair(
+        Value::pair(bit(val & 1), bit((val >> 1) & 1)),
+        Value::pair(bit((val >> 2) & 1), bit((val >> 3) & 1)),
+    )
+}
+
+fn encode_nat6(k: usize) -> Value {
+    let mut v = Value::left(Value::Unit);
+    for _ in 0..k {
+        v = Value::right(v);
+    }
+    v
+}
+
+#[test]
+fn c2_lfsr_whole_domain_fast_and_real_cpu_one() {
+    let p = compiled(elaborate(LFSR_SRC, "lfsr"));
+    eprintln!(
+        "lfsr: N={} B={} S_max={} -> A={} (W={W})",
+        p.rom.len(),
+        p.b,
+        p.s_max,
+        p.a
+    );
+
+    let (in_ty, _) = type_of(&p.iso).unwrap();
+    let vals = enumerate_values(&in_ty);
+    let mut checked = 0;
+    for v in &vals {
+        let fast = run_on_cpu_fast(&p.iso, v).expect("fast");
+        let ev = eval_iso(&p.iso, v.clone());
+        assert_eq!(fast, ev, "lfsr fast != eval on {v:?}");
+        checked += 1;
+    }
+    eprintln!("lfsr: fast-sim == eval on all {checked} domain values");
+
+    // Real CPU (narrow fetch) on the maximal k=5 trajectory from seed 1.
+    let input = Value::pair(encode_nat6(5), encode_reg4(1));
+    let cpu = run_on_cpu(&p.iso, &input, theseus_eval::eval).expect("real cpu");
+    let ev = eval_iso(&p.iso, input.clone());
+    assert_eq!(cpu, ev, "lfsr real-CPU(narrow) != eval on k=5 seed=1");
+    eprintln!("lfsr: real-CPU (A={}-bit fetch) == eval on the k=5 trajectory", p.a);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// c3: straight-line PRESENT S-box ROM on the real narrow step
+// ══════════════════════════════════════════════════════════════════
+
+const PRESENT_SBOX: [u8; 16] = [
+    0xC, 0x5, 0x6, 0xB, 0x9, 0x0, 0xA, 0xD, 0x3, 0xE, 0xF, 0x8, 0x4, 0x7, 0x1, 0x2,
+];
+const ACC: u8 = 4;
+const TMP: u8 = 5;
+
+/// The 47-instruction bit-sliced PRESENT S-box (copied verbatim from
+/// tests/sbox.rs — straight-line, Swapbr-free).
+fn sbox_instrs() -> Vec<Instr> {
+    let mut p = Vec::new();
+    let lin = |p: &mut Vec<Instr>, i: u8| p.push(Instr::Xor { rd: ACC, rs: i });
+    let quad = |p: &mut Vec<Instr>, i: u8, j: u8| p.push(Instr::Ccnot { rd: ACC, rs: i, rt: j });
+    let cube = |p: &mut Vec<Instr>, i: u8, j: u8, k: u8| {
+        p.push(Instr::Ccnot { rd: TMP, rs: i, rt: j });
+        p.push(Instr::Ccnot { rd: ACC, rs: TMP, rt: k });
+        p.push(Instr::Ccnot { rd: TMP, rs: i, rt: j });
+    };
+    let const1 = |p: &mut Vec<Instr>| p.push(Instr::Xori { rd: ACC, imm: 0xFF });
+    let park = |p: &mut Vec<Instr>, sx: u8| p.push(Instr::Xchg { rd: ACC, sx });
+
+    lin(&mut p, 0); lin(&mut p, 2); quad(&mut p, 1, 2); lin(&mut p, 3); park(&mut p, 2);
+    lin(&mut p, 1); cube(&mut p, 0, 1, 2); lin(&mut p, 3); quad(&mut p, 1, 3);
+    cube(&mut p, 0, 1, 3); quad(&mut p, 2, 3); cube(&mut p, 0, 2, 3); park(&mut p, 3);
+    const1(&mut p); quad(&mut p, 0, 1); lin(&mut p, 2); lin(&mut p, 3); quad(&mut p, 0, 3);
+    quad(&mut p, 1, 3); cube(&mut p, 0, 1, 3); cube(&mut p, 0, 2, 3); park(&mut p, 4);
+    const1(&mut p); lin(&mut p, 0); lin(&mut p, 1); quad(&mut p, 1, 2); cube(&mut p, 0, 1, 2);
+    lin(&mut p, 3); cube(&mut p, 0, 1, 3); cube(&mut p, 0, 2, 3); park(&mut p, 5);
+    p
+}
+
+#[test]
+fn c3_sbox_straightline_real_cpu_narrow() {
+    let instrs = sbox_instrs();
+    let rom = assemble(&instrs).expect("assemble sbox");
+    let b = rom.len(); // straight-line: B = N, S_max = 0
+    let a = fetch_addr_bits(b, 0);
+    eprintln!("sbox: N={} B={b} S_max=0 -> A={a} (W={W})", rom.len());
+    let narrow = step_a(&rom, a);
+
+    for &x in &[0x0u8, 0x5, 0xF] {
+        let mut s = empty_state();
+        for i in 0..4 {
+            s.regs[i] = if (x >> i) & 1 == 1 { 0xFF } else { 0x00 };
+        }
+        let real = run_steps(&narrow, &s, b);
+        let fast = run_rom_fast(&rom, s.clone(), b);
+        assert_eq!(real, fast, "sbox real narrow step != fast-sim for x={x:#x}");
+        // Independent oracle: the PRESENT table on bit 0.
+        let mut y = 0u8;
+        for i in 0..4 {
+            if s_out_bit(&real, i) {
+                y |= 1 << i;
+            }
+        }
+        assert_eq!(y, PRESENT_SBOX[x as usize], "sbox table mismatch for x={x:#x}");
+        eprintln!("sbox x={x:#x}: narrow real step == fast-sim, S[x]={y:#x} ✓");
+    }
+}
+
+fn s_out_bit(s: &StateVals, i: usize) -> bool {
+    (s.scratch[2 + i] & 1) == 1
+}
+
+// ══════════════════════════════════════════════════════════════════
+// c4: TEETH — under-derived A on the unguarded variant corrupts;
+//     the guarded variant rejects instead of corrupting.
+// ══════════════════════════════════════════════════════════════════
+
+#[test]
+fn c4_teeth_park_alias_tiny_rom() {
+    // Two live entries + a 3-address park zone:
+    //   0: ADDI r0,#1   1: ADDI r1,#2   park PCs 2,3,4 (budget 5, S_max 0).
+    let instrs = vec![
+        Instr::Addi { rd: 0, imm: 1 },
+        Instr::Addi { rd: 1, imm: 2 },
+    ];
+    let rom = assemble(&instrs).expect("assemble");
+    let budget = 5usize;
+    let a_correct = fetch_addr_bits(budget, 0); // ceil(log2(5)) = 3
+    assert_eq!(a_correct, 3);
+
+    // Reference: fast sim.
+    let fast = run_rom_fast(&rom, empty_state(), budget);
+    assert_eq!((fast.regs[0], fast.regs[1], fast.pc), (1, 2, 5));
+
+    // Correct A, guarded: matches.
+    let ok = run_steps(&step_a(&rom, a_correct), &empty_state(), budget);
+    assert_eq!(ok, fast, "guarded A=3 must match fast-sim");
+
+    // Correct A, unguarded: matches (the invariant holds).
+    let ok_u = run_steps(&step_a_unguarded(&rom, a_correct), &empty_state(), budget);
+    assert_eq!(ok_u, fast, "unguarded A=3 must match fast-sim");
+
+    // TEETH: A-1 = 2, unguarded. Park PC=4 (100b) has low-2 bits 00 ->
+    // aliases live entry 0 -> ADDI r0,#1 re-executes while parked.
+    let bad = run_steps(&step_a_unguarded(&rom, a_correct - 1), &empty_state(), budget);
+    assert_ne!(bad, fast, "unguarded A=2 MUST corrupt (park alias)");
+    assert_eq!(
+        (bad.regs[0], bad.regs[1]),
+        (2, 2),
+        "corruption signature: r0 double-incremented by the aliased fetch"
+    );
+
+    // A-1 = 2, GUARDED: the shared high-zero gate makes the predicate an
+    // exact PC==addr compare, so the park zone stays inert — no corruption.
+    let guarded = run_steps(&step_a(&rom, a_correct - 1), &empty_state(), budget);
+    assert_eq!(guarded, fast, "guarded A=2 must NOT corrupt (gate rescues)");
+
+    eprintln!("teeth: unguarded A-1 corrupts (r0=2), guarded A-1 + correct A do not ✓");
+}
+
+// ══════════════════════════════════════════════════════════════════
+// c5: fib on the real CPU-carrier step — guarded/unguarded A == eval
+// ══════════════════════════════════════════════════════════════════
+
+#[test]
+fn c5_fib_narrow_step_variants_match_eval() {
+    let p = compiled(elaborate(FIB_SRC, "fib"));
+    let (in_ty, out_ty) = type_of(&p.iso).unwrap();
+    let input = fib_input(); // k=1: parks (T < B), exercises the park zone
+    let start = marshal(&input, &in_ty);
+    let expected = eval_iso(&p.iso, input.clone());
+
+    for (label, iso) in [
+        (format!("guarded A={}", p.a), step_a(&p.rom, p.a)),
+        (format!("unguarded A={}", p.a), step_a_unguarded(&p.rom, p.a)),
+        ("full-W baseline".to_string(), step(&p.rom)),
+    ] {
+        let end = run_steps(&iso, &start, p.b);
+        let out = unmarshal(&end, &out_ty);
+        assert_eq!(out, expected, "fib {label}: step output != eval");
+        eprintln!("fib {label}: B={} steps on the real step iso == eval ✓", p.b);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// Energy tier — run ONE test per invocation, release:
+//   cargo test --release -p theseus-tisc --test fetch_narrow_poc \
+//     -- --ignored --test-threads=1 energy_step_narrow
+// ══════════════════════════════════════════════════════════════════
+
+fn fib_rom_meta() -> Prog {
+    compiled(elaborate(FIB_SRC, "fib"))
+}
+
+fn measure(label: &str, step_iso: &Iso) {
+    use theseus_netlist::lower_iso;
+    use theseus_spice::chardb::rung0_measured;
+    use theseus_tisc::energy::balanced_energy;
+    const T_RAMP: f64 = 1e-7;
+    let t0 = std::time::Instant::now();
+    let net = lower_iso(step_iso).expect("lower_iso");
+    eprintln!("{label}: lowered in {:?}, cells: {:?}", t0.elapsed(), net.cell_counts());
+    let db = rung0_measured();
+    let bd = balanced_energy(&net, &db, T_RAMP).expect("balanced_energy");
+    eprintln!("{label}: step_j = {:.6e} J (active {:.6e}, buffer {:.6e})", bd.total_j, bd.active_j, bd.buffer_j);
+}
+
+#[test]
+#[ignore = "energy lowering (~GB, minutes); run individually"]
+fn energy_step_baseline_fullw() {
+    let p = fib_rom_meta();
+    eprintln!("fib N={} B={} S_max={} A={} W={W} — FULL-W fetch", p.rom.len(), p.b, p.s_max, p.a);
+    measure(&format!("W={W} baseline full-W"), &step(&p.rom));
+}
+
+#[test]
+#[ignore = "energy lowering (~GB, minutes); run individually"]
+fn energy_step_narrow() {
+    let p = fib_rom_meta();
+    eprintln!("fib N={} B={} S_max={} A={} W={W} — narrow guarded fetch", p.rom.len(), p.b, p.s_max, p.a);
+    measure(&format!("W={W} narrow A={}", p.a), &step_a(&p.rom, p.a));
+}
+
+#[test]
+#[ignore = "energy lowering (~GB, minutes); run individually"]
+fn energy_step_narrow_unguarded() {
+    let p = fib_rom_meta();
+    measure(&format!("W={W} narrow-unguarded A={}", p.a), &step_a_unguarded(&p.rom, p.a));
+}
+
+/// Cheap construction sanity for W-bump builds (no lowering): builds the
+/// narrow + baseline step isos so debug overflow checks catch any
+/// width-dependent shift bugs before the expensive release lowering.
+#[test]
+#[ignore = "W-bump sanity; run in dev profile after changing W"]
+fn construct_step_sanity() {
+    let p = fib_rom_meta();
+    let _ = step_a(&p.rom, p.a);
+    let _ = step(&p.rom);
+    eprintln!("constructed narrow + baseline step isos at W={W} (N={}, A={})", p.rom.len(), p.a);
+}
