@@ -18,28 +18,26 @@ This is the *same* shared crossbar B-1 dedups across ops (crossbar-half of B-1, 
 16 bits cannot hold three 4-bit operands + a 12-op opcode (1+4+12 = 17 > 16), and op-unification to
 free bits needs direction bits it has no room for. **⇒ the word must widen.**
 
-## DECISION: widen the instruction word to **24 bits** (reformat once, for A-0 + A-2)
-Layout (unified format bit + 5-bit opcode gives room for the 17 current ops + growth; A-6 keeps the
-op count bounded so the opcode won't creep):
-- **R:** `fmt(1) | opcode(5) | rd(4) | rs(4) | rt(4)` = 18 bits (6 spare — reserved for B-1 control
-  lines / future).
-- **I:** `fmt(1) | opcode(5) | rd(4) | imm(14)` = 24 bits. The **14-bit immediate** gives A-2 the
-  wider PC-offset/δu headroom (B up to ~16k) so A-2 needs no *second* reformat — the shared-word
-  real estate is allocated once now.
-- Operand index: `0..8 → r0..r7`, `8..16 → s0..s7` (the crossbar `base` maps `i<8 → reg_field(i)`,
-  `i≥8 → scratch_field(i-8)`). s0/s1 stay decoder-reserved (not emitted as operands) — same as today.
+## DECISION (user, 2026-07-24): widen the instruction word to **32 bits** — max headroom, never
+reformat again. Byte-aligned (4 bytes). **5-bit operand fields (32 locations)** so the register/
+scratch file can grow to 32 later with NO second reformat; **6-bit opcode** (64) for op growth
+headroom; wide immediate for A-2. Layout:
+- **R:** `fmt(1) | opcode(6) | rd(5) | rs(5) | rt(5)` = 22 bits (10 spare — reserved for B-1 control
+  lines / flags / future).
+- **I:** `fmt(1) | opcode(6) | rd(5) | imm(20)` = 32 bits. The **20-bit immediate** gives A-2 vast
+  PC-offset/δu headroom (B up to ~1M) — A-2 needs no second reformat.
+- **Operand index (5-bit, 0..31):** `0..8 → r0..r7`, `8..16 → s0..s7`, `16..32 → reserved` (future
+  registers/scratch). The crossbar `base` maps `i<8 → reg_field(i)`, `8≤i<16 → scratch_field(i−8)`.
+  s0/s1 stay decoder-reserved (not emitted as operands) — same as today.
 
-**Why 24 and not stay-16 / go-32:**
-- *Stay 16 (op-unify):* rejected — no room for 4-bit operands + a dir bit; pinches A-2's imm; forces
-  coupling A-0 to B-1's core-sharing prematurely.
-- *Go 32:* more headroom but ~2× the IR/ROM standing plumbing; 24 already covers A-0 + A-2 with spare.
-- *24:* 3 bytes; fits 4-bit operands (A-0) + 14-bit imm (A-2) + 5-bit opcode + 6 spare; reformats ONCE.
+**Why 32 (user's call):** never reformat again; 32-way operands + 20-bit imm cover every future slice
+(A-0 operands, A-2 imm/PC, more registers/scratch, B-1 control lines) in one reformat. Accepts the
+higher standing cost for zero future encoding churn.
 
-**Standing cost (honest):** IR 16→24 bits (IR_lo/IR_hi → three bytes) and ROM words 16→24 → ~+50% on
-the *fetch-XOR + decode-field-read* portion of step_j (not the whole step). Accepted as a sized-once
-foundation, consistent with "size once generously"; it is the enabling cost for operand-addressable
-working store (which unblocks the GCD and every compute-heavy loop) and is shared with A-2. Re-pin
-energy/ring goldens (the IR width changes the state layout — coordinate with A-2's state widen).
+**Standing cost (honest):** IR 16→32 bits (two more IR bytes) and ROM words 16→32 → ~2× the
+*fetch-XOR + decode-field-read* portion of step_j (not the whole step). Accepted for max headroom;
+partially clawed back later by B-1 (shared decode) and B-2 (per-program widths). Re-pin energy/ring
+goldens (IR width changes the state layout — coordinate with A-2's state widen).
 
 ## Change surface (implementation)
 1. **asm.rs** `r_word`/`i_word` → 24-bit builders with 4-bit operand fields + 5-bit opcode + 14-bit

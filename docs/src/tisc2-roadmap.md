@@ -60,11 +60,11 @@ Xchg-only spill — so a scratch "frame" is not working store. **Make the operan
 `reg ∪ scratch`** (generalize the existing `base: impl Fn(usize)->usize` seam) so ops can name
 scratch words as `rd/rs/rt` — cheaper than adding registers (scratch is *already* plumbed in the
 state; only the crossbar/encoding widens, **no new energized state**). This forces an
-**instruction-word reformat**: the R-format is full (asm.rs:161, 2 pad bits, 3-bit operand fields);
-a 4th operand bit (16 operand locations) needs a freed bit — obtained by shrinking the opcode field,
-which is *also* what B-1's O(log|ISA|) shared decode does. So this slice **co-designs the 16-bit (or
-wider) instruction layout once**: opcode / three operand fields / immediate, with headroom for A-2's
-wider PC/imm. *This is the same operand crossbar B-1 shares across ops — building it here delivers the
+**instruction-word reformat**: the 16-bit R-format is full (asm.rs:161, 2 pad bits, 3-bit operand
+fields), so it cannot address 16+ operand locations. **DECISION (user): widen to a 32-bit word**
+(`R: fmt(1) op(6) rd(5) rs(5) rt(5)`, 10 spare; `I: fmt(1) op(6) rd(5) imm(20)`) — 5-bit operands
+(32 locations: r0..r7, s0..s7, future), 20-bit imm (covers A-2), reformat ONCE. Full design +
+rationale: `docs/scratch/a0-instruction-format.md`. *This is the same operand crossbar B-1 shares across ops — building it here delivers the
 register-pressure cure (coverage) now; the gated ALU-core sharing (efficiency) stays in Phase B.*
 *Gate:* fresh adversarial review (datapath + encoding = highest bar) + every existing program
 `run_on_cpu == eval` at the new format + a test that an op names a scratch operand + energy re-pin.
