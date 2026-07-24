@@ -62,6 +62,25 @@ Build the A-bit fetch, then:
 (c) **the key one:** bump W to 16 WITH the opt and measure step_j — it should barely move vs W=8-with-opt
    (proves widen-PC is nearly free once fetch is narrowed). Report the numbers.
 
+## 7. Soundness lever verified by code-read (feeds the adversarial review)
+The A-derivation introduces **no new trust assumption** — it reuses the exact bound the existing
+park-safety guard already depends on:
+- `run_rom_on_cpu` (compile.rs ~3273) enforces **P2**: `budget + s_max_val > 256 ⇒ reject`. I.e. the
+  system *already* trusts `budget + s_max` as the tight upper bound on every reachable PC (live + park +
+  forward-skip) — that's precisely what P2 checks against the 256-value PC address space.
+- The POC calls `fetch_addr_bits(budget, s_max_val)` with the **same `s_max_val`** P2 guards with, and
+  `fetch_addr_bits = ceil_log2(budget + s_max)`. Hence `2^A ≥ budget + s_max > every reachable PC` ⇒
+  **every reachable PC < 2^A**, so its high `W−A` bits are provably zero and the low-A compare is exact.
+- Therefore the reviewer's headline attack — "A too small ⇒ a park address aliases a live entry" —
+  reduces to "some reachable PC ≥ budget + s_max", which would mean **P2 is already unsound today** (PCs
+  wrapping past 256 without Slice A). The A-bit fetch is exactly as sound as the pre-existing park model.
+- Residual things the review must still break (NOT covered by the above): (i) the `ceil_log2` off-by-one
+  at exact powers of two (2^A ≥ budget+s_max, verify the `.max(2)`/`clamp(1,W)` edges); (ii) the
+  `high_zero` Bennett uncompute leaves *only* the flag set (intermediates + FETCH_HZ_WIRE=4W−1 restored,
+  nothing leaks across fetch phases); (iii) `fetch_a(rom,W)` is byte-identical to `fetch(rom)` (the a==W
+  path); (iv) confirm the a<W predicate ANDs low-a literals **plus** the shared HZ flag (not literals
+  alone — that's the `_unguarded` teeth variant, which must stay test-only, never shipped in `src`).
+
 ## 6. Questions for the design-review
 1. Is A = ⌈log₂(B+S_max)⌉ exactly right (covers live + park + forward-skip; off-by-one)? Where does
    S_max/max reachable PC come from (max_skip_distance + B)?
