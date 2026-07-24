@@ -23,14 +23,16 @@ const EVAL_FUEL: u64 = 8_000_000_000;
 
 // ── Instruction encoders (spec §3) ─────────────────────────────────
 
-fn r_ins(opcode: u16, rd: u16, rs: u16, rt: u16) -> u16 {
-    assert!(opcode < 16 && rd < 8 && rs < 8 && rt < 8);
-    (1 << 15) | (opcode << 11) | (rd << 8) | (rs << 5) | (rt << 2)
+// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
+fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
+    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
+    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
 }
 
-fn i_ins(opc: u16, rd: u16, imm: u8) -> u16 {
-    assert!(opc < 8 && rd < 8);
-    (opc << 12) | (rd << 9) | (u16::from(imm) << 1)
+// I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
+fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
+    assert!(opc < 64 && rd < 16);
+    (opc << 25) | (rd << 20) | u32::from(imm)
 }
 
 // ── Eval helper ────────────────────────────────────────────────────
@@ -44,7 +46,7 @@ fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 
 // ── Small straight-line ROM (no BR mutation → fall-through) ────────
 
-fn small_rom() -> Vec<u16> {
+fn small_rom() -> Vec<u32> {
     vec![
         i_ins(0, 1, 0x05), // 0: ADDI r1, 5
         r_ins(2, 3, 2, 0), // 1: XOR  r3, r2

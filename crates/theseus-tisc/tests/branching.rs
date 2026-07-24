@@ -30,12 +30,12 @@ fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 
 // ── Reference emulator (v2 semantics: PC += BR + 1) ───────────────
 
-fn ref_instr(word: u16, s: &mut StateVals) {
-    if word & 0x8000 != 0 {
-        let opcode = (word >> 11) & 0xF;
-        let rd = ((word >> 8) & 7) as usize;
-        let rs = ((word >> 5) & 7) as usize;
-        let rt = ((word >> 2) & 7) as usize;
+fn ref_instr(word: u32, s: &mut StateVals) {
+    if word & (1 << 31) != 0 {
+        let opcode = (word >> 25) & 0x3F;
+        let rd = ((word >> 20) & 0x1F) as usize;
+        let rs = ((word >> 15) & 0x1F) as usize;
+        let rt = ((word >> 10) & 0x1F) as usize;
         match opcode {
             0b0000 => s.regs[rd] = s.regs[rd].wrapping_add(s.regs[rs]),
             0b0001 => s.regs[rd] = s.regs[rd].wrapping_sub(s.regs[rs]),
@@ -54,9 +54,9 @@ fn ref_instr(word: u16, s: &mut StateVals) {
             _ => {}
         }
     } else {
-        let opc = (word >> 12) & 7;
-        let rd = ((word >> 9) & 7) as usize;
-        let imm = ((word >> 1) & 0xFF) as u8;
+        let opc = (word >> 25) & 0x3F;
+        let rd = ((word >> 20) & 0x1F) as usize;
+        let imm = (word & 0xFF) as u8;
         match opc {
             0b000 => s.regs[rd] = s.regs[rd].wrapping_add(imm),
             0b001 => s.regs[rd] = s.regs[rd].wrapping_sub(imm),
@@ -68,7 +68,7 @@ fn ref_instr(word: u16, s: &mut StateVals) {
     }
 }
 
-fn ref_step(rom: &[u16], s: &StateVals) -> StateVals {
+fn ref_step(rom: &[u32], s: &StateVals) -> StateVals {
     let mut out = s.clone();
     let word = rom.get(s.pc as usize).copied().unwrap_or(0);
     ref_instr(word, &mut out);
@@ -184,8 +184,9 @@ fn taken_branch_with_come_from() {
     );
 }
 
-fn r_ins(opcode: u16, rd: u16, rs: u16, rt: u16) -> u16 {
-    (1 << 15) | (opcode << 11) | (rd << 8) | (rs << 5) | (rt << 2)
+// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
+fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
+    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
 }
 
 // ══════════════════════════════════════════════════════════════════════

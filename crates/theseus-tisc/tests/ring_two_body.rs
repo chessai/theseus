@@ -35,14 +35,16 @@ const EVAL_FUEL: u64 = 8_000_000_000;
 
 // ── Instruction encoders (spec §3) ────────────────────────────────
 
-fn r_ins(opcode: u16, rd: u16, rs: u16, rt: u16) -> u16 {
-    assert!(opcode < 16 && rd < 8 && rs < 8 && rt < 8);
-    (1 << 15) | (opcode << 11) | (rd << 8) | (rs << 5) | (rt << 2)
+// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
+fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
+    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
+    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
 }
 
-fn i_ins(opc: u16, rd: u16, imm: u8) -> u16 {
-    assert!(opc < 8 && rd < 8);
-    (opc << 12) | (rd << 9) | (u16::from(imm) << 1)
+// I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
+fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
+    assert!(opc < 64 && rd < 16);
+    (opc << 25) | (rd << 20) | u32::from(imm)
 }
 
 // ── Eval helper ───────────────────────────────────────────────────
@@ -72,7 +74,7 @@ fn eval_system_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 //   5: ADD r0, r1, rt=3                       — F5: non-MEXCH with nonzero IR.rt
 //   6: SWAPBR r1                              — F5: exercises BR↔reg swap + pc_add_br
 
-fn f5_rom() -> Vec<u16> {
+fn f5_rom() -> Vec<u32> {
     vec![
         r_ins(0b1001, 2, 0, 2), // 0: MEXCH r2, rt=2 (rd==rt, addr=2)
         r_ins(0b1001, 3, 0, 1), // 1: MEXCH r3, rt=1 (addr=1)
@@ -109,7 +111,7 @@ fn f5_rom() -> Vec<u16> {
 //  16:  ROTLI r4, 2                 (I-type opc 0b011)
 //  17:  ROTRI r5, 1                 (I-type opc 0b100)
 
-fn wide_rom() -> Vec<u16> {
+fn wide_rom() -> Vec<u32> {
     vec![
         r_ins(0b0000, 0, 1, 3), //  0: ADD r0, r1, rt=3
         r_ins(0b0001, 2, 3, 0), //  1: SUB r2, r3

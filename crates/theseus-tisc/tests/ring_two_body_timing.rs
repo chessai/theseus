@@ -28,9 +28,10 @@ use theseus_tisc::ring_run::{
 };
 use theseus_tisc::types::{bus_state_ty, mem_state_ty, state_ty};
 
-fn r_ins(opcode: u16, rd: u16, rs: u16, rt: u16) -> u16 {
-    assert!(opcode < 16 && rd < 8 && rs < 8 && rt < 8);
-    (1 << 15) | (opcode << 11) | (rd << 8) | (rs << 5) | (rt << 2)
+// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
+fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
+    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
+    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
 }
 
 // ── F-teeth-1: golden-tuple pin for the MEXCH ROM ──────────────────

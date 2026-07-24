@@ -22,14 +22,16 @@ const EVAL_FUEL: u64 = 8_000_000_000;
 
 // ── Instruction encoders (spec §3) ────────────────────────────────
 
-fn r_ins(opcode: u16, rd: u16, rs: u16, rt: u16) -> u16 {
-    assert!(opcode < 16 && rd < 8 && rs < 8 && rt < 8);
-    (1 << 15) | (opcode << 11) | (rd << 8) | (rs << 5) | (rt << 2)
+// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
+//                  I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
+fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
+    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
+    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
 }
 
-fn i_ins(opc: u16, rd: u16, imm: u8) -> u16 {
-    assert!(opc < 8 && rd < 8);
-    (opc << 12) | (rd << 9) | (u16::from(imm) << 1)
+fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
+    assert!(opc < 64 && rd < 16);
+    (opc << 25) | (rd << 20) | u32::from(imm)
 }
 
 // ── Eval helper ───────────────────────────────────────────────────
@@ -49,7 +51,7 @@ fn eval_system_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 ///   0: ADDI r2, 2        — set r2 = 2 (addr for MEXCHR)
 ///   1: MEXCHR r1, r2     — reg[1] ↔ mem[reg[2] % 4] = mem[2]
 ///   2: SUBI r6, 0x11     — non-MEXCH op
-fn mexchr_rom() -> Vec<u16> {
+fn mexchr_rom() -> Vec<u32> {
     vec![
         i_ins(0, 2, 0x02),          // 0: ADDI r2, 2
         r_ins(0b1010, 1, 2, 0),     // 1: MEXCHR r1, r2 (rd=1, ra=2, rt=0)
@@ -61,7 +63,7 @@ fn mexchr_rom() -> Vec<u16> {
 ///   0: ADDI r3, 0x07     — set r3 = 7 (≥ MEM_WORDS=4, wraps to addr 3)
 ///   1: MEXCHR r0, r3     — reg[0] ↔ mem[7 % 4] = mem[3]
 ///   2: MEXCH r4, 1       — immediate MEXCH for comparison
-fn mexchr_wrap_rom() -> Vec<u16> {
+fn mexchr_wrap_rom() -> Vec<u32> {
     vec![
         i_ins(0, 3, 0x07),          // 0: ADDI r3, 7
         r_ins(0b1010, 0, 3, 0),     // 1: MEXCHR r0, r3 (rd=0, ra=3, rt=0)
@@ -74,7 +76,7 @@ fn mexchr_wrap_rom() -> Vec<u16> {
 ///   1: MEXCH r3, 0       — MEXCH r3, mem[0] (immediate)
 ///   2: MEXCHR r4, r2     — MEXCHR r4, mem[r2%4] = mem[1] (register)
 ///   3: ADDI r5, 0x33     — non-MEXCH
-fn mixed_rom() -> Vec<u16> {
+fn mixed_rom() -> Vec<u32> {
     vec![
         i_ins(0, 2, 0x01),          // 0: ADDI r2, 1
         r_ins(0b1001, 3, 0, 0),     // 1: MEXCH r3, mem[0]
@@ -355,9 +357,9 @@ fn mexchr_encode_decode_round_trip() {
 // ══════════════════════════════════════════════════════════════════════
 
 fn certificate_weakening_mexchr_aliased() {
-    // Hand-craft a 16-bit ROM word with op=0b1010, rd=1, ra=1 (rs=1),
+    // Hand-craft a 32-bit ROM word with op=0b1010, rd=1, ra=1 (rs=1),
     // bypassing the assembler which rejects ra==rd.
-    // R-format: [1 | 1010 | rd=001 | rs=001 | rt=000 | 00]
+    // R-format (A-0): [1 | 001010 | rd=00001 | rs=00001 | rt=00000 | spare=0]
     let malformed_word = r_ins(0b1010, 1, 1, 0);
 
     // This word decodes but violates ra≠rd.

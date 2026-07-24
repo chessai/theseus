@@ -43,12 +43,12 @@ fn char_db() -> &'static CharDb {
 
 /// Small ROM used for step-level tests.
 #[allow(clippy::identity_op)]
-fn test_rom() -> Vec<u16> {
+fn test_rom() -> Vec<u32> {
     vec![
-        // addr 0: ROTLI r0, #1  (I-format: opc=0b011=ROTLI, rd=0, imm=1)
-        (3u16 << 12) | (0 << 9) | (1 << 1),
+        // addr 0: ROTLI r0, #1  (A-0 I-format: opc=0b011=ROTLI, rd=0, imm=1)
+        (3u32 << 25) | (0 << 20) | 1,
         // addr 1: reserved I-format opc 0b101 (decodes None; not a valid instruction)
-        (5u16 << 12) | (1 << 9) | (0xFF << 1),
+        (5u32 << 25) | (1 << 20) | 0xFF,
     ]
 }
 

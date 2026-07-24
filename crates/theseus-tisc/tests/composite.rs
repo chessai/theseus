@@ -304,12 +304,13 @@ fn select_mem_samples(n_mem: usize) -> Vec<Vec<bool>> {
     let cpu_bits = NUM_CPU_FIELDS * W;
     let total_bits = cpu_bits + n_mem * W;
 
-    // R_RT: IR_lo bits [2,3,4] — IR_lo is field 10 of CpuState.
-    let ir_lo_offset = 10 * W;
+    // R_RT: IR bits [10,11,12] (A-0). ir_bit(10..12) live in IR byte 1
+    // (IR_B1_FIELD = field 11 of CpuState), at bits 2,3,4.
+    let ir_b1_offset = 11 * W;
     let addr_bit_positions: [usize; 3] = [
-        ir_lo_offset + 2, // R_RT.bits[0]
-        ir_lo_offset + 3, // R_RT.bits[1]
-        ir_lo_offset + 4, // R_RT.bits[2]
+        ir_b1_offset + 2, // R_RT.bits[0] = IR bit 10 = byte-1 bit 2
+        ir_b1_offset + 3, // R_RT.bits[1] = IR bit 11 = byte-1 bit 3
+        ir_b1_offset + 4, // R_RT.bits[2] = IR bit 12 = byte-1 bit 4
     ];
 
     let word_patterns: [u8; 4] = [0x00, 0xFF, 0xAA, 0x55];
@@ -348,8 +349,9 @@ fn select_mem_reference(n_mem: usize, n_addr_bits: usize) -> impl Fn(&[bool]) ->
     move |bits: &[bool]| {
         let mut out = bits.to_vec();
         let cpu_bits = NUM_CPU_FIELDS * W;
-        let ir_lo_offset = 10 * W;
-        let addr_bit_positions = [ir_lo_offset + 2, ir_lo_offset + 3, ir_lo_offset + 4];
+        // R_RT low bits = IR bits 10,11,12 = IR byte 1 (IR_B1_FIELD = 11), bits 2,3,4.
+        let ir_b1_offset = 11 * W;
+        let addr_bit_positions = [ir_b1_offset + 2, ir_b1_offset + 3, ir_b1_offset + 4];
 
         // Apply the same swap cascade as select_fields: MSB down to LSB.
         for level in (0..n_addr_bits).rev() {
@@ -418,16 +420,18 @@ fn c1_real_select_mem_composite_ancilla_clean_n8() {
 // Contract: on non-MEXCH opcodes, decode_execute'(v) ==
 // proj_CpuState(system_decode_execute(v, mem=0)).
 
-fn r_ins(opcode: u16, rd: u16, rs: u16, rt: u16) -> u16 {
-    (1 << 15) | (opcode << 11) | (rd << 8) | (rs << 5) | (rt << 2)
+// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
+//                  I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
+fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
+    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
 }
 
-fn i_ins(opc: u16, rd: u16, imm: u8) -> u16 {
-    (opc << 12) | (rd << 9) | (u16::from(imm) << 1)
+fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
+    (opc << 25) | (rd << 20) | u32::from(imm)
 }
 
 /// Sample IR words covering all 14 non-MEXCH opcodes + reserved.
-fn non_mexch_ir_samples() -> Vec<u16> {
+fn non_mexch_ir_samples() -> Vec<u32> {
     vec![
         r_ins(0, 2, 1, 0),  // ADD
         r_ins(1, 3, 4, 0),  // SUB
@@ -443,7 +447,7 @@ fn non_mexch_ir_samples() -> Vec<u16> {
         i_ins(2, 2, 0xAA),  // XORI
         i_ins(3, 3, 0x03),  // ROTLI
         i_ins(4, 4, 0x05),  // ROTRI
-        r_ins(11, 1, 2, 3), // reserved R-format (opcode 10=MEXCHR since M-D.b; 11..15 reserved)
+        r_ins(11, 1, 2, 3), // CCNOT (opcode 0b1011; A-0/M-D.b live — NOT reserved)
         i_ins(5, 3, 0x7C),  // reserved I-format
         0,                  // IR=0 (degenerates to ADDI r0, #0)
     ]
@@ -777,7 +781,7 @@ fn stage1b_line_audit_mem_phase() {
 // ══════════════════════════════════════════════════════════════════════
 
 /// Build a MEXCH IR word: R-format opcode 0b1001, rd, rt (addr).
-fn mexch_ir(rd: u16, addr: u16) -> u16 {
+fn mexch_ir(rd: u32, addr: u32) -> u32 {
     r_ins(0b1001, rd, 0, addr)
 }
 
@@ -804,7 +808,7 @@ fn stage1b_emit_mem_absorb_correctness() {
     for &(rd, addr, reg_val, mem_val) in &test_cases {
         assert!((addr as usize) < MEM_WORDS, "addr out of range");
 
-        let ir = mexch_ir(rd as u16, addr as u16);
+        let ir = mexch_ir(rd as u32, addr as u32);
         let mut state = StateVals {
             regs: [0; 8],
             pc: 0,
@@ -872,7 +876,7 @@ fn stage1b_emit_mem_absorb_self_inverse() {
     ];
 
     for &(rd, addr, reg_val, mem_val) in &test_cases {
-        let ir = mexch_ir(rd as u16, addr as u16);
+        let ir = mexch_ir(rd as u32, addr as u32);
         let mut state = StateVals {
             regs: [0; 8],
             pc: 0,

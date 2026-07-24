@@ -41,14 +41,16 @@ const EVAL_FUEL: u64 = 8_000_000_000;
 
 // ── Instruction encoders (spec §3) ─────────────────────────────────
 
-fn r_ins(opcode: u16, rd: u16, rs: u16, rt: u16) -> u16 {
-    assert!(opcode < 16 && rd < 8 && rs < 8 && rt < 8);
-    (1 << 15) | (opcode << 11) | (rd << 8) | (rs << 5) | (rt << 2)
+// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
+//                  I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
+fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
+    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
+    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
 }
 
-fn i_ins(opc: u16, rd: u16, imm: u8) -> u16 {
-    assert!(opc < 8 && rd < 8);
-    (opc << 12) | (rd << 9) | (u16::from(imm) << 1)
+fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
+    assert!(opc < 64 && rd < 16);
+    (opc << 25) | (rd << 20) | u32::from(imm)
 }
 
 // ── Reference emulator ─────────────────────────────────────────────
@@ -56,12 +58,12 @@ fn i_ins(opc: u16, rd: u16, imm: u8) -> u16 {
 /// Apply the semantics of one instruction word to the register state.
 /// SWAPBR rd swaps BR ↔ r[rd] (ADR-0034 D1). Reserved opcodes and
 /// word 0 are no-ops given s0 = 0 (asserted in ref_step).
-fn ref_instr(word: u16, s: &mut StateVals) {
-    if word & 0x8000 != 0 {
-        let opcode = (word >> 11) & 0xF;
-        let rd = ((word >> 8) & 7) as usize;
-        let rs = ((word >> 5) & 7) as usize;
-        let rt = ((word >> 2) & 7) as usize;
+fn ref_instr(word: u32, s: &mut StateVals) {
+    if word & (1 << 31) != 0 {
+        let opcode = (word >> 25) & 0x3F;
+        let rd = ((word >> 20) & 0x1F) as usize;
+        let rs = ((word >> 15) & 0x1F) as usize;
+        let rt = ((word >> 10) & 0x1F) as usize;
         match opcode {
             0b0000 => s.regs[rd] = s.regs[rd].wrapping_add(s.regs[rs]),
             0b0001 => s.regs[rd] = s.regs[rd].wrapping_sub(s.regs[rs]),
@@ -80,9 +82,9 @@ fn ref_instr(word: u16, s: &mut StateVals) {
             _ => {} // reserved
         }
     } else {
-        let opc = (word >> 12) & 7;
-        let rd = ((word >> 9) & 7) as usize;
-        let imm = ((word >> 1) & 0xFF) as u8;
+        let opc = (word >> 25) & 0x3F;
+        let rd = ((word >> 20) & 0x1F) as usize;
+        let imm = (word & 0xFF) as u8;
         match opc {
             0b000 => s.regs[rd] = s.regs[rd].wrapping_add(imm),
             0b001 => s.regs[rd] = s.regs[rd].wrapping_sub(imm),
@@ -96,7 +98,7 @@ fn ref_instr(word: u16, s: &mut StateVals) {
 
 /// One reference machine cycle: fetch rom[pc] (0 out of range), apply
 /// it, PC += BR + 1 (ADR-0034 D2). IR stays 0 across the step.
-fn ref_step(rom: &[u16], s: &StateVals) -> StateVals {
+fn ref_step(rom: &[u32], s: &StateVals) -> StateVals {
     assert_eq!(s.ir, 0, "P4: IR must be 0 between steps");
     assert_eq!(s.scratch[0], 0, "s0 convention (ADDI / IR=0 degeneracy)");
     assert_eq!(s.scratch[1], 0, "s1 reserved-zero convention");
@@ -113,7 +115,7 @@ fn ref_step(rom: &[u16], s: &StateVals) -> StateVals {
 /// Primary ROM: 8 instructions covering ADDI, ADD, XOR, ROTL, EXCH,
 /// SUBI, CSWAP, ROTRI at addresses 0..8. This is the ROM the lowered /
 /// balanced netlist is built for.
-fn rom1() -> Vec<u16> {
+fn rom1() -> Vec<u32> {
     vec![
         i_ins(0, 1, 0x05),  // 0: ADDI r1, 5
         r_ins(0, 2, 1, 0),  // 1: ADD  r2, r1
@@ -127,7 +129,7 @@ fn rom1() -> Vec<u16> {
 }
 
 /// Secondary ROM (eval-only, no lowering): SUB, ROTR, XORI, XCHG.
-fn rom2() -> Vec<u16> {
+fn rom2() -> Vec<u32> {
     vec![
         r_ins(1, 1, 4, 0),  // 0: SUB  r1, r4
         r_ins(5, 2, 5, 0),  // 1: ROTR r2, r5
@@ -308,8 +310,8 @@ fn pc_inc_exhaustive_all_256() {
 
 /// Light context: the rom1 step iso only (for eval-only tests, which
 /// must not pay the multi-minute lowering of the heavy ctx).
-fn step1() -> &'static (Vec<u16>, Iso) {
-    static S: OnceLock<(Vec<u16>, Iso)> = OnceLock::new();
+fn step1() -> &'static (Vec<u32>, Iso) {
+    static S: OnceLock<(Vec<u32>, Iso)> = OnceLock::new();
     S.get_or_init(|| {
         let rom = rom1();
         let iso = step(&rom);
@@ -530,7 +532,7 @@ fn v1_counterexample_distinct_post_states() {
     // These are distinct, so no collision.
 
     // Build a ROM: rom[5] = SWAPBR r0, rom[9] = ADD r1, r2.
-    let mut rom = vec![0u16; 10];
+    let mut rom = vec![0u32; 10];
     rom[5] = r_ins(8, 0, 0, 0); // SWAPBR r0
     rom[9] = r_ins(0, 1, 2, 0); // ADD r1, r2
 

@@ -88,7 +88,7 @@ fn eval_iterate(iso: &theseus_core::Iso, start: &StateVals, t: usize) -> StateVa
 struct Ctx {
     ring: StepRing,
     iso: theseus_core::Iso,
-    rom: Vec<u16>,
+    rom: Vec<u32>,
 }
 
 fn ctx() -> &'static Ctx {

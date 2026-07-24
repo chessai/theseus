@@ -160,7 +160,7 @@ fn extract_list_elems_from_bytes(bytes: &[u8]) -> Vec<u8> {
 // ── T-instr: system-ring dense-byte Ccnot (byte-parallelism proof) ──
 
 /// Build a single-Ccnot ROM for system-ring testing.
-fn ccnot_rom(rd: u8, rs: u8, rt: u8) -> Vec<u16> {
+fn ccnot_rom(rd: u8, rs: u8, rt: u8) -> Vec<u32> {
     vec![encode(Instr::Ccnot { rd, rs, rt }).unwrap()]
 }
 
@@ -223,7 +223,7 @@ fn t_instr_dense_byte_system_ring() {
 
 /// Hoisted compilation state for the masked fold at D=3.
 struct HoistedMaskedFold {
-    rom: Vec<u16>,
+    rom: Vec<u32>,
     budget: usize,
     instrs: Vec<Instr>,
 }
