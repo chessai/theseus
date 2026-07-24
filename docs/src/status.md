@@ -9,7 +9,22 @@ joules** from real ngspice characterization of sky130 cells. The thesis
 characterized silicon — and, at the top of the stack, a reversible **CPU**
 (TISC-1) whose invertibility is its typecheck.
 
-Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip at this writing:
+Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip `216d4cd` (docs/POC refs only);
+last MERGED code milestone `e918e33` (below).
+
+> **IN FLIGHT — T-loops Slice A: narrow the fetch address-compare** (not yet merged; see
+> `docs/scratch/fetch-narrow-compare-design.md` + memory `tloops-fetch-narrow-state`). fetch compares a
+> full-W `PC==addr` per ROM entry, but the PC only ever ∈ [0,B) so its high bits are provably zero →
+> compare only the low `A=⌈log₂(B+S_max)⌉` bits. **Lowers step_j today** (fib B=24→A=5, fetch predicates
+> −43%) **and makes widen-PC nearly free** (per-entry cost ∝ log₂B, not W). The plan: Slice A → **widen-PC**
+> (now cheap, B>256) → the **8-bit subtractive GCD** (first genuine variable-T algorithm; the `gcd2_hist_step`
+> recognizer is already de-risked + pinned, blocked only on the ~60-instr emission not fitting the current
+> 256 WCET — `docs/reviews/tloops-slice1b-recognizer-poc.md`). Slice A status: the A-bit fetch code is
+> built (POC, `docs/scratch/fetch-narrow-poc.diff.ref`); an apparent lfsr failure was diagnosed as a
+> *test-helper* input-encoding bug, NOT a fetch bug; the proper `run_on_cpu==eval` validation (real
+> system_step — the fast oracle is BLIND to fetch) is running. On green → adversarial review + full
+> authority + energy/ring golden re-pin (step_j drops) → merge. HIGHEST BAR (fetch/decoder).
+
 `e918e33` (**T-loops slice-1a: EXACT-K_MAX in `lower_trace` — MERGED**). A reversible `Trace`
 (while-loop) parks the CPU for a static budget B = spine + k_max·iter_len; historically
 `k_max = |u|+1` (the FULL carrier-type cardinality) — grossly loose, so a ≤7-iteration loop over an

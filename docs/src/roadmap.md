@@ -130,10 +130,15 @@
 > attack closed by the pre-walk F-1 guard; fast oracle proven to detect park-wrap) + real-`system_step`
 > H1 authority (2/2, ~2h). The design-review had REFUTED the naive "small GCD fits today" hypothesis
 > (4 walls; widen-PC is NOT the first wall — alone it just fits a 99.97%-park program). Reviews
-> `docs/reviews/tloops-slice1{,a}-*`. **NEXT: slice-1b** = a pinned `gcd2_hist_step` recognizer + the
-> 2-bit GCD (self-delimiting history) = the first genuine variable-T ALGORITHM (`run_on_cpu==eval==gcd`
-> + T/park-tax histogram), plus the impl-review's compile-time-blowup guard. **THEN widen-PC** (w=4 GCD
-> genuinely needs it; ~+10-15% step_j PER PC bit permanent tax — must come AFTER exact-k_max).
+> `docs/reviews/tloops-slice1{,a}-*`. **slice-1b (gcd2 recognizer) POC** de-risked the recognizer
+> machinery (pinned `gcd2_hist_bytes`) but found the 2-bit GCD is **BLOCKED-AT-EMISSION**: the minimal
+> reversible walk is ~60 instrs vs the ≤40 the WCET-256 budget allows (`docs/reviews/tloops-slice1b-recognizer-poc.md`).
+> Unblockers: widen-PC, a `Csub` ISA op, a spare reg, or a smaller-T_max algorithm. **CHOSEN ROUTE (IN
+> FLIGHT):** **Slice A — narrow the fetch address-compare** to `A=⌈log₂(B+S_max)⌉` bits (the PC's high bits
+> are provably zero) — lowers step_j today AND makes widen-PC nearly free (`docs/scratch/fetch-narrow-compare-design.md`;
+> memory `tloops-fetch-narrow-state`). **THEN Slice B widen-PC** (now cheap, B>256) **→ Slice C the 8-bit
+> GCD** (recognizer already pinned) = the first genuine variable-T algorithm. Fetch/decoder = HIGHEST BAR;
+> the fast oracle is BLIND to fetch so validation is real-`system_step` only.
 > **Other follow-ups (each its own slice + review):** AES-8 S-box (recomputation-bounded schedule / wider
 > register file); factored fewer-`Ccnot` PRESENT; Rev-B true-in-place χ⁻¹ cleanup; multi-round Keccak-f
 > (θ/ρ/π/ι). Design docs `docs/scratch/{md*,valwidth-flat,bveq-*,sbox-*,tloops-*}.md`; reviews
