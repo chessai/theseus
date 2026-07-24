@@ -186,3 +186,67 @@ Each ships with a reproducing behavioral test (real worktree + gate round-trip),
   never risks the correctness mandate.
 - **Deferred (not needed for the mandate):** active-only microcode (ring-proof risk); a fully
   active-only datapath; anything that would discard the injectivity/ring-closure proofs.
+
+## 7. Adversarial review findings — corrections that make the design real (3 reviews)
+The design DIRECTION survived (all reviewers endorse: keep paradigm, frame stack, tree fold, general-prim
+synthesis, shared ALU). But three BLOCKER-class findings pin where the hard work actually is and correct
+under-specified claims. These MUST be reflected in implementation.
+
+**BLOCKER-1 (coverage is NOT complete — the deepest honest result).** "No reject-to-be-safe path remains
+after Phase A" is FALSE for **wide symbolic prims**. Two prim routes that do NOT compose into a universal
+synthesizer: (a) `theseus-netlist::synthesize_prim` (lower.rs:608-694) is genuinely universal + whole-domain
+verified BUT requires an *enumerable table* and is capped at `MAX_SYNTH_WIDTH=12` rails; (b) a prim admitted
+via `admit_symbolic` has an EMPTY table by construction (prim.rs:195 SymbolicOnly), so it can ONLY reach
+`recognize_prim`→`selection_by_equiv` — a hardcoded pattern library that REJECTS anything outside its arms
+(compile.rs:1377+). ⇒ a Flat(16)×Flat(16) nonlinear admitted bijection (WCET-able, k_max=1) is STILL
+rejected. I conflated *verification* (symbolic bveq exists) with *synthesis* (no wide symbolic synthesizer
+exists). **TRUE completeness requires building a symbolic transformation-based synthesizer** (emit gates
+whose symbolic PrimSpec bveq-equals the target) — the one hard, UNBUILT piece. Honest scope of Phase A as
+specified: "runs any well-formed program whose prims are enumerable-width (≤12 rails) or recognizer-matched."
+The remaining hole is precisely characterized and is the key open research problem for full arbitrariness.
+(Not-a-bug confirmed: the ≤12-rail synthesizer's Sum-unequal-arm padding/don't-care handling IS
+reversibility-sound — it extends to a full-cube permutation, garbage-marked; add a Distrib→prim→Factor
+round-trip test asserting padding returns to zero.)
+
+**BLOCKER-2 (A3 is deeper than a formula change).** The nested-WCET fix is not just "flat sum → tree fold."
+The exact-k_max trajectory WALK (compile.rs:2691-2743) runs `body_instrs` STRAIGHT-LINE via `exec_instr` —
+it does NOT honor an inner loop's `Swapbr` back-edge, so it simulates the inner body ONCE per outer
+iteration, not inner-k_max times; and `lower_trace` DROPS the inner `body_meta` (compile.rs:2661) instead of
+merging it. Counterexample: outer k=4, inner k=100, inner_iter_len=12 → true B≈4800, flat substrate gives
+≈88 (55× under-count) → park guard passes on bogus 88 → PC wraps mid-run → corruption (L15-class silent
+loss). **A3 fix (mandatory):** (i) merge `body_meta.loop_terms` into parent SCALED by outer k_max; (ii) run
+the k_max walk on an inner-back-edge-HONORING mini-interpreter (not straight-line exec_instr), or fall back
+to the `|u|+1` cardinality PRODUCT. A3's test MUST nest Iter/Trace (Iter-under-Trace is the common desugar
+and slips through as two summed sibling terms), not just Seq siblings.
+
+**BLOCKER-3 / A1 correction (widen is NOT a "pure param"; decouple two widths).** The design conflated the
+come-from token δu with the WCET budget B. **δu is a STATIC ROM offset** (backward-jump distance ≤ N_rom) —
+widen it with `log₂ N_rom`. **B is a DYNAMIC step count** — needs W_pc bits. They are DIFFERENT quantities;
+keep them decoupled (δu stays small; B needs the width). And A1's "pure param" is wrong: `pc:u8`, `br:u8`
+(types.rs:242-243), `Addi/Subi{imm:u8}` (asm.rs:140,290), and `pc_add_br` `n=2*W` (step.rs:151) are ALL
+hardcoded 8-bit and must widen TOGETHER (encoder + state + step iso) — a real coordinated change, and its
+ADR-0034 width-parametricity must be re-proven at the new widths. State the max nesting depth W_pc supports.
+
+**MAJOR-4 (resequence A4/A5).** `lower_trace` hand-assigns `aux_base = max_carrier_reg+1` WITHOUT consulting
+occ (compile.rs:2777); the F-1 reject (compile.rs:2560) is what currently keeps that safe under Times.
+Deleting the rejects (A4) to enable nesting BEFORE replacing aux allocation with occ-aware
+`with_scratch_frame` (A5) would silently alias sibling/outer aux → come-from corruption. **CORRECTED ORDER:
+A3 (tree fold + walk fix) → A5 (frame stack + occ-aware allocation) → A4 (delete has_inner_control/F-1
+rejects).** A5 must precede A4.
+
+**MAJOR-5 (Plus accounting).** Keep BOTH WCET and s_max as Σ over Plus arms (matches today's
+`forward_skip_total += body.len()`, compile.rs:2454). Do NOT "tighten" s_max to `max` — a parked PC can land
+in the untaken larger arm's skip region → unsound. WCET-`max` is sound for steps but must not propagate to
+s_max.
+
+**MINOR (sequencing coupling).** A synthesized prim inside a nested loop can push iter_len past the old 256
+→ A6 (or any A6-prim used in a loop) must land strictly AFTER A1's coordinated width widening.
+
+### Net effect on the plan
+Direction and axes UNCHANGED. Corrected migration order: **A1(coordinated width widen + δu/N_rom decouple) →
+A2(frame → GCD ships) → A3(recursive-tree WCET fold + back-edge-honoring k_max walk) → A5(occ-aware frame
+stack) → A4(delete nesting rejects) → A6(prim synthesis, ≤12-rail scope) → A7(wide data words)**, then
+Phase B. Coverage honest scope: complete EXCEPT wide symbolic prims, which need a new symbolic synthesizer
+(the one precisely-characterized open hard problem). The nested-control slices (A3+A5) are the highest-risk
+and need the full CLAUDE.md adversarial-review + real-worktree-round-trip discipline, with the specific
+counterexamples above (nested Iter/Trace under-count; Times(Trace,·) aliasing) as mandatory regression tests.
