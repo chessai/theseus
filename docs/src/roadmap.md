@@ -1,5 +1,13 @@
 # Roadmap v2: two tracks, layers, parked items
 
+> **⇒ SUPERSEDED as the forward plan by [TISC-2 roadmap](tisc2-roadmap.md) (2026-07-24).**
+> This page records the TISC-1 build (M1→M-E, all merged). The forward direction — the CPU
+> that runs *arbitrary* well-formed theseus programs — is now the TISC-2 roadmap. The prior
+> "T-loops → widen-PC → GCD" plan here was symptom-chasing (the GCD was blocked by register
+> pressure, not PC width) and is retired; the GCD now falls out of TISC-2 Phase A slice A-1
+> with no widen-PC.
+
+
 > **Current status (2026-07-18):** M1, M3a, M3b, **M4-v1**, the **M4-v2
 > ring-machine core** (recirculating CPU + reversible branching, Fibonacci on the
 > ring at 20× area saving, zero-garbage closure), and the **v0.2 software dialect**

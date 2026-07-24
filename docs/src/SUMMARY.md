@@ -2,6 +2,7 @@
 
 [Introduction](introduction.md)
 [Project status](status.md)
+[TISC-2 roadmap (current direction)](tisc2-roadmap.md)
 [Surface → compiled circuit](surface-to-cells.md)
 
 # Architecture Decision Records
