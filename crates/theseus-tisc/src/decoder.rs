@@ -336,16 +336,32 @@ pub fn operand_field(i: usize) -> usize {
 ///
 /// This is the coverage-critical generalization of `select_reg`
 /// (`select_reg` = the low-8 sub-tree). The extra top level (bit 3)
-/// swaps `base(i) ↔ base(i+8)` for i = 0..8, bringing a scratch word
+/// swaps `base(i) ↔ base(i+8)` for i = 2..8, bringing a scratch word
 /// into the register half when the operand names scratch.
+///
+/// A-0 BLOCKER-1 fix (scratch-rd operand crossbar): the level-3 swap
+/// range starts at **i = 2**, NOT i = 0. `base(8)` and `base(9)` are
+/// `s0`/`s1` — the fixed operand buffer (`AUX_OPERAND_FIELD`) and the
+/// predicate word (`AUX_PRED_FIELD`), which are decoder-reserved and
+/// rejected as operands (`asm::check_operand`). Idx 8/9 can therefore
+/// never be a legal operand, so the tree never needs to route those
+/// positions to `base(0)` — and swapping `base(0)↔base(8)` /
+/// `base(1)↔base(9)` (i.e. `r0↔s0`, `r1↔s1`) would DISPLACE the operand
+/// buffer and CORRUPT the predicate word mid-instruction (wrong cores
+/// fire, BR clobbered, s0 left dirty). Every legal scratch operand
+/// s2..s7 (idx 10..15) lives at position 10..15 = `base(2+k)+8`, reached
+/// purely via the i∈2..8 swaps; register operands (bit3=0) are inert
+/// here regardless. So s0/s1 (fields 14/15) are left UNTOUCHED.
 pub fn select_operand(sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
     let (f3, b3) = sel.bits[3];
     let (f2, b2) = sel.bits[2];
     let (f1, b1) = sel.bits[1];
     let (f0, b0) = sel.bits[0];
     let mut steps = Vec::new();
-    // Level 3 (bit 3): reg half ↔ scratch half.
-    for i in 0..8 {
+    // Level 3 (bit 3): reg half ↔ scratch half, EXCLUDING positions 0/1
+    // (whose scratch partners base(8)/base(9) = s0/s1 are the reserved
+    // operand-buffer + predicate word — never legal operands).
+    for i in 2..8 {
         steps.push(ctrl_word_swap(f3, b3, base(i), base(i + 8)));
     }
     // Level 2 (bit 2): quarter swaps within the low 8.
