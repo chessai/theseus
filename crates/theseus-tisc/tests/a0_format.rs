@@ -176,6 +176,15 @@ fn select_operand_routes_reg_and_scratch() {
     let iso = select_operand(R_RD, operand_field);
 
     for idx in 0..16u32 {
+        // idx 8/9 = s0/s1 are decoder-reserved (the operand buffer + the
+        // predicate word); they are NOT legal operands (asm.rs check_operand
+        // rejects them) and the crossbar deliberately does NOT route them
+        // (level-3 swap range is 2..8, so positions 0/1 ↔ s0/s1 are untouched
+        // — the A-0 BLOCKER-1 fix). Legal operands: reg 0..7, scratch s2..s7
+        // (idx 10..15). Skip the reserved pair.
+        if idx == 8 || idx == 9 {
+            continue;
+        }
         let s = distinct_state(idx);
         let got = eval_state("select_operand", &iso, &s);
 
@@ -183,7 +192,7 @@ fn select_operand_routes_reg_and_scratch() {
         let expected_val = if idx < 8 {
             0x10 + idx as u8 // r[idx]
         } else {
-            0x20 + (idx - 8) as u8 // s[idx-8]
+            0x20 + (idx - 8) as u8 // s[idx-8] (s2..s7 for idx 10..15)
         };
         assert_eq!(
             got.regs[0], expected_val,
