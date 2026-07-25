@@ -529,21 +529,26 @@ fn blocker1_odd_imm_iop_does_not_fire_xchg_through_decode_execute() {
     let ir = encode(Instr::Addi { rd: 7, imm: 0x01 }).expect("encode");
     let mut regs = [0u8; 8];
     regs[7] = 0x87; // arbitrary; expect +1 = 0x88
+    // s0/s1 are the decoder-reserved operand buffer + predicate word; they
+    // MUST be 0 on decode_execute entry (the CPU maintains this between
+    // steps — the adder uses s0 as its operand slot). Put the anti-XCHG
+    // sentinels in the NON-reserved words s2..s7: a spurious XCHG (the
+    // BLOCKER-1 bug) would swap r7 into scratch, dirtying one / leaving r7
+    // wrong; a clean Addi preserves all scratch.
+    let scratch0 = [0x00, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
     let s = StateVals {
         regs,
         pc: 0,
         br: 0,
         ir,
-        // s0 = 0x5A: a sentinel. If XCHG spuriously fired it would land
-        // in r7 (or corrupt s0); a clean Addi leaves s0 untouched.
-        scratch: [0x5A, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
+        scratch: scratch0,
         mem: [0; MEM_WORDS],
     };
     let got = eval_state("blocker1/addi-odd", light_ctx(), &s);
     assert_eq!(got.regs[7], 0x88, "Addi r7,#1: r7 must be 0x87+1=0x88");
     assert_eq!(
-        got.scratch[0], 0x5A,
-        "s0 must be untouched — a nonzero delta means XCHG spuriously fired"
+        got.scratch, scratch0,
+        "scratch must be untouched — a change means XCHG spuriously fired"
     );
     // Every other reg unchanged.
     for i in 0..7 {
@@ -561,17 +566,19 @@ fn blocker1_odd_imm_xori_clean_through_decode_execute() {
     let ir = encode(Instr::Xori { rd: 5, imm: 0x0B }).expect("encode");
     let mut regs = [0u8; 8];
     regs[5] = 0xF0;
+    // s0/s1 reserved = 0 on entry; sentinels in non-reserved s2..s7.
+    let scratch0 = [0x00, 0x00, 0x2A, 0x3B, 0x4C, 0x5D, 0x6E, 0x7F];
     let s = StateVals {
         regs,
         pc: 0,
         br: 0,
         ir,
-        scratch: [0xC7, 0x00, 0, 0, 0, 0, 0, 0],
+        scratch: scratch0,
         mem: [0; MEM_WORDS],
     };
     let got = eval_state("blocker1/xori-odd", light_ctx(), &s);
     assert_eq!(got.regs[5], 0xF0 ^ 0x0B, "Xori r5,#0x0B");
-    assert_eq!(got.scratch[0], 0xC7, "s0 untouched (XCHG did not fire)");
+    assert_eq!(got.scratch, scratch0, "scratch untouched (XCHG did not fire)");
     assert_eq!(got.ir, ir, "IR preserved");
 }
 
