@@ -40,6 +40,10 @@ fn golden_pin_mexch_rom() {
     // Single-entry MEXCH ROM: MEXCH r2, rt=2 (rd==rt, addr=2)
     let rom = vec![r_ins(0b1001, 2, 0, 2)];
     let t = two_body_timing_certificate(&rom).expect("no rail skew");
+    eprintln!(
+        "MEASURED TUPLE: d_pre={} d_mem={} d_post={} delta1={} delta2={} delta_hold={} d_locked={} period={}",
+        t.d_pre, t.d_mem, t.d_post, t.delta1, t.delta2, t.delta_hold, t.d_locked, t.period
+    );
 
     // F-teeth-1: assert the EXACT tuple from measured grounding (§4b).
     // If these fail, STOP and report the real measured values.
@@ -55,22 +59,29 @@ fn golden_pin_mexch_rom() {
     // grows the decode_execute netlist (d_pre 3316→3345, delta1 0→3,
     // delta_hold 36→39, d_locked/period 3644→3676). d_post=289, d_mem=35
     // unchanged. validate()==Ok confirms physical lockstep intact.
-    assert_eq!(t.d_pre, 3345, "GOLDEN PIN: d_pre={} (expected 3345)", t.d_pre);
+    // RE-PINNED (TISC-2 A-0, 32-bit word + shared scratch-addressable operand
+    // crossbar): the shared decoder (~40 replicated crossbars → ~3) + leaner
+    // scratch-rd routing SHRINK the cpu_pre/system_step netlist → shorter timing:
+    // d_pre 3345→2874, d_post 289→374, delta1 3→2, delta_hold 39→38,
+    // d_locked/period 3676→3288. d_mem=35, delta2=1 unchanged. validate()==Ok
+    // (physical lockstep intact — a re-pin from the netlist size change, not a
+    // regression). Behavior verified separately (t2 real-CPU all-8).
+    assert_eq!(t.d_pre, 2874, "GOLDEN PIN: d_pre={} (expected 2874)", t.d_pre);
     assert_eq!(t.d_mem, 35, "GOLDEN PIN: d_mem={} (expected 35)", t.d_mem);
-    assert_eq!(t.d_post, 289, "GOLDEN PIN: d_post={} (expected 289)", t.d_post);
-    assert_eq!(t.delta1, 3, "GOLDEN PIN: delta1={} (expected 3)", t.delta1);
+    assert_eq!(t.d_post, 374, "GOLDEN PIN: d_post={} (expected 374)", t.d_post);
+    assert_eq!(t.delta1, 2, "GOLDEN PIN: delta1={} (expected 2)", t.delta1);
     assert_eq!(t.delta2, 1, "GOLDEN PIN: delta2={} (expected 1)", t.delta2);
     assert_eq!(
-        t.delta_hold, 39,
-        "GOLDEN PIN: delta_hold={} (expected 39)",
+        t.delta_hold, 38,
+        "GOLDEN PIN: delta_hold={} (expected 38)",
         t.delta_hold
     );
     assert_eq!(
-        t.d_locked, 3676,
-        "GOLDEN PIN: d_locked={} (expected 3676)",
+        t.d_locked, 3288,
+        "GOLDEN PIN: d_locked={} (expected 3288)",
         t.d_locked
     );
-    assert_eq!(t.period, 3676, "GOLDEN PIN: period={} (expected 3676)", t.period);
+    assert_eq!(t.period, 3288, "GOLDEN PIN: period={} (expected 3288)", t.period);
 
     // validate() must pass on the golden ROM
     t.validate().expect("validate() failed on MEXCH golden ROM");
