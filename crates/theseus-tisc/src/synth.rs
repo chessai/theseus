@@ -742,6 +742,494 @@ fn swap_operands(a: u8, b: u8) -> Result<Instr, SynthError> {
     }
 }
 
+// ── A-6.2: general ANF emission (arbitrary-degree monomials via scratch) ──
+//
+// FINDING (A-6.2): `transcribe_into` (A-6.1) realizes only the SINGLE-Toffoli
+// basis — at most one degree-2 AND term per output bit, byte-parallel. A general
+// ANF (e.g. gcd2's) has per-bit XORs of *arbitrary-degree* monomials (gcd2 hits
+// degree 3, several per bit, mixing bit positions: e.g. `a1 ∧ b0 ∧ h0`). Those
+// are OUTSIDE that basis, so `transcribe_bennett` (which calls `transcribe_into`)
+// rejects gcd2 with `RowNotInPlace`. `transcribe_into_general` /
+// `transcribe_bennett_general` add the general path: they emit ANY ANF onto
+// fresh zero destinations with a reversible, net-zero AND-tree over 2-input
+// Ccnot gates plus a small bank of HELPER words (a bit-mask word + one temp per
+// AND beyond the first). Everything is uncomputed, so every helper and every
+// output ancilla returns to 0. This is DETERMINISTIC (no search); the extra
+// helper words are the cost the design's (b)/widen-PC budget must cover.
+
+/// Bank of zero-init HELPER operands the general emitter needs, disjoint from
+/// carriers, output ancilla, sources, and destinations.
+///
+/// - `mask`: one word used to isolate a single output bit (holds `1<<b`
+///   transiently; always restored to 0).
+/// - `temps`: AND-tree accumulators. A degree-`d` monomial needs `d-1` temps
+///   (the first Ccnot ANDs two factors, each further factor needs one more).
+///   `temps.len()` must be ≥ (max monomial degree − 1).
+///
+/// All helper words are net-zero across each emitted term (compute → use →
+/// uncompute), so they may be reused freely across rows and bits.
+#[derive(Clone, Copy)]
+pub struct HelperBank<'a> {
+    pub mask: u8,
+    pub temps: &'a [u8],
+}
+
+/// Transcribe a `RegTransfer` spec (already in register space; row `r` holds the
+/// BvExpr for register `r`) onto FRESH, DISJOINT zero-init destinations, for the
+/// **general ANF class** — XOR of arbitrary-degree AND-monomials, per bit.
+///
+/// For each spec row `i` and output bit `b`, the expression is flattened to its
+/// ANF terms; each term is emitted into bit `b` of `dst_ops[i]` (which starts 0)
+/// by [`emit_anf_term`], reading spec input `y` from `src_ops[y]` and using the
+/// zero-init [`HelperBank`] for the AND-tree + bit isolation. Everything is
+/// uncomputed → destinations hold `spec(src)`, helpers back to 0.
+pub fn transcribe_into_general(
+    spec: &RegTransfer,
+    dst_ops: &[u8],
+    src_ops: &[u8],
+    helpers: HelperBank,
+) -> Result<Vec<Instr>, SynthError> {
+    if spec.regs.len() != NUM_REGS {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("frame has {} rows, expected {NUM_REGS}", spec.regs.len()),
+        });
+    }
+    if dst_ops.len() != NUM_REGS || src_ops.len() != NUM_REGS {
+        return Err(SynthError::MalformedSpec {
+            detail: "dst_ops/src_ops must each have NUM_REGS entries".to_string(),
+        });
+    }
+    let mut out = Vec::new();
+    for (i, row) in spec.regs.iter().enumerate() {
+        if row.len() != BITS {
+            return Err(SynthError::MalformedSpec {
+                detail: format!("reg {i} row has {} bits, expected {BITS}", row.len()),
+            });
+        }
+        let dst = dst_ops[i];
+        // A row that is the identity AND self-maps (dst operand == src operand
+        // for this row's own register) contributes nothing: the value is already
+        // in place. Emitting `Ccnot dst, dst, mask` self-copies would corrupt a
+        // live word (matches `transcribe_into`'s dst==src skip). This covers the
+        // Bennett wrapper's non-carrier rows (dst_map==src_map==carrier).
+        if is_identity_row(row, i) && dst == src_ops[i] {
+            continue;
+        }
+        for (b, e) in row.iter().enumerate() {
+            for t in flatten_xor(e) {
+                emit_anf_term(t, dst, b, src_ops, &helpers, &mut out)?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Emit gates that XOR one ANF term's contribution into bit `b` of `dst`
+/// (`dst` starts 0 at bit `b` for this term's turn; multiple terms XOR-accumulate).
+///
+/// A term is `Const(true)`, a single `Var(y,c)`, or an AND-monomial
+/// `Var(y0,c0) ∧ … ∧ Var(y_{d-1},c_{d-1})` of any degree `d`; each `Var` reads
+/// its OWN bit `c_k` (ANF monomials mix bit positions). Realization over the
+/// 2-input-Ccnot ISA, net-zero:
+///   - `Const(true)`  → `Xori { dst, 1<<b }`.
+///   - degree 1       → align src bit `c0` to bit `b` (rotate, paired-undone),
+///                      load `mask = 1<<b`, `Ccnot dst, src_aligned, mask`
+///                      (dst bit b ^= src bit c0), unload mask, un-rotate.
+///   - degree d ≥ 2   → align all factors to bit `b`; AND-tree:
+///                        `Ccnot temp0, f0, f1`         (temp0 = f0∧f1)
+///                        `Ccnot temp1, temp0, f2`      (temp1 = f0∧f1∧f2) …
+///                      then `mask = 1<<b`, `Ccnot dst, temp_last, mask`
+///                      (dst bit b ^= product bit b only), unload mask, and run
+///                      the AND-tree in REVERSE to clear every temp, then
+///                      un-rotate the sources. Net-zero by construction.
+///
+/// The `mask` isolates bit `b` because the byte-parallel Ccnot AND-tree leaves
+/// garbage in temp's OTHER bits; ANDing with `1<<b` selects only bit `b` when
+/// XOR-ing onto `dst`.
+fn emit_anf_term(
+    term: &BvExpr,
+    dst: u8,
+    b: usize,
+    src_ops: &[u8],
+    helpers: &HelperBank,
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
+    let factors: Vec<(usize, usize)> = match term {
+        BvExpr::Const(true) => {
+            out.push(Instr::Xori { rd: dst, imm: 1u8 << b });
+            return Ok(());
+        }
+        BvExpr::Const(false) => return Ok(()), // XOR identity — no-op
+        BvExpr::Var { operand, bit } => vec![(*operand, *bit)],
+        BvExpr::And(_, _) => flatten_and(term)?,
+        other => {
+            return Err(SynthError::RowNotInPlace {
+                reg: dst as usize,
+                detail: format!("unsupported ANF term shape: {other:?}"),
+            });
+        }
+    };
+    let degree = factors.len();
+
+    if degree == 1 {
+        // dst bit b ^= (src bit c0): align src bit c0 → bit b, mask-select onto
+        // dst, restore. Net-zero on src (paired rotate) and mask.
+        let (y, c) = factors[0];
+        let s = src_ops[y];
+        // Self-copy `dst ^= dst&mask` on a fresh zero dst is a no-op AND would
+        // read/write the same word; skip it (fresh targets start 0).
+        if s == dst && c == b {
+            return Ok(());
+        }
+        let sh = b as i32 - c as i32;
+        rotate_by(s, sh, out);
+        out.push(Instr::Xori { rd: helpers.mask, imm: 1u8 << b });
+        out.push(Instr::Ccnot { rd: dst, rs: s, rt: helpers.mask });
+        out.push(Instr::Xori { rd: helpers.mask, imm: 1u8 << b });
+        rotate_by(s, -sh, out);
+        return Ok(());
+    }
+
+    // degree ≥ 2: build the product with an AND-LADDER of `degree-1` clean
+    // single-bit accumulators, uncomputed for net-zero. Every factor is aligned
+    // to bit `b` JUST FOR its Ccnot and un-aligned right after, so two factors
+    // that share a source operand (multiplicity > 1) are never rotated
+    // simultaneously — the emitter is aliasing-safe without extra copy words.
+    if helpers.temps.len() < degree - 1 {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "ANF monomial degree {degree} needs {} accumulator temp(s), have {}",
+                degree - 1,
+                helpers.temps.len()
+            ),
+        });
+    }
+
+    // Helper: emit `Ccnot{acc, x, aligned(factor k)}` bracketed by the align /
+    // un-align rotations of factor k's source, appended to `out`.
+    let emit_and = |out: &mut Vec<Instr>, acc: u8, x: u8, k: usize| {
+        let (y, c) = factors[k];
+        let s = src_ops[y];
+        let sh = b as i32 - c as i32;
+        rotate_by(s, sh, out);
+        out.push(Instr::Ccnot { rd: acc, rs: x, rt: s });
+        rotate_by(s, -sh, out);
+    };
+
+    // FORWARD LADDER (compute):
+    //   temp0 := 1<<b ∧ f0    (clean single bit b = f0's bit)  — mask seeds a
+    //   temp_{k-1} := temp_{k-2} ∧ f_k                          clean accumulator
+    // Because temp0 is clean (0 outside bit b), every downstream AND stays clean,
+    // so the final XOR onto dst needs no mask.
+    out.push(Instr::Xori { rd: helpers.mask, imm: 1u8 << b }); // mask = 1<<b
+    emit_and(out, helpers.temps[0], helpers.mask, 0); // temp0 = mask ∧ f0 (clean)
+    for k in 1..degree - 1 {
+        // temp[k] = temp[k-1] ∧ f_k  (factors 1..degree-1; the last goes to dst)
+        emit_and(out, helpers.temps[k], helpers.temps[k - 1], k);
+    }
+    // Last factor ANDs the running product directly onto dst (clean → bit b only).
+    let last_acc = helpers.temps[degree - 2];
+    emit_and(out, dst, last_acc, degree - 1);
+
+    // REVERSE LADDER (uncompute): mirror the forward steps to restore every temp
+    // and the mask to 0. (dst keeps the XOR-ed product; only helpers are cleared.)
+    for k in (1..degree - 1).rev() {
+        emit_and(out, helpers.temps[k], helpers.temps[k - 1], k);
+    }
+    emit_and(out, helpers.temps[0], helpers.mask, 0); // clears temp0
+    out.push(Instr::Xori { rd: helpers.mask, imm: 1u8 << b }); // mask back to 0
+    Ok(())
+}
+
+/// Flatten a (possibly nested) `And` of `Var`s into its factor list.
+fn flatten_and(e: &BvExpr) -> Result<Vec<(usize, usize)>, SynthError> {
+    let mut out = Vec::new();
+    fn go(e: &BvExpr, out: &mut Vec<(usize, usize)>) -> Result<(), SynthError> {
+        match e {
+            BvExpr::And(a, b) => {
+                go(a, out)?;
+                go(b, out)
+            }
+            BvExpr::Var { operand, bit } => {
+                out.push((*operand, *bit));
+                Ok(())
+            }
+            other => Err(SynthError::RowNotInPlace {
+                reg: 0,
+                detail: format!("AND monomial has a non-Var factor: {other:?}"),
+            }),
+        }
+    }
+    go(e, &mut out)?;
+    Ok(out)
+}
+
+/// Emit a rotate-left by `sh` bits (negative ⇒ rotate right), or nothing if 0.
+fn rotate_by(op: u8, sh: i32, out: &mut Vec<Instr>) {
+    let sh = sh.rem_euclid(BITS as i32) as u8;
+    if sh != 0 {
+        out.push(Instr::Rotli { rd: op, imm: sh });
+    }
+}
+
+/// General Bennett wrapper (A-6.2): like [`transcribe_bennett`] but the
+/// compute/uncompute steps use [`transcribe_into_general`], so the permutation's
+/// per-bit ANF may contain arbitrary-degree monomials (gcd2). Same net-zero
+/// guarantee: carriers end at `P(x)`, output ancilla back to 0, and the general
+/// emitter's helper bank back to 0.
+///
+/// `carrier_ops` (leaf order) hold `x`; `out_ancilla` (≥ n, zero-init, disjoint)
+/// receive `P(x)`; `helpers` is the general emitter's zero-init helper bank
+/// (also disjoint). Because the AND-tree reads carriers as sources, in step 3
+/// the carriers already hold `y = P(x)`, and `bwd = P⁻¹` XORs `P⁻¹(y) = x` onto
+/// the ancilla (= x) → 0.
+pub fn transcribe_bennett_general(
+    fwd: &RegTransfer,
+    bwd: &RegTransfer,
+    carrier_ops: &[u8],
+    out_ancilla: &[u8],
+    helpers: HelperBank,
+) -> Result<Vec<Instr>, SynthError> {
+    let n = carrier_ops.len();
+    if out_ancilla.len() < n {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "output ancilla bank has {} words, need ≥ carriers ({n})",
+                out_ancilla.len()
+            ),
+        });
+    }
+    if fwd.regs.len() != NUM_REGS || bwd.regs.len() != NUM_REGS {
+        return Err(SynthError::MalformedSpec {
+            detail: "fwd/bwd frames must be NUM_REGS rows".to_string(),
+        });
+    }
+    for c in &carrier_ops[..n] {
+        if out_ancilla[..n].contains(c) {
+            return Err(SynthError::MalformedSpec {
+                detail: format!("carrier operand {c} aliases an output-ancilla word"),
+            });
+        }
+    }
+    for r in n..NUM_REGS {
+        if !is_identity_row(&fwd.regs[r], r) || !is_identity_row(&bwd.regs[r], r) {
+            return Err(SynthError::MalformedSpec {
+                detail: format!(
+                    "spec touches reg {r} outside the {n} carriers; permutation must be \
+                     identity on non-carrier registers"
+                ),
+            });
+        }
+    }
+    // Build the NUM_REGS-length src/dst maps (spec leaf r → carrier/ancilla op).
+    let mut src_map = vec![0u8; NUM_REGS];
+    let mut dst_map = vec![0u8; NUM_REGS];
+    for r in 0..NUM_REGS {
+        if r < n {
+            src_map[r] = carrier_ops[r];
+            dst_map[r] = out_ancilla[r];
+        } else {
+            src_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
+            dst_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
+        }
+    }
+
+    let mut out = Vec::new();
+    // 1. O ^= P(x).
+    out.extend(transcribe_into_general(fwd, &dst_map, &src_map, helpers)?);
+    // 2. swap carriers ↔ output ancilla.
+    for i in 0..n {
+        out.push(swap_operands(carrier_ops[i], out_ancilla[i])?);
+    }
+    // 3. O ^= P⁻¹(y) → clears O to 0.
+    out.extend(transcribe_into_general(bwd, &dst_map, &src_map, helpers)?);
+    Ok(out)
+}
+
+// ── A-6.2: general table → RegTransfer via per-output-bit ANF ─────────
+
+/// Deterministically build a full-frame `RegTransfer` from a byte-level
+/// bijection, by computing the **algebraic normal form (Reed-Muller / Möbius
+/// transform)** of every output bit as a boolean function of the input bits.
+///
+/// This is the reusable, prim-agnostic front-half of the synthesizer: it turns
+/// *any* concrete permutation on a small carrier (given as a closure over the
+/// carrier bytes) into the symbolic `RegTransfer` the transcriber consumes. It
+/// is EXACT and DETERMINISTIC — no search, no enumeration of instruction
+/// sequences; it enumerates only the carrier's input-bit assignments (2^Σwidths)
+/// and Möbius-transforms each output bit's truth table.
+///
+/// # Carrier model
+/// The carrier is `carrier_regs.len()` leaves. Leaf `i` lives in operand
+/// (register) `carrier_regs[i]` and has `in_bit_widths[i]` MEANINGFUL bits
+/// (bits `0..in_bit_widths[i]`); bits at/above the width are assumed to always
+/// be zero on input and are produced as `Const(false)` on output (matching the
+/// Flat(w) zero-extension convention). The `map` closure receives a byte vector
+/// of length `carrier_regs.len()` (one byte per leaf, in carrier order) holding
+/// the meaningful bits, and returns the post-transfer byte vector (same layout).
+///
+/// # ANF construction (per output bit)
+/// For output bit `(reg=carrier_regs[i], bit b < width_i)`:
+///   1. Enumerate all `2^N` assignments of the `N = Σ in_bit_widths` input bits.
+///      For each assignment, materialise the carrier bytes, call `map`, and read
+///      truth-table entry `f[x] = bit b of output leaf i`.
+///   2. Möbius transform `f` in place → ANF coefficients `c[S]` (over subsets `S`
+///      of the input bits). `c[S] = XOR_{T ⊆ S} f[T]`.
+///   3. Emit `XOR over {S : c[S]=1}` of the AND-monomial `∧_{k ∈ S} Var(reg_k,
+///      bit_k)` of the input variables in `S`. The empty monomial (`S=∅`)
+///      contributes `Const(true)`.
+///
+/// Rows and bits outside the carrier, or beyond a leaf's width, are the identity
+/// `Var(r,b)` (and `Const(false)` for the above-width bits of carrier leaves).
+///
+/// The result is ANF — length is whatever the ANF is (not minimised); A-6.4 /
+/// widen-PC funds the resulting body size. Callers verify with the symbolic
+/// oracle (all-register operands) and/or the exec/net-zero path.
+pub fn table_to_regtransfer(
+    map: impl Fn(&[u8]) -> Vec<u8>,
+    carrier_regs: &[u8],
+    in_bit_widths: &[u8],
+) -> RegTransfer {
+    assert_eq!(
+        carrier_regs.len(),
+        in_bit_widths.len(),
+        "table_to_regtransfer: carrier_regs and in_bit_widths must align"
+    );
+    let n_leaves = carrier_regs.len();
+
+    // Flattened list of meaningful input bits, one entry per bit in carrier
+    // order: `input_vars[k] = (leaf index, register, bit position)` is the k-th
+    // input variable (bit `k` of the packed assignment `x`).
+    let mut input_vars: Vec<(usize, usize, usize)> = Vec::new();
+    for (leaf, (&reg, &w)) in carrier_regs.iter().zip(in_bit_widths.iter()).enumerate() {
+        assert!(
+            (w as usize) <= BITS,
+            "table_to_regtransfer: leaf {leaf} width {w} exceeds BITS={BITS}"
+        );
+        for bit in 0..w as usize {
+            input_vars.push((leaf, reg as usize, bit));
+        }
+    }
+    // The (reg, bit) pair of each input variable, used to build ANF monomials.
+    let var_pairs: Vec<(usize, usize)> = input_vars.iter().map(|&(_, r, b)| (r, b)).collect();
+    let n_in = input_vars.len();
+    assert!(
+        n_in <= 24,
+        "table_to_regtransfer: {n_in} input bits → 2^{n_in} rows is too large to enumerate; \
+         the ANF construction is exponential in the total carrier width"
+    );
+    let n_rows = 1usize << n_in;
+
+    // ── Build the truth table for every output (leaf, bit) in one sweep. ──
+    // truth[leaf][bit][x] = bit `bit` of output leaf `leaf` for input row `x`,
+    // where `x` is the packed assignment of the `n_in` input bits (bit k of `x`
+    // = input_vars[k]).
+    let mut truth: Vec<Vec<Vec<bool>>> = (0..n_leaves)
+        .map(|leaf| {
+            let w = in_bit_widths[leaf] as usize;
+            vec![vec![false; n_rows]; w]
+        })
+        .collect();
+
+    for x in 0..n_rows {
+        // Materialise the carrier bytes for assignment `x`.
+        let mut in_bytes = vec![0u8; n_leaves];
+        for (k, &(leaf, _reg, bit)) in input_vars.iter().enumerate() {
+            if (x >> k) & 1 == 1 {
+                in_bytes[leaf] |= 1 << bit;
+            }
+        }
+        let out_bytes = map(&in_bytes);
+        assert_eq!(
+            out_bytes.len(),
+            n_leaves,
+            "table_to_regtransfer: map returned {} bytes, expected {n_leaves}",
+            out_bytes.len()
+        );
+        for leaf in 0..n_leaves {
+            let w = in_bit_widths[leaf] as usize;
+            for bit in 0..w {
+                truth[leaf][bit][x] = (out_bytes[leaf] >> bit) & 1 == 1;
+            }
+        }
+    }
+
+    // ── Möbius transform each output-bit truth table → ANF, build BvExpr. ──
+    let mut transfer = RegTransfer::identity();
+    for (leaf, &reg) in carrier_regs.iter().enumerate() {
+        let reg = reg as usize;
+        let w = in_bit_widths[leaf] as usize;
+        for bit in 0..w {
+            let coeffs = mobius_transform(&truth[leaf][bit]);
+            transfer.regs[reg][bit] = anf_to_bvexpr(&coeffs, &var_pairs, n_in);
+        }
+        // Above-width bits of a carrier leaf are Flat(w) zero-extended.
+        for bit in w..BITS {
+            transfer.regs[reg][bit] = BvExpr::Const(false);
+        }
+    }
+    transfer
+}
+
+/// In-place Möbius (Reed-Muller) transform of a truth table over `n` bits.
+///
+/// Input `f[x]` is the truth table (`x` packs the `n` input bits). Output is the
+/// ANF coefficient vector `c[S]`, where `c[S] = XOR_{T ⊆ S} f[T]`. Classic
+/// butterfly: for each bit `k`, XOR the low half into the high half. O(n·2^n).
+fn mobius_transform(f: &[bool]) -> Vec<bool> {
+    let len = f.len();
+    debug_assert!(len.is_power_of_two());
+    let mut c = f.to_vec();
+    let mut step = 1usize;
+    while step < len {
+        let mut i = 0usize;
+        while i < len {
+            for j in i..i + step {
+                // The "high" half (index with this bit set) XORs in the "low".
+                let hi = j + step;
+                c[hi] ^= c[j];
+            }
+            i += step << 1;
+        }
+        step <<= 1;
+    }
+    c
+}
+
+/// Build the `BvExpr` for one output bit from its ANF coefficients.
+///
+/// `coeffs[S]` (indexed by the subset bitmask `S` over the `n_in` input bits) is
+/// 1 iff monomial `∧_{k ∈ S} var_pairs[k]` is present. The result is the XOR of
+/// all present monomials; the empty monomial (`S = 0`) is `Const(true)`. If no
+/// coefficient is set the function is the constant `Const(false)`.
+fn anf_to_bvexpr(coeffs: &[bool], var_pairs: &[(usize, usize)], n_in: usize) -> BvExpr {
+    let mut terms: Vec<BvExpr> = Vec::new();
+    for (s, &present) in coeffs.iter().enumerate() {
+        if !present {
+            continue;
+        }
+        // Build the AND-monomial for subset `s`.
+        let mut monomial: Option<BvExpr> = None;
+        for k in 0..n_in {
+            if (s >> k) & 1 == 1 {
+                let (reg, bit) = var_pairs[k];
+                let v = BvExpr::var(reg, bit);
+                monomial = Some(match monomial {
+                    None => v,
+                    Some(m) => m.and(v),
+                });
+            }
+        }
+        terms.push(monomial.unwrap_or(BvExpr::Const(true)));
+    }
+    // XOR all present monomials; none present ⇒ constant 0.
+    let mut it = terms.into_iter();
+    match it.next() {
+        None => BvExpr::Const(false),
+        Some(first) => it.fold(first, |acc, t| acc.xor(t)),
+    }
+}
+
 /// A flat XOR term category (at a fixed bit position).
 enum Term {
     Var(usize),
