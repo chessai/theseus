@@ -1,5 +1,20 @@
 # Project status — where theseus is (2026-07-20)
 
+> **⇒ CURRENT DIRECTION (2026-07-25): TISC-2** — the redesign to run *arbitrary* well-formed
+> theseus programs (see [TISC-2 roadmap](tisc2-roadmap.md)). TISC-1's paradigm (fixed-WCET +
+> reversible park + PC-offset branching) is kept and proven; TISC-2 is a provisioning + compiler
+> + datapath redesign. **Slice A-0 (32-bit instruction word + one shared, scratch-addressable
+> operand crossbar) is validated and merge-ready** on branch `a0-instr-format`: behavior preserved
+> (`t2_real_cpu_all_8` + `t3_real_cpu_oracle` real-`system_step` `run_on_cpu==eval`; scratch-`rd`
+> works through `decode_execute`), two structural blockers found by adversarial review and fixed,
+> and it's a **net energy WIN (−11.9%, fib step_j 3.07e-9→2.71e-9)** because sharing the crossbar
+> (~40 replicated → ~3) more than pays for the wider IR. Operand-addressable scratch is the cure
+> for the register pressure that blocked the GCD (a scratch *frame* alone doesn't work — scratch
+> must be *operand-nameable*). **Next: A-1** — the 2-bit subtractive GCD ships as the first genuine
+> variable-T loop (body ~28, B=194, no widen-PC). Known backlog: lean `lower_iso` for wide-state
+> isos (the 32-bit IR inflates lowering intermediate memory; whole-domain tests OOM, `#[ignore]`'d).
+
+
 One-paragraph orientation for anyone (human or agent) picking this up. theseus
 is a **reversible-computing compiler + adiabatic-silicon backend**: a total,
 reversible source language elaborates to Core Π (an iso calculus), lowers to a
