@@ -243,8 +243,22 @@ pub fn step_ops(rom: &[u32], ops: &[Op]) -> Iso {
 /// `step(rom) : CpuState <-> CpuState` — the ring machine cycle
 /// (decode_execute′, 15 non-MEXCH/MEXCHR ops). Total bijection on CpuState;
 /// SWAPBR is functional, branching works via `PC += BR + 1`.
+///
+/// A-0 shared crossbar: uses the SHARED-crossbar `decoder::decode_execute`
+/// (operands routed once per step) rather than the per-op replicated
+/// `decode_execute_ops(&Op::ALL)`. This is the step net the energy/ring
+/// path lowers, so the sharing is what keeps `me_a3` off the OOM cliff and
+/// drops step_j. Semantically identical to `step_ops(rom, &Op::ALL)`.
 pub fn step(rom: &[u32]) -> Iso {
-    step_ops(rom, &Op::ALL)
+    let f = fetch(rom);
+    let phases = vec![
+        f.clone(),                  // fetch
+        decoder::decode_execute(),  // decode + execute (SHARED crossbar)
+        f,                          // unfetch
+        pc_add_br(),                // PC += BR
+        pc_inc(),                   // PC += 1
+    ];
+    seq_balanced(phases)
 }
 
 /// `system_step(rom) : ((CpuState, MemState), BusMsg) <-> ((CpuState, MemState), BusMsg)` —

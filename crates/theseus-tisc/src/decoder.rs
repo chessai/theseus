@@ -639,8 +639,20 @@ fn sub_instr() -> Iso {
     reg_reg(0b0001, Iso::sym(add_core()))
 }
 
+fn xor_core() -> Iso {
+    std_core(gated_xor_gates(3 * W, PRED3, TGT0, OPD0))
+}
+
+fn exch_core() -> Iso {
+    std_core(
+        (0..W)
+            .map(|i| gate_at(3 * W, &[PRED3, TGT0 + i, OPD0 + i], fredkin_prim()))
+            .collect(),
+    )
+}
+
 fn xor_instr() -> Iso {
-    reg_reg(0b0010, std_core(gated_xor_gates(3 * W, PRED3, TGT0, OPD0)))
+    reg_reg(0b0010, xor_core())
 }
 
 /// EXCH rd, rs: with r[rd] at the r0 slot and the VALUE of r[rs] in s0
@@ -648,12 +660,7 @@ fn xor_instr() -> Iso {
 /// 1-controlled swaps; the swapped s0 content is written back into
 /// r[rs] by the unfetch.
 fn exch_instr() -> Iso {
-    let core = std_core(
-        (0..W)
-            .map(|i| gate_at(3 * W, &[PRED3, TGT0 + i, OPD0 + i], fredkin_prim()))
-            .collect(),
-    );
-    predicated(&r_pred(0b0011), with_two_regs(R_RD, R_RS, core))
+    predicated(&r_pred(0b0011), with_two_regs(R_RD, R_RS, exch_core()))
 }
 
 fn rotl_instr() -> Iso {
@@ -710,35 +717,42 @@ fn cswap_instr() -> Iso {
 /// Value-level aliasing caveat: rs==rt gives rd^=BR_entry∧rt (bijective
 /// but unspecified). The P1 checker / `encode` already rejects via
 /// CcnotNotDistinct.
-fn ccnot_instr() -> Iso {
-    // Swap-fetch operand rt into BR: select_operand(R_RT) routes the
-    // (reg∪scratch) operand rt to the fixed slot, swap it ↔ BR, then
-    // sym routes back. A-0 (BLOCKER-2 fix): reg∪scratch crossbar.
-    // Content-agnostic: whatever was in BR rides in operand rt's cell.
+/// CCNOT's rt→BR swap-fetch bracket (self-inverse). select_operand(R_RT)
+/// routes the (reg∪scratch) operand rt to the fixed r0-slot, swaps it ↔
+/// BR, then routes back. A-0 (BLOCKER-2 fix): reg∪scratch crossbar.
+/// Content-agnostic: whatever was in BR rides in operand rt's cell.
+///
+/// Split out (A-0 shared-crossbar) so it can be hoisted as a shared
+/// bracket in `decode_execute_shared`: the fetch operates on the
+/// UN-permuted register file, so it must sit outside the shared `sel_rd`
+/// crossbar (but inside/beside `fetch_rs`, disjoint slots).
+fn ccnot_fetch_rt_br() -> Iso {
     let sel_rt = select_operand(R_RT, operand_field);
-    let swap_br = at_fields(
-        Iso::SwapProd(word8(), word8()),
-        &[reg_field(0), BR_FIELD],
-    );
-    let fetch_rt_br =
-        Iso::seq(sel_rt.clone(), Iso::seq(swap_br, Iso::sym(sel_rt)));
+    let swap_br = at_fields(Iso::SwapProd(word8(), word8()), &[reg_field(0), BR_FIELD]);
+    Iso::seq(sel_rt.clone(), Iso::seq(swap_br, Iso::sym(sel_rt)))
+}
 
-    // Core: 4-field [r0-slot(rd), s0(rs), BR(rt-value), s1(pred)].
-    // Wire layout: r0-slot = 0..W, s0 = W..2W, BR = 2W..3W, s1 = 3W..4W.
-    // Per-bit CCC-NOT: target = bit i, controls = pred(3W), rs-bit(W+i), rt-bit(2W+i).
+/// CCNOT's state-changing core on the 4 fixed slots
+/// [r0-slot(rd), s0(rs), BR(rt-value), s1(pred)] — gated on the pred bit.
+/// Wire layout: r0-slot = 0..W, s0 = W..2W, BR = 2W..3W, s1 = 3W..4W.
+/// Per-bit CCC-NOT: target = bit i, controls = pred(3W), rs-bit(W+i), rt-bit(2W+i).
+fn ccnot_core() -> Iso {
     let gates = (0..W)
         .map(|i| gate_at(4 * W, &[3 * W, W + i, 2 * W + i, i], cccnot_prim()))
         .collect();
-    let core = on_fields(
+    on_fields(
         &[reg_field(0), AUX_OPERAND_FIELD, BR_FIELD, AUX_PRED_FIELD],
         gates,
-    );
+    )
+}
 
+fn ccnot_instr() -> Iso {
+    let fetch_rt_br = ccnot_fetch_rt_br();
     // Body: fetch_rt_br ; with_two_regs(R_RD, R_RS, core) ; sym(fetch_rt_br)
     let body = Iso::seq(
         fetch_rt_br.clone(),
         Iso::seq(
-            with_two_regs(R_RD, R_RS, core),
+            with_two_regs(R_RD, R_RS, ccnot_core()),
             Iso::sym(fetch_rt_br),
         ),
     );
@@ -843,17 +857,24 @@ fn cross_factor_gated_swap(
 /// crossbar, perform a predicated swap of r0-slot and BR, route back.
 /// No instruction writes PC; the branch offset in BR is consumed by
 /// the end-of-step `pc_add_br ; pc_inc`.
-fn swapbr_instr() -> Iso {
-    // A-0 (BLOCKER-2 fix): route rd over reg∪scratch.
-    let sel = select_operand(R_RD, operand_field);
-    let core = on_fields(
+/// SWAPBR's state-changing core on [r0-slot(rd), BR, s1] — gated swap of
+/// r0-slot ↔ BR. Split out (A-0 shared crossbar) so SWAPBR can join the
+/// shared Group A bracket: it needs only rd→r0-slot (which Group A's
+/// sel_rd provides) and reads BR (untouched by Group A's fetch_rs/sel_rd
+/// over registers). Group A's fetch_rs harmlessly routes r[rs=0]→s0 for a
+/// SWAPBR word (SWAPBR ignores s0; restored on exit).
+fn swapbr_core() -> Iso {
+    on_fields(
         &[reg_field(0), BR_FIELD, AUX_PRED_FIELD],
         (0..W)
             .map(|i| gate_at(3 * W, &[2 * W, i, W + i], fredkin_prim()))
             .collect(),
-    );
-    let body = Iso::seq(sel.clone(), Iso::seq(core, Iso::sym(sel)));
-    predicated(&r_pred(0b1000), body)
+    )
+}
+
+fn swapbr_instr() -> Iso {
+    // A-0 (BLOCKER-2 fix): route rd over reg∪scratch.
+    predicated(&r_pred(0b1000), with_target(R_RD, swapbr_core()))
 }
 
 /// ADDI core on [r0-slot, s0, IR_b0, s1] (A-0): CNOT-mask the imm8
@@ -887,7 +908,7 @@ fn subi_instr() -> Iso {
 /// XORI core on [r0-slot, IR_b0, s1] (A-0): gated CNOTs straight from
 /// the IR immediate bits (IR bits 0..8, all in byte 0, act as controls
 /// — the legal fanout).
-fn xori_instr() -> Iso {
+fn xori_core() -> Iso {
     let n = 3 * W;
     let pred = 2 * W;
     // imm bit j = IR bit j = IR_b0 bit j = wire W + j.
@@ -895,11 +916,11 @@ fn xori_instr() -> Iso {
     let gates: Vec<Iso> = (0..W)
         .map(|j| gate_at(n, &[pred, imm_wire(j), j], toffoli_prim()))
         .collect();
-    let core = on_fields(
-        &[reg_field(0), IR_B0_FIELD, AUX_PRED_FIELD],
-        gates,
-    );
-    predicated(&i_pred(0b010), with_target(I_RD, core))
+    on_fields(&[reg_field(0), IR_B0_FIELD, AUX_PRED_FIELD], gates)
+}
+
+fn xori_instr() -> Iso {
+    predicated(&i_pred(0b010), with_target(I_RD, xori_core()))
 }
 
 /// ROTLI core on [r0-slot, IR_b0, s1] (A-0): barrel rotate controlled
@@ -1002,9 +1023,124 @@ pub fn instruction(op: Op) -> Iso {
 
 /// Decode+execute over a subset of the instruction set (useful for
 /// incremental verification and cost accounting).
+///
+/// Each op re-routes its own operands through the reg∪scratch crossbar
+/// (~40 crossbar instances across the full set). This REPLICATED form is
+/// kept for the per-instruction tests and incremental subsets; the full
+/// ring decoder ([`decode_execute`]) uses the SHARED-crossbar form below.
 pub fn decode_execute_ops(ops: &[Op]) -> Iso {
     assert!(!ops.is_empty(), "nonempty op list");
     seq_balanced(ops.iter().map(|&o| instruction(o)).collect())
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// A-0 shared operand crossbar (decode_execute_shared)
+// ══════════════════════════════════════════════════════════════════════
+//
+// The replicated form routes rd/rs through the 16-way crossbar ONCE PER
+// OP → ~2 crossbars/op × ~11 common ops + the 3-operand/scratch ops →
+// the netlist bloat that OOMs the energy measurement (93.5 GB) and
+// ~doubles step_j. The SHARED form routes operands ONCE per group into
+// the fixed working slots [r0-slot(rd), s0(rs), s1(pred)], runs every
+// op-core in the group gated on its opcode predicate against those
+// slots, then routes back once. Empirically this halves the
+// decode_execute lowered netlist (9730 → 4930 cells) and its lowering
+// peak (~77 → ~39 GB), undoing the ~2× step_j regression.
+//
+// Correctness (why sharing is behaviour-identical to the sequential form):
+// every op in a group carries the SAME routing bracket B (= a self-inverse
+// composition of crossbar/fetch isos). The sequential form is
+//   Σ_i  B ; predicated_i(core_i) ; B⁻¹
+// and between consecutive ops `B⁻¹ ; B = id` cancels EXACTLY (adjoint
+// composition), so it equals
+//   B ; ( Σ_i predicated_i(core_i) ) ; B⁻¹
+// = the shared form. This is pure iso algebra — it holds regardless of
+// what the crossbar permutes, provided the bracket is identical and the
+// per-op predicate/core touch only the fixed slots + IR/s1 (disjoint from
+// the routed transit). Ops whose routing bracket DIFFERS (Cswap routes rt
+// not rd to r0-slot + copies rd[0]; Xchg drives a 2nd scratch crossbar;
+// Swapbr routes rd↔BR) are kept as their own replicated `instruction(op)`
+// — they are a single crossbar each, not the dominant cost.
+
+/// Group A — the reg-reg ops that share the `fetch_rs ; sel_rd` bracket
+/// (rs→s0, rd→r0-slot): Add/Sub/Xor/Exch/Rotl/Rotr. All use only
+/// [r0-slot, s0, s1] and take rs as a genuine 2nd operand. Routed ONCE
+/// for the group.
+///
+/// Swapbr is NOT in this group even though it needs only rd→r0-slot:
+/// Group A's shared `fetch_rs` swap-fetches r[rs] into s0, and Swapbr's
+/// rs field is a don't-care = 0, which ALIASES rd when rd = 0. The fetch
+/// would then displace r0's value into s0, and Swapbr's r0-slot↔BR swap
+/// would read the wrong (zeroed) slot. Swapbr keeps its own `sel_rd`-only
+/// routing (`swapbr_instr`, one crossbar). Same reason the immediates
+/// (which also don't fetch rs) form their own `sel_rd`-only Group B.
+///
+/// Ccnot is NOT in this group: its rt→BR swap-fetch (`ccnot_fetch_rt_br`)
+/// must run on the UN-permuted register file (outside `sel_rd`), yet must
+/// wrap ONLY the ccnot core — an unconditional rt→BR fetch around the
+/// whole group would displace r0's content into BR and corrupt every
+/// non-ccnot core that operates on the r0-slot. Since `sel_rd` is opened
+/// once for the shared group, there is no clean place to insert ccnot's
+/// outside-sel_rd rt fetch. Ccnot keeps its own routing (`ccnot_instr`),
+/// which is a single extra crossbar — not the dominant replicated cost.
+fn group_a_shared() -> Iso {
+    // Shared operand routing = `with_two_regs(R_RD, R_RS, ·)` =
+    //   fetch_rs ; sel_rd ; · ; sel_rd⁻¹ ; fetch_rs⁻¹
+    // (fetch_rs : rs value → s0; sel_rd : rd → r0-slot). fetch_rs operates
+    // on the UN-permuted register file, so it sits OUTSIDE sel_rd (which
+    // permutes the register file for the rd route). ONE fetch_rs + ONE
+    // sel_rd for the whole group instead of one pair per op.
+
+    // Execute phase: each core gated on its opcode predicate, run on the
+    // shared slots. Opcodes are mutually exclusive ⇒ at most one fires.
+    let cores = seq_balanced(vec![
+        predicated(&r_pred(0b0000), add_core()),            // Add
+        predicated(&r_pred(0b0001), Iso::sym(add_core())),  // Sub
+        predicated(&r_pred(0b0010), xor_core()),            // Xor
+        predicated(&r_pred(0b0011), exch_core()),           // Exch
+        predicated(&r_pred(0b0100), rotl_core()),           // Rotl
+        predicated(&r_pred(0b0101), Iso::sym(rotl_core())), // Rotr
+    ]);
+
+    // fetch_rs ; sel_rd ; cores ; sel_rd⁻¹ ; fetch_rs⁻¹  ==  with_two_regs(R_RD, R_RS, cores)
+    with_two_regs(R_RD, R_RS, cores)
+}
+
+/// Group B — the immediate ops that share the `sel_rd` bracket (rd→r0-slot).
+/// No rs fetch: immediates source their 2nd operand from the IR imm bits,
+/// and require s0 = 0 (Group A restored s0 to its entry value). Routed
+/// ONCE for the group.
+fn group_b_shared() -> Iso {
+    let sel_rd = select_operand(R_RD, operand_field);
+    let cores = seq_balanced(vec![
+        predicated(&i_pred(0b000), addi_core()),          // Addi
+        predicated(&i_pred(0b001), Iso::sym(addi_core())), // Subi
+        predicated(&i_pred(0b010), xori_core()),          // Xori
+        predicated(&i_pred(0b011), rotli_core()),         // Rotli
+        predicated(&i_pred(0b100), Iso::sym(rotli_core())), // Rotri
+    ]);
+    Iso::seq(sel_rd.clone(), Iso::seq(cores, Iso::sym(sel_rd)))
+}
+
+/// `decode_execute_shared : CpuState <-> CpuState` — the SHARED-crossbar
+/// form of the full ring decoder. Semantically identical to
+/// `decode_execute_ops(&Op::ALL)` (every op is the identity off its
+/// opcode; opcodes mutually exclusive) but collapses ~40 replicated
+/// crossbar instances down: Group A (Add/Sub/Xor/Exch/Rotl/Rotr) shares
+/// ONE fetch_rs + ONE sel_rd; Group B (the 5 immediates) shares ONE
+/// sel_rd; plus the un-shared ops Ccnot (rt→BR), Cswap (rt→r0-slot +
+/// rd[0] copy), Xchg (2nd scratch crossbar), and Swapbr (rs=0 aliases rd
+/// so it cannot use Group A's fetch_rs) — these do not fit the shared
+/// (rd→D, rs→A) pattern.
+fn decode_execute_shared() -> Iso {
+    seq_balanced(vec![
+        group_a_shared(),
+        ccnot_instr(),
+        cswap_instr(),
+        xchg_instr(),
+        swapbr_instr(),
+        group_b_shared(),
+    ])
 }
 
 /// `decode_execute : CpuState <-> CpuState` — the ring decoder
@@ -1013,23 +1149,25 @@ pub fn decode_execute_ops(ops: &[Op]) -> Iso {
 /// All 15 non-MEXCH/MEXCHR instructions. MEXCH and MEXCHR are handled
 /// by the emit/mem/absorb cycle in [`system_decode_execute`]. Reserved
 /// opcodes (including MEXCH 0b1001 and MEXCHR 0b1010) are the identity.
+///
+/// A-0 shared crossbar: uses [`decode_execute_shared`] (operands routed
+/// once per step) instead of the per-op replicated form.
 pub fn decode_execute() -> Iso {
-    decode_execute_ops(&Op::ALL)
+    decode_execute_shared()
 }
 
 /// `system_decode_execute : (CpuState, MemState) <-> (CpuState, MemState)`
 /// — the composite decoder, non-MEXCH/MEXCHR instructions only (Stage 1b-A).
 ///
-/// All 15 non-MEXCH/MEXCHR ops are `(instruction(op) ⊗ id_MemState)`.
+/// The decoder acts only on the CpuState factor; MemState is identity.
+/// A-0 shared crossbar: tensor the SHARED CpuState decoder with id_Mem
+/// ONCE (not per-op) — this is what the ring/energy path lowers, so the
+/// sharing is what keeps `me_a3` off the OOM cliff.
 /// MEXCH and MEXCHR are handled by the emit/mem/absorb 3-cycle in
 /// `system_step` (Stage 1b-A).
 pub fn system_decode_execute() -> Iso {
     let mem_id = Iso::Id(crate::types::mem_state_ty());
-    let steps: Vec<Iso> = Op::ALL
-        .iter()
-        .map(|&op| Iso::times(instruction(op), mem_id.clone()))
-        .collect();
-    seq_balanced(steps)
+    Iso::times(decode_execute_shared(), mem_id)
 }
 
 // ══════════════════════════════════════════════════════════════════════
