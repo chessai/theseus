@@ -178,9 +178,19 @@ fn encode_operand_out_of_range() {
         encode(Instr::Addi { rd: 31, imm: 0 }),
         Err(AsmError::RegOutOfRange { which: "rd", val: 31 })
     ));
-    // A scratch operand (8..16) is now ACCEPTED (scratch-addressable, A-0).
-    assert!(encode(Instr::Add { rd: 0, rs: 8 }).is_ok(), "rs=8 (s0) is a valid operand");
+    // s0 (idx 8) and s1 (idx 9) are decoder-reserved (operand buffer +
+    // predicate) → rejected as OperandReservedScratch, NOT accepted.
+    assert!(matches!(
+        encode(Instr::Add { rd: 0, rs: 8 }),
+        Err(AsmError::OperandReservedScratch { which: "rs", val: 8 })
+    ));
+    assert!(matches!(
+        encode(Instr::Add { rd: 9, rs: 0 }),
+        Err(AsmError::OperandReservedScratch { which: "rd", val: 9 })
+    ));
+    // Legal scratch operands are s2..s7 (idx 10..16) — scratch-addressable, A-0.
     assert!(encode(Instr::Add { rd: 10, rs: 0 }).is_ok(), "rd=10 (s2) is a valid operand");
+    assert!(encode(Instr::Add { rd: 0, rs: 15 }).is_ok(), "rs=15 (s7) is a valid operand");
 }
 
 #[test]
