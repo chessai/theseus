@@ -419,6 +419,329 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
     })
 }
 
+// ── A-6.1: transcribe_into (fresh disjoint targets) ──────────────────
+
+/// Transcribe a `RegTransfer` spec into gates that XOR each row's function of
+/// the SOURCE operands onto a set of FRESH, disjoint DESTINATION operands.
+///
+/// Semantics: for each spec row `i`, emit gates such that
+/// `dst_ops[i] ^= (spec.regs[i], with every Var(r,·) reading src_ops[r])`,
+/// **assuming `dst_ops` start ZERO and are DISJOINT from `src_ops`**.
+///
+/// This is STRICTLY SIMPLER than the in-place case ([`transcribe_inplace`]):
+/// because the targets are fresh and disjoint from the sources, there is no
+/// self-term to peel, no read-after-write hazard among the outputs, and no
+/// scheduling — each output row is emitted independently, reading only sources
+/// that are never written by this routine. It is the building block A-6.1's
+/// Bennett wrapper composes (compute `O ^= P(x)`, uncompute `O ^= P⁻¹(y)`).
+///
+/// `dst_ops` / `src_ops` are raw **operand indices** over reg∪scratch (A-0:
+/// `0..8` = registers r0..r7, `8..16` = scratch s0..s7). They may name
+/// registers OR scratch words; `transcribe_into` never inspects the model, it
+/// just wires the recognized gate shapes onto the given operand indices.
+///
+/// Row shapes recognized (per spec row, byte-parallel across all `BITS`):
+/// - **copy / affine**: `Σ Var(y_i,·)` → one `Xor { rd: dst, rs: src_ops[y_i] }`
+///   per source term (an identity row `Var(i,·)` is just the single source `i`);
+/// - **constant**: a `Const(true)` at some bits → one `Xori { rd: dst, imm }`;
+/// - **single Toffoli term**: `Var(y,·) ∧ Var(z,·)` → one
+///   `Ccnot { rd: dst, rs: src_ops[y], rt: src_ops[z] }`.
+///
+/// Anything outside this basis (e.g. a `Mux`, a second AND term on one bit, or a
+/// shape not uniform across bits) is rejected with [`SynthError`]. Callers
+/// verify the emission with the symbolic oracle (`symbolic_exec` + `equiv`) when
+/// the operands are all registers, and/or `exec_instr` for the general case.
+pub fn transcribe_into(
+    spec: &RegTransfer,
+    dst_ops: &[u8],
+    src_ops: &[u8],
+) -> Result<Vec<Instr>, SynthError> {
+    // ── Frame + operand-map validation ──────────────────────────────
+    if spec.regs.len() != NUM_REGS {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("frame has {} rows, expected {NUM_REGS}", spec.regs.len()),
+        });
+    }
+    if dst_ops.len() != NUM_REGS {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "dst_ops has {} entries, expected one per spec row ({NUM_REGS})",
+                dst_ops.len()
+            ),
+        });
+    }
+    if src_ops.len() != NUM_REGS {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "src_ops has {} entries, expected one per spec reg ({NUM_REGS})",
+                src_ops.len()
+            ),
+        });
+    }
+    for (r, row) in spec.regs.iter().enumerate() {
+        if row.len() != BITS {
+            return Err(SynthError::MalformedSpec {
+                detail: format!("reg {r} row has {} bits, expected {BITS}", row.len()),
+            });
+        }
+    }
+
+    let mut out = Vec::new();
+    for (i, row) in spec.regs.iter().enumerate() {
+        let dst = dst_ops[i];
+        // Recognize this row as a byte-parallel `f(vars)` in the ISA basis.
+        // NOTE: unlike the in-place case, there is NO self-term to peel — the
+        // fresh target already holds 0 and we XOR the whole function onto it.
+        let (xor_sources, const_mask, and_term) = recognize_into_row(row, i)?;
+        for &y in &xor_sources {
+            let rs = src_ops[y];
+            // A copy where dst == src is `x ^= x = 0` — an ISA-illegal self-XOR
+            // AND a semantic no-op. This only arises for a spec-identity row
+            // whose operand map self-targets (dst==src); such rows contribute
+            // nothing and are skipped. (In the Bennett path dst=ancilla and
+            // src=carrier are always disjoint, so real copies are emitted.)
+            if rs == dst {
+                continue;
+            }
+            out.push(Instr::Xor { rd: dst, rs });
+        }
+        if const_mask != 0 {
+            out.push(Instr::Xori {
+                rd: dst,
+                imm: const_mask,
+            });
+        }
+        if let Some((y, z)) = and_term {
+            out.push(Instr::Ccnot {
+                rd: dst,
+                rs: src_ops[y],
+                rt: src_ops[z],
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Recognized fresh-target row: `(affine sources, const mask, optional single
+/// AND term)`. Indices are SPEC register indices (into `src_ops`).
+type IntoRow = (Vec<usize>, u8, Option<(usize, usize)>);
+
+/// Recognize a fresh-target row `f(vars)` (no self-term) as an [`IntoRow`],
+/// byte-parallel across all bits. Reused by [`transcribe_into`].
+fn recognize_into_row(row: &[BvExpr], r: usize) -> Result<IntoRow, SynthError> {
+    // Classify each bit's flat-XOR terms (identical machinery to the in-place
+    // recognizer, but WITHOUT peeling a self-term first).
+    struct BitClass {
+        sources: Vec<usize>,
+        has_const: bool,
+        and_term: Option<(usize, usize)>,
+    }
+    let mut classes: Vec<BitClass> = Vec::with_capacity(BITS);
+    for (b, e) in row.iter().enumerate() {
+        let terms = flatten_xor(e);
+        let mut sources = Vec::new();
+        let mut has_const = false;
+        let mut at_bit_and: Option<(usize, usize)> = None;
+        for t in terms {
+            match classify_term(t, b) {
+                Some(Term::Var(y)) => sources.push(y),
+                Some(Term::Const) => has_const = true,
+                Some(Term::And(y, z)) => {
+                    if at_bit_and.is_some() {
+                        return Err(SynthError::RowNotInPlace {
+                            reg: r,
+                            detail: format!(
+                                "bit {b} has more than one AND term (needs ≥2 Ccnots — \
+                                 outside transcribe_into's single-Toffoli basis)"
+                            ),
+                        });
+                    }
+                    at_bit_and = Some((y, z));
+                }
+                None => {
+                    return Err(SynthError::RowNotInPlace {
+                        reg: r,
+                        detail: format!("bit {b} has an unsupported XOR term: {t:?}"),
+                    });
+                }
+            }
+        }
+        sources.sort_unstable();
+        classes.push(BitClass {
+            sources,
+            has_const,
+            and_term: at_bit_and,
+        });
+    }
+
+    // Byte-parallel uniformity: the source set and AND term must be identical
+    // across all bits (one gate realizes all 8 bits); the const may vary per bit.
+    let xor_sources = classes[0].sources.clone();
+    let and_term = classes[0].and_term;
+    let mut const_mask: u8 = 0;
+    for (b, c) in classes.iter().enumerate() {
+        if c.sources != xor_sources {
+            return Err(SynthError::RowNotInPlace {
+                reg: r,
+                detail: format!(
+                    "affine sources differ across bits (bit 0: {xor_sources:?}, bit {b}: {:?}) \
+                     — not a whole-register byte-parallel op",
+                    c.sources
+                ),
+            });
+        }
+        if c.and_term != and_term {
+            return Err(SynthError::RowNotInPlace {
+                reg: r,
+                detail: format!(
+                    "AND term differs across bits (bit 0: {and_term:?}, bit {b}: {:?})",
+                    c.and_term
+                ),
+            });
+        }
+        if c.has_const {
+            const_mask |= 1 << b;
+        }
+    }
+    Ok((xor_sources, const_mask, and_term))
+}
+
+// ── A-6.1: the Bennett wrapper (general permutation via ancilla) ─────
+
+/// Textbook Bennett reversible-in-place-permutation: realize a permutation
+/// `P` (given as forward spec `fwd` and its inverse `bwd = P⁻¹`) on a set of
+/// CARRIER operands, using a bank of ZERO-INIT ANCILLA operands that returns to
+/// zero by construction.
+///
+/// Given carriers holding `x` and ancilla `O = 0`:
+/// 1. `O ^= P(x)`   — [`transcribe_into`]`(fwd, dst=ancilla, src=carrier)`.
+///    Now `O = P(x)`, carriers still `x`.
+/// 2. swap carriers ↔ O, per carrier↔ancilla pair (`Exch` for reg↔reg,
+///    `Xchg` when the ancilla is a scratch word). Now carriers `= P(x) = y`,
+///    `O = x`.
+/// 3. `O ^= P⁻¹(y)` — [`transcribe_into`]`(bwd, dst=ancilla, src=carrier)`.
+///    Since carriers now hold `y` and `bwd = P⁻¹`, this XORs `P⁻¹(y) = x` onto
+///    `O(=x)` → `O = 0`. Net-zero ancilla, guaranteed by construction.
+///
+/// Result: carriers hold `P(x)`, ancilla back to `0`. This is the ~2× body the
+/// A-1 finding predicted — CORRECT by construction; length is whatever it is.
+///
+/// `carrier_ops` / `ancilla_ops` are raw operand indices (reg `0..8`, scratch
+/// `8..16`). `ancilla_ops` must be zero-init and have at least
+/// `carrier_ops.len()` words (the extras are unused). Carriers and the used
+/// ancilla words must be disjoint (Bennett requires fresh scratch).
+pub fn transcribe_bennett(
+    fwd: &RegTransfer,
+    bwd: &RegTransfer,
+    carrier_ops: &[u8],
+    ancilla_ops: &[u8],
+) -> Result<Vec<Instr>, SynthError> {
+    let n = carrier_ops.len();
+    if ancilla_ops.len() < n {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "ancilla bank has {} words, need ≥ carriers ({n})",
+                ancilla_ops.len()
+            ),
+        });
+    }
+    // The transcriber operates over a full NUM_REGS frame: build the per-row
+    // dst/src operand maps. Spec register `r` (0..NUM_REGS) reads from carrier
+    // operand `carrier_ops[r]` and (for the compute/uncompute) writes to ancilla
+    // operand `ancilla_ops[r]`. Rows beyond `n` carriers must be identity in the
+    // spec (the permutation only touches the carriers); we still need operand
+    // entries for them, so pad the maps with the carrier/ancilla we have and
+    // require the caller's specs to be identity outside the carriers.
+    if fwd.regs.len() != NUM_REGS || bwd.regs.len() != NUM_REGS {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "fwd/bwd frames must be {NUM_REGS} rows (fwd={}, bwd={})",
+                fwd.regs.len(),
+                bwd.regs.len()
+            ),
+        });
+    }
+    // Disjointness: no carrier may alias a used ancilla word.
+    for c in &carrier_ops[..n] {
+        if ancilla_ops[..n].contains(c) {
+            return Err(SynthError::MalformedSpec {
+                detail: format!("carrier operand {c} aliases an ancilla word (must be disjoint)"),
+            });
+        }
+    }
+
+    // Build NUM_REGS-length dst/src maps. For carrier rows 0..n, src = carrier,
+    // dst = ancilla. For rows n..NUM_REGS (which must be spec-identity), point
+    // both at the carrier operand so any (identity) emission is a self-noop we
+    // never actually emit — but to be safe reject non-identity there.
+    for r in n..NUM_REGS {
+        if !is_identity_row(&fwd.regs[r], r) || !is_identity_row(&bwd.regs[r], r) {
+            return Err(SynthError::MalformedSpec {
+                detail: format!(
+                    "spec touches reg {r} outside the {n} carriers; the permutation must be \
+                     identity on non-carrier registers"
+                ),
+            });
+        }
+    }
+    let mut src_map = vec![0u8; NUM_REGS];
+    let mut dst_map = vec![0u8; NUM_REGS];
+    for r in 0..NUM_REGS {
+        if r < n {
+            src_map[r] = carrier_ops[r];
+            dst_map[r] = ancilla_ops[r];
+        } else {
+            // Non-carrier rows are identity; give them a harmless self-map.
+            src_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
+            dst_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
+        }
+    }
+
+    let mut out = Vec::new();
+
+    // Step 1: O ^= P(x)   (dst = ancilla, src = carriers = x).
+    out.extend(transcribe_into(fwd, &dst_map, &src_map)?);
+
+    // Step 2: swap carriers ↔ ancilla, per pair. Use Exch for reg↔reg, Xchg
+    // (reg↔scratch) when exactly one side is a scratch operand.
+    for i in 0..n {
+        out.push(swap_operands(carrier_ops[i], ancilla_ops[i])?);
+    }
+
+    // Step 3: O ^= P⁻¹(y)  (dst = ancilla, src = carriers = y now). Clears O→0.
+    out.extend(transcribe_into(bwd, &dst_map, &src_map)?);
+
+    Ok(out)
+}
+
+/// Emit the single exchange instruction that swaps two operands `a` and `b`.
+///
+/// - reg↔reg (`a,b < 8`): `Exch { rd: a, rs: b }`.
+/// - reg↔scratch (one side ≥ 8): `Xchg { rd: reg, sx: scratch-8 }`.
+/// - scratch↔scratch: not supported directly (needs a temp register); Bennett
+///   never needs it because the carriers are the working registers. Rejected.
+fn swap_operands(a: u8, b: u8) -> Result<Instr, SynthError> {
+    let a_reg = (a as usize) < NUM_REGS;
+    let b_reg = (b as usize) < NUM_REGS;
+    match (a_reg, b_reg) {
+        (true, true) => Ok(Instr::Exch { rd: a, rs: b }),
+        (true, false) => Ok(Instr::Xchg {
+            rd: a,
+            sx: b - NUM_REGS as u8,
+        }),
+        (false, true) => Ok(Instr::Xchg {
+            rd: b,
+            sx: a - NUM_REGS as u8,
+        }),
+        (false, false) => Err(SynthError::MalformedSpec {
+            detail: format!(
+                "carrier↔ancilla swap of two scratch operands ({a},{b}) is unsupported \
+                 (at least one side must be a register)"
+            ),
+        }),
+    }
+}
+
 /// A flat XOR term category (at a fixed bit position).
 enum Term {
     Var(usize),
