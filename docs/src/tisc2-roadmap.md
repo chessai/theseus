@@ -180,6 +180,23 @@ breaks the single-fixed-step-iso). Not needed for the mandate.
 - **Guard the `Mul`-free `BvExpr` invariant** — it is what makes general prim synthesis polynomial
   and verifiable.
 
+## Backlog / known limitations (surfaced by A-0)
+- **Lean `lower_iso` for wide-state composed isos (BACKLOG, will matter more at A-2).** A-0's 32-bit IR
+  (176-bit CpuState) inflated the *intermediate* memory of `lower_iso(step)` — the fib energy golden
+  (`me_a3`) now peaks ~84 GB (fits on the 94 GB box, but at the edge), and the memory-heavy
+  **whole-domain** tests (`array_map` whole-domain map, `t7_system_ring_closure`, `mexch_reg` heavy
+  case) OOM on this box. This is NOT the energy computation (that already uses the analytic per-cell
+  `analytic_buffer_count`, no `balance()` materialization) — it is the netlist *lowering*'s
+  intermediate blowup over the wider state. It is a validation-infra cost of the 32-bit-max-headroom
+  choice, not a behavior or correctness problem (behavior is validated via `t2_real_cpu_all_8` +
+  `t3_real_cpu_oracle`; `me_a3` at 84 GB and `mexch_reg` at 74 GB both fit alone and are green). The
+  earlier full-suite OOMs were largely **contention** from orphaned stray search processes (since
+  cleaned up); the genuinely-too-big cases are the whole-domain tests already carrying `#[ignore]`
+  (`array_map` whole-domain, `t7_system_ring_closure`). **Decision (option 2):** proceed — the heavy
+  goldens fit at the RAM edge, the whole-domain OOM-ers stay `#[ignore]`'d + documented; a proper
+  *streaming / low-intermediate-memory* `lower_iso` for wide-state isos is a deliberate backlog item
+  (A-2 widens PC further, so it will bite harder — do it before/with A-2, not rushed).
+
 ## The pivot that produced this roadmap (for the record)
 The prior plan (widen-PC to unblock the GCD) was **symptom-chasing**: the GCD was blocked by
 *register pressure*, not PC width; widening the PC treats the symptom and pays a permanent energy
