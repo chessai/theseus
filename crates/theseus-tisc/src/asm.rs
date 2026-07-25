@@ -64,6 +64,12 @@ pub enum AsmError {
     /// An operand index is out of range (must be < 16 = `reg ∪ scratch`;
     /// A-0). `which` is "rd"/"rs"/"rd".
     RegOutOfRange { which: &'static str, val: u8 },
+    /// An operand names decoder-reserved scratch s0 (idx 8) or s1 (idx 9)
+    /// as an rd/rs/rt operand. s0 is the operand/immediate buffer and s1
+    /// the predicate/carry scratch — routing them into the datapath
+    /// mid-instruction corrupts decode. Legal scratch operands are
+    /// s2..s7 (idx 10..15). `which` is "rd"/"rs"/"rt".
+    OperandReservedScratch { which: &'static str, val: u8 },
     /// A two-operand instruction has `rd == rs` (non-injective datapath).
     AliasedOperands { mnemonic: &'static str, rd: u8, rs: u8 },
     /// CSWAP operands are not pairwise distinct.
@@ -91,6 +97,14 @@ impl fmt::Display for AsmError {
         match self {
             AsmError::RegOutOfRange { which, val } => {
                 write!(f, "register index out of range: {which}={val}")
+            }
+            AsmError::OperandReservedScratch { which, val } => {
+                write!(
+                    f,
+                    "operand {which}={val} names decoder-reserved scratch s{} \
+                     (s0/s1 are the operand/predicate buffers; legal scratch operands are s2..s7)",
+                    val - NUM_REGS as u8
+                )
             }
             AsmError::AliasedOperands { mnemonic, rd, rs } => {
                 write!(f, "{mnemonic} r{rd}, r{rs}: aliased operands are illegal (non-injective datapath)")
@@ -181,11 +195,21 @@ pub enum Instr {
     Rotri { rd: u8, imm: u8 },
 }
 
-/// Validate one 5-bit operand index against `reg ∪ scratch` (0..16).
-/// Rejects `≥ 16` (the reserved locations, which no crossbar routes).
+/// Validate one 5-bit operand index against the *legal* operand space
+/// (A-0, MAJOR-4). Legal operands are:
+///   - `0..8`   → r0..r7 (general registers), and
+///   - `10..16` → s2..s7 (scratch operands).
+/// Rejected:
+///   - `8`/`9`  → s0/s1, the decoder-reserved operand/predicate buffers
+///     (routing them into the datapath mid-instruction corrupts decode);
+///   - `≥ 16`   → reserved locations no crossbar routes.
 fn check_operand(which: &'static str, val: u8) -> Result<(), AsmError> {
     if (val as usize) >= NUM_OPERAND_LOCS {
         return Err(AsmError::RegOutOfRange { which, val });
+    }
+    // idx 8 = s0, idx 9 = s1 are decoder-reserved.
+    if val == NUM_REGS as u8 || val == NUM_REGS as u8 + 1 {
+        return Err(AsmError::OperandReservedScratch { which, val });
     }
     Ok(())
 }
@@ -303,14 +327,30 @@ pub fn encode(instr: Instr) -> Result<u32, AsmError> {
 ///
 /// Returns `None` for reserved opcodes and for R-format words with
 /// nonzero spare bits (which `encode` never emits).
+///
+/// MAJOR-3 (decode/datapath agreement): `decode_execute`'s predicates
+/// test only the **low 4** opcode bits (R) / **low 3** (I) — widening
+/// them to the full 6-bit opcode is DEFERRED (it needs the s1-convention
+/// rework: `pred_compute` caps at 5 controls / 3 chain-scratch bits, and
+/// s1 bit 4 already holds CSWAP's control copy, so 6 opcode bits + fmt =
+/// 7 controls do not fit). Until then the datapath dispatches on the low
+/// opcode bits, so a word whose HIGH opcode bits are set aliases a live
+/// op (e.g. R opcode 0b011001 = 25 executes as MEXCH 0b1001). `encode`
+/// never emits such a word (all architected opcodes fit the low bits, and
+/// `assemble` is the sole ROM source), so no emitted ROM can contain one.
+/// To keep `decode` (hence the fast sim) from silently DISAGREEING with
+/// the datapath on hand-crafted words, `decode` masks the opcode to the
+/// same low bits the datapath tests — so `decode` returns exactly the op
+/// the hardware would execute, never a mismatched `None`.
 pub fn decode(word: u32) -> Option<Instr> {
-    let opcode = (word >> OPCODE_SHIFT) & 0x3F; // 6-bit opcode
     let rd = ((word >> RD_SHIFT) & 0x1F) as u8; // 5-bit operand
     if word & (1 << FMT_SHIFT) != 0 {
         // R-format: spare bits 9..0 must be zero.
         if word & ((1u32 << RT_SHIFT) - 1) != 0 {
             return None;
         }
+        // Datapath tests only the low 4 opcode bits (MAJOR-3, deferred).
+        let opcode = (word >> OPCODE_SHIFT) & 0xF;
         let rs = ((word >> RS_SHIFT) & 0x1F) as u8;
         let rt = ((word >> RT_SHIFT) & 0x1F) as u8;
         match opcode {
@@ -329,7 +369,8 @@ pub fn decode(word: u32) -> Option<Instr> {
             _ => None, // reserved
         }
     } else {
-        let opc = opcode;
+        // Datapath tests only the low 3 opcode bits (MAJOR-3, deferred).
+        let opc = (word >> OPCODE_SHIFT) & 0x7;
         let imm = (word & 0xFF) as u8; // low 8 bits of the 20-bit imm
         match opc {
             0b000 => Some(Instr::Addi { rd, imm }),

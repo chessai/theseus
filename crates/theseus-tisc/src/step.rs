@@ -1,7 +1,8 @@
 //! TISC-1 `step`: the full fetch–decode/execute–unfetch–advance machine
 //! cycle, `step(rom) : State <-> State` (tisc-1-spec §4, ADR-0034).
 //!
-//! The ROM is a compile-time-constant slice of 16-bit instruction words;
+//! The ROM is a compile-time-constant slice of 32-bit instruction words
+//! (A-0 widened the instruction word 16 → 32 bits);
 //! `step` is one iso composed of five phases:
 //!
 //! 1. **Fetch** — CNOT the ROM word at address PC onto the (zero) IR.

@@ -471,6 +471,110 @@ fn full_decoder_reserved_opcodes_are_identity() {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// A-0 BLOCKER regression tests — MUST run THROUGH decode_execute (L20).
+// These would have caught the two shipped BLOCKERs; the pre-A-0 fast gate
+// never exercised decode_execute, which is why they slipped through.
+// ══════════════════════════════════════════════════════════════════════
+
+/// BLOCKER-2: a scratch operand (`Ccnot r0, r1, s2`) must execute against
+/// s2 (scratch[2]), NOT r2 — proving the reg∪scratch crossbar is wired
+/// into the instruction, not just the orphaned `select_operand` iso.
+/// Runs through the full `decode_execute` iso (`light_ctx`).
+#[test]
+fn blocker2_ccnot_uses_scratch_operand_through_decode_execute() {
+    use theseus_tisc::asm::{encode, Instr};
+    // Ccnot rd=r0, rs=r1, rt=s2 (operand index 10). r0 ^= r1 & s2.
+    let ir = encode(Instr::Ccnot { rd: 0, rs: 1, rt: 10 }).expect("encode");
+    // Distinct values so routing errors are visible: r2 != s2, and the
+    // AND with r2 would give a DIFFERENT result than with s2.
+    //   r0=0x00, r1=0xFF, r2=0x0F (the wrong operand), s2=0xAA (right).
+    // Correct:  r0 ^= 0xFF & 0xAA = 0xAA.
+    // If it wrongly used r2: r0 ^= 0xFF & 0x0F = 0x0F.
+    let mut regs = [0u8; 8];
+    regs[1] = 0xFF;
+    regs[2] = 0x0F; // the WRONG operand — must be ignored
+    let s = StateVals {
+        regs,
+        pc: 0,
+        br: 0,
+        ir,
+        // s0=s1=0 (decoder convention); s2 = 0xAA is the intended operand.
+        scratch: [0x00, 0x00, 0xAA, 0, 0, 0, 0, 0],
+        mem: [0; MEM_WORDS],
+    };
+    let got = eval_state("blocker2/ccnot-s2", light_ctx(), &s);
+    assert_eq!(
+        got.regs[0], 0xAA,
+        "Ccnot r0,r1,s2 must use s2 (0xAA) → r0=0xAA; got {:#04x} \
+         (0x0F would mean it wrongly used r2)",
+        got.regs[0]
+    );
+    // Operands and IR otherwise preserved (Ccnot leaves rs, rt intact).
+    assert_eq!(got.regs[1], 0xFF, "r1 (rs) preserved");
+    assert_eq!(got.scratch[2], 0xAA, "s2 (rt) preserved");
+    assert_eq!(got.ir, ir, "IR preserved");
+    // s0/s1 restored to 0.
+    assert_eq!(got.scratch[0], 0, "s0 restored");
+    assert_eq!(got.scratch[1], 0, "s1 restored");
+}
+
+/// BLOCKER-1: an odd-immediate I-op (`Addi r7, #1`) must NOT fire XCHG's
+/// gated swap. Pre-fix, XCHG keyed off IR bit 0 (= the imm LSB post-A-0),
+/// so any odd imm spuriously swapped r[rd&7] ↔ s0 before the add. Runs
+/// through the full `decode_execute` iso.
+#[test]
+fn blocker1_odd_imm_iop_does_not_fire_xchg_through_decode_execute() {
+    use theseus_tisc::asm::{encode, Instr};
+    let ir = encode(Instr::Addi { rd: 7, imm: 0x01 }).expect("encode");
+    let mut regs = [0u8; 8];
+    regs[7] = 0x87; // arbitrary; expect +1 = 0x88
+    let s = StateVals {
+        regs,
+        pc: 0,
+        br: 0,
+        ir,
+        // s0 = 0x5A: a sentinel. If XCHG spuriously fired it would land
+        // in r7 (or corrupt s0); a clean Addi leaves s0 untouched.
+        scratch: [0x5A, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66],
+        mem: [0; MEM_WORDS],
+    };
+    let got = eval_state("blocker1/addi-odd", light_ctx(), &s);
+    assert_eq!(got.regs[7], 0x88, "Addi r7,#1: r7 must be 0x87+1=0x88");
+    assert_eq!(
+        got.scratch[0], 0x5A,
+        "s0 must be untouched — a nonzero delta means XCHG spuriously fired"
+    );
+    // Every other reg unchanged.
+    for i in 0..7 {
+        assert_eq!(got.regs[i], 0, "r{i} must be untouched by Addi r7");
+    }
+    assert_eq!(got.ir, ir, "IR preserved");
+}
+
+/// BLOCKER-1 (broader): an odd-imm op on a HIGH register (rd&7 collision)
+/// must still not swap. `Xori r5, #0x0B` (odd) — the pre-fix swap would
+/// have hit r5 ↔ s0.
+#[test]
+fn blocker1_odd_imm_xori_clean_through_decode_execute() {
+    use theseus_tisc::asm::{encode, Instr};
+    let ir = encode(Instr::Xori { rd: 5, imm: 0x0B }).expect("encode");
+    let mut regs = [0u8; 8];
+    regs[5] = 0xF0;
+    let s = StateVals {
+        regs,
+        pc: 0,
+        br: 0,
+        ir,
+        scratch: [0xC7, 0x00, 0, 0, 0, 0, 0, 0],
+        mem: [0; MEM_WORDS],
+    };
+    let got = eval_state("blocker1/xori-odd", light_ctx(), &s);
+    assert_eq!(got.regs[5], 0xF0 ^ 0x0B, "Xori r5,#0x0B");
+    assert_eq!(got.scratch[0], 0xC7, "s0 untouched (XCHG did not fire)");
+    assert_eq!(got.ir, ir, "IR preserved");
+}
+
 /// Smoke faithfulness: one sample per opcode class to verify the
 /// balance path. Ignored by default — balance() alone takes ~50s.
 /// Per-instruction lowering (test 2) covers structural correctness;

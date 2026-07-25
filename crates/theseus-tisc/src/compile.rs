@@ -3342,62 +3342,78 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
 
 /// Execute one TISC-1 instruction on the machine state (direct simulation).
 pub fn exec_instr(instr: Instr, state: &mut StateVals) {
+    // A-0 (BLOCKER-2 fix): rd/rs/rt are operand indices over reg∪scratch
+    // (0..8 → r, 8..16 → s), matching the datapath's `select_operand`
+    // crossbar; use the `operand_*` accessors so the fast sim agrees with
+    // the hardware on scratch operands. `sx`/`addr` remain scratch/mem
+    // indices (not operand indices) and index directly.
     match instr {
         Instr::Add { rd, rs } => {
-            state.regs[rd as usize] = state.regs[rd as usize].wrapping_add(state.regs[rs as usize]);
+            state.operand_set(rd, state.operand_get(rd).wrapping_add(state.operand_get(rs)));
         }
         Instr::Sub { rd, rs } => {
-            state.regs[rd as usize] = state.regs[rd as usize].wrapping_sub(state.regs[rs as usize]);
+            state.operand_set(rd, state.operand_get(rd).wrapping_sub(state.operand_get(rs)));
         }
         Instr::Xor { rd, rs } => {
-            state.regs[rd as usize] ^= state.regs[rs as usize];
+            state.operand_set(rd, state.operand_get(rd) ^ state.operand_get(rs));
         }
         Instr::Exch { rd, rs } => {
-            state.regs.swap(rd as usize, rs as usize);
+            state.operand_swap(rd, rs);
         }
         Instr::Rotl { rd, rs } => {
-            let amount = state.regs[rs as usize] & 7;
-            state.regs[rd as usize] = state.regs[rd as usize].rotate_left(amount as u32);
+            let amount = state.operand_get(rs) & 7;
+            state.operand_set(rd, state.operand_get(rd).rotate_left(amount as u32));
         }
         Instr::Rotr { rd, rs } => {
-            let amount = state.regs[rs as usize] & 7;
-            state.regs[rd as usize] = state.regs[rd as usize].rotate_right(amount as u32);
+            let amount = state.operand_get(rs) & 7;
+            state.operand_set(rd, state.operand_get(rd).rotate_right(amount as u32));
         }
         Instr::Cswap { rd, rs, rt } => {
-            if state.regs[rd as usize] & 1 == 1 {
-                state.regs.swap(rs as usize, rt as usize);
+            if state.operand_get(rd) & 1 == 1 {
+                state.operand_swap(rs, rt);
             }
         }
         Instr::Ccnot { rd, rs, rt } => {
-            state.regs[rd as usize] ^= state.regs[rs as usize] & state.regs[rt as usize];
+            state.operand_set(rd, state.operand_get(rd) ^ (state.operand_get(rs) & state.operand_get(rt)));
         }
         Instr::Xchg { rd, sx } => {
-            std::mem::swap(&mut state.regs[rd as usize], &mut state.scratch[sx as usize]);
+            let rv = state.operand_get(rd);
+            let sv = state.scratch[sx as usize];
+            state.operand_set(rd, sv);
+            state.scratch[sx as usize] = rv;
         }
         Instr::Mexch { rd, addr } => {
-            std::mem::swap(&mut state.regs[rd as usize], &mut state.mem[addr as usize]);
+            let rv = state.operand_get(rd);
+            let mv = state.mem[addr as usize];
+            state.operand_set(rd, mv);
+            state.mem[addr as usize] = rv;
         }
         Instr::MexchReg { rd, ra } => {
-            let addr = (state.regs[ra as usize] as usize) % MEM_WORDS;
-            std::mem::swap(&mut state.regs[rd as usize], &mut state.mem[addr]);
+            let addr = (state.operand_get(ra) as usize) % MEM_WORDS;
+            let rv = state.operand_get(rd);
+            let mv = state.mem[addr];
+            state.operand_set(rd, mv);
+            state.mem[addr] = rv;
         }
         Instr::Swapbr { rd } => {
-            std::mem::swap(&mut state.regs[rd as usize], &mut state.br);
+            let rv = state.operand_get(rd);
+            state.operand_set(rd, state.br);
+            state.br = rv;
         }
         Instr::Addi { rd, imm } => {
-            state.regs[rd as usize] = state.regs[rd as usize].wrapping_add(imm);
+            state.operand_set(rd, state.operand_get(rd).wrapping_add(imm));
         }
         Instr::Subi { rd, imm } => {
-            state.regs[rd as usize] = state.regs[rd as usize].wrapping_sub(imm);
+            state.operand_set(rd, state.operand_get(rd).wrapping_sub(imm));
         }
         Instr::Xori { rd, imm } => {
-            state.regs[rd as usize] ^= imm;
+            state.operand_set(rd, state.operand_get(rd) ^ imm);
         }
         Instr::Rotli { rd, imm } => {
-            state.regs[rd as usize] = state.regs[rd as usize].rotate_left((imm & 7) as u32);
+            state.operand_set(rd, state.operand_get(rd).rotate_left((imm & 7) as u32));
         }
         Instr::Rotri { rd, imm } => {
-            state.regs[rd as usize] = state.regs[rd as usize].rotate_right((imm & 7) as u32);
+            state.operand_set(rd, state.operand_get(rd).rotate_right((imm & 7) as u32));
         }
     }
 }

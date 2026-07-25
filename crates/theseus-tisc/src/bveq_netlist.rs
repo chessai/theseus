@@ -25,7 +25,8 @@ use crate::types::{MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_REGS, W};
 /// Number of operands in the extended VarMap: 8 regs + s0 + BR + 4 mem.
 pub const EXTENDED_NUM_OPERANDS: usize = NUM_REGS + 1 + 1 + MEM_WORDS; // 14
 
-/// VarMap operand index for scratch word s0 (CpuState field 12).
+/// VarMap operand index for scratch word s0 (CpuState field 14 — A-0
+/// 32-bit IR shifted the scratch base 12 → 14).
 pub const OP_S0: usize = NUM_REGS; // 8
 
 /// VarMap operand index for BR (CpuState field 9).
@@ -485,7 +486,7 @@ pub fn build_cpu_init(map: &VarMap, ir_word: u32, pin_s0_zero: bool) -> SV {
 pub fn build_system_init(map: &VarMap, pin_s0_zero: bool) -> SV {
     let vs = map.bdd_vars();
 
-    // CpuState (NUM_CPU_FIELDS = 20 fields)
+    // CpuState (NUM_CPU_FIELDS = 22 fields — A-0 32-bit IR)
     let mut cpu_fields = Vec::with_capacity(NUM_CPU_FIELDS);
     for i in 0..NUM_REGS {
         cpu_fields.push(sv_word8_symbolic(map, i));

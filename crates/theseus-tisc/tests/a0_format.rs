@@ -74,10 +74,13 @@ fn roundtrip_scratch_operands() {
     assert_eq!(decode(word2), Some(ins2));
     assert_eq!((word2 >> 20) & 0x1F, 13, "rd field must hold operand index 13 (s5)");
 
-    // The full 0..16 operand range round-trips through the rs field.
-    for i in 0..16u8 {
-        // Add rd=..,rs=i needs rd != rs; pick rd = (i+1)%16.
-        let rd = (i + 1) % 16;
+    // The legal operand range round-trips through the rs field: registers
+    // r0..r7 (0..8) and scratch operands s2..s7 (10..16). s0/s1 (8/9) are
+    // decoder-reserved (MAJOR-4) and rejected — see `rejects_reserved_operands`.
+    for i in (0..8u8).chain(10..16u8) {
+        // Add rd=..,rs=i needs rd != rs and rd legal; pick a distinct
+        // legal register for rd.
+        let rd = if i == 0 { 1 } else { 0 };
         let ins = Instr::Add { rd, rs: i };
         let word = encode(ins).unwrap_or_else(|e| panic!("encode Add rs={i}: {e}"));
         assert_eq!(decode(word), Some(ins), "rs={i} round-trip");
@@ -85,6 +88,51 @@ fn roundtrip_scratch_operands() {
 
     // Index ≥ 16 (reserved) is rejected.
     assert!(encode(Instr::Add { rd: 0, rs: 16 }).is_err(), "rs=16 must be rejected");
+}
+
+#[test]
+fn rejects_reserved_operands() {
+    use theseus_tisc::asm::AsmError;
+    // MAJOR-4: s0 (idx 8) and s1 (idx 9) are decoder-reserved and must be
+    // rejected as rd/rs/rt operands (routing the live predicate/operand
+    // buffer into the datapath mid-instruction corrupts decode).
+    for &(which, ins) in &[
+        ("rd", Instr::Add { rd: 8, rs: 0 }),
+        ("rs", Instr::Add { rd: 0, rs: 8 }),
+        ("rd", Instr::Add { rd: 9, rs: 0 }),
+        ("rs", Instr::Add { rd: 0, rs: 9 }),
+        ("rt", Instr::Ccnot { rd: 0, rs: 1, rt: 8 }),
+        ("rt", Instr::Ccnot { rd: 0, rs: 1, rt: 9 }),
+    ] {
+        match encode(ins) {
+            Err(AsmError::OperandReservedScratch { .. }) => {}
+            other => panic!(
+                "{ins:?} ({which}=reserved scratch) must be rejected as \
+                 OperandReservedScratch, got {other:?}"
+            ),
+        }
+    }
+
+    // Legal scratch operands s2..s7 (idx 10..16) are accepted.
+    for i in 10..16u8 {
+        assert!(
+            encode(Instr::Add { rd: 0, rs: i }).is_ok(),
+            "s{} (idx {i}) must be a legal operand",
+            i - 8
+        );
+    }
+
+    // Reserved locations idx ≥ 16 are rejected (RegOutOfRange).
+    for &ins in &[
+        Instr::Add { rd: 16, rs: 0 },
+        Instr::Add { rd: 0, rs: 31 },
+        Instr::Ccnot { rd: 0, rs: 1, rt: 20 },
+    ] {
+        match encode(ins) {
+            Err(AsmError::RegOutOfRange { .. }) => {}
+            other => panic!("{ins:?} (idx ≥ 16) must be RegOutOfRange, got {other:?}"),
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════

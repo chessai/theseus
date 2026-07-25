@@ -66,3 +66,41 @@ Add an `AsmError` for it.
 ## Required before A-0 returns
 Fix BLOCKER-1 + BLOCKER-2 (+ MAJOR-3/4), each with a regression test that runs THROUGH `decode_execute`
 (L20); the heavy tier + the design doc's `run_on_cpu == eval` differential oracle must be green.
+
+## Resolution (Opus, worktree `a0-instr-format`)
+
+- **BLOCKER-1 fixed** (`decoder.rs` `xchg_instr`): the gated swap is now **2-controlled** on
+  `fmt (IR bit 31) ∧ IR[0]-pred-copy` (`gated_fredkin_prim` over fields `[IR_b3, IR_lo, reg0, scratch0]`).
+  fmt (bit 31, in IR_b3) is routing-stable (the reg/scratch crossbars never touch it) and is 0 for every
+  I-format word, so the swap is inert for ALL I-ops regardless of the imm LSB. For an R-format XCHG the
+  spare bit IR[0] is 0, so the pred-copy gives `fmt(=1) ∧ pred`; the copy is self-inverse and restores IR.
+  Regression: `blocker1_odd_imm_iop_does_not_fire_xchg_through_decode_execute` (+ `..._xori_...`);
+  `full_decoder_arithmetic` now PASSES.
+
+- **BLOCKER-2 fixed**: every operand fetch now routes through `select_operand(sel, operand_field)` (the
+  reg∪scratch 16-way crossbar) instead of the 8-way `select_reg` — `fetch_operand`, `with_target`, ccnot
+  rt, xchg rd, swapbr, and the MEXCH/MEXCHR emit brackets. Register operands (idx 0..8) have operand-bit 3
+  = 0, so the extra top crossbar level is inert ⇒ behaviour unchanged for existing ROMs; scratch operands
+  (idx 8..16) route s[idx−8] to the fixed slot. `exec_instr` (the fast sim) now indexes operands via new
+  `StateVals::operand_get/set/swap` (idx 8..15 → scratch[idx−8]), so asm / hardware / fast-sim agree.
+  Regression: `blocker2_ccnot_uses_scratch_operand_through_decode_execute`.
+
+- **MAJOR-4 fixed** (`asm.rs` `check_operand`): rd/rs/rt operands 8/9 (s0/s1, decoder-reserved) are
+  rejected with the new `AsmError::OperandReservedScratch`; legal scratch operands are s2..s7 (idx 10..15);
+  idx ≥ 16 stays `RegOutOfRange`. Regression: `rejects_reserved_operands` (a0_format).
+
+- **MAJOR-3 made safe; full predicate-widening DEFERRED.** The datapath predicates still test only the low
+  4 (R) / 3 (I) opcode bits — widening to the full 6-bit opcode needs the s1-convention rework
+  (`pred_compute` caps at 5 controls / 3 chain-scratch bits, and s1 bit 4 is CSWAP's control copy, so
+  fmt + 6 opcode bits = 7 controls do not fit). This is SAFE because `asm::encode` only ever emits opcodes
+  that fit the low bits and `assemble` is the sole ROM source, so no emitted ROM word can have a high
+  opcode bit set (no reserved word can reach the datapath / trigger a bus swap in practice). To remove the
+  silent decode/datapath DIVERGENCE on hand-crafted words, `asm::decode` now masks the opcode to the same
+  low bits the datapath tests, so decode (hence the fast sim) returns exactly the op the hardware executes
+  rather than a mismatched `None`. Documented in `decoder.rs` module docs and `asm::decode`. **Remaining
+  A-6 follow-up: the s1-convention rework to widen the predicates before the opcode space grows.**
+
+- **MINORs**: M-7 stale docs corrected (`types.rs`, `step.rs`, `bveq_netlist.rs`, `decoder.rs`). M-5 (decode
+  drops imm bits 8..19) is SAFE and left as-is: the datapath reads only IR byte 0, so decode and the
+  datapath both ignore the high imm bits (documented in `i_word`). M-6 (reserved operand idx 16..31 aliasing
+  / 5th tree level) is documented in `RegSel` / `select_operand` and gated by `check_operand`.

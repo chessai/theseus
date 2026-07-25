@@ -27,12 +27,22 @@
 //!    instructions run in sequence; opcodes are mutually exclusive, so
 //!    at most one fires.
 //!
-//!    **Reserved opcodes** (R 1100–1111 and I 101–111) match no
-//!    predicate, so `decode_execute` is the identity on them at the
-//!    iso level (MEXCH 1001 and MEXCHR 1010 are handled by
-//!    emit/mem/absorb). Source-level ISA totality
-//!    (rejecting reserved opcodes as compile errors) is the coverage
-//!    checker's job (P1) and is out of scope here.
+//!    **Reserved opcodes.** The predicates test only the **low 4** opcode
+//!    bits (R) / **low 3** (I) — the two high opcode bits are NOT tested
+//!    (MAJOR-3, widening deferred: `pred_compute` caps at 5 controls and
+//!    s1 bit 4 is CSWAP's control copy, so fmt + 6 opcode bits = 7 controls
+//!    do not fit without the s1-convention rework). Consequently a word
+//!    whose HIGH opcode bits are set ALIASES the live op with the same low
+//!    bits (e.g. R opcode 25 = 0b011001 executes as MEXCH 0b1001). This is
+//!    SAFE for every emitted ROM: `asm::encode` only ever emits opcodes
+//!    that fit the low bits, and `assemble` is the sole ROM source, so no
+//!    ROM word can have a high opcode bit set. `asm::decode` masks the
+//!    opcode to the same low bits the datapath tests, so decode and the
+//!    datapath AGREE on hand-crafted words too (no silent divergence).
+//!    Low-bit patterns that match no live op (R low 1100–1111, I low
+//!    101–111) ARE the identity at the iso level. MEXCH 1001 and MEXCHR
+//!    1010 are handled by emit/mem/absorb. Source-level ISA totality is
+//!    the coverage checker's job (P1) and is out of scope here.
 //!
 //! ## Conventions and caveats (documented, enforced by the P1 checker
 //! at source level, not by this iso)
@@ -567,17 +577,23 @@ fn gated_rotl_gates(n: usize, pred: usize, t0: usize, ctrl: impl Fn(usize) -> us
 /// fixed s0 slot). Exact inverse restores both; zero cells beyond the
 /// two crossbar traversals.
 fn fetch_operand(src: RegSel) -> Iso {
-    let sel = select_reg(src);
+    // A-0 (BLOCKER-2 fix): route over reg∪scratch (the full 16-way
+    // crossbar), not the 8-way register-only tree. A register operand
+    // (idx 0..8) has operand-bit 3 = 0, so the top crossbar level is
+    // inert and behaviour is identical to the old `select_reg`; a scratch
+    // operand (idx 8..16) brings s[idx-8] to the fixed slot `operand_field(0)`.
+    let sel = select_operand(src, operand_field);
     let swap = at_fields(
         Iso::SwapProd(word8(), word8()),
-        &[reg_field(0), AUX_OPERAND_FIELD],
+        &[operand_field(0), AUX_OPERAND_FIELD],
     );
     Iso::seq(sel.clone(), Iso::seq(swap, Iso::sym(sel)))
 }
 
-/// Route `r[sel]` to the fixed slot, apply `core`, route back.
+/// Route operand `sel` (over reg∪scratch) to the fixed slot, apply
+/// `core`, route back. A-0 (BLOCKER-2 fix): the crossbar spans reg∪scratch.
 fn with_target(sel: RegSel, core: Iso) -> Iso {
-    let s = select_reg(sel);
+    let s = select_operand(sel, operand_field);
     Iso::seq(s.clone(), Iso::seq(core, Iso::sym(s)))
 }
 
@@ -695,10 +711,11 @@ fn cswap_instr() -> Iso {
 /// but unspecified). The P1 checker / `encode` already rejects via
 /// CcnotNotDistinct.
 fn ccnot_instr() -> Iso {
-    // Swap-fetch r[rt] into BR: select_reg(R_RT) routes r[rt] to r0-slot,
-    // swap r0-slot ↔ BR, then sym(select_reg(R_RT)) routes back.
-    // Content-agnostic: whatever was in BR rides in r[rt]'s cell.
-    let sel_rt = select_reg(R_RT);
+    // Swap-fetch operand rt into BR: select_operand(R_RT) routes the
+    // (reg∪scratch) operand rt to the fixed slot, swap it ↔ BR, then
+    // sym routes back. A-0 (BLOCKER-2 fix): reg∪scratch crossbar.
+    // Content-agnostic: whatever was in BR rides in operand rt's cell.
+    let sel_rt = select_operand(R_RT, operand_field);
     let swap_br = at_fields(
         Iso::SwapProd(word8(), word8()),
         &[reg_field(0), BR_FIELD],
@@ -729,23 +746,43 @@ fn ccnot_instr() -> Iso {
 }
 
 /// XCHG rd, sx: gated swap of the routed register and scratch slots.
-/// The scratch crossbar scrambles s1's position, so the predicate is
-/// first copied onto the R-format pad bit IR[0] (architecturally zero)
-/// which stays fixed during routing; the copy is removed afterwards,
-/// preserving IR.
+///
+/// A-0 (BLOCKER-1 fix): the scratch crossbar scrambles s1's position, so
+/// the predicate cannot be read directly at the swap. It is instead copied
+/// onto IR[0] (a routing-stable IR wire), which the reg/scratch crossbars
+/// never touch. But A-0 turned IR[0] into the I-format immediate LSB, so
+/// IR[0] is NO LONGER architecturally zero — an odd-imm I-op leaves IR[0]=1.
+/// A single-control swap on IR[0] would therefore fire spuriously on every
+/// odd-imm I-op. The swap is now **2-controlled** on `fmt (IR bit 31) ∧
+/// IR[0]-copy`:
+///   - fmt is routing-stable (bit 31 lives in IR_b3, untouched by the reg/
+///     scratch crossbars) and is 0 for every I-format word ⇒ swap inert for
+///     all I-ops regardless of the imm LSB;
+///   - for an R-format XCHG word IR[0] is a spare bit = 0, so the CNOT
+///     copies the predicate onto it (and removes it on exit), giving
+///     `fmt(=1) ∧ pred`.
+/// The copy is self-inverse and restores IR in every case.
 fn xchg_instr() -> Iso {
     // [IR_lo, s1]: pad = wire 0, pred = wire 8.
     let pad_copy = on_fields(
         &[IR_LO_FIELD, AUX_PRED_FIELD],
         vec![gate_at(2 * W, &[W, 0], cnot_prim())],
     );
-    let selr = select_reg(R_RD);
+    let selr = select_operand(R_RD, operand_field);
     let sels = select_scratch(R_RT);
-    // [IR_lo, r0-slot, s0-slot]: pad = wire 0.
+    // [IR_b3, IR_lo, r0-slot, s0-slot]: fmt = wire 7 (IR bit 31),
+    // pred-copy = wire 8 (IR bit 0). 2-controlled swap on fmt ∧ IR[0].
+    let fmt_wire = FMT_BIT % W; // bit 7 within IR_b3
     let gsw = on_fields(
-        &[IR_LO_FIELD, reg_field(0), scratch_field(0)],
+        &[IR_B3_FIELD, IR_LO_FIELD, reg_field(0), scratch_field(0)],
         (0..W)
-            .map(|i| gate_at(3 * W, &[0, W + i, 2 * W + i], fredkin_prim()))
+            .map(|i| {
+                gate_at(
+                    4 * W,
+                    &[fmt_wire, W, 2 * W + i, 3 * W + i],
+                    gated_fredkin_prim(),
+                )
+            })
             .collect(),
     );
     let body = Iso::seq(
@@ -807,7 +844,8 @@ fn cross_factor_gated_swap(
 /// No instruction writes PC; the branch offset in BR is consumed by
 /// the end-of-step `pc_add_br ; pc_inc`.
 fn swapbr_instr() -> Iso {
-    let sel = select_reg(R_RD);
+    // A-0 (BLOCKER-2 fix): route rd over reg∪scratch.
+    let sel = select_operand(R_RD, operand_field);
     let core = on_fields(
         &[reg_field(0), BR_FIELD, AUX_PRED_FIELD],
         (0..W)
@@ -1219,7 +1257,9 @@ pub fn emit_on_cpu_bus() -> Iso {
         let pred_cpu = pred_compute(&r_pred(0b1001));
         let pred = Iso::times(pred_cpu, bus_id.clone());
 
-        let selr = Iso::times(select_reg(R_RD), bus_id.clone());
+        // A-0 (BLOCKER-2 fix): route rd over reg∪scratch (bit3=0 for a
+        // register operand ⇒ inert top level, behaviour unchanged).
+        let selr = Iso::times(select_operand(R_RD, operand_field), bus_id.clone());
 
         // 1. enable ^= predicate bit
         let enable_cnot = cross_cnot(AUX_PRED_FIELD, 0, BUS_ENABLE_FIELD, 0, n_cpu, n_bus);
@@ -1265,7 +1305,7 @@ pub fn emit_on_cpu_bus() -> Iso {
 
         // Ra bracket: route reg[ra] to r0 slot via R_RS crossbar,
         // copy addr bits (AUX_PRED-gated), then un-route.
-        let sela = Iso::times(select_reg(R_RS), bus_id.clone());
+        let sela = Iso::times(select_operand(R_RS, operand_field), bus_id.clone());
         let mut gated_addr_copies: Vec<Iso> = Vec::new();
         for i in 0..n_addr {
             gated_addr_copies.push(cross_toffoli(
@@ -1282,7 +1322,7 @@ pub fn emit_on_cpu_bus() -> Iso {
 
         // Rd bracket: route reg[rd] to r0 slot via R_RD crossbar,
         // enable + gated-swap, then un-route.
-        let selr = Iso::times(select_reg(R_RD), bus_id.clone());
+        let selr = Iso::times(select_operand(R_RD, operand_field), bus_id.clone());
         let enable_cnot = cross_cnot(AUX_PRED_FIELD, 0, BUS_ENABLE_FIELD, 0, n_cpu, n_bus);
         let gsw = cross_factor_gated_swap(
             AUX_PRED_FIELD, 0, reg_field(0), BUS_WORD_FIELD, n_cpu, n_bus,

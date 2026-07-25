@@ -2,8 +2,9 @@
 //!
 //! ## Carrier types (M-C2 Stage 1a-B)
 //!
-//! **CpuState** (= `state_ty()`, 20 Word8 fields):
-//!   [r0..r7, PC, BR, IR_lo, IR_hi, s0..s7]
+//! **CpuState** (= `state_ty()`, 22 Word8 fields — A-0 widened IR 16→32,
+//! adding two IR byte-fields):
+//!   [r0..r7, PC, BR, IR_b0, IR_b1, IR_b2, IR_b3, s0..s7]
 //!
 //! **MemState** (= `mem_state_ty()`, `MEM_WORDS` Word8 fields):
 //!   [m0..m_{MEM_WORDS-1}]
@@ -280,8 +281,8 @@ fn read_ir_bits(bits: &[bool], offset: usize) -> u32 {
 
 impl StateVals {
     /// Encode this State's CPU fields as a `Value` inhabiting `state_ty()`
-    /// (CpuState, 20 fields). Memory fields are NOT included — use
-    /// [`encode_composite`] for the system_step carrier.
+    /// (CpuState, 22 fields — A-0 32-bit IR). Memory fields are NOT
+    /// included — use [`encode_composite`] for the system_step carrier.
     pub fn encode(&self) -> Value {
         let ty = state_ty();
         let mut all_bits: Vec<bool> = Vec::with_capacity(STATE_BITS);
@@ -319,6 +320,42 @@ impl StateVals {
         }
 
         StateVals { regs, pc, br, ir, scratch, mem: [0; MEM_WORDS] }
+    }
+
+    /// Read an operand-indexed word over `reg ∪ scratch` (A-0): idx
+    /// `0..8 → r[idx]`, `8..16 → s[idx-8]`. Panics on idx ≥ 16 (the
+    /// reserved locations the assembler rejects). This is the fast-sim
+    /// counterpart of the datapath's `select_operand` crossbar, so
+    /// `exec_instr` agrees with the hardware on scratch operands.
+    #[inline]
+    pub fn operand_get(&self, idx: u8) -> u8 {
+        let i = idx as usize;
+        if i < NUM_REGS {
+            self.regs[i]
+        } else {
+            self.scratch[i - NUM_REGS]
+        }
+    }
+
+    /// Write an operand-indexed word over `reg ∪ scratch` (A-0).
+    /// Panics on idx ≥ 16.
+    #[inline]
+    pub fn operand_set(&mut self, idx: u8, val: u8) {
+        let i = idx as usize;
+        if i < NUM_REGS {
+            self.regs[i] = val;
+        } else {
+            self.scratch[i - NUM_REGS] = val;
+        }
+    }
+
+    /// Swap two operand-indexed words over `reg ∪ scratch` (A-0).
+    #[inline]
+    pub fn operand_swap(&mut self, a: u8, b: u8) {
+        let va = self.operand_get(a);
+        let vb = self.operand_get(b);
+        self.operand_set(a, vb);
+        self.operand_set(b, va);
     }
 }
 
