@@ -17,3 +17,4 @@ pub mod money_plot;
 pub(crate) mod plumbing;
 pub mod ring_run;
 pub mod step;
+pub mod synth;
