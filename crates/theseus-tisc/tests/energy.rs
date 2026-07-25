@@ -320,14 +320,17 @@ fn me_a3_golden() {
 
     // Pinned golden values (deterministic: committed char-DB fits + fixed
     // lowering of fib's own 24-word ROM step net at T_RAMP=1e-7).
-    // RE-PINNED for f4 (byte-parallel Ccnot): redefining Op::Ccnot from bit-0
-    // Toffoli to byte-parallel (convention B: BR swap-fetch + 8 CCC-NOTs)
-    // enlarges the system_step decoder netlist. step_j rises for EVERY program.
-    // fib's B=24/T=20 codegen is unchanged; only the per-step energy grew:
-    // step_j 3.0121307847e-9 → 3.0697567543e-9 (+1.91%), total_j = 24·step_j.
-    // This is the ISA-growth energy tax, not a codegen regression.
-    const GOLDEN_TOTAL_J: f64 = 7.3674162103e-8;
-    const GOLDEN_STEP_J: f64 = 3.0697567543e-9;
+    // RE-PINNED for TISC-2 A-0 (32-bit instruction word + shared, scratch-
+    // addressable operand crossbar): sharing the operand crossbar collapses the
+    // ~40 replicated per-op crossbars to ~3, and the leaner scratch-rd routing
+    // (level-3 swap 2..8) shortens the crossbar critical paths — both reduce the
+    // balance-buffer count that dominates step energy. Net: step_j DROPS below
+    // the pre-A-0 baseline (a genuine energy WIN, not a cost) despite the wider
+    // IR: step_j 3.0697567543e-9 → 2.7054170445e-9 (−11.9%), total_j = 24·step_j.
+    // fib B=24/T=20 codegen unchanged. Behavior verified (t2 real-CPU all-8 +
+    // scratch_rd shared≡replicated≡ISA). Deterministic (per-cell cost sum).
+    const GOLDEN_TOTAL_J: f64 = 6.4930009067e-8;
+    const GOLDEN_STEP_J: f64 = 2.7054170445e-9;
     const GOLDEN_B: usize = 24;
     const GOLDEN_T: usize = 20;
 
