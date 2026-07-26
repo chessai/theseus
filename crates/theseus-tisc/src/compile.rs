@@ -3151,7 +3151,29 @@ fn lower_data_dependent_iter(
     let (_, mut dctx_body) = dctx.split(n_counter);
     dctx_body.occ.set(Location::Reg(rb));
     dctx_body.occ.set(Location::Reg(temp));
+    // MAJOR-2a TRIPWIRE (compositional-control review, Finding 2a): the body is
+    // lowered ONCE here but emitted D-1 times in the guarded-unroll loop below.
+    // A CostTree loop_term the body contributes (e.g. a Trace inside the Iter
+    // body) would stand for the body compiled once — but D-1 physical copies run,
+    // so `wcet()` would UNDER-COUNT the loop's cost by (D-2)·extra(node) → the
+    // exact L15-class park-wrap A-3 exists to prevent. Today this is unreachable:
+    // a Trace in an iter body sees displaced homes (Reg(n_counter+..)) and rejects
+    // on lower_trace's canonical-input-homes guard. But that protection is an
+    // accident of a DIFFERENT guard; if canonical-homes is ever relaxed this
+    // becomes a live silent under-count. Snapshot loop_terms and reject-with-clear
+    // -error if the body added any — reject-don't-under-count, never leave it
+    // unguarded. (Contrast lower_fold_unfold, which lowers per-copy into `meta`.)
+    let loop_terms_before = meta.loop_terms.len();
     let (body_instrs, body_ctx_out) = lower(body, &dctx_body, meta)?;
+    if meta.loop_terms.len() != loop_terms_before {
+        return Err(CompileError::Deferred(
+            "Iter body contributes a loop term (inner Trace/loop) — the guarded \
+             D-1 unroll lowers the body once but runs it D-1 times, so wcet() would \
+             under-count the inner loop by (D-2)·extra → park-wrap. Rejected \
+             (compositional-control Finding 2a; lower per-copy before admitting)"
+                .into(),
+        ));
+    }
 
     // §2.6 guarded-unroll consistency: canonical layout at body boundary.
     debug_assert_eq!(
@@ -3335,48 +3357,100 @@ fn lower_trace(
         )));
     }
 
-    // Build body_ctx: tag at leaf 0, then input payload, then zero-padding.
-    let mut body_homes = Vec::with_capacity(n_carrier);
-    // Tag register: first free register after input.
-    let _tag_start = n_input as u8;
-    // Actually, we need a specific layout. Let's assign:
-    //   tag = reg[n_input]  (first free reg after input)
-    //   payload[0..|a|] = reg[0..|a|] (input regs, unchanged)
-    //   payload[|a|..max(|u|,|a|)] = reg[n_input+1..] (additional free regs)
-    //   aux: rc, rb, temp, ctrl = next free regs after carrier
+    // ── BLOCKER FIX (compositional-control review, Finding 1): the TAG and the
+    // extra-payload PADDING are ancillae (zero at entry — the tag is XORI'd to 1
+    // to inject Right; padding leaves are never live input), so like the four aux
+    // {rc,rb,temp,ctrl} they must be drawn from GENUINELY-FREE registers per
+    // `ctx.occ`, NOT the positional `Reg(n_input)` / `Reg(n_input+1+j)`. The old
+    // positional rule placed the tag exactly on a `Times(Trace, g)` sibling's
+    // first live leaf (`split` puts g's leaves at Reg(n_input..) yet leaves the
+    // Trace's homes canonical `Reg(0..n_input)`), so the prologue `XORI tag,1`
+    // silently clobbered g's data and ran the wrong arm — invisible to the
+    // BR/s0/s1 terminal check. Drawing tag+padding occ-awarely (disjoint from
+    // carriers, `Times` siblings, and outer aux) closes that aliasing
+    // structurally, exactly as A-5 did for the four aux. The INPUT payload homes
+    // stay canonical `Reg(0..n_input)` (the k_max walk's marshal==body-home
+    // equality requires it — only AUX/ancilla placement becomes occ-aware).
     //
-    // But the body expects leaf 0 = tag. So body_ctx.homes[0] = Reg(tag_reg).
-    // body_ctx.homes[1..1+|a|] = ctx.homes[0..|a|] = Reg(0..n_input).
-    // body_ctx.homes[1+|a|..n_carrier] = Reg(n_input+1..) for extra payload.
-    let tag_reg_idx = n_input as u8; // allocate tag from first free reg
+    // First occ-mark the canonical input payload registers so the ancilla draw
+    // below cannot reuse them; the aux frame is then drawn from what remains.
+    let mut body_occ = ctx.occ;
+    for i in 0..n_input {
+        body_occ.set(ctx.homes[i]);
+    }
+
+    // Draw the tag + extra-payload padding from free registers. `n_ancilla` =
+    // tag(1) + extra payload leaves. We reject-don't-corrupt if a disjoint set
+    // (plus the 4 aux drawn next) cannot fit: never alias.
+    let n_extra = n_carrier - 1 - n_input; // max(|u|,|a|) - |a| = max(0, |u|-|a|)
+    let n_ancilla_regs = 1 + n_extra; // tag + register-resident padding
+
+    // Genuinely-free registers, ascending — the tag takes the lowest so that a
+    // canonical single-level Trace (no sibling/outer occupancy) recovers the old
+    // positional layout tag=Reg(n_input), padding=Reg(n_input+1+j) byte-for-byte.
+    let mut free_regs: Vec<u8> = (0..NUM_REGS as u8)
+        .filter(|r| body_occ.is_free(Location::Reg(*r)))
+        .collect();
+
+    // Reserve 4 free registers for the aux frame {rc,rb,temp,ctrl}, drawn next.
+    // The carrier's register-resident ancillae (tag + as much padding as fits)
+    // take the free registers ABOVE that reservation; wide payload beyond the
+    // budget spills its zero-init padding to free scratch (occ-aware, never a
+    // live-data relocation). This reproduces the old positional `carrier_reg_budget
+    // = NUM_REGS - 4` cap in the canonical single-level case (tag + fitting padding
+    // register-resident, overflow → Scratch, aux frame = the reserved 4), while
+    // being occ-aware under `Times`/nesting. At MAX_LEAVES_LOOP=4 the scratch-spill
+    // path is unreachable, but keep it for the reject-don't-corrupt boundary.
+    let reg_budget_for_ancilla = free_regs.len().saturating_sub(4);
+    let reg_ancilla = n_ancilla_regs.min(reg_budget_for_ancilla);
+    let ancilla_regs: Vec<u8> = free_regs.drain(..reg_ancilla).collect();
+    let mut ancilla_iter = ancilla_regs.iter().copied();
+
+    // Tag = first free register (lowest).
+    let tag_reg_idx = match ancilla_iter.next() {
+        Some(r) => r,
+        None => {
+            return Err(CompileError::Deferred(
+                "Trace tag needs a free register but none available \
+                 (carrier + sibling + outer-aux occupancy full — reject, don't alias) \
+                 (compositional-control Finding 1)"
+                    .into(),
+            ));
+        }
+    };
+
+    // Build body_ctx: tag at leaf 0, then canonical input payload, then padding.
+    let mut body_homes = Vec::with_capacity(n_carrier);
     body_homes.push(Location::Reg(tag_reg_idx)); // leaf 0 = tag
 
-    // Payload: first n_input leaves from ctx (the input data).
+    // Payload: first n_input leaves from ctx (the input data), canonical.
     for i in 0..n_input {
         body_homes.push(ctx.homes[i]);
     }
-    // Extra payload (if carrier is wider than input): register-resident
-    // up to the carrier_reg_budget, then spill to Scratch(SCRATCH_SPILL_BASE+).
-    // Only zero-init PADDING leaves may spill (no live-data relocation — the
-    // n_input+1 guard above ensures all input leaves are register-resident).
-    let n_extra = n_carrier - 1 - n_input; // max(|u|,|a|) - |a| = max(0, |u|-|a|)
-    let mut spill_count = 0u8;
-    for j in 0..n_extra {
-        let reg = n_input + 1 + j; // candidate register index
-        if reg < carrier_reg_budget {
-            body_homes.push(Location::Reg(reg as u8));
-        } else {
-            // M-D.e: zero-init padding leaf spills to scratch.
+
+    // Extra payload (carrier wider than input): occ-free register-resident where
+    // possible, else zero-init padding spilled to the LOWEST free scratch slot
+    // (ascending — byte-identical to the old `SCRATCH_SPILL_BASE + spill_count`
+    // positional spill for the canonical case).
+    let mut free_scratch = (SCRATCH_SPILL_BASE..NUM_SCRATCH as u8)
+        .filter(|s| body_occ.is_free(Location::Scratch(*s)));
+    for _ in 0..n_extra {
+        if let Some(r) = ancilla_iter.next() {
+            body_homes.push(Location::Reg(r));
+        } else if let Some(s) = free_scratch.next() {
+            // M-D.e: zero-init padding leaf spills to a free scratch slot.
             // Marshal already zeroes Scratch — no live-data relocation (F5).
-            // NOTE: home_of maps canonical leaf 8 → Scratch(2)=SCRATCH_SPILL_BASE;
-            // at cap 4 this is unreachable, but the collision is pinned here.
-            body_homes.push(Location::Scratch(SCRATCH_SPILL_BASE + spill_count));
-            spill_count += 1;
+            body_homes.push(Location::Scratch(s));
+        } else {
+            return Err(CompileError::Deferred(
+                "Trace extra-payload padding needs a free register/scratch slot \
+                 but none available (reject, don't alias) (compositional-control Finding 1)"
+                    .into(),
+            ));
         }
     }
 
-    // Build occ: mark all carrier registers as occupied.
-    let mut body_occ = ctx.occ;
+    // Occ-mark all carrier registers (tag + input + padding) as occupied.
     for h in &body_homes {
         body_occ.set(*h);
     }
@@ -4041,11 +4115,20 @@ pub fn value_from_leaf_bytes_pub(bytes: &[u8], ty: &Type) -> (Value, usize) {
 
 /// Static upper bound on total forward-skip distance in a ROM.
 ///
-/// Computed by pairing consecutive `Swapbr` instructions (they come in
-/// clean non-overlapping ordered pairs because skip blocks don't nest)
-/// and summing each pair's body length = (close_index - open_index - 1).
-/// This over-approximates (counts mutually-exclusive Plus arms as
-/// both-taken) which is SOUND.
+/// Computed by pairing **consecutive** `Swapbr` instructions and summing each
+/// pair's body length = (close_index - open_index - 1). This over-approximates
+/// (counts mutually-exclusive Plus arms as both-taken) which is SOUND — but ONLY
+/// when skip blocks do NOT nest.
+///
+/// ⚠ NON-NESTING ASSUMPTION (compositional-control Finding 6): A-4 makes nested
+/// skip blocks real (branch-in-branch / skip-in-loop ROMs). For a NESTED ROM the
+/// consecutive-pairing here is WRONG — it pairs (open₁, open₂) across the gap and
+/// UNDER-counts the true skip distance, which would give an UNSOUND park bound.
+/// This function is a TEST-ONLY helper for hand-assembled, non-nested ROMs.
+/// Production derives s_max compositionally via the A-3 `forward_skip_total`
+/// Σ-fold (`Lowered::s_max()`), which is correct under nesting — do NOT use
+/// `max_skip_distance` to derive a park bound for a compiler-emitted (possibly
+/// nested) ROM.
 pub fn max_skip_distance(instrs: &[Instr]) -> usize {
     let mut total = 0usize;
     let mut i = 0;

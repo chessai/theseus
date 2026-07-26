@@ -895,9 +895,14 @@ fn times_id_iter_l20_regression() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
-fn reject_nested_plus_in_plus() {
-    // doubly-nested skip-block control deferred (reservation ordering);
-    // rejected not corrupted
+fn nested_plus_in_plus_compiles_and_runs() {
+    // A-4: doubly-nested skip-block control is now ADMITTED (the reservation-
+    // ordering hazard is closed by occ-marking each Plus arm's aux before
+    // lowering it — inner Plus draws a disjoint aux pair). Was
+    // `reject_nested_plus_in_plus`; now must compile + fast-oracle == eval on the
+    // whole domain. (Fast oracle keeps the heavy gate bounded — real-CPU terminal
+    // -check authority for the newly-admitted nested programs is the advisor's
+    // slow `run_on_cpu` job, review Finding 3.)
     let bit = Type::sum(Type::One, Type::One);
     let iso = Iso::Plus(
         Box::new(Iso::Id(bit.clone())),
@@ -906,7 +911,8 @@ fn reject_nested_plus_in_plus() {
             Box::new(Iso::SwapSum(Type::One, Type::One)),
         )),
     );
-    assert!(compile(&iso).is_err());
+    assert!(compile(&iso).is_ok(), "nested Plus must now compile");
+    assert_oracle_fast("nested_plus_in_plus", &iso);
 }
 
 #[test]
@@ -928,9 +934,12 @@ fn reject_nested_plus_with_trailing() {
 }
 
 #[test]
-fn reject_nested_plus_in_iter() {
-    // doubly-nested skip-block control deferred (reservation ordering);
-    // rejected not corrupted
+fn nested_plus_in_iter_compiles_and_runs() {
+    // A-4: a Plus (skip-block) inside an Iter body is now ADMITTED — the Iter's
+    // guarded-unroll aux {rb,temp} are occ-marked before the body is lowered, so
+    // the inner Plus draws a disjoint aux pair. Was `reject_nested_plus_in_iter`;
+    // now must compile + fast-oracle == eval on the whole domain (real-CPU
+    // authority = advisor, Finding 3).
     let nat2 = Type::numeral_ty(2);
     let iso = Iso::iter(
         nat2,
@@ -939,7 +948,8 @@ fn reject_nested_plus_in_iter() {
             Box::new(Iso::SwapSum(Type::One, Type::One)),
         ),
     );
-    assert!(compile(&iso).is_err());
+    assert!(compile(&iso).is_ok(), "Plus-in-Iter must now compile");
+    assert_oracle_fast("nested_plus_in_iter", &iso);
 }
 
 #[test]
@@ -1662,33 +1672,83 @@ fn mdd_reject_wcet_overflow() {
 }
 
 #[test]
-fn mdd_reject_trace_under_times() {
-    // F-1 regression: a Trace hand-assigns its tag/payload/aux registers
-    // WITHOUT consulting ctx.occ. Under `Times(Trace, g)`, `Ctx::split`
-    // copies the full parent occ into the Trace's (left) sub-context whose
-    // homes are still canonical (indistinguishable from a top-level ctx),
-    // so those aux registers alias g's live data and silently clobber it —
-    // a wrong output the BR/s0/s1 terminal check cannot see. Must be rejected.
+fn mdd_trace_under_times_compiles_and_runs() {
+    // FINDING-1 FIX (compositional-control review): this was the F-1 pin
+    // `mdd_reject_trace_under_times`. A Trace under a `Times` sibling used to
+    // clobber g's data because the TAG register was positional (`Reg(n_input)`),
+    // landing exactly on g's first live leaf. The tag + extra-payload padding are
+    // now drawn OCC-AWARELY (disjoint from carriers, siblings, and outer aux), so
+    // `Times(Trace, g)` no longer aliases — it compiles and runs correctly.
+    // Real CPU (P2 + BR/s0/s1 terminal check) == eval on the WHOLE domain is the
+    // value here: the aliased-tag orbit, if it existed, would park a nonzero
+    // BR/scratch that only the terminal check can see. This program was the exact
+    // observation-DEGENERATE case (trace factor : One↔One, sibling Id) that the
+    // fast oracle could not certify — so we assert the REAL CPU here.
     let (body, u_ty) = build_3cycle_body(); // Trace(Bit, 3cycle) : One ↔ One
     let trace = Iso::trace(u_ty, body);
     let g = Iso::Id(Type::sum(Type::One, Type::One)); // Id(Bit) — the sibling factor
     let iso = Iso::times(trace, g); // (One × Bit) ↔ (One × Bit)
-    let result = compile(&iso);
     assert!(
-        result.is_err(),
-        "Trace under a Times sibling must be rejected (F-1: aux regs would alias g's data)"
+        compile(&iso).is_ok(),
+        "Times(Trace, g) must now compile (Finding 1: tag/padding occ-aware)"
     );
-    let msg = format!("{}", result.unwrap_err());
-    assert!(
-        msg.contains("F-1") || msg.contains("alias") || msg.contains("occupied"),
-        "expected F-1 occ-guard rejection, got: {msg}"
-    );
+    assert_oracle("trace_under_times", &iso);
+}
+
+#[test]
+fn times_trace_nondegenerate_body_runs() {
+    // L20 regression for compositional-control Finding 1 (probe1/probe2): the
+    // NON-degenerate `Times(Trace, g)` counterexamples the review used to
+    // reproduce the BLOCKER. The shipped A-4 vectors were degenerate (body=Id
+    // self-cancels; symmetric arms hide a wrong-arm run), so they passed even
+    // while the tag aliased g. These use asymmetric arms so a wrong arm is
+    // VISIBLE; they must run_on_cpu == eval on the whole domain (esp. sibling
+    // input = Right, the aliasing-sensitive case).
+    let bit = Type::sum(Type::One, Type::One);
+    let flip = Iso::SwapSum(Type::One, Type::One); // Bit ↔ Bit flip (non-self-cancelling)
+    // probe1: Times(Trace(Bit, Plus(Id, flip)), flip) — trace factor ≡ flip.
+    let left1 = Iso::trace(bit.clone(), Iso::plus(Iso::Id(bit.clone()), flip.clone()));
+    let iso1 = Iso::times(left1, flip.clone());
+    assert!(compile(&iso1).is_ok(), "probe1 must compile");
+    // Fast oracle here (non-degenerate body ⇒ a wrong arm is VISIBLE in the
+    // payload, so fast==eval already reproduces the BLOCKER — exactly how the
+    // review's probes caught it). Real-CPU terminal-check authority for this
+    // family is the advisor's job (Finding 3); the degenerate probe9 program
+    // (mdd_trace_under_times below) IS run on the real CPU here.
+    assert_oracle_fast("times_trace_probe1", &iso1);
+    // probe2: arms swapped — Times(Trace(Bit, Plus(flip, Id)), flip).
+    let left2 = Iso::trace(bit.clone(), Iso::plus(flip.clone(), Iso::Id(bit.clone())));
+    let iso2 = Iso::times(left2, flip.clone());
+    assert!(compile(&iso2).is_ok(), "probe2 must compile");
+    assert_oracle_fast("times_trace_probe2", &iso2);
+}
+
+#[test]
+fn times_trace_wider_payload_runs() {
+    // L20 regression for compositional-control Finding 1 (probe6): a WIDER trace
+    // payload (a = Bit×Bit) under Times. The tag lands at Reg(n_input) which is
+    // still a sibling live leaf for any payload width — the positional bug's
+    // second corruption vector. Must run_on_cpu == eval on the whole domain.
+    let bit = Type::sum(Type::One, Type::One);
+    let flip = Iso::SwapSum(Type::One, Type::One);
+    // body : Sum(Bit, Bit×Bit) ↔ Sum(Bit, Bit×Bit) = Plus(Id(Bit), flip⊗Id) — asymmetric.
+    let flip_left = Iso::times(flip.clone(), Iso::Id(bit.clone())); // (Bit×Bit) ↔ (Bit×Bit)
+    let body = Iso::plus(Iso::Id(bit.clone()), flip_left);
+    let left = Iso::trace(bit.clone(), body); // (Bit×Bit) ↔ (Bit×Bit)
+    let iso = Iso::times(left, flip); // (Bit×Bit) × Bit ↔ same
+    assert!(compile(&iso).is_ok(), "probe6 must compile");
+    assert_oracle_fast("times_trace_probe6", &iso);
 }
 
 #[test]
 fn mdd_reject_nested_trace() {
-    // Nested Trace is rejected (the come-from join does not compose).
-    // A WELL-TYPED nesting that reaches the contains_trace guard:
+    // Nested Trace still REJECTS gracefully (reject-don't-corrupt). A-4 deleted
+    // the `contains_trace` predicate, but the frame-stack discipline now catches
+    // this structurally: the outer Trace occ-marks its own carrier + aux frame
+    // before lowering the body, so the inner Trace's `allocate_aux_frame` finds
+    // no room for a DISJOINT 4-register frame on the 8-register file and rejects.
+    // The message therefore changed from the old "nested Trace"/"come-from" text
+    // to the aux-frame register-bound message — re-pinned here (Finding 2c).
     //   inner Trace(One, Id(1+1)) : One ↔ One
     //   Plus(Id(One), inner)      : (1+1) ↔ (1+1)
     //   outer Trace(One, Plus)    : One ↔ One, whose body CONTAINS a Trace.
@@ -1700,30 +1760,32 @@ fn mdd_reject_nested_trace() {
     assert!(result.is_err(), "nested Trace must be rejected");
     let msg = format!("{}", result.unwrap_err());
     assert!(
-        msg.contains("nested Trace") || msg.contains("come-from"),
-        "expected nested-Trace rejection, got: {msg}"
+        msg.contains("aux frame needs")
+            || msg.contains("free register")
+            || msg.contains("don't alias"),
+        "expected nested-Trace aux-frame register-bound rejection, got: {msg}"
     );
 }
 
 #[test]
-fn mdd_reject_swapbr_body() {
-    // F6 safe policy: a Trace body containing a forward skip-block (Swapbr)
-    // is rejected in v1 (only Swapbr-free bodies supported). `Plus` lowers
-    // its arms via emit_skip_block → the SwapSum arm emits a Swapbr.
+fn mdd_swapbr_body_compiles_and_runs() {
+    // A-4 (R3): a Trace body containing a forward skip-block (Swapbr) is now
+    // ADMITTED. `Plus` lowers its arms via emit_skip_block → the SwapSum arm
+    // emits a Swapbr; the A-3 Σ-fold sums the body's forward_skip_total into the
+    // parent and the k_max walk falls back to the cardinality bound when the body
+    // has inner control, so B_fold stays sound. Was `mdd_reject_swapbr_body`.
     // Trace(Bit, Plus(SwapSum(1,1), Id(One))) : body Sum(Bit,One)↔Sum(Bit,One)
-    // (u=Bit, a=b=One), whose lowering contains a Swapbr.
+    // (u=Bit, a=b=One). Must compile + fast-oracle == eval. The real-CPU
+    // P2/terminal-check authority across the back-edge is the advisor's slow
+    // run_on_cpu job (Finding 3 — this Trace's loop is expensive on the step-iso
+    // CPU); the fast oracle here is the bounded heavy-gate regression.
     let body = Iso::plus(Iso::SwapSum(Type::One, Type::One), Iso::Id(Type::One));
     let iso = Iso::trace(Type::sum(Type::One, Type::One), body);
-    let result = compile(&iso);
     assert!(
-        result.is_err(),
-        "Trace body with a skip-block (Swapbr) must be rejected (F6)"
+        compile(&iso).is_ok(),
+        "Trace body with a skip-block (Swapbr) must now compile (A-4 R3)"
     );
-    let msg = format!("{}", result.unwrap_err());
-    assert!(
-        msg.contains("Swapbr") || msg.contains("F6"),
-        "expected F6 Swapbr-body rejection, got: {msg}"
-    );
+    assert_oracle_fast("swapbr_body_trace", &iso);
 }
 
 #[test]

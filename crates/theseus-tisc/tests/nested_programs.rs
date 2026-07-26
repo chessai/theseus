@@ -162,8 +162,13 @@ fn r6_nested_skip_controlled_compiles_and_runs() {
 
 #[test]
 fn r3_branch_under_trace_compiles_and_runs() {
+    // DE-DEGENERATED (compositional-control Finding 1): the original body was
+    // `Plus(bit_flip, bit_flip)` — SYMMETRIC arms, so running the wrong arm is
+    // INVISIBLE (both do the same thing). Use ASYMMETRIC arms `Plus(Id, bit_flip)`
+    // so a wrong-arm dispatch corrupts the output visibly — the correct vector for
+    // an arm-dispatch aliasing bug.
     // Body : Sum(Bit, Bit) ↔ Sum(Bit, Bit) — a Plus (branch) with a Swapbr.
-    let body = Iso::plus(bit_flip(), bit_flip());
+    let body = Iso::plus(Iso::Id(bit()), bit_flip());
     let iso = Iso::trace(bit(), body);
 
     let lowered = compile_ok("R3 branch-under-Trace", &iso);
@@ -217,14 +222,22 @@ fn r3b_iter_under_trace_rejects_gracefully() {
 
 #[test]
 fn r2_trace_under_times_compiles_and_runs() {
-    // Left: Trace(Bit, Id(Sum(Bit,Bit))) : Bit ↔ Bit (identity loop, exits at once).
-    let left = Iso::trace(bit(), Iso::Id(Type::sum(bit(), bit())));
+    // DE-DEGENERATED (compositional-control Finding 1): the original body was
+    // `Id(Sum(Bit,Bit))` — an empty-body identity loop whose ctrl corruption at
+    // the top pair CANCELS against the bottom pair, so the aliased tag round-trips
+    // and the wrong output was accidentally correct. That is exactly the wrong
+    // vector for a tag-aliasing bug. Use a NON-self-cancelling asymmetric body:
+    // `Plus(Id, bit_flip)` ≡ flip on the trace factor, so a wrong-arm run is
+    // VISIBLE in the payload. The occ-aware tag (Finding 1 fix) keeps the sibling
+    // bit_flip's live register untouched — the sibling must still flip correctly.
+    let body = Iso::plus(Iso::Id(bit()), bit_flip()); // : Sum(Bit,Bit) ↔ Sum(Bit,Bit)
+    let left = Iso::trace(bit(), body); // : Bit ↔ Bit, ≡ flip (non-degenerate)
     // Right sibling: bit_flip : Bit ↔ Bit.
     let iso = Iso::times(left, bit_flip());
 
     let _ = compile_ok("R2 Times(Trace, flip)", &iso);
     let n = assert_cpu_eq_eval("R2 Times(Trace, flip)", &iso);
-    eprintln!("R2 Times(Trace, flip): COMPILE+RUN, {n}/{n} inputs (sibling flip correct)");
+    eprintln!("R2 Times(Trace, flip): COMPILE+RUN, {n}/{n} inputs (non-degenerate body; sibling flip correct)");
 }
 
 // ═════════════════════════════════════════════════════════════════════

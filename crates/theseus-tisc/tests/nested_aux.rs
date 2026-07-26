@@ -151,6 +151,46 @@ fn times_trace_g_old_positional_would_have_aliased() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// (b2) Finding 1: the TAG + extra-payload PADDING are now occ-aware too.
+//
+// Finding 7 noted nested_aux pinned only the FRAME allocator — nothing white-box
+// pinned the tag/padding placement, which is exactly how Finding 1 (the tag
+// aliasing g under Times) escaped. `lower_trace` now draws the tag + extra
+// padding from the SAME occ-free register pool as the frame, occ-marked before
+// the frame is drawn. These end-to-end tests pin that a `Times(Trace, g)`
+// program compiles AND runs correctly (the tag no longer aliases g), and that a
+// wider-payload Trace's padding is likewise disjoint from a live sibling.
+// ─────────────────────────────────────────────────────────────────────
+#[test]
+fn times_trace_tag_does_not_alias_sibling_end_to_end() {
+    use theseus_core::prim::enumerate_values;
+    use theseus_tisc::compile::run_on_cpu_fast;
+    // Trace(Bit, Plus(Id, flip)) ≡ flip; sibling flip. If the tag aliased the
+    // sibling's live Reg(n_input), the sibling's output would be wrong on the
+    // input where the tag XORI flips it. Non-degenerate body: a wrong arm is
+    // visible. Whole domain, esp. sibling = Right.
+    let bit = Type::sum(Type::One, Type::One);
+    let flip = Iso::SwapSum(Type::One, Type::One);
+    let left = Iso::trace(bit.clone(), Iso::plus(Iso::Id(bit.clone()), flip.clone()));
+    let iso = Iso::times(left, flip);
+    let lowered = compile_with_metadata(&iso);
+    assert!(
+        lowered.is_ok(),
+        "Times(Trace, g) must compile (tag occ-aware): {lowered:?}"
+    );
+    let (in_ty, _) = theseus_core::type_of(&iso).unwrap();
+    for v in enumerate_values(&in_ty) {
+        let cpu = run_on_cpu_fast(&iso, &v).expect("run");
+        let mut fuel = 1_000_000u64;
+        let ev = theseus_eval::eval(&iso, v.clone(), &mut fuel).unwrap();
+        assert_eq!(
+            cpu, ev,
+            "Times(Trace, g) tag-aliasing: cpu != eval on {v:?} (Finding 1)"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // (c) The δu save/restore bracket is net-zero via frame DISJOINTNESS.
 //
 // The outer δu token lives in the outer level's `temp` register. Because the
@@ -257,18 +297,31 @@ fn single_level_trace_rom_byte_identical() {
 // is A-4's deliverable, backed by this frame stack.
 // ─────────────────────────────────────────────────────────────────────
 #[test]
-fn nested_trace_program_still_rejects_pending_a4() {
-    // Sanity: a real nested Trace still rejects (A-4 has not landed). This pins
-    // that A-5 did NOT delete any reject — the frame machinery is white-box only.
-    // Outer body IS an inner Trace, so `contains_trace(body)` fires the
-    // nested-Trace reject in lower_trace. Bit carriers, Id bodies.
+fn nested_trace_program_still_rejects_via_frame_bound() {
+    // A-4 deleted the `contains_trace` predicate, but a real nested Trace STILL
+    // rejects — now STRUCTURALLY via the frame-stack discipline: the outer Trace
+    // occ-marks its carrier + 4-aux frame before lowering the body, leaving no
+    // room for the inner Trace's disjoint 4-register frame on the 8-register file.
+    // Reject-don't-corrupt: never an aliasing frame. Well-typed nesting: the
+    // inner Trace is wrapped in a Plus so the outer body is a Sum-endo (same
+    // shape as compile.rs `mdd_reject_nested_trace`).
     let bit = Type::sum(Type::One, Type::One);
-    let inner_carrier = Type::sum(bit.clone(), bit.clone());
-    let inner = Iso::trace(bit.clone(), Iso::Id(inner_carrier));
-    let outer = Iso::trace(bit.clone(), inner);
+    let inner = Iso::trace(Type::One, Iso::Id(bit.clone())); // : One ↔ One
+    let body = Iso::plus(Iso::Id(Type::One), inner); // : (One+One) ↔ (One+One) = Bit
+    let outer = Iso::trace(Type::One, body); // outer body CONTAINS a Trace
     let res = compile_with_metadata(&outer);
     assert!(
         res.is_err(),
-        "nested Trace must still reject (A-4 deletes the reject, not A-5): {res:?}"
+        "nested Trace must still reject (frame register-bound, §2.3): {res:?}"
+    );
+    let msg = format!("{}", res.unwrap_err());
+    // Graceful register-bound reject (never an aliasing frame). The inner Trace
+    // runs out of free registers for its tag OR its 4-aux frame — either is a
+    // clean reject-don't-corrupt (design §2.3 depth bound / Finding 1).
+    assert!(
+        msg.contains("aux frame needs")
+            || msg.contains("free register")
+            || msg.contains("don't alias"),
+        "expected register-bound reject-don't-corrupt, got: {msg}"
     );
 }
