@@ -2918,12 +2918,26 @@ fn realize_wvalue(
             // dst.bit0 = x.bit0 ∧ y.bit0 via ONE Ccnot into the clean dst. Realize
             // x,y into (carrier or freed temp) operands, both distinct from dst;
             // then uncompute + free. No mask/one/else-temp (the Select-AND cost).
-            let (xop, x_body, xmark) = operand_or_temp(x, carriers, work, next, peak, out)?;
-            let (yop, y_body, ymark) = operand_or_temp(y, carriers, work, next, peak, out)?;
-            check_three_distinct("AndBit Ccnot", dst, xop, yop)?;
-            out.push(Instr::Ccnot { rd: dst, rs: xop, rt: yop });
-            free_temp(&y_body, ymark, next, out);
-            free_temp(&x_body, xmark, next, out);
+            //
+            // TECHNIQUE 1 (guard/temp sequencing). A binary AND's concurrent-work peak
+            // is `max(cost(first), 1 + cost(second))`: the first operand is realized
+            // with nothing held, the second on top of the first's single held result
+            // bit. So realize the COSTLIER operand FIRST and the cheaper one SECOND —
+            // the cheaper leg's small is-zero/compare burst then lands on just one held
+            // bit rather than forcing the costly leg's burst to sit atop a held bit.
+            // This is a pure reordering of a commutative AND (same gates, same net-
+            // zero) and never increases the peak; it strictly helps a lop-sided pair.
+            let (first, second) = if factor_internal_cost(y) > factor_internal_cost(x) {
+                (y.as_ref(), x.as_ref())
+            } else {
+                (x.as_ref(), y.as_ref())
+            };
+            let (fop, f_body, fmark) = operand_or_temp(first, carriers, work, next, peak, out)?;
+            let (sop, s_body, smark) = operand_or_temp(second, carriers, work, next, peak, out)?;
+            check_three_distinct("AndBit Ccnot", dst, fop, sop)?;
+            out.push(Instr::Ccnot { rd: dst, rs: fop, rt: sop });
+            free_temp(&s_body, smark, next, out);
+            free_temp(&f_body, fmark, next, out);
         }
         WValue::Masked { guard, val } => {
             // dst ^= val & broadcast(guard.bit0). Realize guard into a FRESH temp
@@ -2964,6 +2978,34 @@ fn realize_wvalue(
         }
     }
     Ok(out[start..].to_vec())
+}
+
+/// Estimate the CONCURRENT internal scratch a sub-value needs when realized into a
+/// temp — used only to ORDER the two legs of an `AndBit` (Technique 1: realize the
+/// costlier leg first). A rough upper bound is sufficient; it never affects
+/// correctness, only the schedule. A bare carrier/const needs 0; an is-zero/compare
+/// needs its macro's temp count; a compound value takes 1 (its value temp) plus its
+/// costliest child.
+fn factor_internal_cost(v: &WValue) -> usize {
+    match v {
+        WValue::Var(_) | WValue::Const(_) => 0,
+        WValue::EqZeroW { width, .. } => weqzero_ntemp(*width),
+        WValue::LtW { width, .. } | WValue::GtW { width, .. } => wlt_ntemp(*width),
+        WValue::Lt(..) | WValue::Gt(..) => WLT_NTEMP,
+        // notp(pred) = Xor(pred, Const(1)); its cost is the predicate's.
+        WValue::Xor(x, y) => factor_internal_cost(x).max(factor_internal_cost(y)),
+        WValue::AndBit { x, y } => 2 + factor_internal_cost(x).max(factor_internal_cost(y)),
+        WValue::Add(x, y) | WValue::Sub(x, y) => {
+            1 + factor_internal_cost(x).max(factor_internal_cost(y))
+        }
+        WValue::Rotl(x, _) | WValue::Rotr(x, _) => factor_internal_cost(x),
+        WValue::Masked { guard, val } => 1 + factor_internal_cost(guard).max(factor_internal_cost(val)),
+        WValue::Select { guard, then_, else_ } => {
+            2 + factor_internal_cost(guard)
+                .max(factor_internal_cost(then_))
+                .max(factor_internal_cost(else_))
+        }
+    }
 }
 
 /// Resolve a carrier-index `WValue::Var(i)` to its operand.
