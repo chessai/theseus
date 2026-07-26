@@ -323,3 +323,189 @@ Also note for the merge decision: A-4's commit message says "the B_fold≤256
 park-safety bound … stays", and the heavy tier is the advisor's pre-merge
 gate — per Finding 2c that gate currently fails on this branch, so the trio
 cannot merge on the fast tier alone even ignoring the BLOCKER.
+
+---
+
+# Fix re-check — occ-aware tag/padding (580015b → f7fc4de)
+
+**Reviewer:** fresh-context adversarial agent (Fable — different model from the
+Opus implementer of the fix). **Scope:** ONLY the Finding-1 BLOCKER fix
+(`git diff 580015b f7fc4de -- crates/theseus-tisc/src/compile.rs`) + the
+heavy-tier reconciliation, per the re-check brief: confirm the fix is sound and
+introduced no NEW aliasing. READ-ONLY (probes run, nothing fixed, not committed).
+
+**Method:** hand-traced the new draw order in `lower_trace`
+(input-homes occ-mark → ancilla drain → carrier occ-mark → `allocate_aux_frame`)
+against `OccSet`/`Ctx::split`/`allocate_aux`; enumerated every context shape
+that can reach `lower_trace` post-fix; ran 12 fresh probes
+(`review_probe_recheck.rs`, temporary, deleted after) + the trace-adjacent fast
+suites; ran the reconciled tests against the PRE-fix compiler (580015b's
+`compile.rs` under f7fc4de's tests) for teeth; byte-compared single-level ROMs
+old-vs-new.
+
+## Verdict: **SOUND — trustworthy to MERGE. No residual BLOCKER or MAJOR.**
+
+## Check 1 — new aliasing from the occ-aware draw: PASS
+
+No ordering hands the same register to two roles:
+
+- **tag vs padding:** both come from a single ascending `drain` of the
+  distinct-filtered free list — pairwise distinct by construction.
+- **tag/padding vs the 4 aux:** all carrier homes (tag + inputs + padding) are
+  occ-marked into `body_occ` BEFORE `allocate_aux_frame` draws — and the frame
+  allocator itself rejects (`< 4 free`) rather than displace. Verified the
+  4-register reservation arithmetic: `reg_budget_for_ancilla =
+  free.len().saturating_sub(4)` guarantees ≥4 registers remain after the drain.
+- **tag/padding vs siblings / outer aux:** `Ctx::split` copies the WHOLE parent
+  occ into both halves, and `body_occ` starts from `ctx.occ` — sibling leaves
+  (register AND scratch homes; `OccSet` tracks Scratch/Mem too) and any outer
+  marks are excluded from the free pool. White-box probe: for
+  `Times(Trace, flip⊗flip)`-class programs the prologue `XORI tag,1` targets a
+  register outside {input, sibling} whenever compilation succeeds.
+- **scratch spill:** padding spills to the LOWEST occ-free scratch ≥
+  `SCRATCH_SPILL_BASE` via a distinct-by-iterator filter — occ-aware (the old
+  positional `SCRATCH_SPILL_BASE + count` was not), and sibling scratch homes
+  are in occ. NLL borrow order is clean (the filter's borrow of `body_occ` ends
+  before the carrier occ-mark loop).
+- **Reachability sweep:** post-fix, `lower_trace` is reachable only with
+  canonical input homes — top level, left spine of `Times`, `Seq` composition,
+  `Sym` (which re-lowers the ISO-level adjoint, no instruction inversion).
+  Trace under `Plus`-arm / `Iter`-body / fold-body still rejects on the
+  canonical-homes guard (probes P5/P7 confirm; reject message correct).
+- **Temporal reuse:** returning `ctx.clone()` (original occ) to the parent is
+  correct — tag/aux/padding are net-zero after the epilogue, so a later sibling
+  re-drawing those registers is safe. Probe P8
+  (`Seq(Times(Trace,flip), Times(Trace,flip))`, whole domain) passes.
+
+Probes run (all green): P1 multi-leaf sibling; P2a padded-trace + sibling
+(tag+padding register-resident, full 8-reg file, whole domain); P2b padded +
+2-leaf sibling; P3a/P3b/P3c occupancy-exhaustion sweep; P4 nested `Times`;
+P5/P7 non-canonical rejects; P6 padded single-level; P8 sequential traces; P9
+ROM dumps.
+
+## Check 2 — occ-marking completeness + ordering: PASS
+
+Order is: input homes marked → tag+padding drawn → ALL carrier homes marked →
+aux frame drawn AND marked → body lowered under the fully-marked occ. Every
+register the loop skeleton touches (`tag_reg`, `rc/rb/temp/ctrl`) is drawn from
+that sequence; the k_max trajectory walk uses the same `tag_reg_idx` (not the
+old positional index), and its marshal==body-home equality is still guarded by
+the canonical-homes reject. No path uses the tag before it is marked; no mark
+leaks to siblings (see temporal-reuse above). Rejects exit before `meta` is
+mutated, so no metadata pollution on failure paths.
+
+## Check 3 — graceful-reject boundary: PASS
+
+Every over-budget occ state I could construct rejects CLEANLY, never aliases,
+never panics:
+
+- tag cannot fit (occ {0..3}+, incl. sibling-in-scratch 9-leaf case):
+  the new Finding-1 `Deferred` message, correct and specific (P3a/P3b/P3c).
+- padding cannot fit register+scratch: the second new `Deferred` arm
+  (constructed arithmetically; unreachable at MAX_LEAVES_LOOP=4 with 6 free
+  scratch, kept as a boundary).
+- body-`Plus` aux exhaustion under a ≥2-leaf sibling (P1/P2b/P4): rejects via
+  `allocate_aux`'s insufficient-displaceable path. **Capacity, not
+  correctness** — fail-closed on the 8-register file. NOTE this reuses the
+  pre-existing misleading `TooManyLeaves` message (Finding 5, MINOR, still
+  open — "needs 2 leaves but maximum is 16").
+
+## Check 4 — single-level byte-identity: PASS (direct evidence)
+
+Dumped and byte-compared the compiled ROMs old(580015b)-vs-new(f7fc4de) for
+three canonical single-level shapes: `Trace(Bit, Plus(Id,flip))`,
+the padded trace (u=Bit², a=Bit → 1 register padding), and the M-D.e
+scratch-spill shape (payload 4 = 3 live + 1 spilled). **All three
+byte-identical.** Arithmetic identity also holds in general: register-resident
+padding count = `min(n_extra, 3 − n_input)` under both the old positional rule
+and the new `min(1+n_extra, free−4)` drain for any canonical unshared ctx. The
+`debug_assert` frame equality ran live through the whole dev-profile fast
+suite (nested_aux 8/8, nested_programs 7/7, mde_spill 4/4, nested_wcet 6/6,
+negative_guards 26/26 — all green).
+
+## Check 5 — heavy-tier reconciliation kept its teeth: PASS (one observation)
+
+Ran the reconciled/new tests against the PRE-fix compiler (580015b
+`compile.rs` under the new test files). Results:
+
+| test | on pre-fix code |
+|---|---|
+| `times_trace_nondegenerate_body_runs` (probe1/2 pin) | **FAILS** — cpu≠eval on `Pair(Left, Right)` (the aliasing-sensitive sibling=Right input) |
+| `times_trace_wider_payload_runs` (probe6 pin) | **FAILS** — cpu≠eval on `Pair(Pair(L,L), Right)` |
+| `times_trace_tag_does_not_alias_sibling_end_to_end` (nested_aux) | **FAILS** — cpu≠eval on `Pair(Left, Right)` |
+| `r2_trace_under_times_compiles_and_runs` (de-degenerated) | **FAILS** — the de-degeneration worked; the old degenerate vector passed on broken code, the new one does not |
+| `mdd_trace_under_times_compiles_and_runs` | **PASSES on pre-fix code** (release, real CPU, 1065s) — see below |
+
+So the new `Times(Trace,·)` vectors are genuinely non-degenerate — they
+reproduce the BLOCKER exactly (fail without the fix, pass with it): the L20
+bar is met. The failing outputs are the textbook wrong-arm corruption
+(`cpu: Pair(Left, ·)` vs `eval: Pair(Right, ·)` — the trace factor ran the
+wrong arm exactly when the sibling was `Right`).
+
+**Empirical correction to that test's own comment (MINOR finding of this
+re-check):** `mdd_trace_under_times_compiles_and_runs` claims "we assert the
+REAL CPU here" because "the aliased-tag orbit … would park a nonzero
+BR/scratch that only the terminal check can see". Empirically FALSE for its
+vector: on the pre-fix (positional-tag, aliasing) compiler the test **passes**
+— real CPU, P2 + BR/s0/s1 terminal check and all. On the degenerate
+3cycle/`Id(Bit)` shape the tag corruption round-trips (prologue/epilogue
+`XORI` cancel and the `Id` sibling never reads its leaf mid-loop), so neither
+output nor terminal state distinguishes broken from fixed. The test is still
+worth keeping — it is the real-CPU pin that the newly-admitted
+`Times(Trace,g)` shape runs and terminates cleanly — but it must NOT be
+counted as Finding-1 regression coverage (fix its comment when convenient).
+The Finding-1 teeth are carried entirely by the four tests above (all four
+fail pre-fix, all pass post-fix). `mdd_reject_nested_trace` still asserts `is_err` with the
+re-pinned frame-bound message (legitimate re-target — the reject moved from
+predicate to structure). `reject_nested_plus_with_trailing` and the WCET
+overflow pins are untouched.
+
+**Observation (MINOR, no action forced):** `mdd_swapbr_body_compiles_and_runs`
+is `One ↔ One` — output-observation-degenerate, so its fast oracle proves
+termination/clean-unmarshal but cannot see a wrong payload; the real-CPU
+authority for the swapbr-in-Trace shape is the prior review's probe7 (advisor
+launched it; confirm it completed before relying on that shape in production
+programs). Same for probe8 (nested-Iter displacement).
+
+## Check 6 — MAJOR-2a tripwire: PASS
+
+`lower_data_dependent_iter` now snapshots `meta.loop_terms.len()` before
+lowering the body and returns a `CompileError::Deferred` if the body added any
+loop term — a real reject, not a comment. Also verified the related
+under-count surfaces: the guarded unroll adds `forward_skip_total +=
+body_instrs.len()` PER COPY (and the outer skip region contains any inner
+regions, so the Σ-fold stays an over-approximation — sound), and
+`max_skip_distance` has NO production caller (test-only; production park
+bounds come from `Lowered::s_max()`), so the Finding-6 doc-fence is accurate.
+
+## Residuals (all MINOR, none blocking merge)
+
+1. Finding 5's misleading `TooManyLeaves` message now also fronts the
+   body-aux capacity reject for `Times(Trace, wider-sibling)` (P1/P4 shapes).
+   Cosmetic; reject-don't-corrupt holds.
+2. `mdd_swapbr_body`'s fast oracle is observation-degenerate (above) —
+   probe7/8 real-CPU completion is the closing evidence for those two shapes.
+3. `mdd_trace_under_times_compiles_and_runs` is NOT a Finding-1 reproducer
+   (it passes on the pre-fix compiler, real CPU included — Check 5); fix its
+   comment so nobody later deletes the four real reproducers believing this
+   one covers them.
+4. Capacity note for program authors: on the 8-register file,
+   `Times(Trace(...,Plus-body), g)` fits only a 1-leaf sibling; ≥2 leaves
+   rejects (fail-closed).
+
+## Verification runs (this re-check, independent of the advisor's)
+
+- Fix tree @ f7fc4de, heavy tier `--release --features heavy-tests --test
+  compile --test-threads=1`: **67 passed / 0 failed / 23 ignored (1225.7s)** —
+  independently reproduces the advisor's gate result.
+- Fix tree, dev profile (debug_asserts LIVE): nested_aux 8/8, nested_programs
+  7/7, mde_spill 4/4, nested_wcet 6/6, negative_guards 26/26, the 8
+  fast-checkable reconciled heavy tests 8/8, and the 12 fresh probes 12/12.
+- Teeth tree (580015b `compile.rs` under f7fc4de's tests), release:
+  `times_trace_nondegenerate_body_runs` FAIL, `times_trace_wider_payload_runs`
+  FAIL, `mdd_trace_under_times_compiles_and_runs` ok (1065.6s; see Check 5);
+  dev: nested_aux tag-alias test FAIL, nested_programs r2 FAIL — 4 genuine
+  Finding-1 reproducers confirmed.
+- ROM byte-compare old-vs-new (single-level canonical: plain / padded /
+  scratch-spill): byte-identical.
+
