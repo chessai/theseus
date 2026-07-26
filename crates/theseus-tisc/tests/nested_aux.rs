@@ -297,31 +297,26 @@ fn single_level_trace_rom_byte_identical() {
 // is A-4's deliverable, backed by this frame stack.
 // ─────────────────────────────────────────────────────────────────────
 #[test]
-fn nested_trace_program_still_rejects_via_frame_bound() {
-    // A-4 deleted the `contains_trace` predicate, but a real nested Trace STILL
-    // rejects — now STRUCTURALLY via the frame-stack discipline: the outer Trace
-    // occ-marks its carrier + 4-aux frame before lowering the body, leaving no
-    // room for the inner Trace's disjoint 4-register frame on the 8-register file.
-    // Reject-don't-corrupt: never an aliasing frame. Well-typed nesting: the
-    // inner Trace is wrapped in a Plus so the outer body is a Sum-endo (same
-    // shape as compile.rs `mdd_reject_nested_trace`).
+fn nested_trace_program_now_compiles_via_aux_reuse() {
+    // A-5b: a depth-2 nested Trace now COMPILES — the inner Trace REUSES the outer
+    // level's four aux {rc,rb,temp,ctrl}, which are provably DEAD across the inner
+    // region (design §2.2), instead of drawing a disjoint second frame. Before
+    // A-5b this exact program REJECTED (frame register-bound); this is the L20
+    // reproducing test for the finding (fails without reuse, passes with it).
+    //   inner Trace(One, Id(1+1)) : One ↔ One
+    //   Plus(Id(One), inner)      : (1+1) ↔ (1+1) = Bit
+    //   outer Trace(One, Plus)    : One ↔ One, whose body CONTAINS a Trace.
+    // (Full non-degenerate ≥2-iteration authority + run_on_cpu_fast==eval lives in
+    // tests/deep_nesting.rs; this pins that the former reject shape now compiles.)
     let bit = Type::sum(Type::One, Type::One);
     let inner = Iso::trace(Type::One, Iso::Id(bit.clone())); // : One ↔ One
     let body = Iso::plus(Iso::Id(Type::One), inner); // : (One+One) ↔ (One+One) = Bit
     let outer = Iso::trace(Type::One, body); // outer body CONTAINS a Trace
-    let res = compile_with_metadata(&outer);
+    let lowered = compile_with_metadata(&outer)
+        .expect("A-5b: depth-2 nested Trace must COMPILE via aux reuse (was rejected)");
+    // The nested loop tree is present (outer loop term carries an inner one).
     assert!(
-        res.is_err(),
-        "nested Trace must still reject (frame register-bound, §2.3): {res:?}"
-    );
-    let msg = format!("{}", res.unwrap_err());
-    // Graceful register-bound reject (never an aliasing frame). The inner Trace
-    // runs out of free registers for its tag OR its 4-aux frame — either is a
-    // clean reject-don't-corrupt (design §2.3 depth bound / Finding 1).
-    assert!(
-        msg.contains("aux frame needs")
-            || msg.contains("free register")
-            || msg.contains("don't alias"),
-        "expected register-bound reject-don't-corrupt, got: {msg}"
+        !lowered.loop_terms.is_empty() && !lowered.loop_terms[0].inner.is_empty(),
+        "A-5b: outer loop term must carry a nested inner loop term (depth-2)"
     );
 }

@@ -167,7 +167,11 @@ fn u8_to_leaf_val(byte: u8, ty: &Type) -> Value {
 fn ctx_regs(n: usize) -> Ctx {
     let homes: Vec<Location> = (0..n).map(|i| Location::Reg(i as u8)).collect();
     let occ = OccSet::from_locations(&homes);
-    Ctx { homes, occ }
+    Ctx {
+        homes,
+        occ,
+        reusable_aux: 0,
+    }
 }
 
 /// Build the walk PrimDef on Sum(N5, Bit) from the byte map.
@@ -400,6 +404,7 @@ fn t_scratch_homed_recognition_passes() {
     let ctx = Ctx {
         homes: vec![Location::Reg(0), Location::Scratch(2)],
         occ: OccSet::from_locations(&[Location::Reg(0), Location::Scratch(2)]),
+        reusable_aux: 0,
     };
     let result = recognize_prim(&def, &ctx);
     assert!(
@@ -543,6 +548,7 @@ fn t_aliased_home_swap_rejected_by_recognize() {
     let ctx = Ctx {
         homes: vec![Location::Reg(0), Location::Reg(0)],
         occ: OccSet::from_locations(&[Location::Reg(0)]),
+        reusable_aux: 0,
     };
     let result = recognize_prim(&def, &ctx);
     assert!(

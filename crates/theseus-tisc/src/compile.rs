@@ -452,6 +452,25 @@ pub struct Ctx {
     /// Whole-machine occupancy: bits for every location holding live data.
     /// Copied unchanged across split/merge; updated only by displacement.
     pub occ: OccSet,
+    /// A-5b (deep loop-nesting via aux REUSE): register bitmask of the enclosing
+    /// Trace level(s)' aux slots `{rc, rb, temp, ctrl}` that are provably **dead
+    /// across this region** (the outer loop's body). A **nested `Trace`** may
+    /// REUSE these slots for its own aux frame — they are time-disjoint from the
+    /// outer aux (design §2.2: the outer aux are net-zero ancillae, all 0 across
+    /// the body, the come-from carried by δu-immediates + PC/BR, not a live reg).
+    ///
+    /// PRECISION (task constraint): this is consumed ONLY by `allocate_aux_frame`
+    /// (a nested Trace's 4-aux frame). It is DELIBERATELY NOT consulted by
+    /// `allocate_aux` (skip-block aux `{rb, temp}`) — a skip-block's aux are LIVE
+    /// across its own body (`temp = body_len` during the CSWAP/SWAPBR bracket,
+    /// `emit_skip_block`), so a skip-block must NEVER reuse these slots. The
+    /// enclosing skip-block's OWN aux are separately marked in `occ` (R4/R5/R6),
+    /// so a nested Trace behind a skip-block draws its frame from
+    /// `free(occ) ∪ reusable_aux` and correctly avoids the skip-block's live aux
+    /// while still reusing the (dead) outer-Trace aux. `reusable_aux` propagates
+    /// unchanged across split/merge and through skip-block arms (the outer aux
+    /// stay dead inside a skip-block body); it never contains a skip-block's aux.
+    pub reusable_aux: u8,
 }
 
 impl Ctx {
@@ -478,18 +497,30 @@ impl Ctx {
             .map(|i| home_of(i, n_leaves, resident))
             .collect();
         let occ = OccSet::from_locations(&homes);
-        Ctx { homes, occ }
+        Ctx {
+            homes,
+            occ,
+            reusable_aux: 0,
+        }
     }
 
     /// Split into two sub-contexts for `Times(f, g)`.
     fn split(&self, n_left: usize) -> (Ctx, Ctx) {
+        // A-5b: `reusable_aux` (outer-Trace dead aux) is region-scoped, not
+        // leaf-scoped — it stays reusable for BOTH factors of a `Times` in the
+        // body (both are inside the same outer-loop body region). Propagate to
+        // both halves. The sibling OCC (F-1) still keeps each factor's live regs
+        // off-limits, so a nested Trace in either factor reuses only the (dead)
+        // outer aux, never the sibling's data.
         let left = Ctx {
             homes: self.homes[..n_left].to_vec(),
             occ: self.occ,
+            reusable_aux: self.reusable_aux,
         };
         let right = Ctx {
             homes: self.homes[n_left..].to_vec(),
             occ: self.occ,
+            reusable_aux: self.reusable_aux,
         };
         (left, right)
     }
@@ -505,6 +536,7 @@ impl Ctx {
         Ctx {
             homes,
             occ: left.occ,
+            reusable_aux: left.reusable_aux,
         }
     }
 }
@@ -751,6 +783,7 @@ fn allocate_aux(
         Ctx {
             homes: modified_homes,
             occ,
+            reusable_aux: ctx.reusable_aux,
         },
     ))
 }
@@ -784,23 +817,39 @@ fn allocate_aux(
 /// `aux_base = max_carrier_reg + 1` positional assignment. (We assert this in
 /// `lower_trace` immediately after the call.)
 fn allocate_aux_frame(ctx: &Ctx) -> Result<([u8; 4], OccSet), CompileError> {
-    // Draw 4 free registers occ-awarely. We pass NO exclude_leaves and require
-    // that the register file already has ≥ 4 free registers: the four aux are
-    // all register-resident live operands for the loop's lifetime, so we do NOT
-    // want allocate_aux's page-out-a-carrier-leaf-to-scratch fallback here (that
-    // would relocate a live carrier leaf → the very corruption A-5 avoids).
-    let free_regs: Vec<u8> = (0..NUM_REGS as u8)
-        .filter(|r| ctx.occ.is_free(Location::Reg(*r)))
+    // Draw 4 register slots occ-awarely from `free(occ) ∪ reusable_aux`. We pass
+    // NO exclude_leaves and require ≥ 4 available: the four aux are all
+    // register-resident live operands for the loop's lifetime, so we do NOT want
+    // allocate_aux's page-out-a-carrier-leaf-to-scratch fallback here (that would
+    // relocate a live carrier leaf → the very corruption A-5 avoids).
+    //
+    // A-5b (deep loop-nesting via REUSE): a genuinely-free register (per occ) is
+    // always usable; ADDITIONALLY, a slot in `ctx.reusable_aux` — an ENCLOSING
+    // Trace level's aux, provably DEAD across this body region (design §2.2) —
+    // may be REUSED even though it is not free-per-occ (the outer marks its aux
+    // in the body occ so skip-blocks still avoid it). Reuse is time-disjoint: the
+    // inner loop is a net-zero bracket that enters+exits these slots at 0, and
+    // the outer never touches them across the entire inner region. This makes the
+    // aux cost O(1) in nesting depth — depth is bounded by CARRIER registers, not
+    // by 4·depth aux (design §2.3). Ascending order: a genuinely-free register is
+    // preferred over a reuse slot only by numeric index, preserving byte-identity
+    // for the canonical single-level case (no reusable_aux ⇒ pure free draw).
+    let candidates: Vec<u8> = (0..NUM_REGS as u8)
+        .filter(|r| ctx.occ.is_free(Location::Reg(*r)) || (ctx.reusable_aux & (1 << *r)) != 0)
         .collect();
-    if free_regs.len() < 4 {
+    if candidates.len() < 4 {
         return Err(CompileError::Deferred(format!(
-            "Trace aux frame needs 4 free registers but only {} are free \
-             (carrier + sibling + outer-aux occupancy leaves no room — \
-             nesting depth / carrier width bound, design §2.3)",
-            free_regs.len()
+            "Trace aux frame needs 4 register slots but only {} are available \
+             (carrier + sibling occupancy leaves no room, even with outer-aux \
+             reuse — nesting bounded by CARRIER registers, design §2.3/A-5b)",
+            candidates.len()
         )));
     }
-    let frame = [free_regs[0], free_regs[1], free_regs[2], free_regs[3]];
+    let frame = [candidates[0], candidates[1], candidates[2], candidates[3]];
+    // Mark the frame occupied in the returned occ so THIS level's carrier/ancilla
+    // draws (and any DIFFERENT enclosing skip-block) treat it as taken. Note the
+    // caller threads its OWN reusable_aux (this level's frame) into the body ctx;
+    // the returned occ is only used for THIS level's remaining allocations.
     let mut marked = ctx.occ;
     for r in frame {
         marked.set(Location::Reg(r));
@@ -832,6 +881,33 @@ pub fn alloc_aux_frame_for_test(
     let ctx = Ctx {
         homes: homes.iter().map(|&r| Location::Reg(r)).collect(),
         occ,
+        reusable_aux: 0,
+    };
+    let (frame, marked) = allocate_aux_frame(&ctx)?;
+    Ok((frame, marked.regs))
+}
+
+/// A-5b WHITE-BOX test hook: draw an aux frame where `reusable` registers are an
+/// enclosing Trace level's DEAD aux available for REUSE (marked occupied but
+/// offered back to a nested Trace). Models the depth-2+ nested-Trace case: the
+/// occupied set includes carriers + the outer aux, but the outer aux are also in
+/// `reusable`, so the inner frame may draw them. Returns `(frame, marked_regs)`.
+pub fn alloc_aux_frame_with_reuse_for_test(
+    occupied: &[u8],
+    reusable: &[u8],
+) -> Result<([u8; 4], u8), CompileError> {
+    let mut occ = OccSet::empty();
+    for &r in occupied {
+        occ.set(Location::Reg(r));
+    }
+    let mut reusable_aux = 0u8;
+    for &r in reusable {
+        reusable_aux |= 1 << r;
+    }
+    let ctx = Ctx {
+        homes: occupied.iter().map(|&r| Location::Reg(r)).collect(),
+        occ,
+        reusable_aux,
     };
     let (frame, marked) = allocate_aux_frame(&ctx)?;
     Ok((frame, marked.regs))
@@ -2573,6 +2649,11 @@ fn lower_controlled_idiom(
     let ctx_tgt = Ctx {
         homes: dctx.homes[n_ctrl..n_ctrl + n_tgt].to_vec(),
         occ: occ_tgt,
+        // A-5b: the outer-Trace dead aux stay dead inside this skip-block body,
+        // so a nested Trace here may still reuse them. This skip-block's OWN aux
+        // {rb, temp, ctrl} are in `occ_tgt` (LIVE across the body) and are NOT in
+        // reusable_aux, so a nested Trace correctly avoids them.
+        reusable_aux: dctx.reusable_aux,
     };
     let (instrs_g, _) = lower(g, &ctx_tgt, meta)?;
 
@@ -3392,16 +3473,27 @@ fn lower_trace(
         .filter(|r| body_occ.is_free(Location::Reg(*r)))
         .collect();
 
-    // Reserve 4 free registers for the aux frame {rc,rb,temp,ctrl}, drawn next.
-    // The carrier's register-resident ancillae (tag + as much padding as fits)
-    // take the free registers ABOVE that reservation; wide payload beyond the
-    // budget spills its zero-init padding to free scratch (occ-aware, never a
-    // live-data relocation). This reproduces the old positional `carrier_reg_budget
-    // = NUM_REGS - 4` cap in the canonical single-level case (tag + fitting padding
-    // register-resident, overflow → Scratch, aux frame = the reserved 4), while
-    // being occ-aware under `Times`/nesting. At MAX_LEAVES_LOOP=4 the scratch-spill
-    // path is unreachable, but keep it for the reject-don't-corrupt boundary.
-    let reg_budget_for_ancilla = free_regs.len().saturating_sub(4);
+    // Reserve enough FREE registers for the aux frame {rc,rb,temp,ctrl}, drawn
+    // next. The carrier's register-resident ancillae (tag + as much padding as
+    // fits) take the free registers ABOVE that reservation; wide payload beyond
+    // the budget spills its zero-init padding to free scratch (occ-aware, never a
+    // live-data relocation). This reproduces the old positional
+    // `carrier_reg_budget = NUM_REGS - 4` cap in the canonical single-level case
+    // (tag + fitting padding register-resident, overflow → Scratch, aux frame =
+    // the reserved 4), while being occ-aware under `Times`/nesting.
+    //
+    // A-5b: the aux frame may REUSE an enclosing Trace's dead aux
+    // (`ctx.reusable_aux`, disjoint from free_regs since the outer marked them in
+    // occ). Each reusable slot the frame consumes is one FEWER free register the
+    // frame needs — so the ancilla (tag/padding) may take free registers the old
+    // rule would have reserved for the frame. This is what lets a nested Trace's
+    // TAG find a register once its 4-aux frame reuses the outer frame (design
+    // §2.3: aux cost O(1) in depth, depth bounded by carriers). Without this the
+    // reservation would hoard 4 free regs for a frame that draws 0 of them and the
+    // inner tag would spuriously reject with a free register still available.
+    let reusable_avail = (ctx.reusable_aux.count_ones() as usize).min(4);
+    let frame_free_needed = 4usize.saturating_sub(reusable_avail);
+    let reg_budget_for_ancilla = free_regs.len().saturating_sub(frame_free_needed);
     let reg_ancilla = n_ancilla_regs.min(reg_budget_for_ancilla);
     let ancilla_regs: Vec<u8> = free_regs.drain(..reg_ancilla).collect();
     let mut ancilla_iter = ancilla_regs.iter().copied();
@@ -3467,9 +3559,13 @@ fn lower_trace(
     // disjoint from the carrier; under `Times(Trace, g)` the sibling g's leaves
     // are already in `ctx.occ`, so the frame is disjoint from g's live regs too
     // (the F-1 aliasing hazard, now closed structurally rather than by reject).
+    // A-5b: pass the INCOMING `ctx.reusable_aux` so THIS Trace's frame may itself
+    // reuse an enclosing (grandparent) Trace level's dead aux — this is what makes
+    // depth-3+ fit: every level's frame reuses the same shared 4 slots.
     let ([rc, rb, temp, ctrl], body_occ) = allocate_aux_frame(&Ctx {
         homes: body_homes.clone(),
         occ: body_occ,
+        reusable_aux: ctx.reusable_aux,
     })?;
 
     // SOUNDNESS / byte-identity assert (A-5 review check §2.3): for the canonical
@@ -3493,7 +3589,10 @@ fn lower_trace(
         // Only meaningful when the ctx is canonical + unshared (single-level):
         // occ holds nothing beyond this Trace's own carrier leaves.
         let canonical = Ctx::new(ctx.homes.len());
-        if ctx.homes == canonical.homes && ctx.occ == OccSet::from_locations(&ctx.homes) {
+        if ctx.homes == canonical.homes
+            && ctx.occ == OccSet::from_locations(&ctx.homes)
+            && ctx.reusable_aux == 0
+        {
             debug_assert_eq!(
                 [rc, rb, temp, ctrl],
                 [
@@ -3509,9 +3608,19 @@ fn lower_trace(
         }
     }
 
+    // A-5b: mark THIS level's 4 aux frame as REUSABLE for a nested Trace in the
+    // body. `body_occ` keeps the frame OCCUPIED (so skip-blocks in the body still
+    // draw disjoint aux — the load-bearing R4/R5/R6 occ-mark is untouched), but
+    // `reusable_aux` additionally OFFERS the frame to a nested Trace, which enters
+    // and exits it at 0 (net-zero, time-disjoint — design §2.2). We UNION with the
+    // incoming `ctx.reusable_aux` so a deeper Trace can reuse any ancestor's frame:
+    // aux cost is O(1) in depth, depth bounded by CARRIER registers (design §2.3).
+    let level_frame_mask: u8 =
+        (1 << rc) | (1 << rb) | (1 << temp) | (1 << ctrl);
     let body_ctx = Ctx {
         homes: body_homes,
         occ: body_occ,
+        reusable_aux: ctx.reusable_aux | level_frame_mask,
     };
 
     // Body must not use Swapbr (no forward skip-blocks inside loops
@@ -3873,6 +3982,9 @@ fn lower_fold_unfold(
         let body_ctx = Ctx {
             homes: body_homes,
             occ: dctx.occ,
+            // A-5b: propagate the outer-Trace dead-aux reuse set through the
+            // Fold/Unfold body (the outer aux stay dead across this region).
+            reusable_aux: dctx.reusable_aux,
         };
 
         // Lower the body against this per-copy context.
@@ -3966,13 +4078,19 @@ fn lower_bare_plus(
     occ_arm.set(Location::Reg(rb));
     occ_arm.set(Location::Reg(temp));
     occ_arm.set(Location::Reg(tag_reg));
+    // A-5b: the outer-Trace dead aux stay dead inside each arm's skip-block body,
+    // so a nested Trace in an arm may still reuse them; this branch's OWN aux
+    // {rb, temp, tag} are in `occ_arm` (LIVE across the arm) and NOT in
+    // reusable_aux, so a nested Trace avoids them (design §2.2 precision).
     let ctx_f = Ctx {
         homes: dctx.homes[1..1 + n_f].to_vec(),
         occ: occ_arm,
+        reusable_aux: dctx.reusable_aux,
     };
     let ctx_g = Ctx {
         homes: dctx.homes[1..1 + n_g].to_vec(),
         occ: occ_arm,
+        reusable_aux: dctx.reusable_aux,
     };
 
     let (instrs_f, _) = lower(f, &ctx_f, meta)?;
@@ -4503,6 +4621,7 @@ mod tests {
         let ctx = Ctx {
             homes: vec![Location::Reg(0), Location::Reg(0)],
             occ: OccSet::from_locations(&[Location::Reg(0)]),
+            reusable_aux: 0,
         };
         let result = recognize_prim(&def, &ctx);
         assert!(

@@ -228,6 +228,7 @@ fn recognize_prim_selects_ccnot_for_symbolic_only() {
             theseus_tisc::compile::Location::Reg(1),
             theseus_tisc::compile::Location::Reg(2),
         ]),
+        reusable_aux: 0,
     };
     let result = theseus_tisc::compile::recognize_prim(&def, &ctx);
     let dt = t0.elapsed();
@@ -686,6 +687,7 @@ fn r3_partial_table_spec_recognize_prim_fast() {
             theseus_tisc::compile::Location::Reg(1),
             theseus_tisc::compile::Location::Reg(2),
         ]),
+        reusable_aux: 0,
     };
     let result = theseus_tisc::compile::recognize_prim(&def, &ctx);
     let dt = t0.elapsed();
@@ -748,6 +750,7 @@ fn payoff_flat8_masked_accum_recognized_as_ccnot() {
             theseus_tisc::compile::Location::Reg(1),
             theseus_tisc::compile::Location::Reg(2),
         ]),
+        reusable_aux: 0,
     };
     let t0 = std::time::Instant::now();
     let body = theseus_tisc::compile::recognize_prim(&def, &ctx)
@@ -877,6 +880,7 @@ fn non_vacuity_wrong_spec_rejected() {
             theseus_tisc::compile::Location::Reg(1),
             theseus_tisc::compile::Location::Reg(2),
         ]),
+        reusable_aux: 0,
     };
     let t0 = std::time::Instant::now();
     let result = theseus_tisc::compile::recognize_prim(&def, &ctx);
@@ -935,6 +939,7 @@ fn selection_non_identity_register_mapping() {
             theseus_tisc::compile::Location::Reg(2),
             theseus_tisc::compile::Location::Reg(7),
         ]),
+        reusable_aux: 0,
     };
     let body = theseus_tisc::compile::recognize_prim(&def, &ctx)
         .expect("scrambled-home masked-accum must still be recognized");

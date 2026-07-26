@@ -1741,14 +1741,13 @@ fn times_trace_wider_payload_runs() {
 }
 
 #[test]
-fn mdd_reject_nested_trace() {
-    // Nested Trace still REJECTS gracefully (reject-don't-corrupt). A-4 deleted
-    // the `contains_trace` predicate, but the frame-stack discipline now catches
-    // this structurally: the outer Trace occ-marks its own carrier + aux frame
-    // before lowering the body, so the inner Trace's `allocate_aux_frame` finds
-    // no room for a DISJOINT 4-register frame on the 8-register file and rejects.
-    // The message therefore changed from the old "nested Trace"/"come-from" text
-    // to the aux-frame register-bound message — re-pinned here (Finding 2c).
+fn mdd_nested_trace_compiles_via_aux_reuse() {
+    // A-5b (was `mdd_reject_nested_trace`): a depth-2 nested Trace now COMPILES.
+    // The inner Trace REUSES the outer level's four aux {rc,rb,temp,ctrl} — dead
+    // across the inner region (design §2.2) — rather than needing a disjoint
+    // second 4-register frame. Aux cost is O(1) in depth; nesting is bounded by
+    // CARRIER + per-level skip-block registers, not by 4·depth aux. This is the
+    // L20 reproducing test: it REJECTED before A-5b and compiles now.
     //   inner Trace(One, Id(1+1)) : One ↔ One
     //   Plus(Id(One), inner)      : (1+1) ↔ (1+1)
     //   outer Trace(One, Plus)    : One ↔ One, whose body CONTAINS a Trace.
@@ -1756,14 +1755,11 @@ fn mdd_reject_nested_trace() {
     let inner = Iso::trace(Type::One, Iso::Id(bit.clone()));
     let body = Iso::plus(Iso::Id(Type::One), inner);
     let outer = Iso::trace(Type::One, body);
-    let result = compile(&outer);
-    assert!(result.is_err(), "nested Trace must be rejected");
-    let msg = format!("{}", result.unwrap_err());
+    let lowered =
+        compile_with_metadata(&outer).expect("A-5b: depth-2 nested Trace must COMPILE via reuse");
     assert!(
-        msg.contains("aux frame needs")
-            || msg.contains("free register")
-            || msg.contains("don't alias"),
-        "expected nested-Trace aux-frame register-bound rejection, got: {msg}"
+        !lowered.loop_terms.is_empty() && !lowered.loop_terms[0].inner.is_empty(),
+        "A-5b: outer loop term must carry a nested inner loop term (depth-2)"
     );
 }
 
