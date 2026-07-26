@@ -278,6 +278,21 @@ pub fn fetch(rom: &[u32]) -> Iso {
     }
 }
 
+// ── Standing energy cost of the widen (MEASURED) ───────────────────
+//
+// Isolated unbalanced cell counts, 8-bit-PC baseline (f186563) → A-6.4
+// 16-bit PC:
+//   pc_add_br : 74  →  194   (+120)   16-bit materialized-operand TK adder
+//   pc_inc    : 43  →  162   (+119)   16-bit TK add of constant 1
+//   fetch(len8): 372 → 326   (−46)    narrow-A (A_fetch=3 vs full-8 compare)
+// Net PC-dependent delta ≈ +193 cells on a ~4846-cell step ≈ +4.0% for the
+// whole 8→16-bit widen (8 added PC bits) ≈ ~0.5 %/bit — under the design's
+// "<1 %/bit" target, and narrow-A fetch pays for part of it (the fetch
+// predicate SHRANK). The absolute step_j re-pin (me_a3) is deferred: the
+// wider state OOMs balance()/lower_iso on the host (see energy.rs), but
+// step_j is exactly proportional to the balanced cell inventory, so the
+// cell-count delta is the faithful per-step energy proxy.
+
 // ── PC += sext(BR)  (sign-extended offset add) ─────────────────────
 //
 // A-6.4 widen-PC: PC is `W_PC` (=16) bits over two Word8 fields
