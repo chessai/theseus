@@ -755,6 +755,88 @@ fn allocate_aux(
     ))
 }
 
+/// A-5: draw a Trace loop-level's aux frame `{rc, rb, temp, ctrl}` OCC-AWARELY.
+///
+/// The frame's four aux registers must be disjoint from (a) the loop carrier's
+/// leaves, (b) any `Times` sibling's live registers, and (c) any outer loop
+/// level's live aux (for nested Trace). We achieve all three by drawing the
+/// frame from *genuinely-free* registers according to whole-machine occupancy
+/// (`ctx.occ`), never the positional `max_carrier_reg + 1` — which was safe only
+/// because the F-1 guard rejected every non-canonical/occupied ctx (M-D.d F-1).
+///
+/// Returns `(frame, marked_occ)` where `frame = [rc, rb, temp, ctrl]` and
+/// `marked_occ` is `ctx.occ` with all four aux registers marked occupied — the
+/// caller threads `marked_occ` into the body's `Ctx` so that an INNER Trace's
+/// `allocate_aux_frame` sees this level's aux as taken and draws a DISJOINT
+/// frame one level down. This is the "outer occ-marks its frame before lowering
+/// the body" discipline (design §2.3.2).
+///
+/// The four aux are drawn as free registers only (never scratch/mem): all four
+/// are live SWAPBR/CSWAP/ADDI operands across the whole loop bracket, so they
+/// must be register-resident — this is why we reject rather than spill when the
+/// register file cannot host a disjoint frame (design §2.3 depth bound).
+///
+/// **Byte-identity for the canonical single-level case.** `allocate_aux(ctx, 4,
+/// carrier_leaves)` returns the four lowest free registers in ascending order.
+/// For a canonical single-level Trace the carrier occupies registers
+/// `0..=max_carrier_reg` contiguously from 0, so the four lowest free registers
+/// are exactly `[max_carrier_reg+1, +2, +3, +4]` — byte-identical to the old
+/// `aux_base = max_carrier_reg + 1` positional assignment. (We assert this in
+/// `lower_trace` immediately after the call.)
+fn allocate_aux_frame(ctx: &Ctx) -> Result<([u8; 4], OccSet), CompileError> {
+    // Draw 4 free registers occ-awarely. We pass NO exclude_leaves and require
+    // that the register file already has ≥ 4 free registers: the four aux are
+    // all register-resident live operands for the loop's lifetime, so we do NOT
+    // want allocate_aux's page-out-a-carrier-leaf-to-scratch fallback here (that
+    // would relocate a live carrier leaf → the very corruption A-5 avoids).
+    let free_regs: Vec<u8> = (0..NUM_REGS as u8)
+        .filter(|r| ctx.occ.is_free(Location::Reg(*r)))
+        .collect();
+    if free_regs.len() < 4 {
+        return Err(CompileError::Deferred(format!(
+            "Trace aux frame needs 4 free registers but only {} are free \
+             (carrier + sibling + outer-aux occupancy leaves no room — \
+             nesting depth / carrier width bound, design §2.3)",
+            free_regs.len()
+        )));
+    }
+    let frame = [free_regs[0], free_regs[1], free_regs[2], free_regs[3]];
+    let mut marked = ctx.occ;
+    for r in frame {
+        marked.set(Location::Reg(r));
+    }
+    Ok((frame, marked))
+}
+
+/// A-5 WHITE-BOX test hook: draw an occ-aware aux frame for a context built
+/// from `homes` (leaf → register index) with `also_occupied` registers marked
+/// live on top of the homes (models `Times` siblings / outer-level live aux).
+///
+/// Returns `(frame, marked_regs_bitmask)` where `frame = [rc, rb, temp, ctrl]`
+/// and `marked_regs_bitmask` is the `regs` occupancy AFTER the frame is marked
+/// (what the caller threads into a nested body). This lets the nested-aux tests
+/// construct the `Times(Trace, g)` and nested-Trace aliasing scenarios directly
+/// — the reject sites (A-4's job) still block these programs end-to-end, so the
+/// frame machinery must be exercised at the allocator boundary (design §2.5).
+pub fn alloc_aux_frame_for_test(
+    homes: &[u8],
+    also_occupied: &[u8],
+) -> Result<([u8; 4], u8), CompileError> {
+    let mut occ = OccSet::empty();
+    for &r in homes {
+        occ.set(Location::Reg(r));
+    }
+    for &r in also_occupied {
+        occ.set(Location::Reg(r));
+    }
+    let ctx = Ctx {
+        homes: homes.iter().map(|&r| Location::Reg(r)).collect(),
+        occ,
+    };
+    let (frame, marked) = allocate_aux_frame(&ctx)?;
+    Ok((frame, marked.regs))
+}
+
 /// Ensure a leaf is in a register. If it's in scratch, page it into a
 /// spare register (excluded from `exclude_regs`).
 /// Returns `(register_index, page_in_instrs, page_out_instrs)`.
@@ -3234,10 +3316,64 @@ fn lower_trace(
         }
     }
 
-    // Build occ: mark all carrier + aux registers as occupied.
+    // Build occ: mark all carrier registers as occupied.
     let mut body_occ = ctx.occ;
     for h in &body_homes {
         body_occ.set(*h);
+    }
+
+    // ── A-5: occ-aware aux frame, drawn BEFORE lowering the body ────────
+    // Draw this loop level's four aux registers {rc, rb, temp, ctrl} from
+    // genuinely-free registers (per occ), NOT the positional `max_carrier_reg+1`.
+    // Then OCC-MARK the frame into `body_occ` before lowering the body, so that a
+    // nested Trace's own `allocate_aux_frame` sees this level's aux as taken and
+    // draws a DISJOINT frame. This is the frame-stack discipline (design §2.3):
+    // each depth gets a frame disjoint from carriers, siblings, and outer aux.
+    //
+    // A carrier ctx has homes marked in `body_occ` above, so the frame is
+    // disjoint from the carrier; under `Times(Trace, g)` the sibling g's leaves
+    // are already in `ctx.occ`, so the frame is disjoint from g's live regs too
+    // (the F-1 aliasing hazard, now closed structurally rather than by reject).
+    let ([rc, rb, temp, ctrl], body_occ) = allocate_aux_frame(&Ctx {
+        homes: body_homes.clone(),
+        occ: body_occ,
+    })?;
+
+    // SOUNDNESS / byte-identity assert (A-5 review check §2.3): for the canonical
+    // single-level Trace the carrier occupies regs 0..=max_carrier_reg
+    // contiguously, so the occ-aware frame MUST equal the old positional
+    // assignment `[max_carrier_reg+1 .. +4]`. If this ever diverges for a
+    // single-level program the aux placement (hence the ROM) changed — a
+    // regression. We only assert the equality when the frame is register-drawn
+    // above the carrier (always, here); for nested/sibling contexts the frame is
+    // *intentionally* different, which is the whole point of A-5.
+    #[cfg(debug_assertions)]
+    {
+        let max_carrier_reg = body_homes
+            .iter()
+            .filter_map(|h| match h {
+                Location::Reg(r) => Some(*r),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        // Only meaningful when the ctx is canonical + unshared (single-level):
+        // occ holds nothing beyond this Trace's own carrier leaves.
+        let canonical = Ctx::new(ctx.homes.len());
+        if ctx.homes == canonical.homes && ctx.occ == OccSet::from_locations(&ctx.homes) {
+            debug_assert_eq!(
+                [rc, rb, temp, ctrl],
+                [
+                    max_carrier_reg + 1,
+                    max_carrier_reg + 2,
+                    max_carrier_reg + 3,
+                    max_carrier_reg + 4
+                ],
+                "A-5: occ-aware aux frame must be byte-identical to the old \
+                 max_carrier_reg+1 positional assignment for a canonical \
+                 single-level Trace (no ROM regression)"
+            );
+        }
     }
 
     let body_ctx = Ctx {
@@ -3392,33 +3528,15 @@ fn lower_trace(
     // Want PC = Ltop → δu = 256 - iter_len (mod 256).
     let delta_u: u8 = (256usize.wrapping_sub(iter_len) & 0xFF) as u8;
 
-    // ── Register assignment (§3) ───────────────────────────────────
-    // The body_ctx has tag at body_homes[0] = Reg(tag_reg_idx).
-    // Aux registers are allocated after all carrier registers.
+    // ── Register assignment (§3, A-5 occ-aware frame) ──────────────────
+    // The body_ctx has tag at body_homes[0] = Reg(tag_reg_idx). The four aux
+    // {rc, rb, temp, ctrl} were drawn OCC-AWARELY above (`allocate_aux_frame`)
+    // *before* the body was lowered, and occ-marked into `body_ctx.occ` so a
+    // nested Trace draws a disjoint frame. `allocate_aux_frame` already
+    // guarantees all four are distinct in-register slots disjoint from the
+    // carrier and any sibling/outer live data — no positional `max_carrier_reg+1`
+    // and no register-file overflow check needed here (it rejected up front).
     let tag_reg: u8 = tag_reg_idx;
-    // Find the highest register used by the carrier.
-    let max_carrier_reg = body_ctx
-        .homes
-        .iter()
-        .filter_map(|h| match h {
-            Location::Reg(r) => Some(*r),
-            _ => None,
-        })
-        .max()
-        .unwrap_or(0);
-    let aux_base = max_carrier_reg + 1;
-    let rc: u8 = aux_base;
-    let rb: u8 = aux_base + 1;
-    let temp: u8 = aux_base + 2;
-    let ctrl: u8 = aux_base + 3;
-
-    // Sanity: all aux must fit in registers.
-    if (ctrl as usize) >= NUM_REGS {
-        return Err(CompileError::Deferred(format!(
-            "Trace aux registers exceed register file (ctrl={}, NUM_REGS={})",
-            ctrl, NUM_REGS
-        )));
-    }
 
     // ── Emit the skeleton ──────────────────────────────────────────
     let mut instrs = vec![
