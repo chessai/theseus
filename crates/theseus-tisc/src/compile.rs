@@ -1564,10 +1564,24 @@ fn leaf_widths(ty: &Type) -> Result<Vec<u8>, CompileError> {
 /// Build a byte-map closure `[u8;n_leaves] -> [u8;n_leaves]` from a prim table,
 /// by round-tripping through the leaf-byte marshaling: reconstruct the input
 /// `Value` from the carrier bytes, look it up in `table`, marshal the output back
-/// to `n_leaves` bytes. Returns `None` (as a per-call closure result) when the
-/// table has no entry — the caller guarantees the table is total over the domain
-/// it enumerates (a cross-checked, admitted bijection), so a miss is a bug we
-/// surface, not silently accept.
+/// to `n_leaves` bytes.
+///
+/// NON-PANICKING + IDENTITY-ON-JUNK (A-6 STEP-1 fix, review MAJOR-1/2a/2b):
+///   * Parsing uses `try_value_from_leaf_bytes` — a byte pattern outside the
+///     type's canonical domain (out-of-range `Flat` byte, junk pad byte, a tag
+///     that selects the wrong-width branch) yields `Err`, never a panic.
+///   * When the input bytes are NOT a canonical marshaling of an `in_ty` value,
+///     or the (canonical) value is not in `table`, the closure returns the input
+///     bytes UNCHANGED (identity on the junk row). The Bennett method interpolates
+///     an exact ANF per row, so junk-row images are irrelevant to correctness on
+///     canonical inputs — the whole-domain-CANONICAL exec-verify certifies the
+///     canonical rows, and the cross-check enumerates canonical values only. This
+///     keeps every enumerated `2^Σwidths` byte row total (no panic) while leaving
+///     the canonical behavior exactly the table.
+///
+/// Callers enumerate over per-leaf widths `= max(in_width, out_width)` so a single
+/// width vector drives both directions (`table_to_regtransfer` needs the output
+/// bits captured: `widths[i] >= out_width_i`).
 fn table_byte_map<'a>(
     table: &'a std::collections::BTreeMap<Value, Value>,
     in_ty: &'a Type,
@@ -1575,13 +1589,21 @@ fn table_byte_map<'a>(
     n_leaves: usize,
 ) -> impl Fn(&[u8]) -> Vec<u8> + 'a {
     move |in_bytes: &[u8]| {
-        let (v_in, _) = value_from_leaf_bytes(in_bytes, in_ty);
-        let v_out = table
-            .get(&v_in)
-            .unwrap_or_else(|| panic!("table_byte_map: no entry for input {v_in:?}"));
-        let mut out = value_to_leaf_bytes(v_out, out_ty);
-        out.resize(n_leaves, 0);
-        out
+        // Non-canonical byte row (out-of-range Flat byte / junk pad) → identity.
+        let v_in = match theseus_core::prim::try_value_from_leaf_bytes(in_bytes, in_ty) {
+            Ok(v) => v,
+            Err(_) => return in_bytes.to_vec(),
+        };
+        match table.get(&v_in) {
+            Some(v_out) => {
+                let mut out = value_to_leaf_bytes(v_out, out_ty);
+                out.resize(n_leaves, 0);
+                out
+            }
+            // Canonical value absent from a full-domain table cannot happen for an
+            // admitted bijection; be defensive (identity) rather than panic.
+            None => in_bytes.to_vec(),
+        }
     }
 }
 
@@ -1636,15 +1658,32 @@ fn general_synthesize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, Compi
         )));
     }
 
-    // Per-leaf widths from the TYPE (never from the table — N5 obligation).
-    let widths = leaf_widths(&def.input_ty)?;
-    if widths.len() != n {
+    // Per-leaf widths from the TYPES (never from the table — N5 obligation).
+    // The carrier register holds BOTH the input value (before) and the output
+    // value (after), so the meaningful bit-width per leaf must cover BOTH
+    // directions. Enumerate/emit over `widths[i] = max(in_width_i, out_width_i)`:
+    //   * the forward transfer captures every OUTPUT bit (widths[i] >= out_i);
+    //   * the backward transfer captures every INPUT bit (widths[i] >= in_i);
+    //   * a single width vector drives both `table_to_regtransfer` sweeps.
+    // This fixes review MAJOR-2b: previously the BACKWARD enumeration (over the
+    // OUTPUT type) was driven by INPUT widths, feeding out-of-range bytes to the
+    // marshaler and panicking. `leaf_widths` mismatched leaf COUNTS are impossible
+    // here (n_in == n_out and Sum tag+payload aligns), but a per-leaf width
+    // mismatch (Flat(1)+Flat(2) branches, or Flat(1)×Flat(3)→Flat(2)×Flat(2)) is
+    // exactly what `max` resolves.
+    let in_widths = leaf_widths(&def.input_ty)?;
+    let out_widths = leaf_widths(&def.output_ty)?;
+    if in_widths.len() != n || out_widths.len() != n {
         return Err(CompileError::UnrecognizedPrim(format!(
-            "prim '{}' general synth: {} leaf widths for {n} leaves",
+            "prim '{}' general synth: {} in / {} out leaf widths for {n} leaves",
             def.forward_name,
-            widths.len()
+            in_widths.len(),
+            out_widths.len()
         )));
     }
+    let widths: Vec<u8> = (0..n)
+        .map(|i| in_widths[i].max(out_widths[i]))
+        .collect();
     let total_bits: usize = widths.iter().map(|&w| w as usize).sum();
     // `table_to_regtransfer` enumerates 2^total_bits rows. Cap defensively (it
     // asserts ≤ 24 internally); a wide prim is a provisioning problem, not a
@@ -1664,34 +1703,27 @@ fn general_synthesize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, Compi
     let fwd_map = table_byte_map(&def.forward, &def.input_ty, &def.output_ty, n);
     let bwd_map = table_byte_map(&def.backward, &def.output_ty, &def.input_ty, n);
 
-    // CROSS-CHECK bwd∘fwd == id over the WHOLE enumerated domain (guards the
-    // Bennett `bwd = fwd⁻¹` assumption at construction time). Enumerate the same
-    // 2^total_bits carrier-bit assignments `table_to_regtransfer` will.
-    {
-        let n_rows = 1usize << total_bits;
-        // Flattened meaningful input bits, in carrier order (leaf, bit).
-        let mut vars: Vec<(usize, usize)> = Vec::new();
-        for (leaf, &w) in widths.iter().enumerate() {
-            for bit in 0..w as usize {
-                vars.push((leaf, bit));
-            }
-        }
-        for x in 0..n_rows {
-            let mut in_bytes = vec![0u8; n];
-            for (k, &(leaf, bit)) in vars.iter().enumerate() {
-                if (x >> k) & 1 == 1 {
-                    in_bytes[leaf] |= 1 << bit;
-                }
-            }
-            let out = fwd_map(&in_bytes);
-            let back = bwd_map(&out);
-            if back != in_bytes {
-                return Err(CompileError::EmissionVerificationFailed(format!(
-                    "general synth '{}': bwd∘fwd ≠ id on carrier bytes {in_bytes:?} \
-                     (fwd→{out:?}, bwd→{back:?}); the backward table is not the inverse",
-                    def.forward_name
-                )));
-            }
+    // CROSS-CHECK bwd∘fwd == id over the CANONICAL DOMAIN (guards the Bennett
+    // `bwd = fwd⁻¹` assumption at construction time). Review MAJOR-1: enumerating
+    // all `2^total_bits` raw BYTE rows falsely rejected loose Sums — a junk pad
+    // row parses to its canonical twin, so `bwd(fwd(junk)) == canonical != junk`
+    // and the check wrongly blamed the (perfect) backward table. The correct
+    // domain is the CANONICAL VALUES: iterate `enumerate_values(input_ty)` and
+    // require `bwd(fwd(x)) == x` on each. (Junk byte rows are handled as identity
+    // by `table_byte_map` and are irrelevant to the interpolated ANF's behavior on
+    // canonical inputs.)
+    for v in theseus_core::prim::enumerate_values(&def.input_ty) {
+        let mut in_bytes = value_to_leaf_bytes(&v, &def.input_ty);
+        in_bytes.resize(n, 0);
+        let out = fwd_map(&in_bytes);
+        let back = bwd_map(&out);
+        if back != in_bytes {
+            return Err(CompileError::EmissionVerificationFailed(format!(
+                "general synth '{}': bwd∘fwd ≠ id on canonical input {v:?} \
+                 (bytes {in_bytes:?}, fwd→{out:?}, bwd→{back:?}); the backward table \
+                 is not the inverse",
+                def.forward_name
+            )));
         }
     }
 
@@ -1802,10 +1834,22 @@ fn general_synthesize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, Compi
         ))
     })?;
 
-    // (b) Differential vs the ANF path: synthesize the SAME prim through the ANF
-    // transcriber and assert both bodies agree on the whole domain (carriers +
-    // net-zero). This is an independent second synthesis mechanism, so an
-    // agreement is strong evidence neither path is wrong the same way.
+    // (b) Second-transcriber CHECK vs the ANF path: synthesize the SAME prim
+    // through the ANF (`transcribe_bennett_general`) transcriber and EXEC-VERIFY
+    // it against the table over the whole canonical domain, exactly as (a) does
+    // the BDD body.
+    //
+    // HONESTY (review Finding 4): this is NOT an independent differential of two
+    // black boxes — both transcribers consume the SAME `fwd`/`bwd` RegTransfers,
+    // so a `table_to_regtransfer` bug is shared. What it DOES buy: (i) exec-verify
+    // runs the REAL emitted `Instr`s through `exec_instr`, so any `table_to_reg-
+    // transfer` bug that makes exec ≠ table is caught by (a) alone regardless;
+    // (ii) it is genuine coverage for `transcribe_bennett_general` (ANF) transcrip-
+    // tion bugs — an ANF body that mis-realizes the shared RegTransfer fails here.
+    // Both bodies pass exec-verify ⇒ both realize the table on every canonical
+    // input ⇒ they agree on carriers (body-vs-body agreement, via the table as the
+    // shared oracle). The ANF-path skip on a wiring failure is deliberate: it is a
+    // secondary check, not a gate — the primary (a) already certified the BDD body.
     {
         // ANF needs its own helper bank (mask + AND-tree temps). Reuse the free
         // pool: mask + temps from the words not used as ancilla. If the ANF
