@@ -59,9 +59,21 @@
 >   blocked only by a conservative `SwapbrRegOutOfRange` encoder guard) is the later generalization
 >   for wide carriers / deeper nests. MINOR follow-ups: depth-limit reject diagnostic message; fold
 >   per-copy occ-mark fragility note.
-> - **NEXT: A-7** (wide `Flat n>8` data words) → **provisioning** (per-program widen-PC A-2/B-2;
->   lean-`lower_iso` for the me_a3 memory borderline; run heavy tier `--test-threads=1`). gcd2-scale
->   bodies run only once provisioning lands, sized per-program so simple programs stay cheap.
+> - **✅ A-7.0 MERGED (`707dc78`): wide data words, bitwise class.** Wide words = multi-byte-leaf.
+>   Wide **bitwise** ops (Xor/Ccnot/Cswap over 2+ byte-lanes) lower with **zero new compiler code**
+>   via the **COMPOSITIONAL** form `Times(byteOp, byteOp)` (per-lane arm matchers fire → one byte-op
+>   per leaf; shape-pinned, `run_on_cpu==eval`, real-CPU witness). **CORRECTION to the earlier design
+>   §3:** a *monolithic* multi-leaf wide-op prim table does NOT recognize per-leaf — it hits the
+>   general synthesizer's `2^total_bits` blowup / `NeedsProvisioning`. So: the general synthesizer
+>   handles a single prim up to ~20 input bits; **wider values must be COMPOSED (Times/fold over
+>   bytes)**, which is how real wide programs are built anyway. A-7.1 harness landed.
+> - **NEXT: A-7.1** (wide **arithmetic** — `Add`/`Sub`) = a NEW parametric zero-ancilla ripple-adder
+>   iso (cross-byte carry — canNOT be `Times` of independent byte-adds; highest-bar: adversarial
+>   review + BDD `equiv` + real-CPU + adjoint round-trip) → **provisioning** (per-program widen-PC
+>   A-2/B-2; lean-`lower_iso` for the me_a3 memory borderline; heavy tier `--test-threads=1`).
+>   gcd2-scale bodies run only once provisioning lands, sized per-program so simple programs stay
+>   cheap. Then Phase B (shared ALU) for `step_j`. MINOR follow-ups: A-5b depth-limit reject message
+>   + fold occ-mark fragility; step-1 `mdd_trace_under_times` degenerate-comment.
 
 ## Why (the mandate)
 Run **any well-formed theseus program** — the closed 22-combinator Iso algebra over finite
