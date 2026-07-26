@@ -2561,19 +2561,20 @@ fn lower_controlled_idiom(
 
     // Compile g's body with the displaced context's target sub-slice.
     // occ from dctx (post-displacement), not the parent.
+    // A-4 (R6 reservation ordering): mark this idiom's skip-block aux
+    // {rb, temp} AND its control register occupied before lowering g, so an
+    // inner skip-block (branch/loop inside g) draws a DISJOINT aux pair and
+    // does not clobber this level's branch channel / control across the inner
+    // block. Previously the `has_inner_control` reject made g Swapbr-free.
+    let mut occ_tgt = dctx.occ;
+    occ_tgt.set(Location::Reg(rb));
+    occ_tgt.set(Location::Reg(temp));
+    occ_tgt.set(Location::Reg(ctrl_reg));
     let ctx_tgt = Ctx {
         homes: dctx.homes[n_ctrl..n_ctrl + n_tgt].to_vec(),
-        occ: dctx.occ,
+        occ: occ_tgt,
     };
     let (instrs_g, _) = lower(g, &ctx_tgt, meta)?;
-
-    // Guard: reject doubly-nested skip-block control (reservation
-    // ordering deferred).
-    if has_inner_control(&instrs_g) {
-        return Err(CompileError::Deferred(
-            "nested skip-block control in controlled idiom — deferred".into(),
-        ));
-    }
 
     if instrs_g.is_empty() {
         return Ok((vec![], ctx.clone()));
@@ -3139,16 +3140,18 @@ fn lower_data_dependent_iter(
     let temp = aux[1];
 
     // Compile the body once with the displaced context's body sub-slice.
-    let (_, dctx_body) = dctx.split(n_counter);
+    // A-4 (R4 reservation ordering): the iter's own skip-block aux {rb, temp}
+    // are drawn from dctx but `allocate_aux` does NOT mark them occupied in
+    // `dctx.occ`. Before A-4, the `has_inner_control` reject below made this
+    // moot. Now that nested skip-blocks are admitted, we MUST occ-mark rb/temp
+    // so an inner Iter/Plus's `allocate_aux` draws a DISJOINT aux pair rather
+    // than re-picking the same free registers and clobbering this level's
+    // branch channel across the inner block (the reservation-ordering hazard
+    // R4 previously deferred).
+    let (_, mut dctx_body) = dctx.split(n_counter);
+    dctx_body.occ.set(Location::Reg(rb));
+    dctx_body.occ.set(Location::Reg(temp));
     let (body_instrs, body_ctx_out) = lower(body, &dctx_body, meta)?;
-
-    // Guard: reject doubly-nested skip-block control (reservation
-    // ordering deferred).
-    if has_inner_control(&body_instrs) {
-        return Err(CompileError::Deferred(
-            "nested skip-block control in iter body — deferred".into(),
-        ));
-    }
 
     // §2.6 guarded-unroll consistency: canonical layout at body boundary.
     debug_assert_eq!(
@@ -3275,21 +3278,33 @@ fn lower_trace(
     // registers would alias the sibling factor's live data and silently
     // clobber it (F-1: `Times(Trace, g)` produced wrong outputs that the
     // BR/s0/s1 terminal check could not see). occ ⊋ homes ⇒ reject.
+    // A-4 (R2, was F-1): the aux frame is now drawn OCC-AWARELY by
+    // `allocate_aux_frame` below (A-5), which consults `ctx.occ` rather than the
+    // positional `max_carrier_reg+1`. Under `Times(Trace, g)` the sibling g's
+    // leaves are already in `ctx.occ`, so the frame is disjoint from g's live
+    // registers — the F-1 aliasing hazard is closed structurally, not by reject.
+    // NOTE (design §2.4 / §8): the F-1 guard ALSO protected the k_max walk's
+    // marshal==body-home equality, which requires the INPUT homes to be
+    // canonical. A-5 relaxes F-1 only for AUX placement — the input homes stay
+    // canonical here (body_homes[1..1+n_input] = ctx.homes, and the walk marshals
+    // to the same slots). We therefore still assert the input homes are canonical
+    // so the walk stays sound; only the occ/aux-aliasing half of F-1 is dropped.
     let canonical = Ctx::new(ctx.homes.len());
-    if ctx.homes != canonical.homes || ctx.occ != OccSet::from_locations(&ctx.homes) {
+    if ctx.homes != canonical.homes {
         return Err(CompileError::Deferred(
-            "Trace under a non-canonical or occupied (e.g. Times sibling) context — \
-             its hand-assigned aux registers would alias live data (M-D.d F-1)"
+            "Trace under a non-canonical (relocated-input) context — the k_max \
+             walk's marshal==body-home equality requires canonical input homes \
+             (design §2.4 / §8; A-5 relaxes only the aux/occ half of F-1)"
                 .into(),
         ));
     }
 
-    // Guard: reject nested Trace — the come-from join doesn't compose.
-    if contains_trace(body) {
-        return Err(CompileError::Deferred(
-            "nested Trace not supported — come-from join does not compose (M-D.d §5)".into(),
-        ));
-    }
+    // A-4 (R1): nested Trace is now admitted — the come-from join composes
+    // across depth because A-5 draws each level's aux frame {rc,rb,temp,ctrl}
+    // occ-awarely and occ-marks it before lowering the body, so the inner Trace
+    // draws a DISJOINT frame and the outer's in-flight δu token (`temp`) is
+    // never touched across the entire inner loop (design §2.3, §5.1). The R1
+    // `contains_trace` reject is therefore deleted.
 
     // ── Lower the body once ────────────────────────────────────────
 
@@ -3447,17 +3462,17 @@ fn lower_trace(
     let body_has_inner_control =
         !body_meta.loop_terms.is_empty() || has_inner_control(&body_instrs);
 
-    // Guard: reject body containing Swapbr (forward skip-blocks inside
-    // a loop body would require compositional S_max accounting under
-    // nesting, deferred per design §4/F6 safe policy).
-    // NOTE (A-3): this reject is what keeps real nested programs out TODAY; it
-    // is A-4's job to delete it. The A-3 cost-tree merge + walk fallback below
-    // are dormant until then and are exercised white-box by the A-3 tests.
-    if has_inner_control(&body_instrs) {
-        return Err(CompileError::Deferred(
-            "Trace body contains Swapbr (skip-block) — deferred (M-D.d F6 safe policy)".into(),
-        ));
-    }
+    // A-4 (R3): the Trace body may now contain forward skip-blocks (Iter/Plus
+    // inside the loop) or an inner Trace. Compositional S_max is handled by the
+    // A-3 Σ-fold (`meta.forward_skip_total += body_meta.forward_skip_total`
+    // below — a parked PC can land in ANY forward-skip region, so we SUM, never
+    // max) and the aux frame is drawn occ-awarely by `allocate_aux_frame`
+    // (A-5), which occ-marked {rc,rb,temp,ctrl} into `body_ctx.occ` BEFORE the
+    // body was lowered — so an inner loop/branch drew a DISJOINT aux frame and
+    // did not touch this level's in-flight come-from token δu (`temp`). The
+    // straight-line walk is untrusted for k_max when the body has inner control
+    // (`body_has_inner_control` → cardinality-bound fallback above), so B_fold
+    // stays sound. The R3 reject is therefore no longer needed.
 
     // Guard: layout invariant — homes_in == homes_out (§3, hard error).
     if body_ctx.homes != body_ctx_out.homes {
@@ -3679,20 +3694,8 @@ fn lower_trace(
     Ok((instrs, ctx.clone()))
 }
 
-/// Check if an Iso contains a Trace node (for nested-Trace rejection).
-fn contains_trace(iso: &Iso) -> bool {
-    match iso {
-        Iso::Trace(_, _) => true,
-        Iso::Seq(f, g) => contains_trace(f) || contains_trace(g),
-        Iso::Times(f, g) => contains_trace(f) || contains_trace(g),
-        Iso::Plus(f, g) => contains_trace(f) || contains_trace(g),
-        Iso::Sym(f) => contains_trace(f),
-        Iso::Iter(_, f) => contains_trace(f),
-        Iso::Fold(_, f) => contains_trace(f),
-        Iso::Unfold(_, f) => contains_trace(f),
-        _ => false,
-    }
-}
+// A-4 (R1): `contains_trace` (the nested-Trace rejection predicate) deleted —
+// nested Trace now compiles via the A-5 disjoint-frame stack.
 
 // ── M-D.a: fold/unfold over list-spine (guarded static unroll) ──────
 
@@ -3878,25 +3881,28 @@ fn lower_bare_plus(
 
     // Build sub-contexts for f (Left payload) and g (Right payload)
     // from the displaced context.
+    // A-4 (R5 reservation ordering): mark this branch's skip-block aux
+    // {rb, temp} AND the tag register occupied before lowering each arm, so a
+    // nested skip-block (branch-in-branch / loop-in-branch) draws a DISJOINT
+    // aux pair and does not alias this level's branch channel / tag across the
+    // inner block. The tag is live across BOTH arms (phase-1 f skip and phase-2
+    // g skip both read it), so it must stay reserved through each arm's body.
+    // Previously the `has_inner_control` reject kept both arms Swapbr-free.
+    let mut occ_arm = dctx.occ;
+    occ_arm.set(Location::Reg(rb));
+    occ_arm.set(Location::Reg(temp));
+    occ_arm.set(Location::Reg(tag_reg));
     let ctx_f = Ctx {
         homes: dctx.homes[1..1 + n_f].to_vec(),
-        occ: dctx.occ,
+        occ: occ_arm,
     };
     let ctx_g = Ctx {
         homes: dctx.homes[1..1 + n_g].to_vec(),
-        occ: dctx.occ,
+        occ: occ_arm,
     };
 
     let (instrs_f, _) = lower(f, &ctx_f, meta)?;
     let (instrs_g, _) = lower(g, &ctx_g, meta)?;
-
-    // Guard: reject doubly-nested skip-block control (reservation
-    // ordering deferred).
-    if has_inner_control(&instrs_f) || has_inner_control(&instrs_g) {
-        return Err(CompileError::Deferred(
-            "nested skip-block control in Plus arm — reservation ordering deferred".into(),
-        ));
-    }
 
     let f_is_nop = instrs_f.is_empty();
     let g_is_nop = instrs_g.is_empty();
