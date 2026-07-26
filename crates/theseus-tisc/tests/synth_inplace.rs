@@ -239,6 +239,45 @@ fn identity_transcribes_to_empty() {
     equiv(&got, &spec_t, BITS, &[]).expect("empty program equals identity");
 }
 
+/// MINOR-1 (const-parity): a row `x ⊕ 1 ⊕ 1` is semantically the IDENTITY
+/// (double const flip cancels). Before the fix `has_const` was a bool, so it
+/// emitted `[Xori{0, 0xFF}]` (a wrong body violating "Ok ⇒ satisfies equiv").
+/// Now the parity fold recognizes it as identity → empty body.
+#[test]
+fn const_parity_double_flip_is_identity() {
+    // Every bit: Var(0,b) ⊕ Const(true) ⊕ Const(true) = Var(0,b) (identity).
+    let spec_t = spec(|r, b| match r {
+        0 => v(0, b).xor(BvExpr::Const(true)).xor(BvExpr::Const(true)),
+        _ => v(r, b),
+    });
+    let body = transcribe_inplace(&spec_t).expect("double-const row transcribes");
+    assert!(
+        body.is_empty(),
+        "x ⊕ 1 ⊕ 1 is the identity → no gate, got {body:?}"
+    );
+    // Verify via the oracle: the (empty) body equals the identity spec.
+    let got = symbolic_exec(&body).unwrap();
+    equiv(&got, &spec_t, BITS, &[0]).expect("empty body equals the identity spec");
+}
+
+/// MINOR-2 (non-distinct Ccnot): a row `x ^= x ∧ z` would emit `Ccnot{0,0,2}`
+/// (rd == rs), which is ISA-illegal (non-bijective; asm::encode rejects it) and
+/// which the permissive exec_instr runs silently. The transcriber must return
+/// Err rather than emit an unassemblable body.
+#[test]
+fn nondistinct_ccnot_returns_err() {
+    // x ^= x ∧ z : the AND term touches the target reg 0.
+    let spec_t = spec(|r, b| match r {
+        0 => v(0, b).xor(v(0, b).and(v(2, b))),
+        _ => v(r, b),
+    });
+    let res = transcribe_inplace(&spec_t);
+    assert!(
+        matches!(res, Err(SynthError::RowNotInPlace { .. })),
+        "x ^= x∧z (non-distinct Ccnot) must return Err (MINOR-2), got {res:?}"
+    );
+}
+
 /// (ordering) A NON-cyclic in-place dependency is scheduled correctly:
 /// row0 = x ⊕ y, row1 = z ⊕ y (both read y, only x and z written; no cycle).
 /// Must succeed and verify regardless of emission order.

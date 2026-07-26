@@ -327,12 +327,14 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
     let mut classes: Vec<BitClass> = Vec::with_capacity(BITS);
     for (b, terms) in per_bit_terms.iter().enumerate() {
         let mut sources = Vec::new();
-        let mut has_const = false;
+        // MINOR-1: const is a PARITY fold, not a bool — `x ⊕ 1 ⊕ 1` is identity,
+        // so two Const(true) terms at one bit cancel (no flip).
+        let mut const_parity = false;
         let mut at_bit_and: Option<(usize, usize)> = None;
         for t in terms {
             match classify_term(t, b) {
                 Some(Term::Var(y)) => sources.push(y),
-                Some(Term::Const) => has_const = true,
+                Some(Term::Const) => const_parity ^= true,
                 Some(Term::And(y, z)) => {
                     if at_bit_and.is_some() {
                         return Err(SynthError::RowNotInPlace {
@@ -355,7 +357,7 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
         sources.sort_unstable();
         classes.push(BitClass {
             sources,
-            has_const,
+            has_const: const_parity,
             and_term: at_bit_and,
         });
     }
@@ -396,6 +398,20 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
     // support the combination on a single target (Ccnot after the Xor/Xori,
     // both XOR-accumulate onto the target — order among them is immaterial).
     if let Some((y, z)) = and_term {
+        // MINOR: the emitted `Ccnot { rd: r, rs: y, rt: z }` must have pairwise
+        // DISTINCT operands (ISA-illegal / non-bijective otherwise — asm::encode
+        // rejects it). The AND term touching the target (`y == r` or `z == r`, the
+        // spec `x ^= x∧z` CE) is non-in-place anyway; `y == z` (`x ^= y∧y = y`)
+        // is degenerate. Reject rather than emit an unassemblable body.
+        if y == z || y == r || z == r {
+            return Err(SynthError::RowNotInPlace {
+                reg: r,
+                detail: format!(
+                    "Ccnot operands not pairwise-distinct (rd={r}, rs={y}, rt={z}); \
+                     the AND term touches the target or repeats an operand — non-bijective"
+                ),
+            });
+        }
         // Represent as an Affine row (for the xor/const part) FOLLOWED by a
         // Ccnot on the same target. We fold both into the emitted sequence via a
         // combined row: reuse Affine for xor/const then a Ccnot. To keep the Row
@@ -486,6 +502,32 @@ pub fn transcribe_into(
         }
     }
 
+    // ── MAJOR-2 / MINOR-3: validate the DESTINATION operand map. Only rows
+    // that actually emit gates matter (a spec-identity row whose dst self-maps
+    // to its own src contributes nothing — MINOR-4). For every row that will
+    // emit, the dst operand must be a legal operand and pairwise-distinct from
+    // every OTHER emitting row's dst (aliased fresh targets clobber each other).
+    let mut used_dsts: Vec<u8> = Vec::new();
+    for (i, row) in spec.regs.iter().enumerate() {
+        let dst = dst_ops[i];
+        // MINOR-4: the skip fires ONLY on a genuine IDENTITY row that self-maps
+        // (dst == src for its own reg). Any NON-identity row that happens to
+        // alias a source is a caller contract violation, not a no-op — never
+        // silently drop its gates.
+        if is_identity_row(row, i) && dst == src_ops[i] {
+            continue;
+        }
+        check_operand_legal("dst", dst)?;
+        if used_dsts.contains(&dst) {
+            return Err(SynthError::MalformedSpec {
+                detail: format!(
+                    "dst operand {dst} used by two rows — fresh targets must be distinct"
+                ),
+            });
+        }
+        used_dsts.push(dst);
+    }
+
     let mut out = Vec::new();
     for (i, row) in spec.regs.iter().enumerate() {
         let dst = dst_ops[i];
@@ -493,15 +535,25 @@ pub fn transcribe_into(
         // NOTE: unlike the in-place case, there is NO self-term to peel — the
         // fresh target already holds 0 and we XOR the whole function onto it.
         let (xor_sources, const_mask, and_term) = recognize_into_row(row, i)?;
+        // MINOR-4: only skip genuine identity self-maps (validated above). If we
+        // reach here with a non-identity row, every gate is emitted — no source
+        // may alias the dst (that would be an ISA-illegal self-XOR / self-Ccnot).
+        let is_id_selfmap = is_identity_row(row, i) && dst == src_ops[i];
+        if is_id_selfmap {
+            continue;
+        }
         for &y in &xor_sources {
             let rs = src_ops[y];
-            // A copy where dst == src is `x ^= x = 0` — an ISA-illegal self-XOR
-            // AND a semantic no-op. This only arises for a spec-identity row
-            // whose operand map self-targets (dst==src); such rows contribute
-            // nothing and are skipped. (In the Bennett path dst=ancilla and
-            // src=carrier are always disjoint, so real copies are emitted.)
+            // A copy where dst == src on a non-identity row is an ISA-illegal
+            // self-XOR AND silently drops a needed term (MINOR-4 CE:
+            // `row0 = v0⊕v1`, dst[0]=1 would drop the self-copy). Reject.
             if rs == dst {
-                continue;
+                return Err(SynthError::MalformedSpec {
+                    detail: format!(
+                        "row {i}: source operand {rs} aliases dst {dst} (self-XOR is \
+                         ISA-illegal; the row is not a fresh-target copy)"
+                    ),
+                });
             }
             out.push(Instr::Xor { rd: dst, rs });
         }
@@ -512,6 +564,18 @@ pub fn transcribe_into(
             });
         }
         if let Some((y, z)) = and_term {
+            let (rs, rt) = (src_ops[y], src_ops[z]);
+            // MINOR: the Ccnot operands must be pairwise-distinct (ISA-illegal /
+            // non-bijective otherwise — asm::encode rejects it).
+            if rs == rt || rs == dst || rt == dst {
+                return Err(SynthError::RowNotInPlace {
+                    reg: i,
+                    detail: format!(
+                        "row {i}: Ccnot operands not pairwise-distinct (rd={dst}, rs={rs}, \
+                         rt={rt})"
+                    ),
+                });
+            }
             out.push(Instr::Ccnot {
                 rd: dst,
                 rs: src_ops[y],
@@ -520,6 +584,31 @@ pub fn transcribe_into(
         }
     }
     Ok(out)
+}
+
+/// Number of legal operand locations (reg ∪ scratch): 0..16.
+const NUM_OPERAND_LOCS: usize = 16;
+
+/// Validate a raw operand index against the LEGAL operand space (mirrors
+/// `asm::check_operand`): `0..8` = registers, `10..16` = scratch s2..s7.
+/// Rejected: `8`/`9` (decoder-reserved s0/s1) and `≥16` (no crossbar route,
+/// and ≥16 would panic `operand_get`). Returns `Err(MalformedSpec)` — a
+/// verification-time reject, not a ROM-time panic (MINOR-3).
+fn check_operand_legal(what: &str, op: u8) -> Result<(), SynthError> {
+    if (op as usize) >= NUM_OPERAND_LOCS {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("{what} operand {op} is out of range (≥{NUM_OPERAND_LOCS})"),
+        });
+    }
+    if op == NUM_REGS as u8 || op == NUM_REGS as u8 + 1 {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "{what} operand {op} names decoder-reserved scratch s{} (s0/s1 unusable)",
+                op - NUM_REGS as u8
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Recognized fresh-target row: `(affine sources, const mask, optional single
@@ -540,12 +629,13 @@ fn recognize_into_row(row: &[BvExpr], r: usize) -> Result<IntoRow, SynthError> {
     for (b, e) in row.iter().enumerate() {
         let terms = flatten_xor(e);
         let mut sources = Vec::new();
-        let mut has_const = false;
+        // MINOR-1: parity fold — even count of Const(true) is no flip.
+        let mut const_parity = false;
         let mut at_bit_and: Option<(usize, usize)> = None;
         for t in terms {
             match classify_term(t, b) {
                 Some(Term::Var(y)) => sources.push(y),
-                Some(Term::Const) => has_const = true,
+                Some(Term::Const) => const_parity ^= true,
                 Some(Term::And(y, z)) => {
                     if at_bit_and.is_some() {
                         return Err(SynthError::RowNotInPlace {
@@ -569,7 +659,7 @@ fn recognize_into_row(row: &[BvExpr], r: usize) -> Result<IntoRow, SynthError> {
         sources.sort_unstable();
         classes.push(BitClass {
             sources,
-            has_const,
+            has_const: const_parity,
             and_term: at_bit_and,
         });
     }
@@ -661,12 +751,64 @@ pub fn transcribe_bennett(
             ),
         });
     }
-    // Disjointness: no carrier may alias a used ancilla word.
+    // MINOR-3: every carrier and every USED ancilla operand must be a legal
+    // operand (reject reserved s0/s1 = 8/9 and out-of-range ≥16, which would
+    // otherwise panic `operand_get` at exec time rather than fail verification).
+    for &c in &carrier_ops[..n] {
+        check_operand_legal("carrier", c)?;
+    }
+    for &a in &ancilla_ops[..n] {
+        check_operand_legal("ancilla", a)?;
+    }
+
+    // MAJOR-2: the operand maps must be internally disjoint with no dups:
+    //   * no carrier repeated; no USED ancilla word repeated (aliased ancilla
+    //     `[3,3]` defeats "ancilla returned to 0" teeth — CE);
+    //   * carriers and used ancilla disjoint (Bennett requires fresh scratch).
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if carrier_ops[i] == carrier_ops[j] {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!("carrier operand {} appears twice", carrier_ops[i]),
+                });
+            }
+            if ancilla_ops[i] == ancilla_ops[j] {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!(
+                        "ancilla operand {} appears twice (aliased ancilla)",
+                        ancilla_ops[i]
+                    ),
+                });
+            }
+        }
+    }
     for c in &carrier_ops[..n] {
         if ancilla_ops[..n].contains(c) {
             return Err(SynthError::MalformedSpec {
                 detail: format!("carrier operand {c} aliases an ancilla word (must be disjoint)"),
             });
+        }
+    }
+
+    // MAJOR-1: a carrier row (0..n) may only READ carriers. `Var(y)` with
+    // `y ≥ n` reads a register OUTSIDE the carrier set; the src_map padding
+    // below wired every such read to a bogus operand (operand 0), silently
+    // producing a wrong body + dirty ancilla. A permutation spec on `n`
+    // carriers must be a function of those `n` carriers alone — reject.
+    for spec in [fwd, bwd] {
+        for r in 0..n {
+            let mut reads: Vec<usize> = Vec::new();
+            for e in &spec.regs[r] {
+                collect_var_operands(e, &mut reads);
+            }
+            if let Some(&y) = reads.iter().find(|&&y| y >= n) {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!(
+                        "carrier row {r} reads register {y} outside the {n} carriers; a \
+                         permutation spec must read only carriers"
+                    ),
+                });
+            }
         }
     }
 
@@ -939,6 +1081,25 @@ fn emit_anf_term(
     emit_and(out, helpers.temps[0], helpers.mask, 0); // clears temp0
     out.push(Instr::Xori { rd: helpers.mask, imm: 1u8 << b }); // mask back to 0
     Ok(())
+}
+
+/// Collect every register operand index READ by a `BvExpr` (walks all node
+/// kinds; used by the Bennett carrier-read validation, MAJOR-1).
+fn collect_var_operands(e: &BvExpr, out: &mut Vec<usize>) {
+    match e {
+        BvExpr::Var { operand, .. } => out.push(*operand),
+        BvExpr::Const(_) => {}
+        BvExpr::Not(a) => collect_var_operands(a, out),
+        BvExpr::Xor(a, b) | BvExpr::And(a, b) | BvExpr::Or(a, b) => {
+            collect_var_operands(a, out);
+            collect_var_operands(b, out);
+        }
+        BvExpr::Mux { sel, then_, else_ } => {
+            collect_var_operands(sel, out);
+            collect_var_operands(then_, out);
+            collect_var_operands(else_, out);
+        }
+    }
 }
 
 /// Flatten a (possibly nested) `And` of `Var`s into its factor list.
