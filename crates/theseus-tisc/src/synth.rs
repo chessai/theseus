@@ -2102,3 +2102,375 @@ pub fn transcribe_bdd_bennett(
     out.extend(transcribe_bdd_into(bwd, &dst_map, &src_map, helpers)?);
     Ok(out)
 }
+
+// ── A-6 W.0: the word/arithmetic-level synthesis IR ──────────────────
+//
+// A small straight-line WORD-level IR (`WOp` / `WSpec`) whose ops map ~1:1 to
+// the ISA's byte/arithmetic gates, plus reversible MACROS (guarded copy, is-zero,
+// compare) that each expand to a small NET-ZERO gate sequence over clean temps
+// while preserving their source operands. This is DETERMINISTIC construction —
+// each `WOp` is a known gate, each macro a fixed gadget — NOT search.
+//
+// The transcriber is the word analogue of `transcribe_inplace`: it is for specs
+// already reversible in-place (an in-place bijection). The macros are the
+// building blocks a word-level Bennett wrapper (W.1) composes. All operand
+// indices are over reg∪scratch (0..8 reg, 10..16 legal scratch); every operand
+// is validated with `check_operand_legal` (rejecting reserved 8/9 and ≥16) and
+// Ccnot/Cswap operands must be pairwise distinct (the MINOR-2 guard).
+
+/// A word-level operation over operand indices (0..8 reg, 10..16 legal scratch).
+///
+/// Each core op maps 1:1 to one ISA gate (see [`transcribe_word`]). `d`/`s`/`t`
+/// are operand indices; `imm` is the 8-bit immediate (for rotates only the low 3
+/// bits are used by the ISA).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WOp {
+    /// `w[d] ^= w[s]` → `Xor`.
+    WXor { d: u8, s: u8 },
+    /// `w[d] += w[s]` (mod 256) → `Add`.
+    WAdd { d: u8, s: u8 },
+    /// `w[d] -= w[s]` (mod 256) → `Sub`.
+    WSub { d: u8, s: u8 },
+    /// `w[d] = rotl(w[d], imm & 7)` → `Rotli`.
+    WRotl { d: u8, imm: u8 },
+    /// `w[d] = rotr(w[d], imm & 7)` → `Rotri`.
+    WRotr { d: u8, imm: u8 },
+    /// `w[d] ^= imm` → `Xori`.
+    WXorConst { d: u8, imm: u8 },
+    /// `w[d] ^= w[s] & w[t]` (byte-parallel) → `Ccnot`. Pairwise distinct.
+    WCcnot { d: u8, s: u8, t: u8 },
+    /// If `w[c] & 1 == 1` then `w[u] ↔ w[v]` → `Cswap`. Pairwise distinct.
+    WCswap { c: u8, u: u8, v: u8 },
+}
+
+/// A straight-line word-level program.
+pub type WSpec = Vec<WOp>;
+
+/// Direct 1:1 transcriber: map each [`WOp`] to its corresponding ISA [`Instr`].
+///
+/// This is for specs that are already reversible IN PLACE (an in-place bijection
+/// — no separate output words). Every operand is validated with
+/// [`check_operand_legal`] (reject reserved s0/s1 = 8/9 and out-of-range ≥16);
+/// two-operand ops require `d != s` (the ISA's non-aliasing rule), and
+/// `WCcnot`/`WCswap` require pairwise-distinct operands (the MINOR-2 guard).
+///
+/// The result, when `Ok`, is an assemblable body realizing the WSpec. Callers
+/// still verify with the symbolic oracle (`symbolic_exec` + `equiv`) — this
+/// function does not claim correctness, only faithful 1:1 transcription.
+pub fn transcribe_word(spec: &[WOp]) -> Result<Vec<Instr>, SynthError> {
+    let mut out = Vec::with_capacity(spec.len());
+    for &op in spec {
+        out.push(transcribe_word_op(op)?);
+    }
+    Ok(out)
+}
+
+/// Reject a two-operand `d,s` op with `d == s` (ISA non-aliasing rule; `encode`
+/// would reject it, and it is non-injective on the datapath).
+fn check_two_distinct(mnemonic: &str, d: u8, s: u8) -> Result<(), SynthError> {
+    if d == s {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("{mnemonic} operands d={d}, s={s} alias (must differ)"),
+        });
+    }
+    Ok(())
+}
+
+/// Reject a three-operand op whose operands are not pairwise distinct (Ccnot /
+/// Cswap ISA requirement; non-distinct is ISA-illegal / non-bijective — MINOR-2).
+fn check_three_distinct(mnemonic: &str, a: u8, b: u8, c: u8) -> Result<(), SynthError> {
+    if a == b || a == c || b == c {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("{mnemonic} operands ({a},{b},{c}) not pairwise distinct"),
+        });
+    }
+    Ok(())
+}
+
+/// Transcribe one [`WOp`] into its ISA [`Instr`], validating operand legality.
+fn transcribe_word_op(op: WOp) -> Result<Instr, SynthError> {
+    match op {
+        WOp::WXor { d, s } => {
+            check_operand_legal("d", d)?;
+            check_operand_legal("s", s)?;
+            check_two_distinct("WXor", d, s)?;
+            Ok(Instr::Xor { rd: d, rs: s })
+        }
+        WOp::WAdd { d, s } => {
+            check_operand_legal("d", d)?;
+            check_operand_legal("s", s)?;
+            check_two_distinct("WAdd", d, s)?;
+            Ok(Instr::Add { rd: d, rs: s })
+        }
+        WOp::WSub { d, s } => {
+            check_operand_legal("d", d)?;
+            check_operand_legal("s", s)?;
+            check_two_distinct("WSub", d, s)?;
+            Ok(Instr::Sub { rd: d, rs: s })
+        }
+        WOp::WRotl { d, imm } => {
+            check_operand_legal("d", d)?;
+            Ok(Instr::Rotli { rd: d, imm })
+        }
+        WOp::WRotr { d, imm } => {
+            check_operand_legal("d", d)?;
+            Ok(Instr::Rotri { rd: d, imm })
+        }
+        WOp::WXorConst { d, imm } => {
+            check_operand_legal("d", d)?;
+            Ok(Instr::Xori { rd: d, imm })
+        }
+        WOp::WCcnot { d, s, t } => {
+            check_operand_legal("d", d)?;
+            check_operand_legal("s", s)?;
+            check_operand_legal("t", t)?;
+            check_three_distinct("WCcnot", d, s, t)?;
+            Ok(Instr::Ccnot { rd: d, rs: s, rt: t })
+        }
+        WOp::WCswap { c, u, v } => {
+            check_operand_legal("c", c)?;
+            check_operand_legal("u", u)?;
+            check_operand_legal("v", v)?;
+            check_three_distinct("WCswap", c, u, v)?;
+            Ok(Instr::Cswap { rd: c, rs: u, rt: v })
+        }
+    }
+}
+
+// ── W.0 reversible macros ────────────────────────────────────────────
+//
+// Each macro emits a small NET-ZERO gate sequence: every temp word it touches
+// returns to its input value (so, starting from 0, it ends at 0), and every
+// SOURCE operand is preserved. The result-carrying `dst` is XOR-accumulated
+// (`dst ^= …`), so a clean (zero) `dst` receives the intended word/bit.
+//
+// Net-zero holds UNCONDITIONALLY (for any temp init) because every temp mutation
+// is paired with its exact inverse — this is what makes the symbolic oracle
+// (which models a temp's initial value as a free variable) able to PROVE
+// net-zero, not merely sample it. The `dst ^= f(guard,then,else)` contract, by
+// contrast, is only correct when the temps START at 0 (the mask/accumulator are
+// seeded from 0); callers/tests verify the dst function with the temp inputs
+// substituted by 0 (the `zero_out` pattern), exactly as the Bennett path does.
+
+/// `WSelect(dst, guard, then_w, else_w, mask_tmp, one)` — guarded word copy
+/// `dst ^= guard ? then_w : else_w`, selected by BIT 0 of `guard`.
+///
+/// # Contract
+/// - The guard is BIT 0 of `guard`; higher bits of `guard` are IGNORED (isolated
+///   internally), so any guard byte is accepted (no bit-word precondition).
+/// - `dst` is XOR-accumulated (`dst ^= selected`); for a plain copy start it at 0.
+/// - `mask_tmp` and `one` are zero-init scratch words, returned to 0 (net-zero).
+/// - `guard`, `then_w`, `else_w` are PRESERVED.
+///
+/// # Gadget (net-zero)
+///   isolate:   `one ^= 1; Ccnot(mask, guard, one)`   ⇒ mask.bit0 = guard.bit0
+///   broadcast: `mask ^= 0xFF; mask += 1`             ⇒ mask = 0x00 / 0xFF
+///   copy:      `dst ^= else_w; Ccnot(dst, then_w, mask); Ccnot(dst, else_w, mask)`
+///              ⇒ `dst ^= else ⊕ ((then⊕else) & mask)` = guard?then:else
+///   uncompute: reverse the broadcast + isolate ⇒ mask, one back to 0.
+///
+/// Distinctness: `mask_tmp`/`one` are fresh temps distinct from every other
+/// operand; the two guarded-copy `Ccnot`s need `dst` distinct from `then_w` /
+/// `else_w`; all six operands must be legal (validated below).
+pub fn emit_wselect(
+    dst: u8,
+    guard: u8,
+    then_w: u8,
+    else_w: u8,
+    mask_tmp: u8,
+    one: u8,
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
+    for (what, op) in [
+        ("dst", dst),
+        ("guard", guard),
+        ("then_w", then_w),
+        ("else_w", else_w),
+        ("mask_tmp", mask_tmp),
+        ("one", one),
+    ] {
+        check_operand_legal(what, op)?;
+    }
+    // mask_tmp and one must be fresh: distinct from every other operand and each
+    // other (they are net-zero scratch; aliasing defeats the isolate/broadcast).
+    for &t in &[mask_tmp, one] {
+        if [dst, guard, then_w, else_w].contains(&t) {
+            return Err(SynthError::MalformedSpec {
+                detail: format!("WSelect temp {t} aliases a value operand"),
+            });
+        }
+    }
+    if mask_tmp == one {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("WSelect mask_tmp and one alias ({mask_tmp})"),
+        });
+    }
+    // Ccnot legality: dst ≠ then_w, dst ≠ else_w (rt=mask already ≠ dst); and the
+    // isolate Ccnot needs mask,guard,one distinct (guard ≠ one, mask ≠ guard).
+    if dst == then_w || dst == else_w {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "WSelect dst {dst} aliases a source word (then={then_w}, else={else_w}); \
+                 the guarded-copy Ccnot needs dst distinct from its sources"
+            ),
+        });
+    }
+    // Isolate guard bit0 into mask_tmp (clean), then broadcast to 0x00/0xFF.
+    out.push(Instr::Xori { rd: one, imm: 1 }); // one.bit0 = 1
+    out.push(Instr::Ccnot { rd: mask_tmp, rs: guard, rt: one }); // mask.bit0 = guard.bit0
+    out.push(Instr::Xori { rd: mask_tmp, imm: 0xFF }); // mask = ~mask
+    out.push(Instr::Addi { rd: mask_tmp, imm: 1 }); // mask = -guardbit0 = 0x00/0xFF
+    // Guarded copy: dst ^= else ⊕ (then⊕else)&mask.
+    out.push(Instr::Xor { rd: dst, rs: else_w }); // dst ^= else
+    out.push(Instr::Ccnot { rd: dst, rs: then_w, rt: mask_tmp }); // dst ^= then & mask
+    out.push(Instr::Ccnot { rd: dst, rs: else_w, rt: mask_tmp }); // dst ^= else & mask
+    // Uncompute mask + one (exact inverse of isolate/broadcast).
+    out.push(Instr::Subi { rd: mask_tmp, imm: 1 });
+    out.push(Instr::Xori { rd: mask_tmp, imm: 0xFF });
+    out.push(Instr::Ccnot { rd: mask_tmp, rs: guard, rt: one });
+    out.push(Instr::Xori { rd: one, imm: 1 });
+    Ok(())
+}
+
+/// `WEqZero(dst_bit, src, temps)` — `dst_bit's bit 0 ^= (src == 0)` (byte-wide),
+/// with `src` PRESERVED and every temp word NET-ZERO.
+///
+/// # Deviation from the design's single-`tmp` signature (REPORTED)
+/// A reversible OR-reduce of `src`'s 8 bits into one bit, over the 2-input-Ccnot
+/// ISA, cannot be done net-zero with a single scratch word: `OR(a,x)=a⊕x⊕(a∧x)`
+/// needs the AND of the ORIGINAL operands to cancel, but an in-place merge
+/// destroys the accumulator's old value first. The clean, provably net-zero
+/// construction is a Bennett compute→use→uncompute of an OR-CHAIN: build the
+/// running OR of bits `0..=k` into a chain of CLEAN partial-OR words `p[k]`, read
+/// the final one, then replay the chain in REVERSE to clear every `p[k]`. This
+/// needs `BITS = 8` partial-OR words (`p[k] = OR(src bits 0..=k)`) plus one `one`
+/// word (holding `0x01`, to isolate a single bit under `Ccnot`), so `WEqZero`
+/// takes a `temps` slice of `len ≥ BITS+1 = 9`: `temps[0..8]` are the partial-OR
+/// words, `temps[8]` is `one`. All are net-zero.
+///
+/// # Gadget (net-zero, all work confined to bit 0)
+///   setup:  `one ^= 1`                              (one.bit0 = 1)
+///   chain:  `p[0].bit0 := src.bit0`                 (one OR node vs implicit 0)
+///           `p[k].bit0 := p[k-1] | src.bit_k`       (clean OR node, k = 1..7)
+///   use:    `dst.bit0 ^= ¬p[7]` = is-zero           (`Xori dst,1 ; Ccnot dst,p7,one`)
+///   reverse: replay the 8 OR nodes backwards → every `p[k]` back to 0
+///   teardown: `one ^= 1`                            (one back to 0)
+///
+/// One OR node `w.bit0 = acc.bit0 | src.bit_k` into a CLEAN `w`, with `src` bit
+/// `k` isolated to bit 0 by a paired rotate and the `one` mask:
+///   `Ccnot(w, src, one)`            w.bit0 ^= src.bit_k          ( ⊕ x )
+///   `Xor(w, acc)`                   w.bit0 ^= acc.bit0           ( ⊕ acc )   [k>0]
+///   `Ccnot(w, acc, src)`           w.bit0 ^= acc.bit0 ∧ src.bit_k ( ⊕ acc∧x )[k>0]
+/// so `w.bit0 = x ⊕ acc ⊕ acc∧x = acc | x`. Both `acc` (a prior p-word, bit-0
+/// only) and `one` keep the AND/XOR confined to bit 0, so `w` stays bit-0-only.
+/// Every op XOR-accumulates onto the clean `w`, so the node is self-inverse and
+/// the reverse pass clears it.
+pub fn emit_weqzero(
+    dst_bit: u8,
+    src: u8,
+    temps: &[u8],
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
+    check_operand_legal("dst_bit", dst_bit)?;
+    check_operand_legal("src", src)?;
+    const NTEMP: usize = BITS + 1; // 8 partial-OR words + 1 `one` word
+    if temps.len() < NTEMP {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("WEqZero needs ≥ {NTEMP} temp words, have {}", temps.len()),
+        });
+    }
+    let p = &temps[..BITS]; // p[0..8): running-OR partial words
+    let one = temps[BITS]; // holds 0x01 to isolate a single bit under Ccnot
+    for (i, &t) in temps[..NTEMP].iter().enumerate() {
+        check_operand_legal(&format!("temp{i}"), t)?;
+    }
+    // dst_bit, src, and every temp must be pairwise distinct (fresh temps +
+    // distinct Ccnot operands throughout).
+    let mut all: Vec<u8> = vec![dst_bit, src];
+    all.extend_from_slice(&temps[..NTEMP]);
+    for i in 0..all.len() {
+        for j in (i + 1)..all.len() {
+            if all[i] == all[j] {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!(
+                        "WEqZero operands not distinct (dst_bit={dst_bit}, src={src}, \
+                         temps={:?})",
+                        &temps[..NTEMP]
+                    ),
+                });
+            }
+        }
+    }
+
+    // One OR node: `w.bit0 = acc.bit0 | src.bit_k` into clean `w`. `acc = None`
+    // means the implicit clean-zero accumulator (the chain seed, p[0]). `src` is
+    // rotated so bit `k` sits at bit 0 for the node, then rotated back (preserved).
+    // The gadget is self-inverse (all XOR-accumulate onto clean `w`), so the same
+    // closure, appended in reverse node order, uncomputes the chain.
+    let emit_or_node = |out: &mut Vec<Instr>, w: u8, acc: Option<u8>, k: usize| {
+        let rot = (k as u8) & 7;
+        if rot != 0 {
+            out.push(Instr::Rotri { rd: src, imm: rot }); // src bit k → bit 0
+        }
+        out.push(Instr::Ccnot { rd: w, rs: src, rt: one }); // w.bit0 ^= x
+        if let Some(a) = acc {
+            out.push(Instr::Xor { rd: w, rs: a }); // w.bit0 ^= acc
+            out.push(Instr::Ccnot { rd: w, rs: a, rt: src }); // w.bit0 ^= acc∧x
+        }
+        if rot != 0 {
+            out.push(Instr::Rotli { rd: src, imm: rot }); // restore src
+        }
+    };
+
+    // setup
+    out.push(Instr::Xori { rd: one, imm: 1 });
+    // forward chain: p[0] = src.bit0 ; p[k] = p[k-1] | src.bit_k  (k = 1..BITS).
+    emit_or_node(out, p[0], None, 0);
+    for k in 1..BITS {
+        emit_or_node(out, p[k], Some(p[k - 1]), k);
+    }
+    // p[BITS-1] = OR of all 8 src bits; is-zero = ¬p[BITS-1].bit0.
+    let last = p[BITS - 1];
+    out.push(Instr::Xori { rd: dst_bit, imm: 1 }); // dst.bit0 ^= 1
+    out.push(Instr::Ccnot { rd: dst_bit, rs: last, rt: one }); // dst.bit0 ^= p_last
+    // reverse chain: uncompute p[k] for k = BITS-1 .. 1, then p[0].
+    for k in (1..BITS).rev() {
+        emit_or_node(out, p[k], Some(p[k - 1]), k);
+    }
+    emit_or_node(out, p[0], None, 0);
+    // teardown
+    out.push(Instr::Xori { rd: one, imm: 1 });
+    Ok(())
+}
+
+/// `WLt(dst_bit, a, b, temps)` — `dst_bit's bit0 ^= (a < b)` (unsigned byte
+/// compare), src operands preserved, temps net-zero.
+///
+/// **DEFERRED to W.1** (reported). The unsigned `a < b` predicate is a
+/// carry/borrow chain the ISA does not expose to a register: the reversible,
+/// net-zero realization is a bit-serial MSB→LSB recurrence
+///   `lt_i = (¬a_i ∧ b_i) ∨ ((a_i == b_i) ∧ lt_{i+1})`
+/// built into a chain of CLEAN per-bit words (the same clean-node + OR-merge
+/// discipline as [`emit_weqzero`], but with an `eq`/`lt` term per bit) and
+/// uncomputed in reverse. It is a larger gadget (≈ 8 chain words + eq/lt scratch
+/// + a `one` mask ≈ 11 temps) than W.0's two landed macros, and gcd2 uses it in
+/// exactly ONE guard (`g_agtb`), so it is scheduled for W.1 alongside the word
+/// Bennett wrapper rather than rushed here. [`emit_weqzero`] + [`emit_wselect`]
+/// (the guards' is-zero tests and every guarded arm write) are landed and fully
+/// verified.
+///
+/// Returns `Err` until implemented, so callers fail loudly rather than emit a
+/// silent wrong body.
+pub fn emit_wlt(
+    _dst_bit: u8,
+    _a: u8,
+    _b: u8,
+    _temps: &[u8],
+    _out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
+    Err(SynthError::MalformedSpec {
+        detail: "WLt/WGt deferred to W.1 (bit-serial borrow chain); use emit_weqzero + \
+                 emit_wselect for W.0 guards"
+            .into(),
+    })
+}
