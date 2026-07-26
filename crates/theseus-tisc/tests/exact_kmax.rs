@@ -97,7 +97,10 @@ fn f1_large_u_fast_exit_compiles() {
     assert_eq!(old_wcet, 334);
     assert!(old_wcet > 256, "old WCET {old_wcet} should exceed 256 cap");
 
-    // Now it compiles with exact-k_max.
+    // A-6.4 widen-PC: the 334 > 256 rejection is ALSO lifted structurally —
+    // the PC address space is now 2^16, so even without exact-k_max a WCET
+    // of 334 fits (see tests/widen_pc_payoff.rs for a program that actually
+    // runs at B > 256). Here exact-k_max additionally shrinks it to 24.
     let lowered = compile_with_metadata(&iso)
         .expect("Flat(5) Id-body Trace must compile under exact-k_max (k_exact=2, WCET=24)");
     let (k_max, iter_len) = (lowered.loop_terms[0].k_max, lowered.loop_terms[0].iter_len);

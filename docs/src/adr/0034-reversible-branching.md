@@ -80,12 +80,29 @@ programmer intended, not the thing that rescues bijectivity.
   as the spec already anticipated.
 
 - **D2 — BR is a PC *offset*, consumed by a uniform end-of-step PC
-  update:** `PC += BR + 1 (mod 256)`, implemented as
-  `pc_add_br ; pc_inc` — an 8-bit in-place ripple add of BR into PC
+  update:** `PC += BR + 1 (mod 2^W_PC)`, implemented as
+  `pc_add_br ; pc_inc` — an in-place ripple add of BR into PC
   (Takahashi–Kunihiro, ≤ K2, carries in s1, same datapath family as
-  ADD) followed by the existing increment. BR = 0 means fall-through,
+  ADD) followed by the increment. BR = 0 means fall-through,
   so **every M4-v1 straight-line ROM runs bit-identically** (backward
   compatible). The step becomes:
+
+  > **A-6.4 widen-PC amendment.** `W_PC` was widened 8 → 16 (PC address
+  > space 256 → 65536) so program bodies whose worst-case step budget
+  > `B > 256` can run; `W_BR` **stays 8**. The update is now `PC += sext(BR)
+  > + 1 (mod 2^W_PC)`: BR is an 8-bit two's-complement offset **sign-
+  > extended** into the 16-bit PC. A backward-jump come-from token
+  > `δu = 256 − iter_len` (top bit set for `iter_len ≤ 128`) sign-extends
+  > to a *negative* 16-bit offset, so the jump walks PC backward across the
+  > full width; a forward offset ≤ 127 sign-extends to itself. The come-from
+  > δu-mint / `SWAPBR` machinery is byte-identical to the 8-bit design —
+  > only the adder sign-extends. `pc_add_br` / `pc_inc` are realized by
+  > materializing the (sign-extended, resp. constant-1) 16-bit operand in
+  > scratch and running the proven zero-ancilla TK in-place adder over
+  > `W_PC` bits; the carry crosses the PC_lo→PC_hi Word8 field boundary.
+  > A per-loop `iter_len ≤ 128` compile guard enforces the sign-extended
+  > back-jump reach (a wider BR / two-byte δu mint is the follow-up for
+  > loop *bodies* > 128 instructions; B itself is unbounded by this).
 
   ```text
   step_v2(rom) = fetch ; decode_execute' ; fetch ; pc_add_br ; pc_inc
@@ -123,6 +140,43 @@ programmer intended, not the thing that rescues bijectivity.
 
   Note what is *not* used: reachability. Injectivity holds on all
   2^160 states, so totality (ADR-0007) needs no side condition.
+
+  > **A-6.4 re-proof at `W_PC = 16` (sign-extended BR).** Two clauses name
+  > the width and are re-argued:
+  >
+  > - **A stays a bijection.** At the widened width A is
+  >   `(PC, BR, rest) ↦ (PC + sext(BR) + 1 (mod 2^16), BR, rest)`, inverse
+  >   `PC ↦ PC − sext(BR) − 1`. For *any fixed BR*, `x ↦ x + c (mod 2^k)`
+  >   with `c = sext(BR)+1` is translation on the cyclic group `Z/2^k`,
+  >   hence a bijection at **every** k — and BR (the per-fiber constant) is
+  >   *preserved* by A (it is only a control of the adder). So A is a
+  >   bijection. What the implementation must additionally witness is that
+  >   the split-field `pc_add_br ; pc_inc` computes *exactly*
+  >   `(PC + sext(BR) + 1) mod 2^16`: the carry crosses the PC_lo→PC_hi
+  >   byte boundary and never leaks above bit 15, BR is restored, and the
+  >   s0/s1 operand scratch returns to 0. This is mechanized by the
+  >   **exhaustive split-add test** `adr0034_split_add_exhaustive`
+  >   (`tests/step.rs`): for all `PC ∈ [0,2^16)`, `BR ∈ [0,2^8)`,
+  >   `(pc_add_br;pc_inc)(PC,BR).pc == pc_update(PC,BR)` where `pc_update`
+  >   is the byte-level reference `PC + sext(BR) + 1 mod 2^16`. (A fast
+  >   sampled cover, `adr0034_split_add_sampled`, runs in the default heavy
+  >   tier; the full 2^24 sweep is `#[ignore]`d.)
+  > - **fetch stays keyed on PC and injective on reachable PC.** Narrow-A
+  >   fetch compares only the low `A_fetch = ⌈log₂(rom.len())⌉` PC bits per
+  >   entry, gated by a single shared "high bits all zero" bit computed
+  >   once per step. It still writes only IR/s0/s1 and preserves PC, so
+  >   `PC ∘ E = PC` and `E = ⊕_p E_p` fiberwise is unchanged. Injectivity
+  >   on reachable PC: every ROM address is `< rom.len() ≤ 2^A_fetch`, so
+  >   the `A_fetch` low bits distinguish all entries, and any PC with a bit
+  >   ≥ A_fetch set fails the shared high-zero gate ⇒ matches nothing ⇒
+  >   PARKS (no false fetch, no corruption). Verified by `fetch_isolated`
+  >   (IR ← rom[PC] at every in-range PC, IR untouched out of range, fetch
+  >   an involution) at the 16-bit width.
+  >
+  > The state-space size changes (2^160 → 2^184 with the appended PC_hi
+  > field) but injectivity is proved *without reachability*, so no side
+  > condition is introduced; the counterexample-dissolution argument below
+  > carries over with `PC' − sext(BR') − 1` as the predecessor PC.
 
   **The counterexample dissolves** rather than becoming unreachable —
   which is strictly stronger than the classical presentation. Given any

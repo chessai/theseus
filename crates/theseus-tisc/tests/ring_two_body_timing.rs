@@ -62,35 +62,42 @@ fn golden_pin_mexch_rom() {
     // crossbar): the shared decoder (~40 replicated crossbars → ~3) + leaner
     // scratch-rd routing SHRINK the cpu_pre/system_step netlist → shorter timing:
     // d_pre 3345→2874, d_post 289→374, delta1 3→2, delta_hold 39→38,
-    // d_locked/period 3676→3288. d_mem=35, delta2=1 unchanged. validate()==Ok
-    // (physical lockstep intact — a re-pin from the netlist size change, not a
-    // regression). Behavior verified separately (t2 real-CPU all-8).
+    // d_locked/period 3676→3288. d_mem=35, delta2=1 unchanged.
+    // RE-PINNED (A-6.4 widen-PC): the 16-bit PC widens pc_add_br (now a
+    // materialized-operand TK adder over s0‖s1) + pc_inc (TK add of const 1
+    // over 16 bits) + adds the PC_hi field to the CpuState, so the cpu_pre/
+    // cpu_post netlists GROW → longer timing: d_pre 2874→2931, d_post
+    // 374→573, delta1 2→1, delta_hold 38→37, d_locked/period 3288→3544.
+    // d_mem=35, delta2=1 unchanged. RE-MEASURED via the certificate (MEASURED
+    // TUPLE printed by two_body_timing_certificate); validate()==Ok (physical
+    // lockstep intact — a re-pin from the netlist size change, not a
+    // regression). Behavior verified separately (step/branching real-CPU).
     assert_eq!(
-        t.d_pre, 2874,
-        "GOLDEN PIN: d_pre={} (expected 2874)",
+        t.d_pre, 2931,
+        "GOLDEN PIN: d_pre={} (expected 2931)",
         t.d_pre
     );
     assert_eq!(t.d_mem, 35, "GOLDEN PIN: d_mem={} (expected 35)", t.d_mem);
     assert_eq!(
-        t.d_post, 374,
-        "GOLDEN PIN: d_post={} (expected 374)",
+        t.d_post, 573,
+        "GOLDEN PIN: d_post={} (expected 573)",
         t.d_post
     );
-    assert_eq!(t.delta1, 2, "GOLDEN PIN: delta1={} (expected 2)", t.delta1);
+    assert_eq!(t.delta1, 1, "GOLDEN PIN: delta1={} (expected 1)", t.delta1);
     assert_eq!(t.delta2, 1, "GOLDEN PIN: delta2={} (expected 1)", t.delta2);
     assert_eq!(
-        t.delta_hold, 38,
-        "GOLDEN PIN: delta_hold={} (expected 38)",
+        t.delta_hold, 37,
+        "GOLDEN PIN: delta_hold={} (expected 37)",
         t.delta_hold
     );
     assert_eq!(
-        t.d_locked, 3288,
-        "GOLDEN PIN: d_locked={} (expected 3288)",
+        t.d_locked, 3544,
+        "GOLDEN PIN: d_locked={} (expected 3544)",
         t.d_locked
     );
     assert_eq!(
-        t.period, 3288,
-        "GOLDEN PIN: period={} (expected 3288)",
+        t.period, 3544,
+        "GOLDEN PIN: period={} (expected 3544)",
         t.period
     );
 

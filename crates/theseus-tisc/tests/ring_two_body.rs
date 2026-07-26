@@ -528,10 +528,12 @@ fn structural_line_audit() {
     // Verify n_data via the body data widths (already asserted at construction,
     // but the test witnesses it)
     // RE-PINNED (TISC-2 A-0): the 32-bit instruction word widens IR 16→32 bits,
-    // so CpuState grows 160→176 bits → CPU_BODY_N_DATA 184→200 (176 + 24 BusMsg).
+    // so CpuState grew 160→176 bits → CPU_BODY_N_DATA 184→200.
+    // RE-PINNED (A-6.4 widen-PC): appending PC_hi grows CpuState 176→184 bits
+    // (22→23 Word8 fields) → CPU_BODY_N_DATA 200→208 (184 + 24 BusMsg).
     assert_eq!(
-        CPU_BODY_N_DATA, 200,
-        "CPU_BODY_N_DATA must be 200 (176 CpuState + 24 BusMsg)"
+        CPU_BODY_N_DATA, 208,
+        "CPU_BODY_N_DATA must be 208 (184 CpuState + 24 BusMsg)"
     );
     assert_eq!(
         MEM_BODY_N_DATA, 56,
