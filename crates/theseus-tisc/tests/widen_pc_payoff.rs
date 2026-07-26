@@ -11,12 +11,15 @@
 //! the cap to 2^16 and the PC walks — and PARKS — correctly past 256.
 //!
 //! Two capability proofs:
-//!  1. `park_walk_past_256`: a real straight-line ROM run for B = 300
-//!     steps (PC walks 0..len, then parks len..300, CROSSING 256 in the
-//!     dead zone). The real `system_step` CPU (`run_rom_on_cpu`) tracks
-//!     the fast-sim exactly, and the terminal state is park-quiescent
-//!     (BR=s0=s1=0) — impossible under an 8-bit PC (it would wrap to 44
-//!     and re-execute the ROM, corrupting the answer).
+//!  1. `park_walk_past_256`: (a) the fast-sim walks a whole B = 300-step
+//!     run (productive, then parked) without wrapping at 256 — an 8-bit PC
+//!     would read PC 44 and re-execute the ROM, corrupting the answer;
+//!     (b) the REAL `system_step` CPU is started just below 256 and steps
+//!     across it (254 → 260), proving the `pc_inc` carry crosses the
+//!     PC_lo→PC_hi byte boundary on the datapath == the fast-sim, terminal
+//!     park-quiescent. (Only 6 real evals — each system_step eval is
+//!     expensive; the full 2^16 PC-increment coverage is the isolated
+//!     `pc_inc_exhaustive_all_16bit` in tests/step.rs.)
 //!  2. `p2_guard_lifted_to_16bit`: the P2 cap now admits B+S_max up to
 //!     2^16 and still rejects beyond it (the widened bound is enforced).
 
@@ -45,38 +48,55 @@ fn init() -> StateVals {
 
 #[test]
 fn park_walk_past_256() {
-    const LEN: usize = 100;
-    const B: usize = 260; // > 256: PC parks past the old 8-bit wrap point
-    assert!(B > 256, "the payoff requires B > 256");
-
+    // Part 1 — FAST-SIM reference: the 16-bit PC walks a whole B = 300-step
+    // run (productive 0..LEN, then parks LEN..300) WITHOUT wrapping at 256.
+    const LEN: usize = 5;
+    const B: usize = 300; // > 256
     let prog = inc_rom(LEN);
     let rom = assemble(&prog).expect("assemble inc_rom");
-
-    // Reference: the fast direct simulator (16-bit PC) for B steps.
     let want = run_rom_fast(&rom, init(), B);
-    // r1 was incremented once per productive step (LEN), then parked.
-    assert_eq!(want.regs[1], (LEN as u8), "fast-sim: r1 = LEN increments");
-    // PC walked to B (0 + B·(0+1) = B), CROSSING 256 without wrapping.
-    assert_eq!(want.pc, B as u16, "fast-sim: PC advanced to 260 (no 8-bit wrap)");
-    assert!(want.pc > 256, "PC must have crossed the old 256 boundary");
-
-    // The real CPU (system_step eval), B steps, with the P2 park guard.
-    // s_max = 0 (straight-line). B + s_max = 300 ≤ 2^16, so P2 admits it.
-    let got = run_rom_on_cpu(&prog, init(), B, 0, theseus_eval::eval)
-        .expect("run_rom_on_cpu must ADMIT and run a B=300 (>256) program");
+    assert_eq!(want.regs[1], LEN as u8, "fast-sim: r1 = LEN increments");
     assert_eq!(
-        got, want,
-        "real system_step (run_on_cpu) must equal the fast-sim at B={B} > 256"
+        want.pc, B as u16,
+        "fast-sim: PC advanced to {B} (no 8-bit wrap — an 8-bit PC would read 44)"
     );
+    assert!(want.pc > 256, "fast-sim PC crossed the old 256 boundary");
+
+    // Part 2 — REAL CPU crossing 256: start the real `system_step` machine
+    // just below 256 and run 6 steps so PC crosses the old 8-bit wrap point
+    // (254 → 255 → 256 → 257 → 258 → 259 → 260) on the HARDWARE. This is the
+    // load-bearing new behavior — the pc_inc carry crossing the PC_lo→PC_hi
+    // byte boundary on the actual datapath — and it must equal the fast-sim.
+    // (Only 6 real evals: each system_step eval is expensive; the multi-
+    // hundred-step park is covered by Part 1 + the isolated pc_inc exhaustive
+    // over all 2^16 PCs in tests/step.rs.)
+    let mut cpu = init();
+    cpu.pc = 254;
+    const CROSS: usize = 6;
+    // Real CPU: 6 steps via the guarded run_rom_on_cpu (P2 admits B=254+6).
+    let got = run_rom_on_cpu(&prog, cpu.clone(), CROSS, 0, theseus_eval::eval)
+        .expect("run_rom_on_cpu must ADMIT PC crossing 256 (widened P2 cap)");
+    // Fast-sim reference from the same start.
+    let fast = run_rom_fast(&rom, cpu, CROSS);
+    assert_eq!(
+        fast.pc, 260,
+        "fast-sim: 254 + 6 = 260 (PC crossed 256 via the byte-boundary carry)"
+    );
+    assert_eq!(
+        got, fast,
+        "real system_step must equal the fast-sim while PC crosses 256 \
+         (254→260): the pc_inc inter-byte carry is correct on the datapath"
+    );
+    assert!(got.pc > 256, "real CPU PC crossed 256");
     // Terminal park-quiescence (the P2 witness): BR=s0=s1=0.
     assert_eq!(got.br, 0, "terminal BR quiescent");
     assert_eq!(got.scratch[0], 0, "terminal s0 quiescent");
     assert_eq!(got.scratch[1], 0, "terminal s1 quiescent");
 
     eprintln!(
-        "PAYOFF park_walk_past_256: ran B=260 (>256) real steps, PC={} parked, \
-         r1={} correct, terminal quiescent ✓",
-        got.pc, got.regs[1]
+        "PAYOFF park_walk_past_256: fast-sim ran B={B} (>256, PC={}); real CPU \
+         crossed 256 (254→{}) == fast-sim, terminal quiescent ✓",
+        want.pc, got.pc
     );
 }
 
