@@ -19,7 +19,9 @@
 use theseus_tisc::asm::{encode, Instr};
 use theseus_tisc::bveq::{equiv, symbolic_exec, BvExpr, RegTransfer, BITS};
 use theseus_tisc::compile::exec_instr;
-use theseus_tisc::synth::{emit_weqzero, emit_wselect, transcribe_word, WOp};
+use theseus_tisc::synth::{
+    emit_weqzero, emit_wgt, emit_wlt, emit_wselect, transcribe_word, WOp, WLT_NTEMP,
+};
 use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
 // ── shared helpers ───────────────────────────────────────────────────
@@ -400,4 +402,128 @@ fn weqzero_rejects_too_few_temps_and_aliases() {
     assert!(emit_weqzero(0, 1, &[1, 3, 4, 10, 11, 12, 13, 14, 15], &mut body).is_err());
     // reserved temp (s0=8)
     assert!(emit_weqzero(0, 1, &[2, 3, 4, 8, 11, 12, 13, 14, 15], &mut body).is_err());
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Part 4 — WLt / WGt (unsigned compare), whole-domain exec
+// ══════════════════════════════════════════════════════════════════════
+
+/// 9 temp words for WLt/WGt: regs 2,3,4 + scratch s2..s7 (idx 10..15).
+fn wlt_temps() -> Vec<u8> {
+    // WLT_NTEMP == 9.
+    vec![2, 3, 4, 10, 11, 12, 13, 14, 15]
+}
+
+/// WLt over the WHOLE 256×256 domain of (a,b): dst_bit.bit0 == (a<b) unsigned,
+/// a/b preserved, every temp net-zero, dst other bits untouched.
+#[test]
+fn wlt_whole_domain_exec_and_netzero() {
+    assert_eq!(WLT_NTEMP, 9);
+    let (dst_bit, a, b) = (0u8, 1u8, 6u8);
+    let temps = wlt_temps();
+    let mut body = Vec::new();
+    emit_wlt(dst_bit, a, b, &temps, &mut body).expect("emit_wlt");
+    assert_all_encode(&body);
+
+    for av in 0u16..=255 {
+        for bv in 0u16..=255 {
+            let (av, bv) = (av as u8, bv as u8);
+            let mut st = zero_state();
+            st.operand_set(a, av);
+            st.operand_set(b, bv);
+            for &instr in &body {
+                exec_instr(instr, &mut st);
+            }
+            let want = if av < bv { 1u8 } else { 0u8 };
+            assert_eq!(
+                st.operand_get(dst_bit) & 1,
+                want,
+                "WLt(a={av},b={bv}) wrong: dst.bit0={}, want {want}",
+                st.operand_get(dst_bit) & 1
+            );
+            assert_eq!(st.operand_get(dst_bit) & !1u8, 0, "WLt touched dst>bit0 (a={av},b={bv})");
+            assert_eq!(st.operand_get(a), av, "WLt must preserve a (a={av},b={bv})");
+            assert_eq!(st.operand_get(b), bv, "WLt must preserve b (a={av},b={bv})");
+            for &t in &temps {
+                assert_eq!(st.operand_get(t), 0, "WLt temp {t} not netzero (a={av},b={bv})");
+            }
+        }
+    }
+}
+
+/// WGt(a,b) == WLt(b,a): whole-domain exec.
+#[test]
+fn wgt_whole_domain_exec_and_netzero() {
+    let (dst_bit, a, b) = (0u8, 1u8, 6u8);
+    let temps = wlt_temps();
+    let mut body = Vec::new();
+    emit_wgt(dst_bit, a, b, &temps, &mut body).expect("emit_wgt");
+    assert_all_encode(&body);
+
+    for av in 0u16..=255 {
+        for bv in 0u16..=255 {
+            let (av, bv) = (av as u8, bv as u8);
+            let mut st = zero_state();
+            st.operand_set(a, av);
+            st.operand_set(b, bv);
+            for &instr in &body {
+                exec_instr(instr, &mut st);
+            }
+            let want = if av > bv { 1u8 } else { 0u8 };
+            assert_eq!(st.operand_get(dst_bit) & 1, want, "WGt(a={av},b={bv}) wrong");
+            assert_eq!(st.operand_get(a), av, "WGt must preserve a");
+            assert_eq!(st.operand_get(b), bv, "WGt must preserve b");
+            for &t in &temps {
+                assert_eq!(st.operand_get(t), 0, "WGt temp {t} not netzero (a={av},b={bv})");
+            }
+        }
+    }
+}
+
+/// TEETH for WLt: dropping the `use` step (every gate writing the final borrow
+/// into dst) makes the predicate constant 0 — it must disagree with the true
+/// `a<b` on some input. The final borrow node XOR-accumulates into `dst_bit` via
+/// `Ccnot`s; removing all of them (dst is never a Ccnot target elsewhere) zeroes
+/// the answer.
+#[test]
+fn wlt_teeth_wrong_body_disagrees() {
+    let (dst_bit, a, b) = (0u8, 1u8, 6u8);
+    let temps = wlt_temps();
+    let mut body = Vec::new();
+    emit_wlt(dst_bit, a, b, &temps, &mut body).unwrap();
+    // Drop ALL `Ccnot { rd: dst_bit, .. }` (the final-borrow accumulation into
+    // dst). dst_bit is never written by any other gate, so the result is 0.
+    let corrupted: Vec<Instr> = body
+        .iter()
+        .copied()
+        .filter(|ins| !matches!(ins, Instr::Ccnot { rd, .. } if *rd == dst_bit))
+        .collect();
+    assert!(corrupted.len() < body.len(), "test setup: expected Ccnots into dst_bit");
+    // a=0,b=1 → true a<b = 1; the corrupted body yields 0 → disagreement.
+    let mut st = zero_state();
+    st.operand_set(a, 0);
+    st.operand_set(b, 1);
+    for &instr in &corrupted {
+        exec_instr(instr, &mut st);
+    }
+    assert_eq!(
+        st.operand_get(dst_bit) & 1,
+        0,
+        "corrupted WLt (use dropped) must NOT report a<b for (0,1) (teeth)"
+    );
+}
+
+#[test]
+fn wlt_rejects_too_few_temps_and_aliases() {
+    let mut body = Vec::new();
+    // too few temps (need 9)
+    assert!(emit_wlt(0, 1, 6, &[2, 3, 4, 10, 11, 12, 13, 14], &mut body).is_err());
+    // aliased temp with a
+    let mut t = wlt_temps();
+    t[0] = 1; // == a
+    assert!(emit_wlt(0, 1, 6, &t, &mut body).is_err());
+    // reserved temp (s1=9)
+    let mut t = wlt_temps();
+    t[4] = 9;
+    assert!(emit_wlt(0, 1, 6, &t, &mut body).is_err());
 }

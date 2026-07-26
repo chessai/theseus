@@ -2443,34 +2443,667 @@ pub fn emit_weqzero(
     Ok(())
 }
 
+/// Number of temp words [`emit_wlt`] / [`emit_wgt`] require: one clean borrow
+/// word for each of bits `0..BITS-1` (`BITS-1` words — the final borrow-out is
+/// folded straight into `dst_bit`, so no word for it) + one `na` scratch
+/// (holding `¬a_k` at bit 0) + one `one` mask word (`0x01`, to isolate a single
+/// bit under `Ccnot`). Kept at 9 so a `Lt`/`Gt` guard fits inside the word-Bennett
+/// wrapper's operand budget (2 carriers + 2 ancilla + ≤ 10 work ≤ 14 locations).
+pub const WLT_NTEMP: usize = (BITS - 1) + 2;
+
 /// `WLt(dst_bit, a, b, temps)` — `dst_bit's bit0 ^= (a < b)` (unsigned byte
-/// compare), src operands preserved, temps net-zero.
+/// compare), `a`/`b` PRESERVED, every temp word NET-ZERO.
 ///
-/// **DEFERRED to W.1** (reported). The unsigned `a < b` predicate is a
-/// carry/borrow chain the ISA does not expose to a register: the reversible,
-/// net-zero realization is a bit-serial MSB→LSB recurrence
-///   `lt_i = (¬a_i ∧ b_i) ∨ ((a_i == b_i) ∧ lt_{i+1})`
-/// built into a chain of CLEAN per-bit words (the same clean-node + OR-merge
-/// discipline as [`emit_weqzero`], but with an `eq`/`lt` term per bit) and
-/// uncomputed in reverse. It is a larger gadget (≈ 8 chain words + eq/lt scratch
-/// + a `one` mask ≈ 11 temps) than W.0's two landed macros, and gcd2 uses it in
-/// exactly ONE guard (`g_agtb`), so it is scheduled for W.1 alongside the word
-/// Bennett wrapper rather than rushed here. [`emit_weqzero`] + [`emit_wselect`]
-/// (the guards' is-zero tests and every guarded arm write) are landed and fully
-/// verified.
+/// # The predicate
+/// Unsigned `a < b` is exactly the borrow-OUT of the full 8-bit subtract
+/// `a - b`. The borrow propagates LSB→MSB by the recurrence (with borrow-in
+/// `bin`, borrow-out `bout` at bit `k`):
+///   `bout = maj(¬a_k, b_k, bin) = (¬a_k ∧ b_k) ⊕ (¬a_k ∧ bin) ⊕ (b_k ∧ bin)`
+/// seeded `bin = 0` at bit 0. `a < b` = the borrow out of bit 7.
 ///
-/// Returns `Err` until implemented, so callers fail loudly rather than emit a
-/// silent wrong body.
+/// # Gadget (net-zero, all work confined to bit 0)
+/// The same clean-chain compute→use→uncompute discipline as [`emit_weqzero`]:
+/// build a chain of CLEAN borrow words `bor[k] = borrow-out of bits 0..=k` (one
+/// per bit), read the final one into `dst_bit`, then replay the chain in REVERSE
+/// so every intermediate `bor[k]` returns to 0. Each borrow node isolates
+/// `a_k`/`b_k` to bit 0 with a paired `Rotr`/`Rotl` (so `a`/`b` are preserved),
+/// forms `¬a_k` in a clean `na` word (`Ccnot(na,a,one); Xori(na,1)`, then
+/// uncomputed), and XOR-accumulates the three majority AND terms onto the target
+/// word. The final bit's borrow-out IS the answer, so it is XOR-accumulated
+/// straight into `dst_bit` (no chain word for it, and no reverse for that node's
+/// dst term — `dst_bit` is the output). The remaining `BITS-1` intermediate
+/// borrows are clean chain words, each self-inverse, so the reverse pass clears
+/// them. `na` is uncomputed inside every node (including the final one).
+///
+/// # Temps
+/// `temps.len() ≥ WLT_NTEMP = (BITS-1) + 2 = 9`: `temps[0..BITS-1]` are the
+/// intermediate borrow words (`temps[k]` = borrow-out of bit `k`, `k < BITS-1`,
+/// seeded from the previous), `temps[BITS-1]` is `na`, `temps[BITS]` is `one`.
+/// All are net-zero.
+///
+/// `dst_bit`, `a`, `b`, and every temp must be pairwise distinct legal operands
+/// (fresh temps + distinct `Ccnot` operands throughout).
 pub fn emit_wlt(
-    _dst_bit: u8,
-    _a: u8,
-    _b: u8,
-    _temps: &[u8],
-    _out: &mut Vec<Instr>,
+    dst_bit: u8,
+    a: u8,
+    b: u8,
+    temps: &[u8],
+    out: &mut Vec<Instr>,
 ) -> Result<(), SynthError> {
-    Err(SynthError::MalformedSpec {
-        detail: "WLt/WGt deferred to W.1 (bit-serial borrow chain); use emit_weqzero + \
-                 emit_wselect for W.0 guards"
-            .into(),
+    check_operand_legal("dst_bit", dst_bit)?;
+    check_operand_legal("a", a)?;
+    check_operand_legal("b", b)?;
+    if temps.len() < WLT_NTEMP {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("WLt needs ≥ {WLT_NTEMP} temp words, have {}", temps.len()),
+        });
+    }
+    for (i, &t) in temps[..WLT_NTEMP].iter().enumerate() {
+        check_operand_legal(&format!("temp{i}"), t)?;
+    }
+    const NBOR: usize = BITS - 1; // intermediate borrow words (bits 0..BITS-1)
+    let bor = &temps[..NBOR]; // bor[k] = borrow-out of bit k (k < BITS-1), clean
+    let na = temps[NBOR]; // holds ¬a_k at bit 0 (clean, uncomputed per node)
+    let one = temps[NBOR + 1]; // holds 0x01 to isolate a single bit under Ccnot
+
+    // All of dst_bit, a, b, and the temps must be pairwise distinct.
+    let mut all: Vec<u8> = vec![dst_bit, a, b];
+    all.extend_from_slice(&temps[..WLT_NTEMP]);
+    for i in 0..all.len() {
+        for j in (i + 1)..all.len() {
+            if all[i] == all[j] {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!(
+                        "WLt operands not distinct (dst_bit={dst_bit}, a={a}, b={b}, \
+                         temps={:?})",
+                        &temps[..WLT_NTEMP]
+                    ),
+                });
+            }
+        }
+    }
+
+    // One borrow node: XOR-accumulate `maj(¬a_k, b_k, bin)` into the target word
+    // `c` (a clean chain word, or `dst_bit` for the final bit), with `bin` = the
+    // previous borrow word (`None` at bit 0 = seed 0). `a`/`b` are rotated so bit
+    // `k` sits at bit 0 for the AND/Ccnot terms, then rotated back (preserved).
+    // The node XOR-accumulates onto `c` and self-inverse-uncomputes `na`, so —
+    // for the CHAIN words — the same closure, appended in reverse bit order,
+    // clears the chain. (The final node targets `dst_bit` and is NOT reversed.)
+    let emit_borrow_node = |out: &mut Vec<Instr>, k: usize, bin: Option<u8>, c: u8| {
+        let rot = (k as u8) & 7;
+        if rot != 0 {
+            out.push(Instr::Rotri { rd: a, imm: rot }); // a bit k → bit 0
+            out.push(Instr::Rotri { rd: b, imm: rot }); // b bit k → bit 0
+        }
+        // na.bit0 = ¬a_k  (compute; uncomputed at the tail of this node).
+        out.push(Instr::Ccnot { rd: na, rs: a, rt: one }); // na.bit0 ^= a_k
+        out.push(Instr::Xori { rd: na, imm: 1 }); // na.bit0 ^= 1  → ¬a_k
+        out.push(Instr::Ccnot { rd: c, rs: na, rt: b }); // c ^= ¬a_k ∧ b_k
+        if let Some(prev) = bin {
+            out.push(Instr::Ccnot { rd: c, rs: na, rt: prev }); // c ^= ¬a_k ∧ bin
+            out.push(Instr::Ccnot { rd: c, rs: b, rt: prev }); //  c ^= b_k ∧ bin
+        }
+        // uncompute na
+        out.push(Instr::Xori { rd: na, imm: 1 });
+        out.push(Instr::Ccnot { rd: na, rs: a, rt: one });
+        if rot != 0 {
+            out.push(Instr::Rotli { rd: a, imm: rot }); // restore a
+            out.push(Instr::Rotli { rd: b, imm: rot }); // restore b
+        }
+    };
+
+    // setup
+    out.push(Instr::Xori { rd: one, imm: 1 });
+    // forward chain: bor[0] = ¬a_0 ∧ b_0 (seed bin=0); bor[k] from bor[k-1] for
+    // bits 1..BITS-1. These are the INTERMEDIATE borrows (clean chain words).
+    emit_borrow_node(out, 0, None, bor[0]);
+    for k in 1..NBOR {
+        emit_borrow_node(out, k, Some(bor[k - 1]), bor[k]);
+    }
+    // final bit (BITS-1): borrow-out = (a<b). XOR it straight into dst_bit, using
+    // the last intermediate borrow bor[BITS-2] as borrow-in. Not reversed.
+    emit_borrow_node(out, BITS - 1, Some(bor[NBOR - 1]), dst_bit);
+    // reverse chain: uncompute bor[k] for k = NBOR-1 .. 1, then bor[0].
+    for k in (1..NBOR).rev() {
+        emit_borrow_node(out, k, Some(bor[k - 1]), bor[k]);
+    }
+    emit_borrow_node(out, 0, None, bor[0]);
+    // teardown
+    out.push(Instr::Xori { rd: one, imm: 1 });
+    Ok(())
+}
+
+/// `WGt(dst_bit, a, b, temps)` — `dst_bit's bit0 ^= (a > b)` (unsigned), by the
+/// identity `a > b ⇔ b < a`. Same temp budget ([`WLT_NTEMP`]) and net-zero /
+/// preserve contract as [`emit_wlt`].
+pub fn emit_wgt(
+    dst_bit: u8,
+    a: u8,
+    b: u8,
+    temps: &[u8],
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
+    emit_wlt(dst_bit, b, a, temps, out)
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// W.1 — the word-level Bennett wrapper
+// ══════════════════════════════════════════════════════════════════════
+//
+// The word analogue of [`transcribe_bennett`]. A permutation is described by a
+// FORWARD word function [`WForward`] (each output word as a [`WValue`] of the
+// carriers) plus its inverse `bwd`; the wrapper emits the textbook reversible
+// in-place-permutation:
+//   1. O ^= fwd(x)   — XOR-accumulate each output value into a CLEAN ancilla O_i
+//                      via the Bennett-clean idiom (compute value → temp; XOR into
+//                      O_i; UNCOMPUTE temp so temp returns to 0). Keeping O a pure
+//                      XOR-accumulation is what makes step 3 cancel.
+//   2. swap carriers ↔ O   — Exch/Xchg per carrier↔ancilla pair.
+//   3. O ^= bwd(y)   — same idiom with the inverse; carriers now hold y = fwd(x),
+//                      O holds x, so O ^= fwd⁻¹(y) = x → O = 0 (net-zero).
+//
+// Every carrier/ancilla/work guard from `transcribe_bennett` is carried: carrier
+// rows read only carriers, operands are legal (reserved 8/9 and ≥16 rejected),
+// carriers/ancilla/work are pairwise disjoint and non-duplicated.
+
+/// A word-valued expression over CARRIER operands, realized reversibly into a
+/// clean temp (and uncomputed) by the Bennett-clean idiom. Indices in `Var` /
+/// `Lt` / `Gt` are CARRIER indices (0..n), resolved to operands by the wrapper.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WValue {
+    /// Carrier word `carriers[i]`.
+    Var(usize),
+    /// The 8-bit constant `c`.
+    Const(u8),
+    /// `x + y` (mod 256).
+    Add(Box<WValue>, Box<WValue>),
+    /// `x - y` (mod 256).
+    Sub(Box<WValue>, Box<WValue>),
+    /// `rotl(x, imm & 7)`.
+    Rotl(Box<WValue>, u8),
+    /// `rotr(x, imm & 7)`.
+    Rotr(Box<WValue>, u8),
+    /// `x ^ y`.
+    Xor(Box<WValue>, Box<WValue>),
+    /// A bit-0 predicate word `(x < y)` (unsigned); higher bits 0.
+    Lt(Box<WValue>, Box<WValue>),
+    /// A bit-0 predicate word `(x > y)` (unsigned); higher bits 0.
+    Gt(Box<WValue>, Box<WValue>),
+    /// `guard.bit0 ? then : else` (guard is any WValue; its bit 0 selects).
+    Select {
+        guard: Box<WValue>,
+        then_: Box<WValue>,
+        else_: Box<WValue>,
+    },
+}
+
+// `add`/`sub`/`xor` are builder names for the IR, not arithmetic on `WValue`
+// itself — intentionally not the std `Add`/`Sub` traits.
+#[allow(clippy::should_implement_trait)]
+impl WValue {
+    /// Convenience constructors.
+    pub fn var(i: usize) -> Self {
+        WValue::Var(i)
+    }
+    pub fn add(x: WValue, y: WValue) -> Self {
+        WValue::Add(Box::new(x), Box::new(y))
+    }
+    pub fn sub(x: WValue, y: WValue) -> Self {
+        WValue::Sub(Box::new(x), Box::new(y))
+    }
+    pub fn xor(x: WValue, y: WValue) -> Self {
+        WValue::Xor(Box::new(x), Box::new(y))
+    }
+    pub fn rotl(x: WValue, imm: u8) -> Self {
+        WValue::Rotl(Box::new(x), imm)
+    }
+    pub fn rotr(x: WValue, imm: u8) -> Self {
+        WValue::Rotr(Box::new(x), imm)
+    }
+    pub fn lt(x: WValue, y: WValue) -> Self {
+        WValue::Lt(Box::new(x), Box::new(y))
+    }
+    pub fn gt(x: WValue, y: WValue) -> Self {
+        WValue::Gt(Box::new(x), Box::new(y))
+    }
+    pub fn select(guard: WValue, then_: WValue, else_: WValue) -> Self {
+        WValue::Select {
+            guard: Box::new(guard),
+            then_: Box::new(then_),
+            else_: Box::new(else_),
+        }
+    }
+}
+
+/// A forward word function: each named OUTPUT word (by ancilla slot index) is a
+/// [`WValue`] of the carriers. `outputs[k] = (slot, value)` means ancilla slot
+/// `slot` (index into `out_ancilla`) receives `value`. Slots not listed stay 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WForward {
+    /// `(ancilla-slot, value)` pairs. Each slot at most once.
+    pub outputs: Vec<(usize, WValue)>,
+}
+
+/// A pool of clean (zero-init) scratch WORD operands the Bennett-clean idiom and
+/// the compare/select macros draw from. Reused sequentially across outputs; every
+/// word is returned to 0. Must be disjoint from carriers and ancilla.
+///
+/// A single output's realization can need several nested temps at once (e.g.
+/// `Select{ Sub(a,b), a }` needs a value temp + a Sub temp + then/else temps +
+/// the WSelect mask/one, and a `Lt` guard needs [`WLT_NTEMP`] more). The wrapper
+/// allocates from `work_ops` with a running high-water mark and reports if the
+/// pool is too small.
+pub type WorkOps = Vec<u8>;
+
+/// Realize a [`WValue`] into a CLEAN temp `dst`, returning the compute op list
+/// (also pushed onto `out`) so the caller can UNCOMPUTE by replaying the inverse
+/// in reverse. `dst` must start at 0. Temps are drawn from `work[next..]`; `next`
+/// is advanced past every temp this call consumes (nested realizations get fresh
+/// temps). `carriers` maps `WValue::Var(i)` to its operand.
+///
+/// The returned `Vec<Instr>` is exactly what was appended to `out`; to uncompute,
+/// emit `invert_body(&compute)` (reverse order, each instr self-or-paired-inverse
+/// — see [`invert_instr`]). Every macro used (WSelect/WLt) is itself net-zero, so
+/// inverting the whole compute list restores `dst` and all nested temps to 0.
+fn realize_wvalue(
+    val: &WValue,
+    dst: u8,
+    carriers: &[u8],
+    work: &[u8],
+    next: &mut usize,
+    peak: &mut usize,
+    out: &mut Vec<Instr>,
+) -> Result<Vec<Instr>, SynthError> {
+    let start = out.len();
+    match val {
+        WValue::Var(i) => {
+            let c = resolve_var(*i, carriers)?;
+            check_two_distinct("WValue::Var copy", dst, c)?;
+            out.push(Instr::Xor { rd: dst, rs: c }); // dst ^= carrier  (dst was 0)
+        }
+        WValue::Const(k) => {
+            out.push(Instr::Xori { rd: dst, imm: *k });
+        }
+        WValue::Rotl(inner, imm) => {
+            realize_wvalue(inner, dst, carriers, work, next, peak, out)?;
+            out.push(Instr::Rotli { rd: dst, imm: *imm });
+        }
+        WValue::Rotr(inner, imm) => {
+            realize_wvalue(inner, dst, carriers, work, next, peak, out)?;
+            out.push(Instr::Rotri { rd: dst, imm: *imm });
+        }
+        WValue::Add(x, y) | WValue::Sub(x, y) | WValue::Xor(x, y) => {
+            // dst := x, then combine with y. If y is a bare carrier we combine
+            // with it directly (no temp); otherwise realize y into a SCRATCH temp
+            // that is uncomputed + FREED (stack discipline) so peak stays low.
+            realize_wvalue(x, dst, carriers, work, next, peak, out)?;
+            let (yop, y_body, mark) = operand_or_temp(y, carriers, work, next, peak, out)?;
+            match val {
+                WValue::Add(..) => out.push(Instr::Add { rd: dst, rs: yop }),
+                WValue::Sub(..) => out.push(Instr::Sub { rd: dst, rs: yop }),
+                WValue::Xor(..) => out.push(Instr::Xor { rd: dst, rs: yop }),
+                _ => unreachable!(),
+            }
+            free_temp(&y_body, mark, next, out);
+        }
+        WValue::Lt(x, y) | WValue::Gt(x, y) => {
+            // Realize x,y into (carrier or freed temp) operands, run the compare
+            // macro into dst.bit0, then uncompute + free the temps.
+            let (xop, x_body, xmark) = operand_or_temp(x, carriers, work, next, peak, out)?;
+            let (yop, y_body, ymark) = operand_or_temp(y, carriers, work, next, peak, out)?;
+            let cmp_temps = alloc_work_n(work, next, peak, WLT_NTEMP)?;
+            match val {
+                WValue::Lt(..) => emit_wlt(dst, xop, yop, &cmp_temps, out)?,
+                WValue::Gt(..) => emit_wgt(dst, xop, yop, &cmp_temps, out)?,
+                _ => unreachable!(),
+            }
+            *next -= WLT_NTEMP; // cmp_temps are net-zero → free them
+            free_temp(&y_body, ymark, next, out);
+            free_temp(&x_body, xmark, next, out);
+        }
+        WValue::Select { guard, then_, else_ } => {
+            // WSelect needs dst ∉ {then_w, else_w}; a bare-carrier then/else is
+            // used directly. mask/one are fresh temps (freed after).
+            let (gop, g_body, gmark) = operand_or_temp(guard, carriers, work, next, peak, out)?;
+            let (top, t_body, tmark) = operand_or_temp(then_, carriers, work, next, peak, out)?;
+            let (eop, e_body, emark) = operand_or_temp(else_, carriers, work, next, peak, out)?;
+            let mask = alloc_work(work, next, peak)?;
+            let one = alloc_work(work, next, peak)?;
+            emit_wselect(dst, gop, top, eop, mask, one, out)?;
+            *next -= 2; // mask, one net-zero → free
+            free_temp(&e_body, emark, next, out);
+            free_temp(&t_body, tmark, next, out);
+            free_temp(&g_body, gmark, next, out);
+        }
+    }
+    Ok(out[start..].to_vec())
+}
+
+/// Resolve a carrier-index `WValue::Var(i)` to its operand.
+fn resolve_var(i: usize, carriers: &[u8]) -> Result<u8, SynthError> {
+    carriers.get(i).copied().ok_or_else(|| SynthError::MalformedSpec {
+        detail: format!("WValue::Var({i}) out of carrier range ({})", carriers.len()),
     })
+}
+
+/// Yield an OPERAND for a sub-value, plus its (compute-body, saved-mark) for
+/// uncompute+free. A bare `WValue::Var(i)` returns the carrier operand directly
+/// with an EMPTY body (nothing to uncompute, mark unchanged) — the carrier is
+/// read-only and preserved. Any other shape is realized into a freshly-allocated
+/// SCRATCH temp; the returned body/mark let the caller uncompute it and restore
+/// `next` (freeing the temp for reuse), keeping concurrent temp usage minimal.
+fn operand_or_temp(
+    val: &WValue,
+    carriers: &[u8],
+    work: &[u8],
+    next: &mut usize,
+    peak: &mut usize,
+    out: &mut Vec<Instr>,
+) -> Result<(u8, Vec<Instr>, usize), SynthError> {
+    if let WValue::Var(i) = val {
+        return Ok((resolve_var(*i, carriers)?, Vec::new(), *next));
+    }
+    let mark = *next;
+    let t = alloc_work(work, next, peak)?;
+    let body = realize_wvalue(val, t, carriers, work, next, peak, out)?;
+    Ok((t, body, mark))
+}
+
+/// Uncompute a temp's compute body (net-zero) and restore the allocation mark,
+/// freeing the temp (and its nested scratch) for reuse. An empty body (bare
+/// carrier) is a no-op. `mark` is where `next` stood BEFORE the temp was alloc'd.
+fn free_temp(body: &[Instr], mark: usize, next: &mut usize, out: &mut Vec<Instr>) {
+    if body.is_empty() {
+        return; // bare carrier — nothing allocated, nothing to uncompute
+    }
+    out.extend(invert_body(body));
+    *next = mark;
+}
+
+/// Allocate one clean work word, advancing `next` and bumping the concurrent-use
+/// high-water mark `peak` (tracked because temps are FREED — the true peak is the
+/// max concurrent, not the total consumed).
+fn alloc_work(work: &[u8], next: &mut usize, peak: &mut usize) -> Result<u8, SynthError> {
+    let w = *work.get(*next).ok_or_else(|| SynthError::MalformedSpec {
+        detail: format!(
+            "work pool exhausted: needed word #{}, have {}",
+            *next + 1,
+            work.len()
+        ),
+    })?;
+    *next += 1;
+    *peak = (*peak).max(*next);
+    Ok(w)
+}
+
+/// Allocate `n` clean work words (a contiguous slice), advancing the mark and
+/// bumping `peak`.
+fn alloc_work_n(
+    work: &[u8],
+    next: &mut usize,
+    peak: &mut usize,
+    n: usize,
+) -> Result<Vec<u8>, SynthError> {
+    if *next + n > work.len() {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "work pool exhausted: needed {n} words at #{}, have {}",
+                *next, work.len()
+            ),
+        });
+    }
+    let slice = work[*next..*next + n].to_vec();
+    *next += n;
+    *peak = (*peak).max(*next);
+    Ok(slice)
+}
+
+/// The inverse of one emitted instruction. Only the instructions [`realize_wvalue`]
+/// and the macros emit are handled — every one is either self-inverse or has an
+/// explicit paired inverse. A gate outside that set is a bug (unreachable).
+fn invert_instr(ins: Instr) -> Instr {
+    match ins {
+        // self-inverse
+        Instr::Xor { .. }
+        | Instr::Xori { .. }
+        | Instr::Ccnot { .. }
+        | Instr::Cswap { .. }
+        | Instr::Exch { .. }
+        | Instr::Xchg { .. } => ins,
+        // paired inverses
+        Instr::Add { rd, rs } => Instr::Sub { rd, rs },
+        Instr::Sub { rd, rs } => Instr::Add { rd, rs },
+        Instr::Addi { rd, imm } => Instr::Subi { rd, imm },
+        Instr::Subi { rd, imm } => Instr::Addi { rd, imm },
+        Instr::Rotli { rd, imm } => Instr::Rotri { rd, imm },
+        Instr::Rotri { rd, imm } => Instr::Rotli { rd, imm },
+        other => panic!("invert_instr: unexpected gate in a Bennett-clean body: {other:?}"),
+    }
+}
+
+/// Reverse a body and invert each instruction — the exact uncompute of a
+/// compute list built only from [`realize_wvalue`]/macro gates.
+fn invert_body(body: &[Instr]) -> Vec<Instr> {
+    body.iter().rev().map(|&ins| invert_instr(ins)).collect()
+}
+
+/// Whether a top-level [`WValue`] realizes touching its destination ONLY via
+/// XOR-accumulation (`Xor`/`Xori`/`Ccnot` into `dst`), never mutating it with
+/// `Add`/`Sub`/`Rotl`/`Rotr`. Such values can be realized STRAIGHT into the clean
+/// ancilla `O` (which starts at 0), skipping the value-temp — keeping `O` a pure
+/// XOR-accumulation, exactly the invariant the step-3 backward pass needs.
+///
+/// - `Var`/`Const` write `O` with a single `Xor`/`Xori` — safe.
+/// - `Lt`/`Gt`/`Select` realize ALL their operands into fresh temps (or bare
+///   carriers) and touch `O`/`dst` only through `Ccnot`/`Xor` accumulation — safe
+///   regardless of operand shape.
+/// - `Add`/`Sub`/`Rotl`/`Rotr` (and `Xor`, whose FIRST operand is realized into
+///   `dst` and may itself be arithmetic) mutate `dst` non-XOR-linearly → they MUST
+///   go through a value-temp then be XOR-ed into `O` (mixing raw `Add`/`Sub` into
+///   `O` would break step-3 cancellation).
+fn is_pure_xor_top(val: &WValue) -> bool {
+    matches!(
+        val,
+        WValue::Var(_) | WValue::Const(_) | WValue::Lt(..) | WValue::Gt(..) | WValue::Select { .. }
+    )
+}
+
+/// Emit one Bennett-clean "O_i ^= value" step. For a pure-XOR-top value, realize
+/// directly into the clean ancilla `o` (no value-temp). Otherwise compute the
+/// value into a clean work temp, XOR it into `o`, and uncompute the temp
+/// (net-zero). Either way `o` is a pure XOR-accumulation so step 3 cancels it.
+fn emit_clean_accumulate(
+    o: u8,
+    value: &WValue,
+    carriers: &[u8],
+    work: &[u8],
+    peak: &mut usize,
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
+    // Each output is realized sequentially, so `next` restarts at 0 per output
+    // (temps are reused across outputs).
+    let mut next = 0usize;
+    if is_pure_xor_top(value) {
+        // Realize straight into the clean ancilla; nested temps are uncomputed by
+        // realize_wvalue itself (net-zero). `o` keeps the XOR-accumulated value.
+        realize_wvalue(value, o, carriers, work, &mut next, peak, out)?;
+    } else {
+        let vtmp = alloc_work(work, &mut next, peak)?;
+        let compute = realize_wvalue(value, vtmp, carriers, work, &mut next, peak, out)?;
+        check_two_distinct("Bennett-clean XOR into ancilla", o, vtmp)?;
+        out.push(Instr::Xor { rd: o, rs: vtmp }); // O_i ^= value
+        out.extend(invert_body(&compute)); // uncompute the value temp → 0
+    }
+    Ok(())
+}
+
+/// Word-level Bennett wrapper (W.1). See the module comment above.
+///
+/// `carrier_ops` are the `n` carrier word operands; `out_ancilla` the `n` clean
+/// ancilla words that receive `fwd(x)` (must be ≥ the number of distinct output
+/// slots referenced). `work_ops` is the shared clean scratch pool.
+///
+/// Returns the assemblable body, or `Err` if the specs violate a guard (carrier
+/// row reading a non-carrier, illegal/duplicated/aliased operands, an ancilla
+/// slot out of range, or the work pool being too small). Callers verify with the
+/// symbolic oracle / whole-domain exec (this function does not claim correctness).
+pub fn transcribe_word_bennett(
+    fwd: &WForward,
+    bwd: &WForward,
+    carrier_ops: &[u8],
+    out_ancilla: &[u8],
+    work_ops: &[u8],
+) -> Result<Vec<Instr>, SynthError> {
+    transcribe_word_bennett_peak(fwd, bwd, carrier_ops, out_ancilla, work_ops).map(|(b, _)| b)
+}
+
+/// Like [`transcribe_word_bennett`] but also returns the PEAK concurrent work-word
+/// count (the max scratch words live at once — the number the widen-state / free-
+/// operand budget must cover; reported at W.2 for gcd2).
+pub fn transcribe_word_bennett_peak(
+    fwd: &WForward,
+    bwd: &WForward,
+    carrier_ops: &[u8],
+    out_ancilla: &[u8],
+    work_ops: &[u8],
+) -> Result<(Vec<Instr>, usize), SynthError> {
+    let n = carrier_ops.len();
+    // ── Operand-legality + disjointness guards (mirror transcribe_bennett) ──
+    for &c in carrier_ops {
+        check_operand_legal("carrier", c)?;
+    }
+    for &a in out_ancilla {
+        check_operand_legal("ancilla", a)?;
+    }
+    for &w in work_ops {
+        check_operand_legal("work", w)?;
+    }
+    // No dup within each bank; carriers/ancilla/work pairwise disjoint.
+    let mut seen: Vec<u8> = Vec::new();
+    for (what, bank) in [
+        ("carrier", carrier_ops),
+        ("ancilla", out_ancilla),
+        ("work", work_ops),
+    ] {
+        for &op in bank {
+            if seen.contains(&op) {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!("{what} operand {op} duplicates another carrier/ancilla/work"),
+                });
+            }
+            seen.push(op);
+        }
+    }
+    // MAJOR-1 analogue + slot validation: every Var read names a real carrier;
+    // every output slot is in range and written at most once. Returns the ordered
+    // set of ACTIVE slots (those the permutation actually writes).
+    let check_slots = |wf: &WForward, which: &str| -> Result<Vec<usize>, SynthError> {
+        let mut used: Vec<usize> = Vec::new();
+        for (slot, val) in &wf.outputs {
+            if *slot >= n {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!("{which} output slot {slot} ≥ carrier count {n}"),
+                });
+            }
+            if used.contains(slot) {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!("{which} output slot {slot} written twice"),
+                });
+            }
+            used.push(*slot);
+            check_wvalue_vars(val, n, which)?;
+        }
+        Ok(used)
+    };
+    let mut fwd_slots = check_slots(fwd, "fwd")?;
+    let mut bwd_slots = check_slots(bwd, "bwd")?;
+    // fwd and bwd must touch the SAME carriers: an unlisted carrier is a pure
+    // identity pass-through (held in place — no ancilla, no swap). If a carrier is
+    // active in one direction only, the swap/uncompute would desynchronize.
+    fwd_slots.sort_unstable();
+    bwd_slots.sort_unstable();
+    if fwd_slots != bwd_slots {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "fwd active slots {fwd_slots:?} ≠ bwd active slots {bwd_slots:?}; \
+                 fwd and bwd must write the same carriers"
+            ),
+        });
+    }
+    let active = fwd_slots; // sorted, deduped, identical to bwd
+    // ONE ancilla per ACTIVE carrier, indexed by position in the sorted active set
+    // (`out_ancilla[k]` is the clean ancilla for carrier `active[k]`). Identity
+    // carriers consume no ancilla. This is the free-operand saving that lets a
+    // permutation with many preserved guards (e.g. gcd2) fit the operand budget.
+    if out_ancilla.len() < active.len() {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "need ≥ {} ancilla (one per active carrier {active:?}), have {}",
+                active.len(),
+                out_ancilla.len()
+            ),
+        });
+    }
+    // slot → ancilla operand.
+    let ancilla_of = |slot: usize| -> u8 {
+        let k = active.iter().position(|&s| s == slot).unwrap();
+        out_ancilla[k]
+    };
+    // A carrier↔ancilla swap (for ACTIVE carriers only) needs at least one side to
+    // be a register (Exch/Xchg).
+    for &i in &active {
+        swap_operands(carrier_ops[i], ancilla_of(i))?;
+    }
+
+    let mut out = Vec::new();
+    let mut peak = 0usize;
+
+    // Step 1: O ^= fwd(x)  (each active slot's clean ancilla XOR-accumulates the
+    // forward value; UNLISTED carriers are identity — untouched, held in place).
+    for (slot, val) in &fwd.outputs {
+        emit_clean_accumulate(ancilla_of(*slot), val, carrier_ops, work_ops, &mut peak, &mut out)?;
+    }
+    // Step 2: swap ACTIVE carriers ↔ ancilla, per pair. Identity carriers stay put
+    // (still hold their inputs), so bwd can read them in step 3.
+    for &i in &active {
+        out.push(swap_operands(carrier_ops[i], ancilla_of(i))?);
+    }
+    // Step 3: O ^= bwd(y).  Active carriers now hold y = fwd(x); identity carriers
+    // still hold their inputs. bwd(y, identity-inputs) = x is XORed into O (which
+    // holds x), zeroing every ancilla → net-zero.
+    for (slot, val) in &bwd.outputs {
+        emit_clean_accumulate(ancilla_of(*slot), val, carrier_ops, work_ops, &mut peak, &mut out)?;
+    }
+    Ok((out, peak))
+}
+
+/// Reject a [`WValue`] that reads a carrier index ≥ `n` (a permutation output
+/// must be a function of the carriers alone — the MAJOR-1 analogue).
+fn check_wvalue_vars(val: &WValue, n: usize, which: &str) -> Result<(), SynthError> {
+    match val {
+        WValue::Var(i) => {
+            if *i >= n {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!("{which} reads carrier index {i} ≥ carrier count {n}"),
+                });
+            }
+            Ok(())
+        }
+        WValue::Const(_) => Ok(()),
+        WValue::Rotl(x, _) | WValue::Rotr(x, _) => check_wvalue_vars(x, n, which),
+        WValue::Add(x, y)
+        | WValue::Sub(x, y)
+        | WValue::Xor(x, y)
+        | WValue::Lt(x, y)
+        | WValue::Gt(x, y) => {
+            check_wvalue_vars(x, n, which)?;
+            check_wvalue_vars(y, n, which)
+        }
+        WValue::Select { guard, then_, else_ } => {
+            check_wvalue_vars(guard, n, which)?;
+            check_wvalue_vars(then_, n, which)?;
+            check_wvalue_vars(else_, n, which)
+        }
+    }
 }
