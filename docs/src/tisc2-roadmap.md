@@ -16,6 +16,26 @@
 > **A-0 (shared, scratch-addressable operand crossbar + instruction-word reformat)** is inserted
 > before the frame slice; with it, the GCD body returns to ~28 (B=194) exactly as first estimated.
 
+> **⇒⇒ CURRENT STATUS (2026-07-26) — re-prioritized to the primary goal (arbitrary-programs compiler):**
+> - **A-0 MERGED** to `chessai/theseus-v2` (`5f11e6b`): 32-bit word + shared scratch-addressable
+>   operand crossbar; net energy WIN −11.9%.
+> - **A-1 (hand-walk GCD) ABANDONED** — a correct reversible in-place gcd2 walk to ≤40 is
+>   infeasible by hand (the reversible-clear ~doubles the body; ISA has no controlled arithmetic).
+>   Finding: `docs/scratch/a1-gcd-emission-finding.md`. GCD is NOT the goal; it was a probe.
+> - **A-6 GENERAL SYNTHESIZER = COVERAGE GAP (2) CLOSED.** `table → BDD (biodivine ROBDD) → gates`
+>   lowers **any admitted-bijection prim** to correct reversible gates (proven: gcd2 256/256 +
+>   symbolic, teeth). This retires the finite-arm-recognizer limitation — the deepest coverage gap.
+>   Branch `a6-synth` (off A-0). BDD is the production path; ANF = differential oracle; **word-level
+>   synthesis = documented NEGATIVE RESULT** (control-heavy prims explode: gcd2 778k instrs — filed,
+>   not production). Efficiency of a given prim (BDD gcd2 = 5,408 gates, ~the general floor) is a
+>   **Phase-B / provisioning** concern, NOT a coverage gap.
+> - **NEXT (this is the critical path to the goal): (1) INTEGRATE** the BDD synthesizer into
+>   `recognize_prim` as the general lowering fall-through + retire the vacuity guard + validate
+>   end-to-end on a SMALL prim (no widen); **(2) COMPOSITIONAL CONTROL A-3 → A-5 → A-4** (nested
+>   `Trace` / loop-under-`⊗` / branch-in-branch) = the deepest *remaining* gap; then A-7 wide words
+>   + per-program provisioning. gcd2-scale bodies run only once provisioning (A-2/B-2) lands, sized
+>   per-program so simple programs stay cheap.
+
 ## Why (the mandate)
 Run **any well-formed theseus program** — the closed 22-combinator Iso algebra over finite
 trees — correctness first, **efficiency (energy/step) critical**, and **no more whack-a-mole**
