@@ -35,7 +35,7 @@
 //! gate (it has teeth: a wrong emission is rejected).
 
 use crate::asm::Instr;
-use crate::bveq::{BvExpr, RegTransfer, BITS};
+use crate::bveq::{expr_to_bdd, BvExpr, RegTransfer, VarMap, BITS};
 use crate::types::NUM_REGS;
 
 /// Why a spec could not be transcribed into the in-place ancilla-free class.
@@ -1650,4 +1650,455 @@ fn schedule(rows: &[Row]) -> Result<Vec<Row>, SynthError> {
     }
 
     Ok(order.into_iter().map(|i| units[i].1.clone()).collect())
+}
+
+// ── A-6.D (D.0 + D.1): BDD-based reversible synthesis ─────────────────
+//
+// The general, STRUCTURE-PRESERVING prim→gates mechanism. Where the A-6.2 ANF
+// path (`transcribe_into_general`) re-expands each output bit to its Reed-Muller
+// sum-of-products (degree blowup: gcd2 → 15,148 instrs), this walks the CANONICAL
+// ROBDD of each output bit and emits O(#nodes) gates. Same generality (any
+// BvExpr → BDD via `expr_to_bdd`, the representation `equiv`/`admit_symbolic`
+// already trust), but the node count — not the ANF degree — sets the length.
+//
+// DETERMINISTIC: build the ROBDD, walk its nodes children-before-parents, emit a
+// fixed gate gadget per node, uncompute for net-zero. No search, no enumeration.
+//
+// # ROBDD access (D.0)
+//
+// biodivine's `Bdd` is a `Vec<BddNode>` in which indices 0 and 1 are the FALSE
+// and TRUE terminals and every non-terminal is appended AFTER its children, so
+// plain ascending pointer order (`bdd.pointers()`, skipping the two terminals) is
+// already a valid children-before-parents topological order. Per node we read
+// `bdd.var_of(p)` (the decision variable), `bdd.low_link_of(p)` (the `else`/x=0
+// child) and `bdd.high_link_of(p)` (the `then`/x=1 child); `bdd.root_pointer()`
+// is the output. `BddVariable::to_index()` inverts the shared `VarMap` mapping
+// (`idx = bit*num_operands + operand`), recovering the input `(operand, bit)`.
+//
+// We build ONE BDD per (carrier output operand, output bit) — per-bit BDDs, which
+// the design explicitly permits for this slice; node lines are allocated and
+// uncomputed per output bit, so the ancilla-word budget is the MAX single-bit
+// node count, not the sum.
+//
+// # Shannon-node → gates (D.1)
+//
+// Each node value lives at BIT 0 of a dedicated ancilla WORD, kept clean (bits
+// 1..7 always 0). A node `n = ite(x, hi, lo) = lo ⊕ (x ∧ (hi ⊕ lo))` is built:
+//   1. `n ^= lo`                (copy the clean low child; XOR of a clean word)
+//   2. `T ^= hi ; T ^= lo`      (T = hi⊕lo in a clean reused temp word, bit 0)
+//   3. `Ccnot(n, x_aligned, T)` (n bit0 ^= x_bit ∧ (hi⊕lo); T clean ⇒ n stays clean)
+//   4. `T ^= lo ; T ^= hi`      (restore T = 0)
+// A child that is the FALSE terminal contributes nothing (clean 0); the TRUE
+// terminal contributes `Xori(word, 1)`. The output carrier bit reads the root
+// node's line (or the root terminal directly). Every node's 4-step gadget is its
+// own inverse (all XOR-accumulate), so the reverse pass replays it to return each
+// node word to 0 — Bennett net-zero.
+
+/// Zero-init helper bank for [`transcribe_bdd_into`]'s per-bit BDD synthesis.
+///
+/// - `temp`: one clean scratch word holding `hi ⊕ lo` at bit 0 during a node's
+///   Ccnot; always restored to 0 within each node's gadget.
+/// - `nodes`: one word per BDD node LINE (value at bit 0). Must have at least the
+///   max single-output-bit ROBDD node count; node words are recycled across
+///   output bits (each bit fully uncomputes its lines before the next). Every
+///   word is disjoint from carriers, destinations, sources, and `temp`.
+///
+/// All helper words are net-zero across each output bit (compute → read →
+/// uncompute), so they are reused freely bit-to-bit and row-to-row.
+#[derive(Clone, Copy)]
+pub struct BddHelpers<'a> {
+    pub temp: u8,
+    pub nodes: &'a [u8],
+}
+
+/// A clean bit-0 value source feeding a node gadget.
+#[derive(Clone, Copy)]
+enum Line {
+    /// Constant 0 (FALSE terminal) — contributes nothing.
+    Zero,
+    /// Constant 1 (TRUE terminal) — one `Xori(word, 1)`.
+    One,
+    /// Bit 0 of node ancilla word `w` (clean: upper bits are 0).
+    Node(u8),
+}
+
+/// Transcribe a register-space `RegTransfer` spec onto FRESH, DISJOINT zero-init
+/// destinations via BDD synthesis (D.1). For each spec row `i` and output bit
+/// `b`, builds the ROBDD of `spec.regs[i][b]` over the input variables, walks it,
+/// and emits O(#nodes) gates that XOR `spec.regs[i][b]` into bit `b` of
+/// `dst_ops[i]` (which starts 0). Every node line is uncomputed → destinations
+/// hold `spec(src)`, helpers back to 0.
+///
+/// Mirrors [`transcribe_into_general`]'s operand contract: `dst_ops`/`src_ops`
+/// are NUM_REGS-length raw operand maps; spec input `Var(y, c)` reads bit `c` of
+/// `src_ops[y]`. An identity row that self-maps (`dst == src`) is skipped.
+pub fn transcribe_bdd_into(
+    spec: &RegTransfer,
+    dst_ops: &[u8],
+    src_ops: &[u8],
+    helpers: BddHelpers,
+) -> Result<Vec<Instr>, SynthError> {
+    if spec.regs.len() != NUM_REGS {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("frame has {} rows, expected {NUM_REGS}", spec.regs.len()),
+        });
+    }
+    if dst_ops.len() != NUM_REGS || src_ops.len() != NUM_REGS {
+        return Err(SynthError::MalformedSpec {
+            detail: "dst_ops/src_ops must each have NUM_REGS entries".to_string(),
+        });
+    }
+    // Shared variable mapping over the register space (operand = register index):
+    // idx = bit * NUM_REGS + operand, inverted below to recover (operand, bit).
+    let map = VarMap::new(NUM_REGS).map_err(|e| SynthError::MalformedSpec {
+        detail: format!("VarMap::new failed: {e}"),
+    })?;
+
+    let mut out = Vec::new();
+    for (i, row) in spec.regs.iter().enumerate() {
+        if row.len() != BITS {
+            return Err(SynthError::MalformedSpec {
+                detail: format!("reg {i} row has {} bits, expected {BITS}", row.len()),
+            });
+        }
+        let dst = dst_ops[i];
+        // Genuine identity self-map contributes nothing (matches the ANF path).
+        if is_identity_row(row, i) && dst == src_ops[i] {
+            continue;
+        }
+        for (b, e) in row.iter().enumerate() {
+            emit_bdd_output_bit(e, dst, b, src_ops, &helpers, &map, &mut out)?;
+        }
+    }
+    Ok(out)
+}
+
+/// Emit gates that XOR `expr` (a boolean function of the input vars) into bit `b`
+/// of `dst`, via ROBDD synthesis with per-node ancilla + Bennett uncompute.
+fn emit_bdd_output_bit(
+    expr: &BvExpr,
+    dst: u8,
+    b: usize,
+    src_ops: &[u8],
+    helpers: &BddHelpers,
+    map: &VarMap,
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
+    let bdd = expr_to_bdd(expr, map).map_err(|e| SynthError::MalformedSpec {
+        detail: format!("expr_to_bdd failed for output bit {b}: {e}"),
+    })?;
+
+    let root = bdd.root_pointer();
+    // Constant output bit: no nodes to walk.
+    if root.is_zero() {
+        return Ok(()); // dst bit b already 0
+    }
+    if root.is_one() {
+        out.push(Instr::Xori { rd: dst, imm: 1u8 << b });
+        return Ok(());
+    }
+
+    // Assign a node WORD to every non-terminal pointer (ascending order = a
+    // children-before-parents topological order). node_word[pointer_index] = word.
+    let n_nodes = bdd.size() - 2; // exclude the two terminals
+    if n_nodes > helpers.nodes.len() {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "output bit {b} ROBDD has {n_nodes} nodes, helper node bank has only {} words",
+                helpers.nodes.len()
+            ),
+        });
+    }
+    // Map a pointer index (≥2) to its allocated node word.
+    let node_word = |idx: usize| -> u8 { helpers.nodes[idx - 2] };
+    // Interpret a child pointer as a clean bit-0 Line.
+    let child_line = |p: biodivine_lib_bdd::BddPointer| -> Line {
+        if p.is_zero() {
+            Line::Zero
+        } else if p.is_one() {
+            Line::One
+        } else {
+            Line::Node(node_word(p.to_index()))
+        }
+    };
+
+    // Record, per node (in emission order), the gadget parameters so the reverse
+    // pass can replay them exactly (the gadget is its own inverse).
+    let mut gadgets: Vec<NodeGadgetRef> = Vec::with_capacity(n_nodes);
+
+    // FORWARD PASS: compute every node line, children before parents.
+    for p in bdd.pointers() {
+        if p.is_terminal() {
+            continue;
+        }
+        let idx = p.to_index();
+        let var = bdd.var_of(p).to_index();
+        // Invert the shared VarMap: idx = bit * NUM_REGS + operand.
+        let var_reg = var % NUM_REGS;
+        let var_bit = var / NUM_REGS;
+        let lo = child_line(bdd.low_link_of(p)); // x = 0 branch
+        let hi = child_line(bdd.high_link_of(p)); // x = 1 branch
+        let g = NodeGadgetRef {
+            word: node_word(idx),
+            var_reg,
+            var_bit,
+            lo,
+            hi,
+        };
+        emit_node_gadget(&g, src_ops, helpers, out)?;
+        gadgets.push(g);
+    }
+
+    // Copy the ROOT node line into dst bit b: dst bit b ^= root bit0.
+    // Root is a non-terminal (handled the terminal cases above), so it's a clean
+    // node word — a single Ccnot against a bit-b mask realized by the temp word.
+    let root_word = node_word(root.to_index());
+    // dst bit b ^= root_word bit0. Align root's bit0 to bit b, then a masked XOR.
+    // root_word is clean (bit0 only). Rotate it so bit0 → bit b, XOR the whole
+    // word onto dst (only bit b is set), rotate back. dst distinct from root_word.
+    if dst == root_word {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("dst operand {dst} aliases a node word (must be disjoint)"),
+        });
+    }
+    rotate_by(root_word, b as i32, out); // bit0 → bit b
+    out.push(Instr::Xor { rd: dst, rs: root_word });
+    rotate_by(root_word, -(b as i32), out); // restore
+
+    // REVERSE PASS: uncompute every node line (replay its gadget = its inverse).
+    for g in gadgets.iter().rev() {
+        emit_node_gadget(g, src_ops, helpers, out)?;
+    }
+    Ok(())
+}
+
+/// Emit the 4-step Shannon-mux gadget for one node
+/// `word ^= lo ⊕ (x ∧ (hi ⊕ lo))`, all at bit 0, net-zero on `temp`.
+///
+/// Because every step XOR-accumulates onto `word`/`temp`, re-emitting the SAME
+/// gadget is its own inverse — the reverse pass uses this to clear the word.
+fn emit_node_gadget(
+    g: &NodeGadgetRef,
+    src_ops: &[u8],
+    helpers: &BddHelpers,
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
+    let word = g.word;
+    let temp = helpers.temp;
+    // Validate the operands this gadget will actually use are legal + distinct
+    // where the ISA requires it. `word` and `temp` must differ; the Ccnot needs
+    // word, x_word, temp pairwise-distinct.
+    if word == temp {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("node word {word} aliases the temp helper {temp}"),
+        });
+    }
+
+    // Step 1: word ^= lo  (copy clean low child).
+    xor_clean_line(word, g.lo, out)?;
+
+    // Steps 2/4 wrap the Ccnot: if hi == lo the AND term is 0 (n = lo already),
+    // so skip the diff+Ccnot entirely (also avoids a degenerate empty temp).
+    if !lines_equal(g.hi, g.lo) {
+        // Step 2: temp = hi ⊕ lo  (clean, bit 0).
+        xor_clean_line(temp, g.hi, out)?;
+        xor_clean_line(temp, g.lo, out)?;
+
+        // Step 3: word bit0 ^= x_bit ∧ temp_bit0. Align x's bit to bit 0.
+        let x_word = src_ops[g.var_reg];
+        if x_word == word || x_word == temp {
+            return Err(SynthError::MalformedSpec {
+                detail: format!(
+                    "input source operand {x_word} aliases node word {word} or temp {temp} \
+                     (Ccnot needs distinct operands)"
+                ),
+            });
+        }
+        let sh = -(g.var_bit as i32); // bring bit var_bit → bit 0
+        rotate_by(x_word, sh, out);
+        out.push(Instr::Ccnot {
+            rd: word,
+            rs: x_word,
+            rt: temp,
+        });
+        rotate_by(x_word, -sh, out);
+
+        // Step 4: restore temp = 0 (reverse of step 2).
+        xor_clean_line(temp, g.lo, out)?;
+        xor_clean_line(temp, g.hi, out)?;
+    }
+    Ok(())
+}
+
+/// Borrowed view of a node gadget (owned `NodeGadget` lives in
+/// `emit_bdd_output_bit`; this is the shape `emit_node_gadget` consumes).
+struct NodeGadgetRef {
+    word: u8,
+    var_reg: usize,
+    var_bit: usize,
+    lo: Line,
+    hi: Line,
+}
+
+/// XOR a clean bit-0 [`Line`] onto bit 0 of `word`.
+fn xor_clean_line(word: u8, line: Line, out: &mut Vec<Instr>) -> Result<(), SynthError> {
+    match line {
+        Line::Zero => {}
+        Line::One => out.push(Instr::Xori { rd: word, imm: 1 }),
+        Line::Node(w) => {
+            if w == word {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!("Xor operands alias (rd=rs={word}) copying a node line"),
+                });
+            }
+            // Both words are clean (bit0 only) ⇒ plain Xor moves only bit 0.
+            out.push(Instr::Xor { rd: word, rs: w });
+        }
+    }
+    Ok(())
+}
+
+/// True iff two [`Line`]s denote the same value source.
+fn lines_equal(a: Line, b: Line) -> bool {
+    matches!(
+        (a, b),
+        (Line::Zero, Line::Zero) | (Line::One, Line::One)
+    ) || matches!((a, b), (Line::Node(x), Line::Node(y)) if x == y)
+}
+
+/// BDD analog of [`transcribe_bennett_general`]: realize a permutation `P`
+/// (forward `fwd` + inverse `bwd`) in place on `carrier_ops`, computing the fwd
+/// BDD into `out_ancilla`, swapping, then the bwd BDD to clear the ancilla —
+/// but the compute/uncompute steps use [`transcribe_bdd_into`] (BDD synthesis,
+/// compact) instead of ANF. Same net-zero guarantee.
+///
+/// Carries the same MAJOR-1/2 / reserved-operand validation as
+/// [`transcribe_bennett`]: rejects non-carrier reads, duplicate/aliased/reserved
+/// carrier & ancilla operands, and specs touching non-carrier registers.
+pub fn transcribe_bdd_bennett(
+    fwd: &RegTransfer,
+    bwd: &RegTransfer,
+    carrier_ops: &[u8],
+    out_ancilla: &[u8],
+    helpers: BddHelpers,
+) -> Result<Vec<Instr>, SynthError> {
+    let n = carrier_ops.len();
+    if out_ancilla.len() < n {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "output ancilla bank has {} words, need ≥ carriers ({n})",
+                out_ancilla.len()
+            ),
+        });
+    }
+    if fwd.regs.len() != NUM_REGS || bwd.regs.len() != NUM_REGS {
+        return Err(SynthError::MalformedSpec {
+            detail: format!(
+                "fwd/bwd frames must be {NUM_REGS} rows (fwd={}, bwd={})",
+                fwd.regs.len(),
+                bwd.regs.len()
+            ),
+        });
+    }
+    // Legal-operand guards (carry from transcribe_bennett): reject reserved
+    // s0/s1 (8/9) and out-of-range (≥16) carriers, ancilla, temp, node words.
+    for &c in &carrier_ops[..n] {
+        check_operand_legal("carrier", c)?;
+    }
+    for &a in &out_ancilla[..n] {
+        check_operand_legal("ancilla", a)?;
+    }
+    check_operand_legal("temp", helpers.temp)?;
+    for &w in helpers.nodes {
+        check_operand_legal("node", w)?;
+    }
+
+    // Internal-disjointness + no-dup guards (MAJOR-2).
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if carrier_ops[i] == carrier_ops[j] {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!("carrier operand {} appears twice", carrier_ops[i]),
+                });
+            }
+            if out_ancilla[i] == out_ancilla[j] {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!("ancilla operand {} appears twice", out_ancilla[i]),
+                });
+            }
+        }
+    }
+    // All working words must be mutually disjoint: carriers, ancilla, temp, nodes.
+    let mut all: Vec<u8> = Vec::new();
+    all.extend_from_slice(&carrier_ops[..n]);
+    all.extend_from_slice(&out_ancilla[..n]);
+    all.push(helpers.temp);
+    all.extend_from_slice(helpers.nodes);
+    for i in 0..all.len() {
+        for j in (i + 1)..all.len() {
+            if all[i] == all[j] {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!(
+                        "working operand {} is used twice (carriers/ancilla/temp/nodes must be \
+                         pairwise disjoint)",
+                        all[i]
+                    ),
+                });
+            }
+        }
+    }
+
+    // MAJOR-1: a carrier row may only READ carriers (a permutation on `n`
+    // carriers is a function of those carriers alone).
+    for spec in [fwd, bwd] {
+        for r in 0..n {
+            let mut reads: Vec<usize> = Vec::new();
+            for e in &spec.regs[r] {
+                collect_var_operands(e, &mut reads);
+            }
+            if let Some(&y) = reads.iter().find(|&&y| y >= n) {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!(
+                        "carrier row {r} reads register {y} outside the {n} carriers; a \
+                         permutation spec must read only carriers"
+                    ),
+                });
+            }
+        }
+    }
+    // The permutation must be identity on non-carrier registers.
+    for r in n..NUM_REGS {
+        if !is_identity_row(&fwd.regs[r], r) || !is_identity_row(&bwd.regs[r], r) {
+            return Err(SynthError::MalformedSpec {
+                detail: format!(
+                    "spec touches reg {r} outside the {n} carriers; the permutation must be \
+                     identity on non-carrier registers"
+                ),
+            });
+        }
+    }
+
+    // Build the NUM_REGS-length src/dst maps (spec leaf r → carrier/ancilla op).
+    let mut src_map = vec![0u8; NUM_REGS];
+    let mut dst_map = vec![0u8; NUM_REGS];
+    for r in 0..NUM_REGS {
+        if r < n {
+            src_map[r] = carrier_ops[r];
+            dst_map[r] = out_ancilla[r];
+        } else {
+            src_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
+            dst_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
+        }
+    }
+
+    let mut out = Vec::new();
+    // 1. O ^= P(x)  (BDD synthesis: dst = ancilla, src = carriers = x).
+    out.extend(transcribe_bdd_into(fwd, &dst_map, &src_map, helpers)?);
+    // 2. swap carriers ↔ output ancilla.
+    for i in 0..n {
+        out.push(swap_operands(carrier_ops[i], out_ancilla[i])?);
+    }
+    // 3. O ^= P⁻¹(y)  (carriers now hold y) → clears O to 0.
+    out.extend(transcribe_bdd_into(bwd, &dst_map, &src_map, helpers)?);
+    Ok(out)
 }
