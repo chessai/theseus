@@ -18,7 +18,8 @@ use theseus_core::prim::{enumerate_values, PrimDef};
 use theseus_core::{Iso, Type};
 
 use theseus_tisc::compile::{
-    compile_with_metadata, run_on_cpu_fast, value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
+    compile_with_metadata, run_on_cpu, run_on_cpu_fast, value_from_leaf_bytes_pub,
+    value_to_leaf_bytes_pub,
 };
 
 // ── helpers ─────────────────────────────────────────────────────────
@@ -60,6 +61,30 @@ fn assert_cpu_eq_eval(name: &str, iso: &Iso) -> usize {
         let ev = theseus_eval::eval(iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
         assert_eq!(cpu, ev, "{name}: fast-oracle disagrees with eval on {v:?}");
+    }
+    inputs.len()
+}
+
+/// Whole-domain REAL-CPU authority: the compiled ROM on the real `step`-iso CPU
+/// (`run_on_cpu`, driven by `theseus_eval::eval`) == `eval` on every input. This
+/// is the INDEPENDENT runtime witness that does NOT share `exec_instr` with the
+/// k_max fast-oracle walk — mirrors `compile.rs::assert_oracle` (the `*_real_cpu`
+/// authority pattern). Slow (each step-iso evaluation ~seconds), hence `#[ignore]`.
+fn assert_real_cpu_eq_eval(name: &str, iso: &Iso) -> usize {
+    let (in_ty, _) =
+        theseus_core::type_of(iso).unwrap_or_else(|e| panic!("{name}: type error: {e:?}"));
+    let inputs = enumerate_values(&in_ty);
+    assert!(!inputs.is_empty(), "{name}: domain is empty");
+    for v in &inputs {
+        let cpu = run_on_cpu(iso, v, theseus_eval::eval)
+            .unwrap_or_else(|e| panic!("{name} (real-CPU): run failed on {v:?}: {e}"));
+        let mut fuel = 1_000_000u64;
+        let ev = theseus_eval::eval(iso, v.clone(), &mut fuel)
+            .unwrap_or_else(|e| panic!("{name}: eval failed on {v:?}: {e:?}"));
+        assert_eq!(
+            cpu, ev,
+            "{name} (real-CPU): CPU disagrees with eval on {v:?}\n  cpu:  {cpu:?}\n  eval: {ev:?}"
+        );
     }
     inputs.len()
 }
@@ -206,6 +231,63 @@ fn depth2_shared_aux_is_reused_not_disjoint() {
     assert!(
         res.is_err(),
         "without reuse the nested frame must reject (only 2 free regs): {res:?}"
+    );
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// (2R) DEPTH-2 nested Trace — REAL-CPU AUTHORITY (#[ignore], slow).
+//
+// The SAME non-degenerate depth-2 nested-Trace program as
+// `depth2_nested_trace_compiles_and_runs`, but checked against the INDEPENDENT
+// runtime witness the fast oracle can't provide: the compiled ROM executed on
+// the REAL `step`-iso CPU (`run_on_cpu`, driven by `theseus_eval::eval` for the
+// per-step core-iso evaluation) == `eval` on the WHOLE domain. This is the
+// authority that does NOT share `exec_instr` with the k_max fast-oracle walk —
+// it proves aux-REUSE (the shared 4-aux come-from frame) composes across depth
+// on the real machine, not just in the byte-level simulator. Mirrors the
+// `compile.rs` `*_real_cpu` / `mdd_*_trace_real_cpu` `assert_oracle` pattern.
+// ═════════════════════════════════════════════════════════════════════
+#[test]
+#[ignore = "authoritative real-CPU oracle (slow); run via `cargo test -p theseus-tisc --features heavy-tests --test deep_nesting depth2_nested_trace_real_cpu -- --ignored`"]
+fn depth2_nested_trace_real_cpu() {
+    let inner = tag_only_loop(); // Trace(One, SwapSum) : One ↔ One, iterates 2×
+
+    // outer body : Sum(One,One) ↔ Sum(One,One) = Bit ↔ Bit — IDENTICAL to
+    // `depth2_nested_trace_compiles_and_runs` (the outer body CONTAINS a Trace).
+    let outer_body = Iso::seq(
+        Iso::plus(Iso::Id(one()), inner),
+        Iso::SwapSum(one(), one()),
+    );
+    let outer = Iso::trace(one(), outer_body);
+
+    // Compile + re-assert non-degeneracy at BOTH levels (same as the fast test),
+    // so this authority runs against exactly the depth-2 nested loop, not a
+    // silently-degenerate program.
+    let lowered = compile_with_metadata(&outer)
+        .expect("A-5b: depth-2 nested Trace must COMPILE via aux reuse");
+    let outer_term = &lowered.loop_terms[0];
+    assert!(
+        !outer_term.inner.is_empty(),
+        "A-5b real-CPU: the outer loop term must carry a NESTED inner loop term (depth-2)"
+    );
+    assert!(
+        outer_term.k_max >= 2,
+        "outer loop must iterate ≥2× (k_max={})",
+        outer_term.k_max
+    );
+    assert!(
+        outer_term.inner.iter().any(|c| c.k_max >= 2),
+        "inner loop must iterate ≥2× (nested k_max={:?})",
+        outer_term.inner.iter().map(|c| c.k_max).collect::<Vec<_>>()
+    );
+
+    // THE authority: real `step`-iso CPU == eval on the whole domain.
+    let n = assert_real_cpu_eq_eval("depth-2 nested Trace", &outer);
+    eprintln!(
+        "A-5b depth-2 nested Trace: REAL-CPU authority, {n}/{n} inputs, \
+         run_on_cpu==eval; outer k_max={}, inner k_max={:?}",
+        outer_term.k_max,
+        outer_term.inner.iter().map(|c| c.k_max).collect::<Vec<_>>()
     );
 }
 
