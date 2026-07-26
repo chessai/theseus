@@ -41,11 +41,17 @@
 >   nested-skip / Swapbr-in-Trace-body / loop-under-product all `run_on_cpu_fast==eval`.** Depth-2
 >   nested `Trace` rejects GRACEFULLY (register-bound, fail-closed) pending **A-5b** (frames-in-
 >   scratch — using A-0's operand-addressable s2–s7). The non-compositional-control gap (1) is
->   substantially closed. Trio Fable review + real-`system_step` authority (the fast oracle shares
->   `exec_instr` with the k_max walk → NOT independent) pending before merge `a3-wcet`→v2.
-> - **NEXT: A-5b** (deep loop-nesting via scratch frames) → **A-7** (wide `Flat n>8`) →
->   **provisioning** (per-program widen-PC A-2/B-2 so larger bodies + deeper nests run). gcd2-scale
->   bodies run only once provisioning lands, sized
+>   substantially closed.
+> - **✅ MERGED to `chessai/theseus-v2` (`1bd5908`, 2026-07-26) — 33 commits.** Trio Fable-reviewed
+>   twice (one silent-corruption BLOCKER — `Times(Trace,g)` positional tag — caught + fixed occ-aware
+>   + re-checked sound), verified on the HEAVY tier (67/0, incl. real-CPU nested authority
+>   `run_on_cpu==eval`) — the fast oracle is NOT independent (shares `exec_instr` with the k_max walk),
+>   so the real-`system_step` heavy tier was the gate. **Both deepest coverage gaps closed on the
+>   main branch.** Deep loop-nesting rejects gracefully pending A-5b. Lessons: run heavy tier
+>   `--test-threads=1`; test vectors must be non-degenerate.
+> - **NEXT: A-5b** (deep loop-nesting via scratch aux frames — A-0's operand-addressable s2–s7) →
+>   **A-7** (wide `Flat n>8`) → **provisioning** (per-program widen-PC A-2/B-2; lean-`lower_iso` for
+>   the me_a3 memory borderline). gcd2-scale bodies run only once provisioning lands, sized
 >   per-program so simple programs stay cheap.
 
 ## Why (the mandate)
