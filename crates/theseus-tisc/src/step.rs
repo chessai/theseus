@@ -73,7 +73,7 @@
 use theseus_core::Iso;
 
 use crate::decoder::{
-    self, cccnot_prim, cnot_prim, on_fields, toffoli_prim, Op, AUX_OPERAND_FIELD, AUX_PRED_FIELD,
+    self, cnot_prim, on_fields, toffoli_prim, Op, AUX_OPERAND_FIELD, AUX_PRED_FIELD,
 };
 use crate::plumbing::{at_wire, gate_at, not_iso, seq_balanced};
 use crate::types::{
