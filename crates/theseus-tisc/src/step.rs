@@ -92,7 +92,14 @@ const FETCH_CHAIN0: usize = 5 * W + 1;
 
 /// The fields the fetch core lifts over: PC, the four IR bytes, and s1.
 fn fetch_fields() -> [usize; 6] {
-    [PC_FIELD, IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, AUX_PRED_FIELD]
+    [
+        PC_FIELD,
+        IR_B0_FIELD,
+        IR_B1_FIELD,
+        IR_B2_FIELD,
+        IR_B3_FIELD,
+        AUX_PRED_FIELD,
+    ]
 }
 
 /// Compute the predicate `PC == addr` into s1 bit 0 (8-literal AND:
@@ -134,7 +141,10 @@ fn fetch_entry(addr: u8, word: u32) -> Iso {
 /// Self-inverse for a fixed PC, so it doubles as the unfetch.
 /// Requires s1 = 0 on entry (restored on exit).
 pub fn fetch(rom: &[u32]) -> Iso {
-    assert!(rom.len() <= 1 << W, "ROM exceeds the 8-bit PC address space");
+    assert!(
+        rom.len() <= 1 << W,
+        "ROM exceeds the 8-bit PC address space"
+    );
     let entries: Vec<Iso> = rom
         .iter()
         .enumerate()
@@ -252,11 +262,11 @@ pub fn step_ops(rom: &[u32], ops: &[Op]) -> Iso {
 pub fn step(rom: &[u32]) -> Iso {
     let f = fetch(rom);
     let phases = vec![
-        f.clone(),                  // fetch
-        decoder::decode_execute(),  // decode + execute (SHARED crossbar)
-        f,                          // unfetch
-        pc_add_br(),                // PC += BR
-        pc_inc(),                   // PC += 1
+        f.clone(),                 // fetch
+        decoder::decode_execute(), // decode + execute (SHARED crossbar)
+        f,                         // unfetch
+        pc_add_br(),               // PC += BR
+        pc_inc(),                  // PC += 1
     ];
     seq_balanced(phases)
 }
@@ -284,20 +294,19 @@ pub fn system_step(rom: &[u32]) -> Iso {
     let bus_id = Iso::Id(crate::types::bus_state_ty());
 
     // Helper: lift CpuState iso to system = ((Cpu,Mem),Bus)
-    let lift_cpu = |iso: Iso| -> Iso {
-        Iso::times(Iso::times(iso, mem_id.clone()), bus_id.clone())
-    };
+    let lift_cpu =
+        |iso: Iso| -> Iso { Iso::times(Iso::times(iso, mem_id.clone()), bus_id.clone()) };
 
     let f = fetch(rom);
     let phases = vec![
-        lift_cpu(f.clone()),                                              // 1. fetch
-        Iso::times(decoder::system_decode_execute(), bus_id.clone()),     // 2. decode_execute (non-MEXCH)
-        decoder::emit(),                                                  // 3. emit
-        decoder::mem_phase(),                                             // 4. mem
-        decoder::absorb(),                                                // 5. absorb
-        lift_cpu(f),                                                      // 6. unfetch
-        lift_cpu(pc_add_br()),                                            // 7. PC += BR
-        lift_cpu(pc_inc()),                                               // 8. PC += 1
+        lift_cpu(f.clone()),                                          // 1. fetch
+        Iso::times(decoder::system_decode_execute(), bus_id.clone()), // 2. decode_execute (non-MEXCH)
+        decoder::emit(),                                              // 3. emit
+        decoder::mem_phase(),                                         // 4. mem
+        decoder::absorb(),                                            // 5. absorb
+        lift_cpu(f),                                                  // 6. unfetch
+        lift_cpu(pc_add_br()),                                        // 7. PC += BR
+        lift_cpu(pc_inc()),                                           // 8. PC += 1
     ];
     seq_balanced(phases)
 }
@@ -317,9 +326,9 @@ pub fn cpu_pre(rom: &[u32]) -> Iso {
     let bus_id = Iso::Id(crate::types::bus_state_ty());
     let f = fetch(rom);
     let phases = vec![
-        Iso::times(f, bus_id.clone()),                     // fetch ⊗ id_Bus
-        Iso::times(decoder::decode_execute(), bus_id),     // decode_execute ⊗ id_Bus
-        decoder::emit_on_cpu_bus(),                        // emit on (Cpu,Bus)
+        Iso::times(f, bus_id.clone()),                 // fetch ⊗ id_Bus
+        Iso::times(decoder::decode_execute(), bus_id), // decode_execute ⊗ id_Bus
+        decoder::emit_on_cpu_bus(),                    // emit on (Cpu,Bus)
     ];
     seq_balanced(phases)
 }
@@ -338,10 +347,10 @@ pub fn cpu_post(rom: &[u32]) -> Iso {
     let bus_id = Iso::Id(crate::types::bus_state_ty());
     let f = fetch(rom); // unfetch == fetch (self-inverse XOR mask)
     let phases = vec![
-        Iso::sym(decoder::emit_on_cpu_bus()),              // absorb on (Cpu,Bus)
-        Iso::times(f, bus_id.clone()),                     // unfetch ⊗ id_Bus
-        Iso::times(pc_add_br(), bus_id.clone()),           // pc_add_br ⊗ id_Bus
-        Iso::times(pc_inc(), bus_id),                      // pc_inc ⊗ id_Bus
+        Iso::sym(decoder::emit_on_cpu_bus()),    // absorb on (Cpu,Bus)
+        Iso::times(f, bus_id.clone()),           // unfetch ⊗ id_Bus
+        Iso::times(pc_add_br(), bus_id.clone()), // pc_add_br ⊗ id_Bus
+        Iso::times(pc_inc(), bus_id),            // pc_inc ⊗ id_Bus
     ];
     seq_balanced(phases)
 }

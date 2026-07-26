@@ -21,9 +21,8 @@ use theseus_core::{Iso, Type, Value};
 
 use theseus_tisc::asm::Instr;
 use theseus_tisc::compile::{
-    compile_with_metadata_resident, marshal_resident, memexch_prim_idx,
-    run_on_cpu_resident, run_rom_fast, unmarshal_resident,
-    value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
+    compile_with_metadata_resident, marshal_resident, memexch_prim_idx, run_on_cpu_resident,
+    run_rom_fast, unmarshal_resident, value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
 };
 
 // ── Type helpers ────────────────────────────────────────────────────
@@ -147,7 +146,10 @@ fn xor_reduce_body(w: u8) -> Iso {
     // (id_{acc,data} ⊗ succ_idx ⊗ id_arr): on (acc, (data, (idx, arr)))
     let succ_part = Iso::times(
         Iso::Id(flat.clone()),
-        Iso::times(Iso::Id(flat.clone()), Iso::times(succ_idx(), Iso::Id(arr_ty(w)))),
+        Iso::times(
+            Iso::Id(flat.clone()),
+            Iso::times(succ_idx(), Iso::Id(arr_ty(w))),
+        ),
     );
 
     Iso::seq(
@@ -257,7 +259,11 @@ fn t1_emission_parametric_pin() {
         let iso = reduce_flat(w, 3);
         let lowered = compile_with_metadata_resident(&iso, 2)
             .unwrap_or_else(|_| panic!("compile reduce_flat({w}, 3)"));
-        assert_eq!(lowered.wcet(), 24, "w={w}: WCET must be 24 (f3's clean-regime B)");
+        assert_eq!(
+            lowered.wcet(),
+            24,
+            "w={w}: WCET must be 24 (f3's clean-regime B)"
+        );
         roms.push(lowered.instrs.clone());
 
         // Assert exactly 4 MexchReg and 2 Xor at d=3.
@@ -303,7 +309,8 @@ fn t1_emission_parametric_pin() {
 
             // pos2 = pos1 + 4
             assert_eq!(
-                pos2, pos1 + 4,
+                pos2,
+                pos1 + 4,
                 "w={w} copy {copy_idx}: second MexchReg must be at pos1+4"
             );
 
@@ -312,16 +319,26 @@ fn t1_emission_parametric_pin() {
             // instrs[pos1+1] = Exch involving d_r
             let a_r = match lowered.instrs[pos1 + 1] {
                 Instr::Exch { rd: r1, rs: r2 } => {
-                    if r1 == d_r { r2 } else {
+                    if r1 == d_r {
+                        r2
+                    } else {
                         assert_eq!(r2, d_r, "w={w} copy {copy_idx}: Exch must involve d_r");
                         r1
                     }
                 }
-                ref other => panic!("w={w} copy {copy_idx}: expected Exch at pos1+1, got {other:?}"),
+                ref other => {
+                    panic!("w={w} copy {copy_idx}: expected Exch at pos1+1, got {other:?}")
+                }
             };
 
-            assert_ne!(a_r, ra, "w={w} copy {copy_idx}: acc reg must differ from addr reg");
-            assert_ne!(a_r, d_r, "w={w} copy {copy_idx}: acc reg must differ from data reg");
+            assert_ne!(
+                a_r, ra,
+                "w={w} copy {copy_idx}: acc reg must differ from addr reg"
+            );
+            assert_ne!(
+                a_r, d_r,
+                "w={w} copy {copy_idx}: acc reg must differ from data reg"
+            );
 
             // instrs[pos1+2] = Xor{rd: d_r, rs: a_r} (F3-1: Xor writes DATA reg)
             assert_eq!(
@@ -332,7 +349,8 @@ fn t1_emission_parametric_pin() {
 
             // instrs[pos1+3] = same Exch
             assert_eq!(
-                lowered.instrs[pos1 + 3], lowered.instrs[pos1 + 1],
+                lowered.instrs[pos1 + 3],
+                lowered.instrs[pos1 + 1],
                 "w={w} copy {copy_idx}: second Exch must match first"
             );
 
@@ -346,8 +364,14 @@ fn t1_emission_parametric_pin() {
     }
     // Cross-w: the full ROM must be byte-identical across widths (width-independent
     // codegen — the parametric pin the design/review F3 mandated).
-    assert_eq!(roms[0], roms[1], "reduce ROM must be identical for Flat(1) vs Flat(2)");
-    assert_eq!(roms[1], roms[2], "reduce ROM must be identical for Flat(2) vs Flat(4)");
+    assert_eq!(
+        roms[0], roms[1],
+        "reduce ROM must be identical for Flat(1) vs Flat(2)"
+    );
+    assert_eq!(
+        roms[1], roms[2],
+        "reduce ROM must be identical for Flat(2) vs Flat(4)"
+    );
 }
 
 // ── T2: Flat(2) whole-domain, hoist-compiled ────────────────────────
@@ -376,13 +400,9 @@ fn t2_flat2_whole_domain() {
 
         // Eval oracle
         let mut fuel = 100_000_000u64;
-        let eval_out = theseus_eval::eval(&iso, input.clone(), &mut fuel)
-            .expect("eval");
+        let eval_out = theseus_eval::eval(&iso, input.clone(), &mut fuel).expect("eval");
 
-        assert_eq!(
-            rom_out, eval_out,
-            "Flat(2) rom vs eval mismatch on input"
-        );
+        assert_eq!(rom_out, eval_out, "Flat(2) rom vs eval mismatch on input");
 
         // Semantic check: full-word acc_out = acc0 ⊕ (⊕ arr[touched])
         let (k, acc0, data0, idx0, a0, a1) = decompose_output(input, w);
@@ -448,10 +468,7 @@ fn t3_flat4_whole_domain() {
         let mut fuel = 100_000_000u64;
         let eval_out = theseus_eval::eval(&iso, input.clone(), &mut fuel).expect("eval");
 
-        assert_eq!(
-            rom_out, eval_out,
-            "Flat(4) rom vs eval mismatch"
-        );
+        assert_eq!(rom_out, eval_out, "Flat(4) rom vs eval mismatch");
     }
 }
 
@@ -516,8 +533,14 @@ fn t5_wcet_histogram() {
     }
 
     // Strictly decreasing: 50% > 25% > 0%.
-    assert!((park_taxes[0] - 0.5).abs() < 1e-10, "park_tax(0) must be 50%");
-    assert!((park_taxes[1] - 0.25).abs() < 1e-10, "park_tax(1) must be 25%");
+    assert!(
+        (park_taxes[0] - 0.5).abs() < 1e-10,
+        "park_tax(0) must be 50%"
+    );
+    assert!(
+        (park_taxes[1] - 0.25).abs() < 1e-10,
+        "park_tax(1) must be 25%"
+    );
     assert!(park_taxes[2].abs() < 1e-10, "park_tax(2) must be 0%");
 }
 
@@ -575,10 +598,7 @@ fn t6_canonicalization_real_cpu() {
     let d = 3usize;
     let iso = reduce_flat(w, d);
 
-    let samples = vec![
-        make_input(2, 3, 1, 1, 2, 3),
-        make_input(1, 1, 0, 0, 2, 1),
-    ];
+    let samples = vec![make_input(2, 3, 1, 1, 2, 3), make_input(1, 1, 0, 0, 2, 1)];
     for input in &samples {
         let expected = eval_reduce(w, d, input);
         let got = run_on_cpu_resident(&iso, input, 2, |iso, v, fuel| {

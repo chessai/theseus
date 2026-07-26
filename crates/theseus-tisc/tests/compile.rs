@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Run-on-CPU differential oracle for the M-A/M-B compiler
 //! (ADR-0042 §6, ADR-0043 §5).
 //!
@@ -7,8 +8,8 @@
 
 use theseus_core::{enumerate_values, type_of, Iso, Type, Value};
 use theseus_tisc::compile::{
-    compile, compile_with_metadata, max_skip_distance, run_on_cpu, run_on_cpu_fast,
-    run_rom_on_cpu, run_rom_fast, wcet,
+    compile, compile_with_metadata, max_skip_distance, run_on_cpu, run_on_cpu_fast, run_rom_fast,
+    run_rom_on_cpu, wcet,
 };
 use theseus_tisc::types::MEM_WORDS;
 
@@ -80,9 +81,8 @@ fn assert_oracle_with(
     assert!(!vals.is_empty(), "{name}: domain is empty");
     let mut checked = 0usize;
     for v in &vals {
-        let cpu_out = run(iso, v).unwrap_or_else(|e| {
-            panic!("{name} ({which}): run failed on {v:?}: {e}")
-        });
+        let cpu_out =
+            run(iso, v).unwrap_or_else(|e| panic!("{name} ({which}): run failed on {v:?}: {e}"));
         let mut fuel = 100_000u64;
         let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("{name}: eval failed on {v:?}: {e:?}"));
@@ -107,7 +107,11 @@ fn assert_oracle_fast_bounded(name: &str, iso: &Iso, cap: usize) {
     let count = cap.min(n);
     let mut indices: Vec<usize> = (0..count)
         .map(|i| {
-            if count <= 1 { 0 } else { i * (n - 1) / (count - 1) }
+            if count <= 1 {
+                0
+            } else {
+                i * (n - 1) / (count - 1)
+            }
         })
         .collect();
     indices.push(0);
@@ -120,9 +124,8 @@ fn assert_oracle_fast_bounded(name: &str, iso: &Iso, cap: usize) {
     let mut checked = 0usize;
     for &i in &indices {
         let v = &vals[i];
-        let cpu_out = run_on_cpu_fast(iso, v).unwrap_or_else(|e| {
-            panic!("{name} (fast-bounded): run failed on #{i}: {e}")
-        });
+        let cpu_out = run_on_cpu_fast(iso, v)
+            .unwrap_or_else(|e| panic!("{name} (fast-bounded): run failed on #{i}: {e}"));
         let mut fuel = 100_000u64;
         let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("{name}: eval failed on #{i}: {e:?}"));
@@ -148,7 +151,9 @@ fn cnot_compiles_and_oracle_agrees() {
     let instrs = compile(&iso).expect("cnot should compile");
     eprintln!("cnot instructions: {instrs:?}");
     assert!(
-        instrs.iter().any(|i| matches!(i, theseus_tisc::asm::Instr::Xor { .. })),
+        instrs
+            .iter()
+            .any(|i| matches!(i, theseus_tisc::asm::Instr::Xor { .. })),
         "cnot ROM should contain an XOR instruction"
     );
     assert_oracle("cnot", &iso);
@@ -198,7 +203,10 @@ fn bare_fold_compiles() {
     let body = Iso::SwapProd(bit.clone(), bit.clone());
     let iso = Iso::fold(Type::list_spine_ty(bit.clone(), 3), body);
     let instrs = compile(&iso).expect("Fold over list-spine should compile in M-D.a");
-    eprintln!("bare fold instructions ({} total): {instrs:?}", instrs.len());
+    eprintln!(
+        "bare fold instructions ({} total): {instrs:?}",
+        instrs.len()
+    );
     assert_oracle_fast("bare_fold", &iso);
 }
 
@@ -208,7 +216,10 @@ fn bare_unfold_compiles() {
     let body = Iso::SwapProd(bit.clone(), bit.clone());
     let iso = Iso::unfold(Type::list_spine_ty(bit.clone(), 3), body);
     let instrs = compile(&iso).expect("Unfold over list-spine should compile in M-D.a");
-    eprintln!("bare unfold instructions ({} total): {instrs:?}", instrs.len());
+    eprintln!(
+        "bare unfold instructions ({} total): {instrs:?}",
+        instrs.len()
+    );
     assert_oracle_fast("bare_unfold", &iso);
 }
 
@@ -269,7 +280,10 @@ fn build_controlled_fibstep() -> Iso {
 fn general_controlled_op_oracle_agrees() {
     let ctrl_idiom = build_controlled_fibstep();
     let instrs = compile(&ctrl_idiom).expect("controlled fibStep should compile in M-B");
-    eprintln!("controlled fibStep instructions ({} total): {instrs:?}", instrs.len());
+    eprintln!(
+        "controlled fibStep instructions ({} total): {instrs:?}",
+        instrs.len()
+    );
     assert_oracle_fast("controlled_fibStep", &ctrl_idiom);
 }
 
@@ -287,7 +301,10 @@ fn general_controlled_op_real_cpu() {
 fn swapmay_bare_sum_oracle_agrees() {
     let iso = elaborate(SWAPMAY_SRC, "swapMaybe");
     let instrs = compile(&iso).expect("swapMaybe should compile in M-B");
-    eprintln!("swapMaybe instructions ({} total): {instrs:?}", instrs.len());
+    eprintln!(
+        "swapMaybe instructions ({} total): {instrs:?}",
+        instrs.len()
+    );
     assert_oracle_fast("swapMaybe", &iso);
 }
 
@@ -337,9 +354,8 @@ fn assert_oracle_sample(name: &str, iso: &Iso, count: usize) {
     let mut checked = 0usize;
     for &i in &indices {
         let v = &vals[i];
-        let cpu_out = cpu_run(iso, v).unwrap_or_else(|e| {
-            panic!("{name} (real-CPU sample): failed on #{i}: {e}")
-        });
+        let cpu_out = cpu_run(iso, v)
+            .unwrap_or_else(|e| panic!("{name} (real-CPU sample): failed on #{i}: {e}"));
         let mut fuel = 100_000u64;
         let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("{name}: eval failed on #{i}: {e:?}"));
@@ -420,10 +436,7 @@ fn build_spill_controlled_not() -> Iso {
             Iso::seq(
                 Iso::Plus(
                     Box::new(Iso::Id(Type::prod(tgt_ty.clone(), Type::One))),
-                    Box::new(Iso::Times(
-                        Box::new(g_body),
-                        Box::new(Iso::Id(Type::One)),
-                    )),
+                    Box::new(Iso::Times(Box::new(g_body), Box::new(Iso::Id(Type::One)))),
                 ),
                 Iso::seq(
                     Iso::Factor(tgt_ty.clone(), Type::One, Type::One),
@@ -486,7 +499,11 @@ fn spill_15_leaves_straight_line_now_compiles() {
     // Previously rejected at the M-C1 ceiling of 14.
     let iso = Iso::Id(bit_prod(15));
     let result = compile(&iso);
-    assert!(result.is_ok(), "15-leaf program should compile with memory (ceiling = {})", 14 + MEM_WORDS);
+    assert!(
+        result.is_ok(),
+        "15-leaf program should compile with memory (ceiling = {})",
+        14 + MEM_WORDS
+    );
 }
 
 #[test]
@@ -506,10 +523,7 @@ fn spill_13_leaves_branching_now_compiles() {
             Iso::seq(
                 Iso::Plus(
                     Box::new(Iso::Id(Type::prod(tgt_ty.clone(), Type::One))),
-                    Box::new(Iso::Times(
-                        Box::new(g_body),
-                        Box::new(Iso::Id(Type::One)),
-                    )),
+                    Box::new(Iso::Times(Box::new(g_body), Box::new(Iso::Id(Type::One)))),
                 ),
                 Iso::seq(
                     Iso::Factor(tgt_ty.clone(), Type::One, Type::One),
@@ -519,7 +533,11 @@ fn spill_13_leaves_branching_now_compiles() {
         ),
     );
     let result = compile(&iso);
-    assert!(result.is_ok(), "13-leaf branching program should compile with memory (ceiling = {})", 12 + MEM_WORDS);
+    assert!(
+        result.is_ok(),
+        "13-leaf branching program should compile with memory (ceiling = {})",
+        12 + MEM_WORDS
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -531,7 +549,10 @@ fn mem_spill_15_leaves_swap_oracle_agrees() {
     // 15 leaves = 8 reg + 6 scratch + 1 mem: exercises memory spill.
     let iso = Iso::SwapProd(bit_prod(7), bit_prod(8));
     let instrs = compile(&iso).expect("15-leaf SwapProd should compile with memory");
-    eprintln!("15-leaf SwapProd (mem spill): {} instructions", instrs.len());
+    eprintln!(
+        "15-leaf SwapProd (mem spill): {} instructions",
+        instrs.len()
+    );
     assert_oracle_fast_bounded("mem_spill_15_swap", &iso, 256);
 }
 
@@ -595,7 +616,10 @@ fn mem_store_reload_round_trip_oracle_agrees() {
     let n = 15.min(14 + MEM_WORDS);
     let iso = Iso::SwapProd(bit_prod(1), bit_prod(n - 1));
     let instrs = compile(&iso).expect("store-reload should compile");
-    eprintln!("store-reload round-trip: {} instructions on {n} leaves", instrs.len());
+    eprintln!(
+        "store-reload round-trip: {} instructions on {n} leaves",
+        instrs.len()
+    );
     assert_oracle_fast_bounded("mem_store_reload", &iso, 256);
 }
 
@@ -628,7 +652,10 @@ fn mem_over_ceiling_straight_line_rejected() {
     let over = 14 + MEM_WORDS + 1;
     let iso = Iso::Id(bit_prod(over));
     let result = compile(&iso);
-    assert!(result.is_err(), "{over}-leaf straight-line program must be rejected");
+    assert!(
+        result.is_err(),
+        "{over}-leaf straight-line program must be rejected"
+    );
     assert!(matches!(
         result.unwrap_err(),
         theseus_tisc::compile::CompileError::TooManyLeaves { .. }
@@ -652,10 +679,7 @@ fn mem_over_ceiling_branching_rejected() {
             Iso::seq(
                 Iso::Plus(
                     Box::new(Iso::Id(Type::prod(tgt_ty.clone(), Type::One))),
-                    Box::new(Iso::Times(
-                        Box::new(g_body),
-                        Box::new(Iso::Id(Type::One)),
-                    )),
+                    Box::new(Iso::Times(Box::new(g_body), Box::new(Iso::Id(Type::One)))),
                 ),
                 Iso::seq(
                     Iso::Factor(tgt_ty.clone(), Type::One, Type::One),
@@ -862,10 +886,7 @@ fn times_id_iter_l20_regression() {
     let bit = Type::sum(Type::One, Type::One);
     let nat2 = Type::sum(Type::One, Type::sum(Type::One, Type::Zero));
     let body = Iso::SwapSum(Type::One, Type::One);
-    let iso = Iso::times(
-        Iso::Id(bit.clone()),
-        Iso::Iter(nat2, Box::new(body)),
-    );
+    let iso = Iso::times(Iso::Id(bit.clone()), Iso::Iter(nat2, Box::new(body)));
     assert_oracle_fast("times_id_iter", &iso);
 }
 
@@ -956,7 +977,11 @@ fn mdw_t2a_park_liveness_straight_line() {
     let instrs = compile(&iso).unwrap();
     let rom = assemble(&instrs).unwrap();
     let rom_len = rom.len();
-    assert_eq!(max_skip_distance(&instrs), 0, "fibStep should be straight-line (no Swapbr)");
+    assert_eq!(
+        max_skip_distance(&instrs),
+        0,
+        "fibStep should be straight-line (no Swapbr)"
+    );
 
     let (in_ty, out_ty) = type_of(&iso).unwrap();
     let vals = enumerate_values(&in_ty);
@@ -996,10 +1021,10 @@ fn mdw_t2b_park_liveness_skip_tightness() {
     // (a) stable for 252 extra steps (whole dead zone)
     // (b) at extra step 253 (total 257 = PC wraps to 1), corruption occurs.
     let instrs = vec![
-        Instr::Addi { rd: 0, imm: 1 },  // r0 += 1
-        Instr::Swapbr { rd: 1 },          // open skip
-        Instr::Addi { rd: 0, imm: 1 },  // skip body: r0 += 1
-        Instr::Swapbr { rd: 1 },          // close skip
+        Instr::Addi { rd: 0, imm: 1 }, // r0 += 1
+        Instr::Swapbr { rd: 1 },       // open skip
+        Instr::Addi { rd: 0, imm: 1 }, // skip body: r0 += 1
+        Instr::Swapbr { rd: 1 },       // close skip
     ];
     let rom = assemble(&instrs).unwrap();
     let rom_len = rom.len();
@@ -1105,10 +1130,19 @@ fn mdw_t5_p2_park_safety_overflow() {
         scratch: [0; NUM_SCRATCH],
         mem: [0; MEM_WORDS],
     };
-    let result = run_rom_on_cpu(&instrs, init, instrs.len(), max_skip_distance(&instrs), theseus_eval::eval);
+    let result = run_rom_on_cpu(
+        &instrs,
+        init,
+        instrs.len(),
+        max_skip_distance(&instrs),
+        theseus_eval::eval,
+    );
     assert!(result.is_err(), "P2 guard must reject");
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("parked PC"), "expected P2 error, got: {err_msg}");
+    assert!(
+        err_msg.contains("parked PC"),
+        "expected P2 error, got: {err_msg}"
+    );
 }
 
 #[test]
@@ -1126,10 +1160,19 @@ fn mdw_t5_p3_terminal_s0_nonzero() {
         mem: [0; MEM_WORDS],
     };
     init.scratch[0] = 1; // s0 != 0
-    let result = run_rom_on_cpu(&instrs, init, instrs.len(), max_skip_distance(&instrs), theseus_eval::eval);
+    let result = run_rom_on_cpu(
+        &instrs,
+        init,
+        instrs.len(),
+        max_skip_distance(&instrs),
+        theseus_eval::eval,
+    );
     assert!(result.is_err(), "P3 guard must reject (s0 != 0)");
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("terminal precondition"), "expected P3 error, got: {err_msg}");
+    assert!(
+        err_msg.contains("terminal precondition"),
+        "expected P3 error, got: {err_msg}"
+    );
 }
 
 #[test]
@@ -1146,10 +1189,19 @@ fn mdw_t5_p1_terminal_br_nonzero() {
         mem: [0; MEM_WORDS],
     };
     init.regs[0] = 5; // will become BR after Swapbr
-    let result = run_rom_on_cpu(&instrs, init, instrs.len(), max_skip_distance(&instrs), theseus_eval::eval);
+    let result = run_rom_on_cpu(
+        &instrs,
+        init,
+        instrs.len(),
+        max_skip_distance(&instrs),
+        theseus_eval::eval,
+    );
     assert!(result.is_err(), "P1 guard must reject (BR != 0)");
     let err_msg = format!("{}", result.unwrap_err());
-    assert!(err_msg.contains("terminal precondition"), "expected P1 error, got: {err_msg}");
+    assert!(
+        err_msg.contains("terminal precondition"),
+        "expected P1 error, got: {err_msg}"
+    );
 }
 
 // ── T6: real-CPU spot-checks (AUTHORITATIVE, #[ignore]) ────────────
@@ -1198,7 +1250,10 @@ fn mdw_t6_real_cpu_park_liveness() {
         for k in [1usize, 2, 3, 8] {
             let ext = run_real(rom_len + k);
             let ext_out = theseus_tisc::compile::unmarshal(&ext, &out_ty);
-            assert_eq!(base_out, ext_out, "real CPU park failed at +{k} for input {v:?}");
+            assert_eq!(
+                base_out, ext_out,
+                "real CPU park failed at +{k} for input {v:?}"
+            );
         }
     }
 }
@@ -1354,7 +1409,10 @@ fn mdd_bare_trace_compiles() {
     let body = Iso::Id(carrier);
     let iso = Iso::trace(u_ty, body);
     let instrs = compile(&iso).expect("bare_trace should compile in M-D.d");
-    eprintln!("bare_trace instructions ({} total): {instrs:?}", instrs.len());
+    eprintln!(
+        "bare_trace instructions ({} total): {instrs:?}",
+        instrs.len()
+    );
     assert_oracle_fast("mdd_bare_trace", &iso);
 }
 
@@ -1368,7 +1426,10 @@ fn mdd_3cycle_trace_fast() {
     let (body, u_ty) = build_3cycle_body();
     let iso = Iso::trace(u_ty, body);
     let instrs = compile(&iso).expect("3-cycle trace should compile");
-    eprintln!("3-cycle trace instructions ({} total): {instrs:?}", instrs.len());
+    eprintln!(
+        "3-cycle trace instructions ({} total): {instrs:?}",
+        instrs.len()
+    );
 
     // Whole-domain oracle (a=b=One, so only 1 input value).
     assert_oracle_fast("mdd_3cycle_trace", &iso);
@@ -1390,13 +1451,11 @@ fn mdd_adjoint_trace() {
     let iso = Iso::trace(u_ty, body);
 
     // Forward
-    let fwd_out = run_on_cpu_fast(&iso, &Value::Unit)
-        .expect("forward trace should succeed");
+    let fwd_out = run_on_cpu_fast(&iso, &Value::Unit).expect("forward trace should succeed");
 
     // Backward = Sym(Trace(u, body)) = Trace(u, body†)
     let sym_iso = Iso::sym(iso);
-    let bwd_out = run_on_cpu_fast(&sym_iso, &fwd_out)
-        .expect("adjoint trace should succeed");
+    let bwd_out = run_on_cpu_fast(&sym_iso, &fwd_out).expect("adjoint trace should succeed");
 
     // Adjoint must invert: apply(sym, apply(fwd, x)) == x
     assert_eq!(
@@ -1507,16 +1566,14 @@ fn mdd_system_ring_closure() {
 
         // Run R = budget revolutions.
         for _ in 0..budget {
-            cur = theseus_eval::eval(&step_iso, cur, &mut fuel)
-                .expect("ring step failed");
+            cur = theseus_eval::eval(&step_iso, cur, &mut fuel).expect("ring step failed");
         }
 
         let final_state = theseus_tisc::types::decode_system(&cur);
         let cpu_out = theseus_tisc::compile::unmarshal(&final_state, &out_ty);
 
         let mut eval_fuel = 100_000u64;
-        let eval_out = theseus_eval::eval(&iso, v.clone(), &mut eval_fuel)
-            .expect("eval failed");
+        let eval_out = theseus_eval::eval(&iso, v.clone(), &mut eval_fuel).expect("eval failed");
 
         assert_eq!(
             cpu_out, eval_out,
@@ -1533,9 +1590,25 @@ fn mdd_reject_wcet_overflow() {
     // Use a large |u| so k_max * iter_len > 256.
     // u = Nat256 has 256 inhabitants → k_max = 257. iter_len >= 10.
     // wcet = 4 + 257*10 = 2574 > 256. Rejected.
-    let _u_ty = Type::sum(Type::One, Type::sum(Type::One, Type::sum(Type::One,
-        Type::sum(Type::One, Type::sum(Type::One, Type::sum(Type::One,
-        Type::sum(Type::One, Type::sum(Type::One, Type::Zero))))))));
+    let _u_ty = Type::sum(
+        Type::One,
+        Type::sum(
+            Type::One,
+            Type::sum(
+                Type::One,
+                Type::sum(
+                    Type::One,
+                    Type::sum(
+                        Type::One,
+                        Type::sum(
+                            Type::One,
+                            Type::sum(Type::One, Type::sum(Type::One, Type::Zero)),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    );
     // u = Nat8 (8 inhabitants). k_max = 9. Body = Id → 0 instrs. iter_len = 10.
     // spine = 4. wcet = 4 + 9*10 = 94. S_max = 0. 94 ≤ 256 → should compile.
     // We need a bigger u. Let's try Nat32: 32 inhabitants. k_max=33. iter_len=10.
@@ -1667,7 +1740,11 @@ fn mdd_reject_leaf_count_mismatch() {
     let out_ty = Type::sum(one.clone(), b.clone()); // u+b
     let ins = enumerate_values(&in_ty);
     let outs = enumerate_values(&out_ty);
-    assert_eq!(ins.len(), outs.len(), "need equal inhabitants for a bijection");
+    assert_eq!(
+        ins.len(),
+        outs.len(),
+        "need equal inhabitants for a bijection"
+    );
     let mut forward = BTreeMap::new();
     let mut backward = BTreeMap::new();
     for (i, o) in ins.iter().zip(outs.iter()) {
@@ -1706,7 +1783,10 @@ fn f7_assoc_rsum_nested_rejected() {
     let one = Type::One;
     let iso = Iso::AssocRSum(one.clone(), one.clone(), one.clone());
     let result = compile(&iso);
-    assert!(result.is_err(), "AssocRSum(One,One,One) must be rejected (F7)");
+    assert!(
+        result.is_err(),
+        "AssocRSum(One,One,One) must be rejected (F7)"
+    );
     let msg = format!("{}", result.unwrap_err());
     assert!(
         msg.contains("F7"),
@@ -1720,7 +1800,10 @@ fn f7_assoc_lsum_nested_rejected() {
     let one = Type::One;
     let iso = Iso::AssocLSum(one.clone(), one.clone(), one.clone());
     let result = compile(&iso);
-    assert!(result.is_err(), "AssocLSum(One,One,One) must be rejected (F7)");
+    assert!(
+        result.is_err(),
+        "AssocLSum(One,One,One) must be rejected (F7)"
+    );
     let msg = format!("{}", result.unwrap_err());
     assert!(
         msg.contains("F7"),
@@ -1751,7 +1834,11 @@ fn f7_assoc_identity_still_compiles() {
         result.err()
     );
     let instrs = result.unwrap();
-    assert_eq!(instrs.len(), 0, "UniteSum(Zero) should emit no instructions");
+    assert_eq!(
+        instrs.len(),
+        0,
+        "UniteSum(Zero) should emit no instructions"
+    );
 
     let iso_uniti_zero = Iso::UnitiSum(Type::Zero);
     let result = compile(&iso_uniti_zero);
@@ -1761,7 +1848,11 @@ fn f7_assoc_identity_still_compiles() {
         result.err()
     );
     let instrs = result.unwrap();
-    assert_eq!(instrs.len(), 0, "UnitiSum(Zero) should emit no instructions");
+    assert_eq!(
+        instrs.len(),
+        0,
+        "UnitiSum(Zero) should emit no instructions"
+    );
 }
 
 #[test]
@@ -1799,7 +1890,10 @@ fn f7_distrib_nested_rejected() {
     let bit = Type::sum(Type::One, Type::One);
     let iso = Iso::Distrib(bit, Type::One, Type::One);
     let result = compile(&iso);
-    assert!(result.is_err(), "Distrib(Bit,One,One) must be rejected (F7)");
+    assert!(
+        result.is_err(),
+        "Distrib(Bit,One,One) must be rejected (F7)"
+    );
     let msg = format!("{}", result.unwrap_err());
     assert!(
         msg.contains("F7"),
@@ -1891,7 +1985,9 @@ fn mdw_parked_pc_is_b_plus_s_not_b() {
     assert!(
         parked_left.pc as usize > rom_len || parked_right.pc as usize > rom_len,
         "an input must idle past rom.len (parked PC = B + S, S>0): L={} R={} rom_len={}",
-        parked_left.pc, parked_right.pc, rom_len
+        parked_left.pc,
+        parked_right.pc,
+        rom_len
     );
     assert_ne!(
         parked_left.pc, parked_right.pc,

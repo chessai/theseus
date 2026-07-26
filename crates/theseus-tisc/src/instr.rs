@@ -7,13 +7,13 @@
 //! (tisc_struct.rs, tisc_controlled.rs, tisc_arith.rs) and wrapped with
 //! the addressing layer to produce State-level isos.
 
-use theseus_core::{Iso, Type};
-use theseus_netlist::prim_from_bits;
 use crate::addressing::{at_fields, at_reg1, at_reg2, at_reg3};
 use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_list, swap_adj,
 };
-use crate::types::{bit, flat, word8, reg_field, scratch_field, BR_FIELD, W};
+use crate::types::{bit, flat, reg_field, scratch_field, word8, BR_FIELD, W};
+use theseus_core::{Iso, Type};
+use theseus_netlist::prim_from_bits;
 
 // ══════════════════════════════════════════════════════════════════════
 // Operand-level iso builders (lifted from verified test files)
@@ -230,25 +230,56 @@ fn tk_add_gates() -> Vec<Gate> {
     let a = |i: usize| W + i;
     let b = |i: usize| i;
     let mut g: Vec<Gate> = Vec::new();
-    for i in 1..W - 1 { g.push(Gate::Cnot { c: a(i), t: b(i) }); }
-    for i in (1..W - 1).rev() { g.push(Gate::Cnot { c: a(i), t: a(i + 1) }); }
-    for i in 0..W - 1 { g.push(Gate::Tof { c1: a(i), c2: b(i), t: a(i + 1) }); }
-    g.push(Gate::Cnot { c: a(W - 1), t: b(W - 1) });
-    g.push(Gate::Tof { c1: a(W - 2), c2: b(W - 2), t: a(W - 1) });
+    for i in 1..W - 1 {
+        g.push(Gate::Cnot { c: a(i), t: b(i) });
+    }
+    for i in (1..W - 1).rev() {
+        g.push(Gate::Cnot {
+            c: a(i),
+            t: a(i + 1),
+        });
+    }
+    for i in 0..W - 1 {
+        g.push(Gate::Tof {
+            c1: a(i),
+            c2: b(i),
+            t: a(i + 1),
+        });
+    }
+    g.push(Gate::Cnot {
+        c: a(W - 1),
+        t: b(W - 1),
+    });
+    g.push(Gate::Tof {
+        c1: a(W - 2),
+        c2: b(W - 2),
+        t: a(W - 1),
+    });
     for i in (1..W - 1).rev() {
         g.push(Gate::Cnot { c: a(i), t: b(i) });
-        g.push(Gate::Tof { c1: a(i - 1), c2: b(i - 1), t: a(i) });
+        g.push(Gate::Tof {
+            c1: a(i - 1),
+            c2: b(i - 1),
+            t: a(i),
+        });
     }
-    for i in 1..W - 1 { g.push(Gate::Cnot { c: a(i), t: a(i + 1) }); }
-    for i in 0..W - 1 { g.push(Gate::Cnot { c: a(i), t: b(i) }); }
+    for i in 1..W - 1 {
+        g.push(Gate::Cnot {
+            c: a(i),
+            t: a(i + 1),
+        });
+    }
+    for i in 0..W - 1 {
+        g.push(Gate::Cnot { c: a(i), t: b(i) });
+    }
     g
 }
 
 /// 2-wire CNOT prim for arithmetic: (c, t) -> (c, t ^ c). K1.
 fn cnot_ar_prim() -> Iso {
     let t2 = flat(2);
-    let def = prim_from_bits("cnot_ar", t2.clone(), t2, |b| vec![b[0], b[1] ^ b[0]])
-        .expect("cnot prim");
+    let def =
+        prim_from_bits("cnot_ar", t2.clone(), t2, |b| vec![b[0], b[1] ^ b[0]]).expect("cnot prim");
     Iso::Prim(Box::new(def))
 }
 
@@ -414,11 +445,7 @@ pub fn mexch(rd: usize, addr: usize) -> Iso {
 
     // at_fields_n handles routing + split_fields reshape + apply + undo,
     // so the associativity is correct (fields(2) × fields(rest)).
-    let inner = at_fields_n(
-        swap_words_iso(),
-        &[reg_field(rd), n_left + addr],
-        n_total,
-    );
+    let inner = at_fields_n(swap_words_iso(), &[reg_field(rd), n_left + addr], n_total);
 
     // Bracket with the composite ↔ flat iso.
     let split = split_fields(n_left, n_right);

@@ -49,7 +49,7 @@ use theseus_spice::chardb::{rung0_measured, CharDb};
 use theseus_tisc::asm::{assemble, decode, Instr};
 use theseus_tisc::energy::{balanced_energy, instruction_energy};
 use theseus_tisc::step::step;
-use theseus_tisc::types::{MEM_WORDS, StateVals};
+use theseus_tisc::types::{StateVals, MEM_WORDS};
 
 /// Generous per-eval fuel (same order as fib_cpu.rs).
 const EVAL_FUEL: u64 = 8_000_000_000;
@@ -108,14 +108,14 @@ fn run_and_reverse(rom: &[u32], start: &StateVals, t: usize) -> (StateVals, Stat
 /// r3 = key, r4 = t (must be 0 on entry; is 0 again on exit).
 fn feistel_round_instrs() -> [Instr; ROUND_LEN] {
     [
-        Instr::Xor { rd: 4, rs: 2 },       // t = R
+        Instr::Xor { rd: 4, rs: 2 },        // t = R
         Instr::Rotli { rd: 4, imm: ROT_C }, // t = ROTL(R, C)
-        Instr::Xor { rd: 4, rs: 3 },       // t = F(R)
-        Instr::Xor { rd: 1, rs: 4 },       // L ^= F(R)
-        Instr::Xor { rd: 4, rs: 3 },       // t = ROTL(R, C)   (uncompute)
+        Instr::Xor { rd: 4, rs: 3 },        // t = F(R)
+        Instr::Xor { rd: 1, rs: 4 },        // L ^= F(R)
+        Instr::Xor { rd: 4, rs: 3 },        // t = ROTL(R, C)   (uncompute)
         Instr::Rotri { rd: 4, imm: ROT_C }, // t = R
-        Instr::Xor { rd: 4, rs: 2 },       // t = 0
-        Instr::Exch { rd: 1, rs: 2 },      // (L, R) <- (R, L ^ F(R))
+        Instr::Xor { rd: 4, rs: 2 },        // t = 0
+        Instr::Exch { rd: 1, rs: 2 },       // (L, R) <- (R, L ^ F(R))
     ]
 }
 
@@ -190,9 +190,7 @@ fn feistel_forward() {
     for &(l0, r0, key) in &SAMPLES {
         let mut cur = block_state(l0, r0, key);
         let (mut lr, mut rr) = (l0, r0);
-        eprintln!(
-            "CPU Feistel run: (L, R, key) = ({l0:#04X}, {r0:#04X}, {key:#04X})"
-        );
+        eprintln!("CPU Feistel run: (L, R, key) = ({l0:#04X}, {r0:#04X}, {key:#04X})");
         for round in 0..ROUNDS {
             for c in 0..ROUND_LEN {
                 cur = eval_state(&format!("feistel/round{round}/cycle{c}"), &iso, &cur);
@@ -210,8 +208,15 @@ fn feistel_forward() {
                 "round {round}: CPU diverged from the reference Feistel round"
             );
             assert_eq!(cur.regs[3], key, "key register must be untouched");
-            assert_eq!(cur.regs[4], 0, "temp r4 must be uncomputed back to 0 (garbage-free)");
-            assert_eq!(cur.pc, (ROUND_LEN * (round + 1)) as u8, "PC must track the cycle count");
+            assert_eq!(
+                cur.regs[4], 0,
+                "temp r4 must be uncomputed back to 0 (garbage-free)"
+            );
+            assert_eq!(
+                cur.pc,
+                (ROUND_LEN * (round + 1)) as u8,
+                "PC must track the cycle count"
+            );
             assert_eq!(cur.ir, 0, "P4: IR must be zero between steps");
             assert_eq!(cur.scratch, [0; 8], "scratch must stay zero");
         }
@@ -245,7 +250,11 @@ fn feistel_forward_and_backward() {
         (lr, rr) = round_ref(lr, rr, key);
     }
     assert_eq!((fwd.regs[1], fwd.regs[2]), (lr, rr), "ciphertext mismatch");
-    assert_ne!((fwd.regs[1], fwd.regs[2]), (l0, r0), "cipher must change the block");
+    assert_ne!(
+        (fwd.regs[1], fwd.regs[2]),
+        (l0, r0),
+        "cipher must change the block"
+    );
     assert_eq!(fwd.regs[3], key);
     assert_eq!(fwd.regs[4], 0, "no garbage left in the temp register");
     assert_eq!(fwd.pc, t as u8);
@@ -316,7 +325,11 @@ fn feistel_energy() {
             assert!(bd.total_j > 0.0, "{label}: XOR must burn energy");
             xor_seen_positive = true;
         }
-        let note = if bd.total_j == 0.0 { "  [free: pure wiring]" } else { "" };
+        let note = if bd.total_j == 0.0 {
+            "  [free: pure wiring]"
+        } else {
+            ""
+        };
         eprintln!(
             "  {label:<24} total {:.4e} J (active {:.4e} J + {} K0 buffers {:.4e} J){note}",
             bd.total_j, bd.active_j, bd.buffer_count, bd.buffer_j
@@ -328,7 +341,10 @@ fn feistel_energy() {
     // Feistel ROM (fetch + decode_execute + unfetch + pc_inc each cycle).
     let step_bd = balanced_energy(feistel_step_net(), db, T_RAMP).unwrap();
     assert!(step_bd.total_j > 0.0, "step energy must be positive");
-    assert!(step_bd.buffer_count > 0, "the step has deep skew; buffers expected");
+    assert!(
+        step_bd.buffer_count > 0,
+        "the step has deep skew; buffers expected"
+    );
     let round_j = step_bd.total_j * ROUND_LEN as f64;
     let program_j = step_bd.total_j * t as f64;
 

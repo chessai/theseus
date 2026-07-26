@@ -44,11 +44,10 @@
 //! lowering is still K-only-dirty (e.g. trace tag duplication, iter/fold
 //! control chains — genuine fan-outs that still emit K-only garbage).
 
-use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_netlist::ir::cell::CellNetError;
+use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_netlist::{
-    balance_compact, bits_of, lower_iso_bennett, value_from_bits, CompactBalanced,
-    PHASE_COUNT,
+    balance_compact, bits_of, lower_iso_bennett, value_from_bits, CompactBalanced, PHASE_COUNT,
 };
 
 use crate::step::{step, system_step};
@@ -70,8 +69,7 @@ pub struct StepRing {
 /// O(active cells) memory, no K0 materialization.
 pub fn step_ring(rom: &[u32]) -> StepRing {
     let iso = step(rom);
-    let (net, ancilla_init) =
-        lower_iso_with_ancillas(&iso).expect("step lowers");
+    let (net, ancilla_init) = lower_iso_with_ancillas(&iso).expect("step lowers");
     assert_eq!(
         net.inputs.len(),
         net.outputs.len(),
@@ -112,21 +110,18 @@ impl StepRing {
             self.ancilla_mismatches(start)
         );
         let ty = state_ty();
-        let mut data_bits =
-            bits_of(&start.encode(), &ty).expect("bits_of");
+        let mut data_bits = bits_of(&start.encode(), &ty).expect("bits_of");
         let mut ancilla_bits = self.ancilla_init.clone();
 
         for _ in 0..revolutions {
             let mut input = data_bits.clone();
             input.extend_from_slice(&ancilla_bits);
-            let sim =
-                self.compact.simulate(&input).expect("simulate");
+            let sim = self.compact.simulate(&input).expect("simulate");
             data_bits = sim.outputs[..self.n_data].to_vec();
             ancilla_bits = sim.outputs[self.n_data..].to_vec();
         }
 
-        let val =
-            value_from_bits(&ty, &data_bits).expect("value_from_bits");
+        let val = value_from_bits(&ty, &data_bits).expect("value_from_bits");
         StateVals::decode(&val)
     }
 
@@ -137,26 +132,19 @@ impl StepRing {
     /// [`Self::run`] exactly when the lowering is ancilla-clean, which is
     /// the equivalence that certifies the zero-garbage closure. Retained
     /// as the robust fallback for non-ancilla-clean lowerings.
-    pub fn run_open(
-        &self,
-        start: &StateVals,
-        revolutions: u32,
-    ) -> StateVals {
+    pub fn run_open(&self, start: &StateVals, revolutions: u32) -> StateVals {
         let ty = state_ty();
-        let mut data_bits =
-            bits_of(&start.encode(), &ty).expect("bits_of");
+        let mut data_bits = bits_of(&start.encode(), &ty).expect("bits_of");
         assert_eq!(data_bits.len(), self.n_data);
 
         for _ in 0..revolutions {
             let mut input = data_bits.clone();
             input.extend_from_slice(&self.ancilla_init);
-            let sim =
-                self.compact.simulate(&input).expect("simulate");
+            let sim = self.compact.simulate(&input).expect("simulate");
             data_bits = sim.outputs[..self.n_data].to_vec();
         }
 
-        let val =
-            value_from_bits(&ty, &data_bits).expect("value_from_bits");
+        let val = value_from_bits(&ty, &data_bits).expect("value_from_bits");
         StateVals::decode(&val)
     }
 
@@ -164,8 +152,7 @@ impl StepRing {
     /// after one revolution from `start`.
     pub fn ancilla_mismatches(&self, start: &StateVals) -> Vec<usize> {
         let ty = state_ty();
-        let data_bits =
-            bits_of(&start.encode(), &ty).expect("bits_of");
+        let data_bits = bits_of(&start.encode(), &ty).expect("bits_of");
         let mut input = data_bits;
         input.extend_from_slice(&self.ancilla_init);
         let sim = self.compact.simulate(&input).expect("simulate");
@@ -221,8 +208,7 @@ pub struct ClosedStepRing {
 /// the boundary pairs with fixed inits `(1, 0)` per data bit.
 pub fn closed_step_ring(rom: &[u32]) -> ClosedStepRing {
     let iso = step(rom);
-    let (net, ancilla_init) =
-        lower_iso_bennett(&iso).expect("step lowers via bennett");
+    let (net, ancilla_init) = lower_iso_bennett(&iso).expect("step lowers via bennett");
     assert_eq!(
         net.inputs.len(),
         net.outputs.len(),
@@ -261,30 +247,24 @@ impl ClosedStepRing {
     /// forward ancillas really do come back clean every revolution.
     pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
         let ty = state_ty();
-        let mut data_bits =
-            bits_of(&start.encode(), &ty).expect("bits_of");
+        let mut data_bits = bits_of(&start.encode(), &ty).expect("bits_of");
         assert_eq!(data_bits.len(), self.n_data);
-        let mut forward_bits =
-            self.ancilla_init[..self.n_forward].to_vec();
+        let mut forward_bits = self.ancilla_init[..self.n_forward].to_vec();
         let boundary_init = &self.ancilla_init[self.n_forward..];
 
         for _ in 0..revolutions {
             let mut input = data_bits.clone();
             input.extend_from_slice(&forward_bits);
             input.extend_from_slice(boundary_init);
-            let sim =
-                self.compact.simulate(&input).expect("simulate");
+            let sim = self.compact.simulate(&input).expect("simulate");
             data_bits = sim.outputs[..self.n_data].to_vec();
             // Feed the forward ancillas back — TRUE recirculation.
-            forward_bits = sim.outputs
-                [self.n_data..self.n_data + self.n_forward]
-                .to_vec();
+            forward_bits = sim.outputs[self.n_data..self.n_data + self.n_forward].to_vec();
             // Boundary outputs (the Bennett residue) exit the ring;
             // fresh (1, 0) pairs are re-supplied next revolution.
         }
 
-        let val =
-            value_from_bits(&ty, &data_bits).expect("value_from_bits");
+        let val = value_from_bits(&ty, &data_bits).expect("value_from_bits");
         StateVals::decode(&val)
     }
 
@@ -313,8 +293,7 @@ impl ClosedStepRing {
 
     fn revolve_once(&self, start: &StateVals) -> Vec<bool> {
         let ty = state_ty();
-        let data_bits =
-            bits_of(&start.encode(), &ty).expect("bits_of");
+        let data_bits = bits_of(&start.encode(), &ty).expect("bits_of");
         let mut input = data_bits;
         input.extend_from_slice(&self.ancilla_init);
         self.compact.simulate(&input).expect("simulate").outputs
@@ -368,8 +347,7 @@ pub struct SystemRing {
 /// O(active cells) memory, no K0 materialization.
 pub fn system_ring(rom: &[u32]) -> SystemRing {
     let iso = system_step(rom);
-    let (net, ancilla_init) =
-        lower_iso_with_ancillas(&iso).expect("system_step lowers");
+    let (net, ancilla_init) = lower_iso_with_ancillas(&iso).expect("system_step lowers");
     assert_eq!(
         net.inputs.len(),
         net.outputs.len(),
@@ -399,21 +377,18 @@ impl SystemRing {
     /// `bus_quiescent`, and it doubles per-call cost.
     pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
         let ty = system_state_ty();
-        let mut data_bits =
-            bits_of(&encode_system(start), &ty).expect("bits_of");
+        let mut data_bits = bits_of(&encode_system(start), &ty).expect("bits_of");
         let mut ancilla_bits = self.ancilla_init.clone();
 
         for _ in 0..revolutions {
             let mut input = data_bits.clone();
             input.extend_from_slice(&ancilla_bits);
-            let sim =
-                self.compact.simulate(&input).expect("simulate");
+            let sim = self.compact.simulate(&input).expect("simulate");
             data_bits = sim.outputs[..self.n_data].to_vec();
             ancilla_bits = sim.outputs[self.n_data..].to_vec();
         }
 
-        let val =
-            value_from_bits(&ty, &data_bits).expect("value_from_bits");
+        let val = value_from_bits(&ty, &data_bits).expect("value_from_bits");
         decode_system(&val)
     }
 
@@ -423,26 +398,19 @@ impl SystemRing {
     /// Always correct (independent of ancilla cleanliness); equals
     /// [`Self::run`] exactly when the lowering is ancilla-clean, which
     /// is the equivalence that certifies the zero-garbage closure.
-    pub fn run_open(
-        &self,
-        start: &StateVals,
-        revolutions: u32,
-    ) -> StateVals {
+    pub fn run_open(&self, start: &StateVals, revolutions: u32) -> StateVals {
         let ty = system_state_ty();
-        let mut data_bits =
-            bits_of(&encode_system(start), &ty).expect("bits_of");
+        let mut data_bits = bits_of(&encode_system(start), &ty).expect("bits_of");
         assert_eq!(data_bits.len(), self.n_data);
 
         for _ in 0..revolutions {
             let mut input = data_bits.clone();
             input.extend_from_slice(&self.ancilla_init);
-            let sim =
-                self.compact.simulate(&input).expect("simulate");
+            let sim = self.compact.simulate(&input).expect("simulate");
             data_bits = sim.outputs[..self.n_data].to_vec();
         }
 
-        let val =
-            value_from_bits(&ty, &data_bits).expect("value_from_bits");
+        let val = value_from_bits(&ty, &data_bits).expect("value_from_bits");
         decode_system(&val)
     }
 
@@ -450,8 +418,7 @@ impl SystemRing {
     /// after one revolution from `start`.
     pub fn ancilla_mismatches(&self, start: &StateVals) -> Vec<usize> {
         let ty = system_state_ty();
-        let data_bits =
-            bits_of(&encode_system(start), &ty).expect("bits_of");
+        let data_bits = bits_of(&encode_system(start), &ty).expect("bits_of");
         let mut input = data_bits;
         input.extend_from_slice(&self.ancilla_init);
         let sim = self.compact.simulate(&input).expect("simulate");
@@ -486,8 +453,7 @@ impl SystemRing {
             self.n_data, SYSTEM_BITS,
         );
         let ty = system_state_ty();
-        let data_bits =
-            bits_of(&encode_system(start), &ty).expect("bits_of");
+        let data_bits = bits_of(&encode_system(start), &ty).expect("bits_of");
         let mut input = data_bits;
         input.extend_from_slice(&self.ancilla_init);
         let sim = self.compact.simulate(&input).expect("simulate");
@@ -555,8 +521,7 @@ pub fn two_body_ring(rom: &[u32]) -> TwoBodyRing {
 
     // --- cpu_pre ---
     let iso_pre = crate::step::cpu_pre(rom);
-    let (net_pre, anc_pre) =
-        lower_iso_with_ancillas(&iso_pre).expect("cpu_pre lowers");
+    let (net_pre, anc_pre) = lower_iso_with_ancillas(&iso_pre).expect("cpu_pre lowers");
     let n_data_pre = net_pre.inputs.len() - anc_pre.len();
     assert_eq!(
         n_data_pre, CPU_BODY_N_DATA,
@@ -570,8 +535,7 @@ pub fn two_body_ring(rom: &[u32]) -> TwoBodyRing {
 
     // --- mem_body ---
     let iso_mem = crate::decoder::mem_body();
-    let (net_mem, anc_mem) =
-        lower_iso_with_ancillas(&iso_mem).expect("mem_body lowers");
+    let (net_mem, anc_mem) = lower_iso_with_ancillas(&iso_mem).expect("mem_body lowers");
     let n_data_mem = net_mem.inputs.len() - anc_mem.len();
     assert_eq!(
         n_data_mem, MEM_BODY_N_DATA,
@@ -585,8 +549,7 @@ pub fn two_body_ring(rom: &[u32]) -> TwoBodyRing {
 
     // --- cpu_post ---
     let iso_post = crate::step::cpu_post(rom);
-    let (net_post, anc_post) =
-        lower_iso_with_ancillas(&iso_post).expect("cpu_post lowers");
+    let (net_post, anc_post) = lower_iso_with_ancillas(&iso_post).expect("cpu_post lowers");
     let n_data_post = net_post.inputs.len() - anc_post.len();
     assert_eq!(
         n_data_post, CPU_BODY_N_DATA,
@@ -638,8 +601,7 @@ impl TwoBodyRing {
             pre_input.extend_from_slice(&pre_anc);
             let pre_sim = self.pre.simulate(&pre_input).expect("simulate cpu_pre");
             cpu_bits = pre_sim.outputs[..STATE_BITS].to_vec();
-            let bus_from_pre =
-                pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
+            let bus_from_pre = pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
             pre_anc = pre_sim.outputs[self.pre_n_data..].to_vec();
 
             // (b) mem_body: Mem[0..32) + Bus[32..56) (relocate bus)
@@ -648,8 +610,7 @@ impl TwoBodyRing {
             mem_input.extend_from_slice(&mem_anc);
             let mem_sim = self.mem.simulate(&mem_input).expect("simulate mem_body");
             mem_bits = mem_sim.outputs[..MEM_WORDS * W].to_vec();
-            let bus_from_mem =
-                mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
+            let bus_from_mem = mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
             mem_anc = mem_sim.outputs[self.mem_n_data..].to_vec();
 
             // (c) cpu_post: Cpu[0..160) + Bus[160..184) (relocate bus back)
@@ -661,8 +622,7 @@ impl TwoBodyRing {
             post_anc = post_sim.outputs[self.post_n_data..].to_vec();
 
             // (d) F3: assert bus quiescence — the §3 lemma made runtime
-            let bus_out =
-                &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
+            let bus_out = &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
             assert!(
                 bus_out.iter().all(|&b| !b),
                 "TwoBodyRing: bus NOT quiescent after cpu_post — \
@@ -677,8 +637,7 @@ impl TwoBodyRing {
         }
 
         // Decode back to StateVals
-        let cpu_val =
-            value_from_bits(&cpu_ty, &cpu_bits).expect("cpu value_from_bits");
+        let cpu_val = value_from_bits(&cpu_ty, &cpu_bits).expect("cpu value_from_bits");
         let mut result = StateVals::decode(&cpu_val);
         Self::decode_mem_bits(&mem_bits, &mut result);
         result
@@ -700,8 +659,7 @@ impl TwoBodyRing {
             pre_input.extend_from_slice(&self.pre_ancilla);
             let pre_sim = self.pre.simulate(&pre_input).expect("simulate cpu_pre");
             cpu_bits = pre_sim.outputs[..STATE_BITS].to_vec();
-            let bus_from_pre =
-                pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
+            let bus_from_pre = pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
 
             // (b) mem_body
             let mut mem_input = mem_bits.clone();
@@ -709,8 +667,7 @@ impl TwoBodyRing {
             mem_input.extend_from_slice(&self.mem_ancilla);
             let mem_sim = self.mem.simulate(&mem_input).expect("simulate mem_body");
             mem_bits = mem_sim.outputs[..MEM_WORDS * W].to_vec();
-            let bus_from_mem =
-                mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
+            let bus_from_mem = mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
 
             // (c) cpu_post
             let mut post_input = cpu_bits.clone();
@@ -720,16 +677,14 @@ impl TwoBodyRing {
             cpu_bits = post_sim.outputs[..STATE_BITS].to_vec();
 
             // (d) F3: assert bus quiescence
-            let bus_out =
-                &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
+            let bus_out = &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
             assert!(
                 bus_out.iter().all(|&b| !b),
                 "TwoBodyRing (open): bus NOT quiescent after cpu_post"
             );
         }
 
-        let cpu_val =
-            value_from_bits(&cpu_ty, &cpu_bits).expect("cpu value_from_bits");
+        let cpu_val = value_from_bits(&cpu_ty, &cpu_bits).expect("cpu value_from_bits");
         let mut result = StateVals::decode(&cpu_val);
         Self::decode_mem_bits(&mem_bits, &mut result);
         result
@@ -798,8 +753,7 @@ impl TwoBodyRing {
             pre_input.extend_from_slice(&pre_anc);
             let pre_sim = self.pre.simulate(&pre_input).expect("simulate cpu_pre");
             cpu_bits = pre_sim.outputs[..STATE_BITS].to_vec();
-            let bus_from_pre =
-                pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
+            let bus_from_pre = pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
             pre_anc = pre_sim.outputs[self.pre_n_data..].to_vec();
 
             // Check cpu_pre ancillas
@@ -815,8 +769,7 @@ impl TwoBodyRing {
             mem_input.extend_from_slice(&mem_anc);
             let mem_sim = self.mem.simulate(&mem_input).expect("simulate mem_body");
             mem_bits = mem_sim.outputs[..MEM_WORDS * W].to_vec();
-            let bus_from_mem =
-                mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
+            let bus_from_mem = mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
             mem_anc = mem_sim.outputs[self.mem_n_data..].to_vec();
 
             // Check mem_body ancillas
@@ -842,8 +795,7 @@ impl TwoBodyRing {
             }
 
             // (d) F3: bus quiescence
-            let bus_out =
-                &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
+            let bus_out = &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
             assert!(
                 bus_out.iter().all(|&b| !b),
                 "TwoBodyRing (ancilla check): bus NOT quiescent after cpu_post"
@@ -1064,18 +1016,12 @@ impl TwoBodyTiming {
         // We check that d_body >= arrival, i.e. pad <= d_body.
         for (i, &pad) in self.pre_bus_pads.iter().enumerate() {
             if pad > self.d_pre {
-                return Err(format!(
-                    "G: pre_bus_pads[{i}]={pad} > d_pre={}",
-                    self.d_pre
-                ));
+                return Err(format!("G: pre_bus_pads[{i}]={pad} > d_pre={}", self.d_pre));
             }
         }
         for (i, &pad) in self.mem_bus_pads.iter().enumerate() {
             if pad > self.d_mem {
-                return Err(format!(
-                    "G: mem_bus_pads[{i}]={pad} > d_mem={}",
-                    self.d_mem
-                ));
+                return Err(format!("G: mem_bus_pads[{i}]={pad} > d_mem={}", self.d_mem));
             }
         }
         for (i, &pad) in self.post_bus_pads.iter().enumerate() {
@@ -1116,8 +1062,7 @@ pub fn two_body_timing_certificate(rom: &[u32]) -> Result<TwoBodyTiming, CellNet
     // --- Lower each body and compute checked output arrivals ---
 
     let iso_pre = crate::step::cpu_pre(rom);
-    let (net_pre, anc_pre) =
-        lower_iso_with_ancillas(&iso_pre).expect("cpu_pre lowers");
+    let (net_pre, anc_pre) = lower_iso_with_ancillas(&iso_pre).expect("cpu_pre lowers");
     let n_data_pre = net_pre.inputs.len() - anc_pre.len();
     assert_eq!(
         n_data_pre, CPU_BODY_N_DATA,
@@ -1126,8 +1071,7 @@ pub fn two_body_timing_certificate(rom: &[u32]) -> Result<TwoBodyTiming, CellNet
     let checked_pre = net_pre.checked_output_arrivals()?;
 
     let iso_mem = crate::decoder::mem_body();
-    let (net_mem, anc_mem) =
-        lower_iso_with_ancillas(&iso_mem).expect("mem_body lowers");
+    let (net_mem, anc_mem) = lower_iso_with_ancillas(&iso_mem).expect("mem_body lowers");
     let n_data_mem = net_mem.inputs.len() - anc_mem.len();
     assert_eq!(
         n_data_mem, MEM_BODY_N_DATA,
@@ -1136,8 +1080,7 @@ pub fn two_body_timing_certificate(rom: &[u32]) -> Result<TwoBodyTiming, CellNet
     let checked_mem = net_mem.checked_output_arrivals()?;
 
     let iso_post = crate::step::cpu_post(rom);
-    let (net_post, anc_post) =
-        lower_iso_with_ancillas(&iso_post).expect("cpu_post lowers");
+    let (net_post, anc_post) = lower_iso_with_ancillas(&iso_post).expect("cpu_post lowers");
     let n_data_post = net_post.inputs.len() - anc_post.len();
     assert_eq!(
         n_data_post, CPU_BODY_N_DATA,
@@ -1147,11 +1090,20 @@ pub fn two_body_timing_certificate(rom: &[u32]) -> Result<TwoBodyTiming, CellNet
 
     // --- Step 1: D_pre/D_mem/D_post = max data-output arrival ---
 
-    let d_pre = checked_pre[..n_data_pre].iter().copied().max()
+    let d_pre = checked_pre[..n_data_pre]
+        .iter()
+        .copied()
+        .max()
         .expect("body has data outputs");
-    let d_mem = checked_mem[..n_data_mem].iter().copied().max()
+    let d_mem = checked_mem[..n_data_mem]
+        .iter()
+        .copied()
+        .max()
         .expect("body has data outputs");
-    let d_post = checked_post[..n_data_post].iter().copied().max()
+    let d_post = checked_post[..n_data_post]
+        .iter()
+        .copied()
+        .max()
         .expect("body has data outputs");
 
     // --- Step 2: delta1 = least k>=0 with (d_pre+k) % P == 0 ---

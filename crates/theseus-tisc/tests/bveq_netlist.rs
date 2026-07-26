@@ -22,9 +22,9 @@
 use theseus_tisc::asm::{self, Instr};
 use theseus_tisc::bveq::{biodivine_lib_bdd, expr_to_bdd, instr_semantics, BITS};
 use theseus_tisc::bveq_netlist::{
-    self, build_concrete_system_sv, build_cpu_init, build_system_init, eval_bdd,
-    extended_varmap, extract_field, extract_word8_bdds, needs_s0_pinned, sv_flatten,
-    sv_to_u8, sv_word8_symbolic, WalkCtx, OP_BR, OP_MEM_BASE, OP_S0,
+    self, build_concrete_system_sv, build_cpu_init, build_system_init, eval_bdd, extended_varmap,
+    extract_field, extract_word8_bdds, needs_s0_pinned, sv_flatten, sv_to_u8, sv_word8_symbolic,
+    WalkCtx, OP_BR, OP_MEM_BASE, OP_S0,
 };
 use theseus_tisc::decoder::{self, Op};
 use theseus_tisc::step;
@@ -73,8 +73,16 @@ fn register_pure_ops() -> Vec<Instr> {
         Instr::Exch { rd: 0, rs: 1 },
         Instr::Rotl { rd: 0, rs: 1 },
         Instr::Rotr { rd: 0, rs: 1 },
-        Instr::Cswap { rd: 0, rs: 1, rt: 2 },
-        Instr::Ccnot { rd: 0, rs: 1, rt: 2 },
+        Instr::Cswap {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        },
+        Instr::Ccnot {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        },
         Instr::Addi { rd: 0, imm: 42 },
         Instr::Subi { rd: 0, imm: 100 },
         Instr::Xori { rd: 0, imm: 0xFF },
@@ -111,17 +119,16 @@ fn assert_word8_const(
 }
 
 /// Assert that a Word8 SV's bits match the entry-value BDDs (identity check).
-fn assert_word8_identity(
-    sv: &bveq_netlist::SV,
-    entry: &bveq_netlist::SV,
-    ctx: &str,
-) {
+fn assert_word8_identity(sv: &bveq_netlist::SV, entry: &bveq_netlist::SV, ctx: &str) {
     let out_bits = sv_flatten(sv);
     let entry_bits = sv_flatten(entry);
     assert_eq!(out_bits.len(), W, "{ctx}: expected {W} bits");
     assert_eq!(entry_bits.len(), W, "{ctx}: entry expected {W} bits");
     for i in 0..W {
-        assert_eq!(out_bits[i], entry_bits[i], "{ctx}: bit {i} not restored to entry");
+        assert_eq!(
+            out_bits[i], entry_bits[i],
+            "{ctx}: bit {i} not restored to entry"
+        );
     }
 }
 
@@ -137,43 +144,44 @@ fn walk_one_arm_and_check(instr: Instr, label: &str) {
     let iso = decoder::instruction(op);
 
     let mut ctx = WalkCtx::new();
-    let out_sv = eval_bdd(&iso, init_sv, vs, &mut ctx)
-        .unwrap_or_else(|e| panic!("{label}: eval_bdd: {e}"));
+    let out_sv =
+        eval_bdd(&iso, init_sv, vs, &mut ctx).unwrap_or_else(|e| panic!("{label}: eval_bdd: {e}"));
 
     // Compare registers against instr_semantics.
-    let semantics = instr_semantics(&instr)
-        .unwrap_or_else(|e| panic!("{label}: instr_semantics: {e}"));
+    let semantics =
+        instr_semantics(&instr).unwrap_or_else(|e| panic!("{label}: instr_semantics: {e}"));
     for reg in 0..NUM_REGS {
         let out_field = extract_field(&out_sv, reg, NUM_CPU_FIELDS);
         let out_bdds = extract_word8_bdds(out_field);
         for bit in 0..BITS {
             let expected = expr_to_bdd(&semantics.regs[reg][bit], &map)
                 .unwrap_or_else(|e| panic!("{label}: expr_to_bdd r{reg}[{bit}]: {e}"));
-            assert_eq!(
-                out_bdds[bit], expected,
-                "{label}: r{reg}[{bit}] mismatch"
-            );
+            assert_eq!(out_bdds[bit], expected, "{label}: r{reg}[{bit}] mismatch");
         }
     }
 
     // PC = 0 (one-arm doesn't touch PC).
     assert_word8_zero(
         extract_field(&out_sv, 8, NUM_CPU_FIELDS),
-        vs, &format!("{label}: PC"),
+        vs,
+        &format!("{label}: PC"),
     );
 
     // BR restored to symbolic entry.
     let br_entry = sv_word8_symbolic(&map, OP_BR);
     assert_word8_identity(
         extract_field(&out_sv, 9, NUM_CPU_FIELDS),
-        &br_entry, &format!("{label}: BR"),
+        &br_entry,
+        &format!("{label}: BR"),
     );
 
     // IR unchanged (concrete 32-bit word, A-0: bytes at fields 10..14).
     for byte in 0..4 {
         assert_word8_const(
             extract_field(&out_sv, 10 + byte, NUM_CPU_FIELDS),
-            (word >> (8 * byte)) as u8, vs, &format!("{label}: IR_b{byte}"),
+            (word >> (8 * byte)) as u8,
+            vs,
+            &format!("{label}: IR_b{byte}"),
         );
     }
 
@@ -181,13 +189,15 @@ fn walk_one_arm_and_check(instr: Instr, label: &str) {
     if pin_s0 {
         assert_word8_zero(
             extract_field(&out_sv, 14, NUM_CPU_FIELDS),
-            vs, &format!("{label}: s0"),
+            vs,
+            &format!("{label}: s0"),
         );
     } else {
         let s0_entry = sv_word8_symbolic(&map, OP_S0);
         assert_word8_identity(
             extract_field(&out_sv, 14, NUM_CPU_FIELDS),
-            &s0_entry, &format!("{label}: s0"),
+            &s0_entry,
+            &format!("{label}: s0"),
         );
     }
 
@@ -195,7 +205,8 @@ fn walk_one_arm_and_check(instr: Instr, label: &str) {
     for i in 1..8 {
         assert_word8_zero(
             extract_field(&out_sv, 14 + i, NUM_CPU_FIELDS),
-            vs, &format!("{label}: s{i}"),
+            vs,
+            &format!("{label}: s{i}"),
         );
     }
 }
@@ -208,10 +219,18 @@ fn bveq_netlist_convention_left_is_1() {
     let bit_ty = Type::sum(Type::One, Type::One);
     // Left(Unit) = true = 1
     let bits_left = theseus_netlist::bits_of(&Value::left(Value::Unit), &bit_ty).unwrap();
-    assert_eq!(bits_left, vec![true], "Left(Unit) must encode as [true] (= 1)");
+    assert_eq!(
+        bits_left,
+        vec![true],
+        "Left(Unit) must encode as [true] (= 1)"
+    );
     // Right(Unit) = false = 0
     let bits_right = theseus_netlist::bits_of(&Value::right(Value::Unit), &bit_ty).unwrap();
-    assert_eq!(bits_right, vec![false], "Right(Unit) must encode as [false] (= 0)");
+    assert_eq!(
+        bits_right,
+        vec![false],
+        "Right(Unit) must encode as [false] (= 0)"
+    );
 }
 
 // ── Tier 1: bveq_netlist_walk_reconcile (DEFAULT, ~5-15s) ──────────
@@ -238,11 +257,39 @@ fn bveq_netlist_walk_reconcile() {
         (Instr::Rotr { rd: 5, rs: 2 }, "Rotr(5,2)"),
         (Instr::Rotl { rd: 0, rs: 1 }, "Rotl(0,1)"),
         // 3-op: Cswap
-        (Instr::Cswap { rd: 0, rs: 1, rt: 2 }, "Cswap(0,1,2)"),
-        (Instr::Cswap { rd: 4, rs: 3, rt: 6 }, "Cswap(4,3,6)"),
+        (
+            Instr::Cswap {
+                rd: 0,
+                rs: 1,
+                rt: 2,
+            },
+            "Cswap(0,1,2)",
+        ),
+        (
+            Instr::Cswap {
+                rd: 4,
+                rs: 3,
+                rt: 6,
+            },
+            "Cswap(4,3,6)",
+        ),
         // 3-op: Ccnot
-        (Instr::Ccnot { rd: 0, rs: 1, rt: 2 }, "Ccnot(0,1,2)"),
-        (Instr::Ccnot { rd: 5, rs: 3, rt: 7 }, "Ccnot(5,3,7)"),
+        (
+            Instr::Ccnot {
+                rd: 0,
+                rs: 1,
+                rt: 2,
+            },
+            "Ccnot(0,1,2)",
+        ),
+        (
+            Instr::Ccnot {
+                rd: 5,
+                rs: 3,
+                rt: 7,
+            },
+            "Ccnot(5,3,7)",
+        ),
         // Immediate: Addi/Subi (s0 pinned)
         (Instr::Addi { rd: 0, imm: 42 }, "Addi(0,42)"),
         (Instr::Addi { rd: 3, imm: 255 }, "Addi(3,255)"),
@@ -307,48 +354,52 @@ fn bveq_netlist_walk_system() {
                 let out_bdds = extract_word8_bdds(out_field);
                 for bit in 0..BITS {
                     let expected = expr_to_bdd(&semantics.regs[reg][bit], &map).unwrap();
-                    assert_eq!(
-                        out_bdds[bit], expected,
-                        "{label}: r{reg}[{bit}] mismatch"
-                    );
+                    assert_eq!(out_bdds[bit], expected, "{label}: r{reg}[{bit}] mismatch");
                 }
             }
 
             // PC = 1 (incremented).
             assert_word8_const(
                 extract_field(cpu_sv, 8, NUM_CPU_FIELDS),
-                1, vs, &format!("{label}: PC"),
+                1,
+                vs,
+                &format!("{label}: PC"),
             );
             // BR = 0 (restored, was 0 in init).
             assert_word8_zero(
                 extract_field(cpu_sv, 9, NUM_CPU_FIELDS),
-                vs, &format!("{label}: BR"),
+                vs,
+                &format!("{label}: BR"),
             );
             // IR = 0 (unfetched). A-0: 4 IR bytes at fields 10..14.
             for byte in 0..4 {
                 assert_word8_zero(
                     extract_field(cpu_sv, 10 + byte, NUM_CPU_FIELDS),
-                    vs, &format!("{label}: IR_b{byte}"),
+                    vs,
+                    &format!("{label}: IR_b{byte}"),
                 );
             }
             // s0 restored. A-0: s0 at field 14.
             if pin_s0 {
                 assert_word8_zero(
                     extract_field(cpu_sv, 14, NUM_CPU_FIELDS),
-                    vs, &format!("{label}: s0"),
+                    vs,
+                    &format!("{label}: s0"),
                 );
             } else {
                 let s0_entry = sv_word8_symbolic(&map, OP_S0);
                 assert_word8_identity(
                     extract_field(cpu_sv, 14, NUM_CPU_FIELDS),
-                    &s0_entry, &format!("{label}: s0"),
+                    &s0_entry,
+                    &format!("{label}: s0"),
                 );
             }
             // s1-s7 = 0. A-0: s1..s7 at fields 15..22.
             for i in 1..8 {
                 assert_word8_zero(
                     extract_field(cpu_sv, 14 + i, NUM_CPU_FIELDS),
-                    vs, &format!("{label}: s{i}"),
+                    vs,
+                    &format!("{label}: s{i}"),
                 );
             }
             // Mem: symbolic entry preserved.
@@ -356,14 +407,16 @@ fn bveq_netlist_walk_system() {
                 let mem_entry = sv_word8_symbolic(&map, OP_MEM_BASE + i);
                 assert_word8_identity(
                     extract_field(mem_sv, i, MEM_WORDS),
-                    &mem_entry, &format!("{label}: m{i}"),
+                    &mem_entry,
+                    &format!("{label}: m{i}"),
                 );
             }
             // Bus = 0 (quiescent).
             for i in 0..NUM_BUS_FIELDS {
                 assert_word8_zero(
                     extract_field(bus_sv, i, NUM_BUS_FIELDS),
-                    vs, &format!("{label}: bus[{i}]"),
+                    vs,
+                    &format!("{label}: bus[{i}]"),
                 );
             }
 
@@ -392,18 +445,28 @@ fn bveq_netlist_walk_full_sweep() {
         ];
         for mk in two_ops {
             let sample = mk(0, 1);
-            let op_name = format!("{sample:?}").split('{').next().unwrap().trim().to_string();
+            let op_name = format!("{sample:?}")
+                .split('{')
+                .next()
+                .unwrap()
+                .trim()
+                .to_string();
             let t = std::time::Instant::now();
             let mut count = 0u32;
             for rd in 0..NUM_REGS as u8 {
                 for rs in 0..NUM_REGS as u8 {
-                    if rd == rs { continue; }
+                    if rd == rs {
+                        continue;
+                    }
                     let instr = mk(rd, rs);
                     walk_one_arm_and_check(instr, &format!("{op_name}({rd},{rs})"));
                     count += 1;
                 }
             }
-            eprintln!("  sweep {op_name}: {count} configs in {:.1} s", t.elapsed().as_secs_f64());
+            eprintln!(
+                "  sweep {op_name}: {count} configs in {:.1} s",
+                t.elapsed().as_secs_f64()
+            );
         }
 
         // 3-op: all (rd, rs, rt) triples, pairwise distinct, 336 combos.
@@ -413,21 +476,33 @@ fn bveq_netlist_walk_full_sweep() {
         ];
         for mk in three_ops {
             let sample = mk(0, 1, 2);
-            let op_name = format!("{sample:?}").split('{').next().unwrap().trim().to_string();
+            let op_name = format!("{sample:?}")
+                .split('{')
+                .next()
+                .unwrap()
+                .trim()
+                .to_string();
             let t = std::time::Instant::now();
             let mut count = 0u32;
             for rd in 0..NUM_REGS as u8 {
                 for rs in 0..NUM_REGS as u8 {
-                    if rs == rd { continue; }
+                    if rs == rd {
+                        continue;
+                    }
                     for rt in 0..NUM_REGS as u8 {
-                        if rt == rd || rt == rs { continue; }
+                        if rt == rd || rt == rs {
+                            continue;
+                        }
                         let instr = mk(rd, rs, rt);
                         walk_one_arm_and_check(instr, &format!("{op_name}({rd},{rs},{rt})"));
                         count += 1;
                     }
                 }
             }
-            eprintln!("  sweep {op_name}: {count} configs in {:.1} s", t.elapsed().as_secs_f64());
+            eprintln!(
+                "  sweep {op_name}: {count} configs in {:.1} s",
+                t.elapsed().as_secs_f64()
+            );
         }
 
         // Immediate: all rd × all imm, 8 × 256 = 2048 per op.
@@ -440,7 +515,12 @@ fn bveq_netlist_walk_full_sweep() {
         ];
         for mk in imm_ops {
             let sample = mk(0, 1);
-            let op_name = format!("{sample:?}").split('{').next().unwrap().trim().to_string();
+            let op_name = format!("{sample:?}")
+                .split('{')
+                .next()
+                .unwrap()
+                .trim()
+                .to_string();
             let t = std::time::Instant::now();
             let mut count = 0u32;
             for rd in 0..NUM_REGS as u8 {
@@ -450,7 +530,10 @@ fn bveq_netlist_walk_full_sweep() {
                     count += 1;
                 }
             }
-            eprintln!("  sweep {op_name}: {count} configs in {:.1} s", t.elapsed().as_secs_f64());
+            eprintln!(
+                "  sweep {op_name}: {count} configs in {:.1} s",
+                t.elapsed().as_secs_f64()
+            );
         }
     });
 }
@@ -471,8 +554,11 @@ fn bveq_netlist_walk_bootstrap() {
             Instr::Xor { rd: 0, rs: 1 },
             StateVals {
                 regs: [0xAA, 0x55, 0, 0, 0, 0, 0, 0],
-                pc: 0, br: 0, ir: 0,
-                scratch: [0; 8], mem: [0; MEM_WORDS],
+                pc: 0,
+                br: 0,
+                ir: 0,
+                scratch: [0; 8],
+                mem: [0; MEM_WORDS],
             },
             "Xor(0,1) AA^55",
         ),
@@ -480,17 +566,27 @@ fn bveq_netlist_walk_bootstrap() {
             Instr::Add { rd: 0, rs: 1 },
             StateVals {
                 regs: [200, 100, 0, 0, 0, 0, 0, 0],
-                pc: 0, br: 0, ir: 0,
-                scratch: [0; 8], mem: [0; MEM_WORDS],
+                pc: 0,
+                br: 0,
+                ir: 0,
+                scratch: [0; 8],
+                mem: [0; MEM_WORDS],
             },
             "Add(0,1) 200+100",
         ),
         (
-            Instr::Ccnot { rd: 0, rs: 1, rt: 2 },
+            Instr::Ccnot {
+                rd: 0,
+                rs: 1,
+                rt: 2,
+            },
             StateVals {
                 regs: [0x0F, 0xFF, 0xF0, 0, 0, 0, 0, 0],
-                pc: 0, br: 0, ir: 0,
-                scratch: [0; 8], mem: [0; MEM_WORDS],
+                pc: 0,
+                br: 0,
+                ir: 0,
+                scratch: [0; 8],
+                mem: [0; MEM_WORDS],
             },
             "Ccnot(0,1,2) 0x0F^(0xFF&0xF0)",
         ),
@@ -498,8 +594,11 @@ fn bveq_netlist_walk_bootstrap() {
             Instr::Addi { rd: 0, imm: 42 },
             StateVals {
                 regs: [100, 0, 0, 0, 0, 0, 0, 0],
-                pc: 0, br: 0, ir: 0,
-                scratch: [0; 8], mem: [0; MEM_WORDS],
+                pc: 0,
+                br: 0,
+                ir: 0,
+                scratch: [0; 8],
+                mem: [0; MEM_WORDS],
             },
             "Addi(0,42) 100+42",
         ),
@@ -507,8 +606,11 @@ fn bveq_netlist_walk_bootstrap() {
             Instr::Rotl { rd: 0, rs: 1 },
             StateVals {
                 regs: [0b1010_0101, 3, 0, 0, 0, 0, 0, 0],
-                pc: 0, br: 0, ir: 0,
-                scratch: [0; 8], mem: [0; MEM_WORDS],
+                pc: 0,
+                br: 0,
+                ir: 0,
+                scratch: [0; 8],
+                mem: [0; MEM_WORDS],
             },
             "Rotl(0,1) 0xA5<<3",
         ),
@@ -538,14 +640,12 @@ fn bveq_netlist_walk_bootstrap() {
                 bveq_netlist::SV::Pair(cpu, mem) => (&**cpu, &**mem),
                 _ => panic!("{label}: composite not Pair"),
             };
-            let walked_regs: [u8; NUM_REGS] = std::array::from_fn(|r| {
-                sv_to_u8(extract_field(cpu_sv, r, NUM_CPU_FIELDS), vs)
-            });
+            let walked_regs: [u8; NUM_REGS] =
+                std::array::from_fn(|r| sv_to_u8(extract_field(cpu_sv, r, NUM_CPU_FIELDS), vs));
 
             // Run the real machine.
-            let real = run_rom_on_cpu(
-                &[*instr], init.clone(), 1, 0, theseus_eval::eval,
-            ).unwrap_or_else(|e| panic!("{label}: run_rom_on_cpu: {e}"));
+            let real = run_rom_on_cpu(&[*instr], init.clone(), 1, 0, theseus_eval::eval)
+                .unwrap_or_else(|e| panic!("{label}: run_rom_on_cpu: {e}"));
 
             assert_eq!(
                 walked_regs, real.regs,
@@ -597,7 +697,10 @@ fn bveq_netlist_negative_xor_vs_add() {
                 break;
             }
         }
-        assert!(found_mismatch, "xor-netlist vs add-semantics: no mismatch found (vacuous!)");
+        assert!(
+            found_mismatch,
+            "xor-netlist vs add-semantics: no mismatch found (vacuous!)"
+        );
     });
 }
 

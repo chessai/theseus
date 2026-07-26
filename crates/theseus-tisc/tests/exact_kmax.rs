@@ -98,12 +98,14 @@ fn f1_large_u_fast_exit_compiles() {
     assert!(old_wcet > 256, "old WCET {old_wcet} should exceed 256 cap");
 
     // Now it compiles with exact-k_max.
-    let lowered = compile_with_metadata(&iso).expect(
-        "Flat(5) Id-body Trace must compile under exact-k_max (k_exact=2, WCET=24)",
-    );
+    let lowered = compile_with_metadata(&iso)
+        .expect("Flat(5) Id-body Trace must compile under exact-k_max (k_exact=2, WCET=24)");
     let (k_max, iter_len) = lowered.loop_terms[0];
     assert_eq!(k_max, 2, "k_exact = max(T=1) + 1 = 2");
-    assert_eq!(iter_len, 10, "Id body = 0 instrs, iter_len = LOOP_OVERHEAD = 10");
+    assert_eq!(
+        iter_len, 10,
+        "Id body = 0 instrs, iter_len = LOOP_OVERHEAD = 10"
+    );
     let wcet = lowered.wcet();
     assert_eq!(wcet, 24, "spine(4) + 2*10 = 24");
     assert!(wcet <= 256, "exact-k_max WCET {wcet} must fit in 256 cap");
@@ -147,8 +149,8 @@ fn f2_k_exact_never_looser() {
     ];
 
     for (name, iso, u_ty) in &cases {
-        let lowered = compile_with_metadata(iso)
-            .unwrap_or_else(|e| panic!("{name}: compile failed: {e}"));
+        let lowered =
+            compile_with_metadata(iso).unwrap_or_else(|e| panic!("{name}: compile failed: {e}"));
         let (k_max, _) = lowered.loop_terms[0];
         let u_card = enumerate_values(u_ty).len();
         let k_fallback = u_card + 1;
@@ -182,7 +184,10 @@ fn f3_mde_walk_soundness() {
         let cpu = run_on_cpu_fast(&iso, &v).expect("run");
         let mut fuel = 10_000u64;
         let ev = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval");
-        assert_eq!(cpu, ev, "mde_walk: fast-oracle disagrees with eval on {v:?}");
+        assert_eq!(
+            cpu, ev,
+            "mde_walk: fast-oracle disagrees with eval on {v:?}"
+        );
     }
     eprintln!(
         "F3: mde_walk soundness: k_max={k_max}, WCET={}, 2/2 green",
@@ -232,8 +237,8 @@ fn h1_large_u_id_body_real_cpu() {
 
     let u_card = enumerate_values(&u_ty).len();
     for v in enumerate_values(&u_ty) {
-        let cpu = theseus_tisc::compile::run_on_cpu(&iso, &v, theseus_eval::eval)
-            .expect("run_on_cpu");
+        let cpu =
+            theseus_tisc::compile::run_on_cpu(&iso, &v, theseus_eval::eval).expect("run_on_cpu");
         let mut fuel = 100_000u64;
         let ev = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval");
         assert_eq!(cpu, ev, "real CPU disagrees with eval on {v:?}");
@@ -249,8 +254,8 @@ fn h1_mde_walk_real_cpu() {
     let iso = Iso::trace(u_ty, body);
 
     for v in enumerate_values(&bit) {
-        let cpu = theseus_tisc::compile::run_on_cpu(&iso, &v, theseus_eval::eval)
-            .expect("run_on_cpu");
+        let cpu =
+            theseus_tisc::compile::run_on_cpu(&iso, &v, theseus_eval::eval).expect("run_on_cpu");
         let mut fuel = 10_000u64;
         let ev = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval");
         assert_eq!(cpu, ev, "real CPU disagrees with eval on {v:?}");

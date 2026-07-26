@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 
 use theseus_core::{Iso, Type, Value};
 use theseus_tisc::compile::{
-    compile_with_metadata_resident, marshal_resident, memexch_prim,
-    run_on_cpu_fast_resident, value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
+    compile_with_metadata_resident, marshal_resident, memexch_prim, run_on_cpu_fast_resident,
+    value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
 };
 use theseus_tisc::energy::rom_trace;
 
@@ -35,11 +35,17 @@ fn notb() -> Iso {
     Iso::SwapSum(Type::One, Type::One)
 }
 fn bit_val(b: u8) -> Value {
-    if b == 0 { Value::left(Value::Unit) } else { Value::right(Value::Unit) }
+    if b == 0 {
+        Value::left(Value::Unit)
+    } else {
+        Value::right(Value::Unit)
+    }
 }
 fn numeral(k: usize) -> Value {
     let mut v = Value::left(Value::Unit);
-    for _ in 0..k { v = Value::right(v); }
+    for _ in 0..k {
+        v = Value::right(v);
+    }
     v
 }
 
@@ -58,8 +64,13 @@ fn map_iso(d: usize) -> Iso {
 fn map_input(k: usize, data: u8, idx: u8, a0: u8, a1: u8) -> Value {
     Value::pair(
         numeral(k),
-        Value::pair(bit_val(data), Value::pair(bit_val(idx),
-            Value::pair(bit_val(a0), Value::pair(bit_val(a1), Value::Unit)))),
+        Value::pair(
+            bit_val(data),
+            Value::pair(
+                bit_val(idx),
+                Value::pair(bit_val(a0), Value::pair(bit_val(a1), Value::Unit)),
+            ),
+        ),
     )
 }
 
@@ -74,28 +85,39 @@ fn xor_prim() -> Iso {
     }
     let backward = forward.clone();
     Iso::Prim(Box::new(theseus_core::prim::PrimDef {
-        forward_name: "xor".into(), backward_name: "xor".into(),
-        input_ty: ty.clone(), output_ty: ty, forward, backward,
+        forward_name: "xor".into(),
+        backward_name: "xor".into(),
+        input_ty: ty.clone(),
+        output_ty: ty,
+        forward,
+        backward,
         symbolic: None,
     }))
 }
 fn reduce_iso(d: usize) -> Iso {
-    let reduce_step = Iso::seq(Iso::SwapProd(bit(), bit()),
-        Iso::seq(xor_prim(), Iso::SwapProd(bit(), bit())));
+    let reduce_step = Iso::seq(
+        Iso::SwapProd(bit(), bit()),
+        Iso::seq(xor_prim(), Iso::SwapProd(bit(), bit())),
+    );
     let idacc_mexch = Iso::times(Iso::Id(bit()), memexch());
     let body = Iso::seq(
         Iso::seq(
             Iso::seq(
                 Iso::seq(
-                    Iso::seq(idacc_mexch.clone(), Iso::AssocLProd(bit(), bit(), idx_arr_ty())),
+                    Iso::seq(
+                        idacc_mexch.clone(),
+                        Iso::AssocLProd(bit(), bit(), idx_arr_ty()),
+                    ),
                     Iso::times(reduce_step, Iso::Id(idx_arr_ty())),
                 ),
                 Iso::AssocRProd(bit(), bit(), idx_arr_ty()),
             ),
             idacc_mexch,
         ),
-        Iso::times(Iso::Id(bit()),
-            Iso::times(Iso::Id(bit()), Iso::times(notb(), Iso::Id(arr_ty())))),
+        Iso::times(
+            Iso::Id(bit()),
+            Iso::times(Iso::Id(bit()), Iso::times(notb(), Iso::Id(arr_ty()))),
+        ),
     );
     Iso::iter(Type::numeral_ty(d), body)
 }
@@ -103,21 +125,41 @@ fn reduce_iso(d: usize) -> Iso {
 fn reduce_input(k: usize, acc: u8, data: u8, idx: u8, a0: u8, a1: u8) -> Value {
     Value::pair(
         numeral(k),
-        Value::pair(bit_val(acc), Value::pair(bit_val(data), Value::pair(bit_val(idx),
-            Value::pair(bit_val(a0), Value::pair(bit_val(a1), Value::Unit))))),
+        Value::pair(
+            bit_val(acc),
+            Value::pair(
+                bit_val(data),
+                Value::pair(
+                    bit_val(idx),
+                    Value::pair(bit_val(a0), Value::pair(bit_val(a1), Value::Unit)),
+                ),
+            ),
+        ),
     )
 }
 
-fn histogram(name: &str, iso: &Iso, d: usize, ty: &Type,
-             sample: &Value, inputs: &dyn Fn(usize) -> Value) {
+fn histogram(
+    name: &str,
+    iso: &Iso,
+    d: usize,
+    ty: &Type,
+    sample: &Value,
+    inputs: &dyn Fn(usize) -> Value,
+) {
     let lowered = compile_with_metadata_resident(iso, 2).expect("compile");
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
     let b = lowered.wcet();
-    let n_mexchr = lowered.instrs.iter()
-        .filter(|i| matches!(i, theseus_tisc::asm::Instr::MexchReg { .. })).count();
+    let n_mexchr = lowered
+        .instrs
+        .iter()
+        .filter(|i| matches!(i, theseus_tisc::asm::Instr::MexchReg { .. }))
+        .count();
 
     println!("\n=== {name} (d={d}) ===");
-    println!("compiled → {}-instr ROM, {n_mexchr} MexchReg, WCET B={b}", rom.len());
+    println!(
+        "compiled → {}-instr ROM, {n_mexchr} MexchReg, WCET B={b}",
+        rom.len()
+    );
 
     // Run on the simulated CPU and check against eval.
     let mut fuel = 5_000_000u64;
@@ -125,8 +167,14 @@ fn histogram(name: &str, iso: &Iso, d: usize, ty: &Type,
     let cpu_out = run_on_cpu_fast_resident(iso, sample, 2).expect("run_on_cpu");
     println!("sample run:  in {sample:?}");
     println!("  CPU out    {cpu_out:?}");
-    println!("  eval out   {eval_out:?}   [{}]",
-        if cpu_out == eval_out { "run_on_cpu == eval ✓" } else { "MISMATCH ✗" });
+    println!(
+        "  eval out   {eval_out:?}   [{}]",
+        if cpu_out == eval_out {
+            "run_on_cpu == eval ✓"
+        } else {
+            "MISMATCH ✗"
+        }
+    );
 
     // Park-tax histogram: sweep the runtime count k.
     println!("  k |  T(k) | park_tax=(B-T)/B");
@@ -143,17 +191,42 @@ fn histogram(name: &str, iso: &Iso, d: usize, ty: &Type,
 fn main() {
     // f2: array MAP (flip each of the first k words), d=4.
     let map = map_iso(4);
-    let map_ty = Type::prod(Type::numeral_ty(4), Type::prod(bit(),
-        Type::prod(bit(), Type::prod(bit(), Type::prod(bit(), Type::One)))));
-    histogram("array MAP  (arr[i] ↦ ¬arr[i])", &map, 4, &map_ty,
-        &map_input(2, 0, 0, 1, 0), &|k| map_input(k, 0, 0, 1, 0));
+    let map_ty = Type::prod(
+        Type::numeral_ty(4),
+        Type::prod(
+            bit(),
+            Type::prod(bit(), Type::prod(bit(), Type::prod(bit(), Type::One))),
+        ),
+    );
+    histogram(
+        "array MAP  (arr[i] ↦ ¬arr[i])",
+        &map,
+        4,
+        &map_ty,
+        &map_input(2, 0, 0, 1, 0),
+        &|k| map_input(k, 0, 0, 1, 0),
+    );
 
     // f3: XOR/parity REDUCE (acc ⊕= arr[i]), d=3.
     let reduce = reduce_iso(3);
-    let red_ty = Type::prod(Type::numeral_ty(3), Type::prod(bit(), Type::prod(bit(),
-        Type::prod(bit(), Type::prod(bit(), Type::prod(bit(), Type::One))))));
-    histogram("XOR reduce (acc ⊕= arr[i])", &reduce, 3, &red_ty,
-        &reduce_input(2, 0, 0, 0, 1, 1), &|k| reduce_input(k, 0, 0, 0, 1, 0));
+    let red_ty = Type::prod(
+        Type::numeral_ty(3),
+        Type::prod(
+            bit(),
+            Type::prod(
+                bit(),
+                Type::prod(bit(), Type::prod(bit(), Type::prod(bit(), Type::One))),
+            ),
+        ),
+    );
+    histogram(
+        "XOR reduce (acc ⊕= arr[i])",
+        &reduce,
+        3,
+        &red_ty,
+        &reduce_input(2, 0, 0, 0, 1, 1),
+        &|k| reduce_input(k, 0, 0, 0, 1, 0),
+    );
 
     println!("\n(joules: `cargo run -p theseus-tisc --example rom_energy` prices the fib ROM in measured pJ.)");
 }

@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! CPU money-plot mechanics (ADR-0028/0030).
 //!
 //! The *headline* numbers (the full TISC-1 step: active logic below the
@@ -29,9 +30,7 @@ fn db() -> &'static CharDb {
 /// this net exercises the zero-garbage cell in the energy path.
 fn add_net() -> &'static PhasedCellNetlist {
     static N: OnceLock<PhasedCellNetlist> = OnceLock::new();
-    N.get_or_init(|| {
-        lower_iso(&theseus_tisc::instr::add(0, 1)).expect("lower ADD")
-    })
+    N.get_or_init(|| lower_iso(&theseus_tisc::instr::add(0, 1)).expect("lower ADD"))
 }
 
 #[test]
@@ -66,13 +65,11 @@ fn cmos_reference_flat_and_crossing_finite() {
     let plot = cpu_money_plot(add_net(), db(), &AXIS).unwrap();
     assert!(plot.cmos_ref_j > 0.0, "CMOS reference must be positive");
     // CMOS = active_cells × ½CV²/gate, a flat line.
-    let expected = plot.active_cells as f64
-        * theseus_tisc::money_plot::CMOS_STATIC_E_PER_GATE_J;
+    let expected = plot.active_cells as f64 * theseus_tisc::money_plot::CMOS_STATIC_E_PER_GATE_J;
     assert!((plot.cmos_ref_j - expected).abs() < 1e-30);
     // The 1/T adiabatic curve must cross the flat CMOS line at a finite,
     // positive ramp time.
-    let tc = cmos_crossing_t_ramp(&plot.full_step, plot.cmos_ref_j)
-        .expect("finite crossing");
+    let tc = cmos_crossing_t_ramp(&plot.full_step, plot.cmos_ref_j).expect("finite crossing");
     assert!(
         tc > 0.0 && tc.is_finite(),
         "CMOS crossing must be finite positive, got {tc}"

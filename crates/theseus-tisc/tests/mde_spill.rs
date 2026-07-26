@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! M-D.e slice 1 — loop-carrier scratch-spill machinery proof.
 //!
 //! Trace(u=N5, walk) with a 5-leaf carrier (4 payload leaves) so payload
@@ -22,8 +23,8 @@ use theseus_core::prim::{enumerate_values, PrimDef};
 use theseus_core::{Iso, Type};
 use theseus_tisc::asm::{assemble, Instr};
 use theseus_tisc::compile::{
-    compile, compile_with_metadata, marshal, mde_walk_bytes, run_on_cpu_fast,
-    run_rom_on_cpu, unmarshal, CompileError,
+    compile, compile_with_metadata, marshal, mde_walk_bytes, run_on_cpu_fast, run_rom_on_cpu,
+    unmarshal, CompileError,
 };
 use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
@@ -232,9 +233,14 @@ fn mde_spill_real_cpu() {
 
         // Run via run_rom_on_cpu to get the full final StateVals (condition 4).
         let state = marshal(&v, &in_ty);
-        let final_state =
-            run_rom_on_cpu(&lowered.instrs, state, budget, s_max_val, theseus_eval::eval)
-                .expect("real-cpu run");
+        let final_state = run_rom_on_cpu(
+            &lowered.instrs,
+            state,
+            budget,
+            s_max_val,
+            theseus_eval::eval,
+        )
+        .expect("real-cpu run");
 
         let cpu_out = unmarshal(&final_state, &out_ty);
         let mut fuel = 1_000_000u64;
@@ -246,8 +252,7 @@ fn mde_spill_real_cpu() {
         // A paging bug leaving garbage in s2 at exit with correct output
         // regs would otherwise pass both oracles (unmarshal of Bit reads r0 only).
         assert_eq!(
-            final_state.scratch,
-            [0u8; NUM_SCRATCH],
+            final_state.scratch, [0u8; NUM_SCRATCH],
             "scratch must be all-zero at exit (paging leak check): scratch={:?}",
             final_state.scratch
         );
@@ -271,8 +276,7 @@ fn mde_spill_system_ring_closure() {
     let ring = system_ring(&rom);
 
     // validate()==Ok on the spilled-carrier ROM's timing certificate.
-    let cert = two_body_timing_certificate(&rom)
-        .expect("no rail skew on spill-trace ROM");
+    let cert = two_body_timing_certificate(&rom).expect("no rail skew on spill-trace ROM");
     cert.validate()
         .expect("validate() must pass on spill-trace ROM (M-D.e closure obligation)");
 
@@ -294,16 +298,14 @@ fn mde_spill_system_ring_closure() {
         let mut fuel = 8_000_000_000u64;
 
         for _ in 0..budget {
-            cur = theseus_eval::eval(&step_iso, cur, &mut fuel)
-                .expect("ring step failed");
+            cur = theseus_eval::eval(&step_iso, cur, &mut fuel).expect("ring step failed");
         }
 
         let final_state = decode_system(&cur);
         let cpu_out = unmarshal(&final_state, &out_ty);
 
         let mut eval_fuel = 1_000_000u64;
-        let eval_out = theseus_eval::eval(&iso, v.clone(), &mut eval_fuel)
-            .expect("eval failed");
+        let eval_out = theseus_eval::eval(&iso, v.clone(), &mut eval_fuel).expect("eval failed");
 
         assert_eq!(
             cpu_out, eval_out,

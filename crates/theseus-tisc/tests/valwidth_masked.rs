@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Value-width slice-4 (final rung): byte-parallel masked accumulate
 //! `acc ^= key & arr[i]` at Flat(4) via `fold` over a Flat(4) list spine.
 //!
@@ -52,7 +53,11 @@ fn list_spine_val(elems: &[u8], w: u8, d: usize) -> Value {
     let ty = Type::list_spine_ty(Type::Flat(w), d);
     let bytes = value_to_leaf_bytes_pub(&val, &ty);
     let (rt_val, consumed) = value_from_leaf_bytes_pub(&bytes, &ty);
-    assert_eq!(consumed, bytes.len(), "list_spine_val round-trip: consumed mismatch");
+    assert_eq!(
+        consumed,
+        bytes.len(),
+        "list_spine_val round-trip: consumed mismatch"
+    );
     assert_eq!(rt_val, val, "list_spine_val round-trip: value mismatch");
     val
 }
@@ -115,7 +120,10 @@ fn masked_fold_ty(d: usize) -> Type {
 /// Build a full maskedFold input: Pair(list_spine_val, Pair(thermo(key), thermo(acc))).
 fn masked_fold_input(elems: &[u8], key: u8, acc: u8, d: usize) -> Value {
     let list_val = list_spine_val(elems, 4, d);
-    Value::pair(list_val, Value::pair(thermo(key as usize), thermo(acc as usize)))
+    Value::pair(
+        list_val,
+        Value::pair(thermo(key as usize), thermo(acc as usize)),
+    )
 }
 
 /// Extract the accumulator byte from a maskedFold output value.
@@ -201,10 +209,7 @@ fn t_instr_dense_byte_system_ring() {
         );
 
         // Assert bus quiescent.
-        assert!(
-            ring.bus_quiescent(&state),
-            "bus NOT quiescent for {label}"
-        );
+        assert!(ring.bus_quiescent(&state), "bus NOT quiescent for {label}");
 
         // Assert rd got the right value.
         assert_eq!(
@@ -250,11 +255,16 @@ fn t_prog_whole_domain() {
 
     // Pin: D=3 compiles to 26 instrs with exactly 2 Ccnots.
     assert_eq!(
-        h.instrs.len(), 26,
+        h.instrs.len(),
+        26,
         "D=3 maskedFold must compile to 26 instrs, got {}",
         h.instrs.len()
     );
-    let ccnot_count = h.instrs.iter().filter(|i| matches!(i, Instr::Ccnot { .. })).count();
+    let ccnot_count = h
+        .instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Ccnot { .. }))
+        .count();
     assert_eq!(
         ccnot_count, 2,
         "D=3 maskedFold must contain exactly 2 Ccnots, got {ccnot_count}"
@@ -280,8 +290,8 @@ fn t_prog_whole_domain() {
         let rom_out = unmarshal(&final_state, &ty);
 
         let mut fuel = 100_000_000u64;
-        let eval_out = theseus_eval::eval(&eval_iso, v.clone(), &mut fuel)
-            .expect("eval maskedFold D=3");
+        let eval_out =
+            theseus_eval::eval(&eval_iso, v.clone(), &mut fuel).expect("eval maskedFold D=3");
 
         assert_eq!(rom_out, eval_out, "maskedFold D=3: rom vs eval mismatch");
 
@@ -321,7 +331,8 @@ fn t_prog_disc_discriminating() {
 
         let expected = acc0 ^ 2; // byte-parallel result
         assert_eq!(
-            out_acc, expected,
+            out_acc,
+            expected,
             "discriminating case: acc0={acc0}, expected acc^=2={expected}, got {out_acc} \
              (a bit-0 decoder would give {}, proving byte-parallel AND)",
             acc0 // bit-0 would leave acc0 unchanged since 2&1=0
@@ -340,10 +351,10 @@ fn t_real_cpu() {
     // Dense-byte masked step: single Ccnot instruction on system_step.
     // Also include Flat(4) masked-fold samples including the discriminating case.
     let samples: Vec<(Vec<u8>, u8, u8)> = vec![
-        (vec![], 5, 3),          // empty list
-        (vec![7], 3, 0),         // len-1
-        (vec![2], 2, 0),         // discriminating case
-        (vec![15, 1], 7, 10),    // len-2
+        (vec![], 5, 3),       // empty list
+        (vec![7], 3, 0),      // len-1
+        (vec![2], 2, 0),      // discriminating case
+        (vec![15, 1], 7, 10), // len-2
     ];
 
     let eval_def = masked_step_prim_def(4);
@@ -355,8 +366,8 @@ fn t_real_cpu() {
     for (elems, key, acc0) in &samples {
         let input = masked_fold_input(elems, *key, *acc0, d);
         let mut fuel = 100_000_000u64;
-        let expected = theseus_eval::eval(&eval_iso, input.clone(), &mut fuel)
-            .expect("eval maskedFold D=3");
+        let expected =
+            theseus_eval::eval(&eval_iso, input.clone(), &mut fuel).expect("eval maskedFold D=3");
 
         let got = run_on_cpu_resident(&iso, &input, 0, |iso, v, fuel| {
             theseus_eval::eval(iso, v, fuel)
@@ -389,8 +400,5 @@ fn t7_system_ring_closure() {
         ring.ancillas_restored(&state),
         "SystemRing ancillas not restored"
     );
-    assert!(
-        ring.bus_quiescent(&state),
-        "SystemRing bus not quiescent"
-    );
+    assert!(ring.bus_quiescent(&state), "SystemRing bus not quiescent");
 }

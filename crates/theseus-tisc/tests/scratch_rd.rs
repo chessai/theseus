@@ -73,9 +73,25 @@ fn scratch_rd_samples() -> Vec<(&'static str, Instr, StateVals)> {
     v.push(("rotr", Instr::Rotr { rd: 14, rs: 6 }, st(mk(0xFF), 0)));
     v.push(("exch", Instr::Exch { rd: 15, rs: 2 }, st(mk(0xAA), 0)));
     // Cswap with scratch rd (predicate source): rd=s2, rs=r4, rt=r6.
-    v.push(("cswap_taken", Instr::Cswap { rd: 10, rs: 4, rt: 6 }, st(mk(0x01), 0)));
+    v.push((
+        "cswap_taken",
+        Instr::Cswap {
+            rd: 10,
+            rs: 4,
+            rt: 6,
+        },
+        st(mk(0x01), 0),
+    ));
     // Ccnot with scratch rd: rd=s3, rs=r1, rt=r2.
-    v.push(("ccnot", Instr::Ccnot { rd: 11, rs: 1, rt: 2 }, st(mk(0xFF), 0)));
+    v.push((
+        "ccnot",
+        Instr::Ccnot {
+            rd: 11,
+            rs: 1,
+            rt: 2,
+        },
+        st(mk(0xFF), 0),
+    ));
     // NB: Swapbr is register-only by ISA (`rd < NUM_REGS`), so it has no
     // scratch-rd form. Xchg is EXCLUDED here: it is the sole op that
     // composes `select_operand(rd)` with `select_scratch(sx)` over the
@@ -111,17 +127,38 @@ fn scratch_rd_shared_and_replicated_match_isa() {
         let got_repl = eval_state(name, &replicated, &s);
 
         eprintln!("op={name} instr={instr:?}");
-        eprintln!("  in        : regs={:02x?} scratch={:02x?} br={:#04x}", s.regs, s.scratch, s.br);
-        eprintln!("  expected  : regs={:02x?} scratch={:02x?} br={:#04x}", expected.regs, expected.scratch, expected.br);
-        eprintln!("  shared    : regs={:02x?} scratch={:02x?} br={:#04x}", got_shared.regs, got_shared.scratch, got_shared.br);
-        eprintln!("  replicated: regs={:02x?} scratch={:02x?} br={:#04x}", got_repl.regs, got_repl.scratch, got_repl.br);
+        eprintln!(
+            "  in        : regs={:02x?} scratch={:02x?} br={:#04x}",
+            s.regs, s.scratch, s.br
+        );
+        eprintln!(
+            "  expected  : regs={:02x?} scratch={:02x?} br={:#04x}",
+            expected.regs, expected.scratch, expected.br
+        );
+        eprintln!(
+            "  shared    : regs={:02x?} scratch={:02x?} br={:#04x}",
+            got_shared.regs, got_shared.scratch, got_shared.br
+        );
+        eprintln!(
+            "  replicated: regs={:02x?} scratch={:02x?} br={:#04x}",
+            got_repl.regs, got_repl.scratch, got_repl.br
+        );
 
         assert_eq!(got_shared, expected, "SHARED wrong for {name} ({instr:?})");
-        assert_eq!(got_repl, expected, "REPLICATED wrong for {name} ({instr:?})");
-        assert_eq!(got_shared, got_repl, "shared != replicated for {name} ({instr:?})");
+        assert_eq!(
+            got_repl, expected,
+            "REPLICATED wrong for {name} ({instr:?})"
+        );
+        assert_eq!(
+            got_shared, got_repl,
+            "shared != replicated for {name} ({instr:?})"
+        );
         // Inter-step invariant: operand buffer (s0) and predicate (s1)
         // must be left at zero after any instruction.
-        assert_eq!(got_shared.scratch[0], 0, "{name}: s0 (operand buffer) dirty");
+        assert_eq!(
+            got_shared.scratch[0], 0,
+            "{name}: s0 (operand buffer) dirty"
+        );
         assert_eq!(got_shared.scratch[1], 0, "{name}: s1 (predicate) dirty");
     }
 }

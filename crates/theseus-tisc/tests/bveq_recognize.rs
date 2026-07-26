@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! BVEQ emission-verifier tests (slice-2: decomposed check).
 //!
 //! T-suite-agree: the verifier ACCEPTs every currently-recognized prim.
@@ -12,11 +13,10 @@ use theseus_core::prim::{enumerate_values, PrimDef};
 use theseus_core::{Type, Value};
 use theseus_tisc::asm::Instr;
 use theseus_tisc::compile::{
-    bveq_verify_emission, recognize_prim, mde_walk_bytes,
-    CompileError, Ctx, Location, OccSet,
-    marshal, unmarshal, value_to_leaf_bytes_pub,
+    bveq_verify_emission, marshal, mde_walk_bytes, recognize_prim, unmarshal,
+    value_to_leaf_bytes_pub, CompileError, Ctx, Location, OccSet,
 };
-use theseus_tisc::types::{NUM_REGS, NUM_SCRATCH, MEM_WORDS, StateVals};
+use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -88,7 +88,9 @@ fn prim_3reg(name: &str, ty: &Type, f: impl Fn(u8, u8, u8) -> (u8, u8, u8)) -> P
     let mut backward = BTreeMap::new();
     for v in &vals {
         let Value::Pair(c, ab) = v else { panic!() };
-        let Value::Pair(a, b) = ab.as_ref() else { panic!() };
+        let Value::Pair(a, b) = ab.as_ref() else {
+            panic!()
+        };
         let cb = leaf_val_to_u8(c);
         let ab_val = leaf_val_to_u8(a);
         let bb = leaf_val_to_u8(b);
@@ -250,30 +252,42 @@ fn t_suite_agree_rotr_f8() {
 #[test]
 fn t_suite_agree_cswap_f4() {
     let def = prim_3reg("cswap", &flat4(), |c, a, b| {
-        if c & 1 == 1 { (c, b, a) } else { (c, a, b) }
+        if c & 1 == 1 {
+            (c, b, a)
+        } else {
+            (c, a, b)
+        }
     });
     let regs: &[u8] = &[0, 1, 2];
-    let body = [Instr::Cswap { rd: 0, rs: 1, rt: 2 }];
+    let body = [Instr::Cswap {
+        rd: 0,
+        rs: 1,
+        rt: 2,
+    }];
     bveq_verify_emission(&body, &def, regs).unwrap();
 }
 
 #[test]
 fn t_suite_agree_ccnot_first_f4() {
-    let def = prim_3reg("ccnot_first", &flat4(), |t, c1, c2| {
-        (t ^ (c1 & c2), c1, c2)
-    });
+    let def = prim_3reg("ccnot_first", &flat4(), |t, c1, c2| (t ^ (c1 & c2), c1, c2));
     let regs: &[u8] = &[0, 1, 2];
-    let body = [Instr::Ccnot { rd: 0, rs: 1, rt: 2 }];
+    let body = [Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 2,
+    }];
     bveq_verify_emission(&body, &def, regs).unwrap();
 }
 
 #[test]
 fn t_suite_agree_ccnot_last_f4() {
-    let def = prim_3reg("ccnot_last", &flat4(), |c1, c2, t| {
-        (c1, c2, t ^ (c1 & c2))
-    });
+    let def = prim_3reg("ccnot_last", &flat4(), |c1, c2, t| (c1, c2, t ^ (c1 & c2)));
     let regs: &[u8] = &[0, 1, 2];
-    let body = [Instr::Ccnot { rd: 2, rs: 0, rt: 1 }];
+    let body = [Instr::Ccnot {
+        rd: 2,
+        rs: 0,
+        rt: 1,
+    }];
     bveq_verify_emission(&body, &def, regs).unwrap();
 }
 
@@ -352,9 +366,21 @@ fn t_suite_agree_mde_spill_walk() {
         Instr::Xor { rd: 2, rs: 3 },
         Instr::Xor { rd: 3, rs: 4 },
         Instr::Xori { rd: 0, imm: 1 },
-        Instr::Cswap { rd: 0, rs: 1, rt: 2 },
-        Instr::Cswap { rd: 0, rs: 2, rt: 3 },
-        Instr::Cswap { rd: 0, rs: 3, rt: 4 },
+        Instr::Cswap {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        },
+        Instr::Cswap {
+            rd: 0,
+            rs: 2,
+            rt: 3,
+        },
+        Instr::Cswap {
+            rd: 0,
+            rs: 3,
+            rt: 4,
+        },
         Instr::Xori { rd: 0, imm: 1 },
         Instr::Xor { rd: 3, rs: 4 },
         Instr::Xor { rd: 2, rs: 3 },
@@ -376,7 +402,10 @@ fn t_scratch_homed_recognition_passes() {
         occ: OccSet::from_locations(&[Location::Reg(0), Location::Scratch(2)]),
     };
     let result = recognize_prim(&def, &ctx);
-    assert!(result.is_ok(), "scratch-homed xorInto should be recognized: {result:?}");
+    assert!(
+        result.is_ok(),
+        "scratch-homed xorInto should be recognized: {result:?}"
+    );
     let instrs = result.unwrap();
     // The result should include Xchg page-in, the Xor body, and Xchg page-out.
     assert!(
@@ -440,7 +469,11 @@ fn t_operand_from_type_rejects_corruption() {
     let type_regs: &[u8] = &[0, 1];
     let body = [
         Instr::Xor { rd: 1, rs: 0 },
-        Instr::Ccnot { rd: 1, rs: 3, rt: 4 },
+        Instr::Ccnot {
+            rd: 1,
+            rs: 3,
+            rt: 4,
+        },
     ];
     let result = bveq_verify_emission(&body, &def, type_regs);
     assert!(
@@ -571,7 +604,11 @@ fn t_recognize_rotr_f8() {
 #[test]
 fn t_recognize_cswap_f4() {
     let def = prim_3reg("cswap", &flat4(), |c, a, b| {
-        if c & 1 == 1 { (c, b, a) } else { (c, a, b) }
+        if c & 1 == 1 {
+            (c, b, a)
+        } else {
+            (c, a, b)
+        }
     });
     let ctx = ctx_regs(3);
     let result = recognize_prim(&def, &ctx);
@@ -580,22 +617,24 @@ fn t_recognize_cswap_f4() {
 
 #[test]
 fn t_recognize_ccnot_first_f4() {
-    let def = prim_3reg("ccnot_first", &flat4(), |t, c1, c2| {
-        (t ^ (c1 & c2), c1, c2)
-    });
+    let def = prim_3reg("ccnot_first", &flat4(), |t, c1, c2| (t ^ (c1 & c2), c1, c2));
     let ctx = ctx_regs(3);
     let result = recognize_prim(&def, &ctx);
-    assert!(result.is_ok(), "ccnot-first should be recognized: {result:?}");
+    assert!(
+        result.is_ok(),
+        "ccnot-first should be recognized: {result:?}"
+    );
 }
 
 #[test]
 fn t_recognize_ccnot_last_f4() {
-    let def = prim_3reg("ccnot_last", &flat4(), |c1, c2, t| {
-        (c1, c2, t ^ (c1 & c2))
-    });
+    let def = prim_3reg("ccnot_last", &flat4(), |c1, c2, t| (c1, c2, t ^ (c1 & c2)));
     let ctx = ctx_regs(3);
     let result = recognize_prim(&def, &ctx);
-    assert!(result.is_ok(), "ccnot-last should be recognized: {result:?}");
+    assert!(
+        result.is_ok(),
+        "ccnot-last should be recognized: {result:?}"
+    );
 }
 
 #[test]
@@ -630,5 +669,8 @@ fn t_recognize_mde_spill_walk() {
     let def = build_walk_prim();
     let ctx = ctx_regs(5);
     let result = recognize_prim(&def, &ctx);
-    assert!(result.is_ok(), "mde_spill_walk should be recognized: {result:?}");
+    assert!(
+        result.is_ok(),
+        "mde_spill_walk should be recognized: {result:?}"
+    );
 }

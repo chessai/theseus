@@ -48,7 +48,11 @@ fn ccnot_mix_produces_and_verifies() {
     assert_produces_and_verifies(
         &spec_t,
         &[0, 1, 2],
-        &[Instr::Ccnot { rd: 0, rs: 1, rt: 2 }],
+        &[Instr::Ccnot {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        }],
     );
 }
 
@@ -65,7 +69,11 @@ fn affine_nonlinear_mix_produces_and_verifies() {
         &[0, 1, 2, 3],
         &[
             Instr::Xor { rd: 0, rs: 3 },
-            Instr::Ccnot { rd: 0, rs: 1, rt: 2 },
+            Instr::Ccnot {
+                rd: 0,
+                rs: 1,
+                rt: 2,
+            },
         ],
     );
 }
@@ -129,7 +137,10 @@ fn affine_plus_const_produces_and_verifies() {
     assert_produces_and_verifies(
         &spec_t,
         &[0, 1],
-        &[Instr::Xor { rd: 0, rs: 1 }, Instr::Xori { rd: 0, imm: MASK }],
+        &[
+            Instr::Xor { rd: 0, rs: 1 },
+            Instr::Xori { rd: 0, imm: MASK },
+        ],
     );
 }
 
@@ -139,11 +150,20 @@ fn cswap_produces_and_verifies() {
     // Emit the ground truth from a real Cswap and use that as the spec: this
     // guarantees the spec is EXACTLY what Cswap does, and the transcriber must
     // recover the single gate.
-    let spec_t = symbolic_exec(&[Instr::Cswap { rd: 0, rs: 1, rt: 2 }]).unwrap();
+    let spec_t = symbolic_exec(&[Instr::Cswap {
+        rd: 0,
+        rs: 1,
+        rt: 2,
+    }])
+    .unwrap();
     assert_produces_and_verifies(
         &spec_t,
         &[0, 1, 2],
-        &[Instr::Cswap { rd: 0, rs: 1, rt: 2 }],
+        &[Instr::Cswap {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        }],
     );
 }
 
@@ -217,9 +237,7 @@ fn out_of_class_cyclic_ordering_returns_err() {
 fn out_of_class_two_and_terms_returns_err() {
     // x ⊕ (y∧z) ⊕ (y∧w): a single in-place row can carry only one Ccnot.
     let spec_t = spec(|r, b| match r {
-        0 => v(0, b)
-            .xor(v(1, b).and(v(2, b)))
-            .xor(v(1, b).and(v(3, b))),
+        0 => v(0, b).xor(v(1, b).and(v(2, b))).xor(v(1, b).and(v(3, b))),
         _ => v(r, b),
     });
     let res = transcribe_inplace(&spec_t);

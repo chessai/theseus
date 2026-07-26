@@ -87,7 +87,10 @@ fn symbolic_complete(
     carrier_fn: impl Fn(usize, usize) -> BvExpr,
 ) -> Vec<Instr> {
     let total = 2 * n + n_work;
-    assert!(total <= NUM_REGS, "register dry-run needs ≤ {NUM_REGS} regs, want {total}");
+    assert!(
+        total <= NUM_REGS,
+        "register dry-run needs ≤ {NUM_REGS} regs, want {total}"
+    );
     let carriers: Vec<u8> = (0..n as u8).collect();
     let ancilla: Vec<u8> = (n as u8..2 * n as u8).collect();
     let work: Vec<u8> = (2 * n as u8..(2 * n + n_work) as u8).collect();
@@ -112,9 +115,8 @@ fn symbolic_complete(
             .collect(),
     };
     let touched: Vec<usize> = (0..total).collect();
-    equiv(&got0, &expected, BITS, &touched).expect(
-        "word-Bennett: carriers = fwd, ancilla+work ≡ 0 (complete bwd=fwd⁻¹ + net-zero)",
-    );
+    equiv(&got0, &expected, BITS, &touched)
+        .expect("word-Bennett: carriers = fwd, ancilla+work ≡ 0 (complete bwd=fwd⁻¹ + net-zero)");
     body
 }
 
@@ -138,12 +140,14 @@ fn word_bennett_swap_symbolic_complete() {
         1 => v(0, b), // carrier1 ends = a
         _ => v(r, b),
     });
-    let (_, peak) =
-        transcribe_word_bennett_peak(&fwd, &bwd, &[0, 1], &[2, 3], &[4]).unwrap();
+    let (_, peak) = transcribe_word_bennett_peak(&fwd, &bwd, &[0, 1], &[2, 3], &[4]).unwrap();
     eprintln!("SWAP gate_count = {}, peak_work = {peak}", body.len());
     // out = Var → realized directly into the clean ancilla (o ^= carrier); no
     // value-temp, no scratch → peak work 0.
-    assert_eq!(peak, 0, "swap outputs are bare carriers (direct XOR into ancilla)");
+    assert_eq!(
+        peak, 0,
+        "swap outputs are bare carriers (direct XOR into ancilla)"
+    );
 }
 
 /// TEETH: a wrong bwd (identity instead of swap) must leave the ancilla ≠ 0 —
@@ -158,8 +162,7 @@ fn word_bennett_swap_teeth_wrong_bwd() {
     let carriers = [0u8, 1];
     let ancilla = [2u8, 3];
     let work = [4u8];
-    let body =
-        transcribe_word_bennett(&fwd, &wrong_bwd, &carriers, &ancilla, &work).unwrap();
+    let body = transcribe_word_bennett(&fwd, &wrong_bwd, &carriers, &ancilla, &work).unwrap();
     let got = symbolic_exec(&body).unwrap();
     let got0 = transfer_zero_out(&got, &[2, 3, 4]);
     let expected = RegTransfer {
@@ -194,11 +197,8 @@ fn cond_sub_fwd(sub: bool) -> WForward {
     };
     WForward {
         outputs: vec![
-            (0, WValue::var(0)), // g preserved
-            (
-                1,
-                WValue::select(WValue::var(0), combine, WValue::var(1)),
-            ), // g&1 ? a±g : a
+            (0, WValue::var(0)),                                          // g preserved
+            (1, WValue::select(WValue::var(0), combine, WValue::var(1))), // g&1 ? a±g : a
         ],
     }
 }
@@ -213,8 +213,7 @@ fn word_bennett_cond_subtract_symbolic_complete() {
     let carriers = [0u8, 1];
     let ancilla = [2u8, 3];
     let work: Vec<u8> = vec![4, 5, 6, 7]; // peak ≤ 4
-    let body =
-        transcribe_word_bennett(&fwd, &bwd, &carriers, &ancilla, &work).expect("build");
+    let body = transcribe_word_bennett(&fwd, &bwd, &carriers, &ancilla, &work).expect("build");
     assert_all_encode(&body);
 
     // Reference: g preserved; carrier1 = mux(g.bit0, a-g, a) at every bit — built
@@ -294,10 +293,10 @@ fn ltxor_fwd() -> WForward {
 fn word_bennett_ltxor_whole_domain_exec() {
     let fwd = ltxor_fwd();
     let bwd = ltxor_fwd(); // self-inverse
-    // carriers a=r0,b=r1,c=r2 (a,b preserved). Only c is active → 1 ancilla.
+                           // carriers a=r0,b=r1,c=r2 (a,b preserved). Only c is active → 1 ancilla.
     let carriers = [0u8, 1, 2];
     let ancilla = [10u8]; // c's ancilla (scratch s2)
-    // work: regs 3..8 (5) + scratch s3..s7 (11..16 → 11,12,13,14,15) (5) = 10.
+                          // work: regs 3..8 (5) + scratch s3..s7 (11..16 → 11,12,13,14,15) (5) = 10.
     let work: Vec<u8> = (3u8..8).chain(11u8..16).collect();
     let (body, peak) =
         transcribe_word_bennett_peak(&fwd, &bwd, &carriers, &ancilla, &work).expect("build");
@@ -317,18 +316,34 @@ fn word_bennett_ltxor_whole_domain_exec() {
                     exec_instr(instr, &mut st);
                 }
                 let toggle = if av < bv { 1u8 } else { 0u8 };
-                assert_eq!(st.operand_get(0), av, "ltxor a preserved (a={av},b={bv},c={cv})");
-                assert_eq!(st.operand_get(1), bv, "ltxor b preserved (a={av},b={bv},c={cv})");
+                assert_eq!(
+                    st.operand_get(0),
+                    av,
+                    "ltxor a preserved (a={av},b={bv},c={cv})"
+                );
+                assert_eq!(
+                    st.operand_get(1),
+                    bv,
+                    "ltxor b preserved (a={av},b={bv},c={cv})"
+                );
                 assert_eq!(
                     st.operand_get(2),
                     cv ^ toggle,
                     "ltxor c⊕(a<b) (a={av},b={bv},c={cv})"
                 );
                 for &t in &ancilla {
-                    assert_eq!(st.operand_get(t), 0, "ancilla {t} net-zero (a={av},b={bv},c={cv})");
+                    assert_eq!(
+                        st.operand_get(t),
+                        0,
+                        "ancilla {t} net-zero (a={av},b={bv},c={cv})"
+                    );
                 }
                 for &t in &work {
-                    assert_eq!(st.operand_get(t), 0, "work {t} net-zero (a={av},b={bv},c={cv})");
+                    assert_eq!(
+                        st.operand_get(t),
+                        0,
+                        "work {t} net-zero (a={av},b={bv},c={cv})"
+                    );
                 }
             }
         }

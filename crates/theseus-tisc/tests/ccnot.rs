@@ -14,8 +14,7 @@ use theseus_core::{Iso, Type};
 
 use theseus_tisc::asm::{decode, encode, AsmError, Instr};
 use theseus_tisc::compile::{
-    compile_with_metadata, run_on_cpu_resident,
-    value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
+    compile_with_metadata, run_on_cpu_resident, value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
 };
 
 // ── Type / prim helpers ────────────────────────────────────────────
@@ -114,10 +113,7 @@ fn t2_real_cpu_all_8() {
             theseus_eval::eval(iso, v, fuel)
         })
         .expect("run_on_cpu_resident");
-        assert_eq!(
-            got, expected,
-            "real CPU mismatch for input {input:?}"
-        );
+        assert_eq!(got, expected, "real CPU mismatch for input {input:?}");
     }
 }
 
@@ -136,10 +132,17 @@ fn t3_encode_decode_roundtrip() {
                 let word = encode(instr).expect("encode Ccnot");
                 // Verify opcode is 0b1011 (A-0: 6-bit opcode at bits 25..30).
                 assert_eq!((word >> 25) & 0x3F, 0b1011, "opcode must be 0b1011");
-                assert_eq!(word & 0x8000_0000, 0x8000_0000, "must be R-format (fmt bit 31)");
+                assert_eq!(
+                    word & 0x8000_0000,
+                    0x8000_0000,
+                    "must be R-format (fmt bit 31)"
+                );
                 // Round-trip.
                 let decoded = decode(word).expect("decode Ccnot");
-                assert_eq!(decoded, instr, "round-trip failed for rd={rd} rs={rs} rt={rt}");
+                assert_eq!(
+                    decoded, instr,
+                    "round-trip failed for rd={rd} rs={rs} rt={rt}"
+                );
             }
         }
     }
@@ -149,18 +152,42 @@ fn t3_encode_decode_roundtrip() {
 fn t3_ccnot_not_distinct_rejects() {
     // rd == rs
     assert!(matches!(
-        encode(Instr::Ccnot { rd: 1, rs: 1, rt: 2 }),
-        Err(AsmError::CcnotNotDistinct { rd: 1, rs: 1, rt: 2 })
+        encode(Instr::Ccnot {
+            rd: 1,
+            rs: 1,
+            rt: 2
+        }),
+        Err(AsmError::CcnotNotDistinct {
+            rd: 1,
+            rs: 1,
+            rt: 2
+        })
     ));
     // rd == rt
     assert!(matches!(
-        encode(Instr::Ccnot { rd: 3, rs: 0, rt: 3 }),
-        Err(AsmError::CcnotNotDistinct { rd: 3, rs: 0, rt: 3 })
+        encode(Instr::Ccnot {
+            rd: 3,
+            rs: 0,
+            rt: 3
+        }),
+        Err(AsmError::CcnotNotDistinct {
+            rd: 3,
+            rs: 0,
+            rt: 3
+        })
     ));
     // rs == rt
     assert!(matches!(
-        encode(Instr::Ccnot { rd: 0, rs: 4, rt: 4 }),
-        Err(AsmError::CcnotNotDistinct { rd: 0, rs: 4, rt: 4 })
+        encode(Instr::Ccnot {
+            rd: 0,
+            rs: 4,
+            rt: 4
+        }),
+        Err(AsmError::CcnotNotDistinct {
+            rd: 0,
+            rs: 4,
+            rt: 4
+        })
     ));
 }
 
@@ -195,7 +222,11 @@ fn t_dense_full_byte_and() {
 
     // Dense-byte full-byte AND: r[rd] ^= r[rs] & r[rt] over all 8 bits.
     // r0=0xAA, r1=0x55, r2=0xFF → r0 ^= (0x55 & 0xFF) = 0xAA ^ 0x55 = 0xFF
-    let instr = Instr::Ccnot { rd: 0, rs: 1, rt: 2 };
+    let instr = Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 2,
+    };
     let rom = vec![encode(instr).unwrap()];
 
     let state = StateVals {
@@ -209,8 +240,7 @@ fn t_dense_full_byte_and() {
     let out = run_rom_fast(&rom, state.clone(), 1);
     let expected_rd: u8 = 0xFF; // 0xAA ^ (0x55 & 0xFF)
     assert_eq!(
-        out.regs[0],
-        expected_rd,
+        out.regs[0], expected_rd,
         "r0 should be 0xAA ^ (0x55 & 0xFF) = 0xFF (full-byte AND)"
     );
     assert_eq!(out.regs[1], 0x55, "r1 unchanged");
@@ -218,7 +248,11 @@ fn t_dense_full_byte_and() {
     assert_eq!(out.regs[3..], state.regs[3..], "other regs unchanged");
 
     // Case 2: r3=0x33, rs=r0=0xAA, rt=r4=0x44 → r3 ^= (0xAA & 0x44) = 0x33 ^ 0x00 = 0x33
-    let instr2 = Instr::Ccnot { rd: 3, rs: 0, rt: 4 };
+    let instr2 = Instr::Ccnot {
+        rd: 3,
+        rs: 0,
+        rt: 4,
+    };
     let rom2 = vec![encode(instr2).unwrap()];
     let state2 = StateVals {
         regs: [0xAA, 0x55, 0xFF, 0x33, 0x44, 0x66, 0x77, 0x88],
@@ -230,7 +264,10 @@ fn t_dense_full_byte_and() {
     };
     let out2 = run_rom_fast(&rom2, state2.clone(), 1);
     // 0xAA & 0x44 = 0x00, so r3 ^= 0x00 = 0x33; all regs unchanged.
-    assert_eq!(out2.regs, state2.regs, "case 2: all regs unchanged (AND product is 0x00)");
+    assert_eq!(
+        out2.regs, state2.regs,
+        "case 2: all regs unchanged (AND product is 0x00)"
+    );
 }
 
 // ── T-neg: 2-leaf xor recognizes as Xor NOT Ccnot ─────────────────
@@ -284,7 +321,22 @@ fn t_neg_xor_not_ccnot() {
 #[test]
 fn t_neg_aliased_ccnot_rejected_at_encode() {
     // All three aliased-pair cases must be rejected.
-    assert!(encode(Instr::Ccnot { rd: 2, rs: 2, rt: 3 }).is_err());
-    assert!(encode(Instr::Ccnot { rd: 2, rs: 3, rt: 2 }).is_err());
-    assert!(encode(Instr::Ccnot { rd: 2, rs: 3, rt: 3 }).is_err());
+    assert!(encode(Instr::Ccnot {
+        rd: 2,
+        rs: 2,
+        rt: 3
+    })
+    .is_err());
+    assert!(encode(Instr::Ccnot {
+        rd: 2,
+        rs: 3,
+        rt: 2
+    })
+    .is_err());
+    assert!(encode(Instr::Ccnot {
+        rd: 2,
+        rs: 3,
+        rt: 3
+    })
+    .is_err());
 }

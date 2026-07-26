@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Value-width slice-3: Flat(8) Add REDUCE (real numeric sum acc += arr[i]
 //! over 8-bit words) via `fold` over a Flat8List.
 //!
@@ -126,7 +127,11 @@ fn list_spine_val(elems: &[u8], w: u8, d: usize) -> Value {
     let ty = Type::list_spine_ty(Type::Flat(w), d);
     let bytes = value_to_leaf_bytes_pub(&val, &ty);
     let (rt_val, consumed) = value_from_leaf_bytes_pub(&bytes, &ty);
-    assert_eq!(consumed, bytes.len(), "list_spine_val round-trip: consumed mismatch");
+    assert_eq!(
+        consumed,
+        bytes.len(),
+        "list_spine_val round-trip: consumed mismatch"
+    );
     assert_eq!(rt_val, val, "list_spine_val round-trip: value mismatch");
     val
 }
@@ -217,22 +222,38 @@ fn t1_emission_pin() {
     let expected_d3_rom = vec![
         Instr::Mexch { rd: 6, addr: 0 },
         Instr::Addi { rd: 7, imm: 3 },
-        Instr::Cswap { rd: 0, rs: 7, rt: 6 },
+        Instr::Cswap {
+            rd: 0,
+            rs: 7,
+            rt: 6,
+        },
         Instr::Swapbr { rd: 7 },
         Instr::Mexch { rd: 7, addr: 0 },
         Instr::Add { rd: 7, rs: 1 },
         Instr::Mexch { rd: 7, addr: 0 },
         Instr::Swapbr { rd: 7 },
-        Instr::Cswap { rd: 0, rs: 7, rt: 6 },
+        Instr::Cswap {
+            rd: 0,
+            rs: 7,
+            rt: 6,
+        },
         Instr::Subi { rd: 7, imm: 3 },
         Instr::Addi { rd: 7, imm: 3 },
-        Instr::Cswap { rd: 2, rs: 7, rt: 6 },
+        Instr::Cswap {
+            rd: 2,
+            rs: 7,
+            rt: 6,
+        },
         Instr::Swapbr { rd: 7 },
         Instr::Mexch { rd: 7, addr: 0 },
         Instr::Add { rd: 7, rs: 3 },
         Instr::Mexch { rd: 7, addr: 0 },
         Instr::Swapbr { rd: 7 },
-        Instr::Cswap { rd: 2, rs: 7, rt: 6 },
+        Instr::Cswap {
+            rd: 2,
+            rs: 7,
+            rt: 6,
+        },
         Instr::Subi { rd: 7, imm: 3 },
         Instr::Mexch { rd: 6, addr: 0 },
     ];
@@ -260,9 +281,18 @@ fn t1_emission_pin() {
         .iter()
         .filter(|i| matches!(i, Instr::Add { .. }))
         .count();
-    assert_eq!(add_count_d4, 3, "D=4 must have 3 Adds, got {add_count_d4}; ROM: {:?}", lowered_d4.instrs);
+    assert_eq!(
+        add_count_d4, 3,
+        "D=4 must have 3 Adds, got {add_count_d4}; ROM: {:?}",
+        lowered_d4.instrs
+    );
     // D=4 = 31 instrs / wcet 31 (design-review-attested; MINOR-1 full-per-D pin).
-    assert_eq!(lowered_d4.instrs.len(), 31, "D=4 ROM must be 31 instrs; ROM: {:?}", lowered_d4.instrs);
+    assert_eq!(
+        lowered_d4.instrs.len(),
+        31,
+        "D=4 ROM must be 31 instrs; ROM: {:?}",
+        lowered_d4.instrs
+    );
     assert_eq!(lowered_d4.wcet(), 31, "D=4 WCET must be 31");
 }
 
@@ -300,8 +330,7 @@ fn t_bare_add_whole_domain() {
         let rom_out = unmarshal(&final_state, &ty);
 
         let mut fuel = 100_000u64;
-        let eval_out = theseus_eval::eval(&eval_iso, v.clone(), &mut fuel)
-            .expect("eval addInto");
+        let eval_out = theseus_eval::eval(&eval_iso, v.clone(), &mut fuel).expect("eval addInto");
 
         assert_eq!(rom_out, eval_out, "bare addInto: rom vs eval mismatch");
     }
@@ -341,10 +370,13 @@ fn t_foldstruct_flat2_xor_fold() {
         let rom_out = unmarshal(&final_state, &ty);
 
         let mut fuel = 100_000_000u64;
-        let eval_out = theseus_eval::eval(&eval_iso, v.clone(), &mut fuel)
-            .expect("eval fold xorInto");
+        let eval_out =
+            theseus_eval::eval(&eval_iso, v.clone(), &mut fuel).expect("eval fold xorInto");
 
-        assert_eq!(rom_out, eval_out, "foldstruct Flat(2) xor: rom vs eval mismatch");
+        assert_eq!(
+            rom_out, eval_out,
+            "foldstruct Flat(2) xor: rom vs eval mismatch"
+        );
     }
 }
 
@@ -378,8 +410,8 @@ fn t_sum_d2_whole_domain() {
         let rom_out = unmarshal(&final_state, &ty);
 
         let mut fuel = 100_000_000u64;
-        let eval_out = theseus_eval::eval(&eval_iso, v.clone(), &mut fuel)
-            .expect("eval sumFold D=2");
+        let eval_out =
+            theseus_eval::eval(&eval_iso, v.clone(), &mut fuel).expect("eval sumFold D=2");
 
         assert_eq!(rom_out, eval_out, "sumFold D=2: rom vs eval mismatch");
 
@@ -439,8 +471,8 @@ fn t_sum_d3_strided() {
         let rom_out = unmarshal(&final_state, &ty);
 
         let mut fuel = 100_000_000u64;
-        let eval_out = theseus_eval::eval(&eval_iso, input.clone(), &mut fuel)
-            .expect("eval sumFold D=3 edge");
+        let eval_out =
+            theseus_eval::eval(&eval_iso, input.clone(), &mut fuel).expect("eval sumFold D=3 edge");
 
         assert_eq!(
             rom_out, eval_out,
@@ -506,7 +538,10 @@ fn t_sum_d3_strided() {
 
             let expected_acc = reference_sum(&elems, acc0 as u8);
             let actual_acc = extract_acc(&rom_out, d);
-            assert_eq!(actual_acc, expected_acc, "sumFold D=3 strided len-1 ref mismatch");
+            assert_eq!(
+                actual_acc, expected_acc,
+                "sumFold D=3 strided len-1 ref mismatch"
+            );
             checked += 1;
         }
     }
@@ -520,7 +555,10 @@ fn t_sum_d3_strided() {
         let rom_out = unmarshal(&final_state, &ty);
         let expected_acc = reference_sum(&[], acc0 as u8);
         let actual_acc = extract_acc(&rom_out, d);
-        assert_eq!(actual_acc, expected_acc, "sumFold D=3 empty-list ref mismatch acc0={acc0}");
+        assert_eq!(
+            actual_acc, expected_acc,
+            "sumFold D=3 empty-list ref mismatch acc0={acc0}"
+        );
         checked += 1;
     }
 
@@ -553,7 +591,10 @@ fn t_sum_d4_strided() {
         let rom_out = unmarshal(&final_state, &ty);
         let mut fuel = 100_000_000u64;
         let eval_out = theseus_eval::eval(&eval_iso, input.clone(), &mut fuel).expect("eval D=4");
-        assert_eq!(rom_out, eval_out, "sumFold D=4: rom vs eval on elems={elems:?}, acc0={acc0}");
+        assert_eq!(
+            rom_out, eval_out,
+            "sumFold D=4: rom vs eval on elems={elems:?}, acc0={acc0}"
+        );
         let expected_acc = reference_sum(elems, acc0);
         let actual_acc = extract_acc(&rom_out, d);
         assert_eq!(
@@ -571,7 +612,7 @@ fn t_sum_d4_strided() {
     check(&[], 99, &mut checked); // empty at D=4
     check(&[7], 3, &mut checked); // len-1
     check(&[7, 11], 3, &mut checked); // len-2
-    // Coarse stride over (e1,e2,e3,acc0) for length-3 lists: stride 85 → {0,85,170,255}.
+                                      // Coarse stride over (e1,e2,e3,acc0) for length-3 lists: stride 85 → {0,85,170,255}.
     let stride = 85u16;
     eprintln!("T-sum-D4: stride={stride}");
     for e1 in (0u16..256).step_by(stride as usize) {
@@ -595,10 +636,10 @@ fn t_real_cpu_d3() {
     let iso = sum_fold_iso(d);
 
     let samples: Vec<(Vec<u8>, u8)> = vec![
-        (vec![], 5),             // empty list
-        (vec![7], 3),            // len-1: 3+7=10
-        (vec![200, 100], 0),     // carry: 200+100=44 (mod 256)
-        (vec![5, 7], 3),         // design-review example: 3+5+7=15
+        (vec![], 5),         // empty list
+        (vec![7], 3),        // len-1: 3+7=10
+        (vec![200, 100], 0), // carry: 200+100=44 (mod 256)
+        (vec![5, 7], 3),     // design-review example: 3+5+7=15
     ];
 
     // Fresh eval iso for reference.
@@ -611,8 +652,8 @@ fn t_real_cpu_d3() {
     for (elems, acc0) in &samples {
         let input = sum_fold_input(elems, *acc0, d);
         let mut fuel = 100_000_000u64;
-        let expected = theseus_eval::eval(&eval_iso, input.clone(), &mut fuel)
-            .expect("eval sumFold D=3");
+        let expected =
+            theseus_eval::eval(&eval_iso, input.clone(), &mut fuel).expect("eval sumFold D=3");
 
         let got = run_on_cpu_resident(&iso, &input, 0, |iso, v, fuel| {
             theseus_eval::eval(iso, v, fuel)

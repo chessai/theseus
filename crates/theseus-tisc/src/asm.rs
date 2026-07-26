@@ -71,7 +71,11 @@ pub enum AsmError {
     /// s2..s7 (idx 10..15). `which` is "rd"/"rs"/"rt".
     OperandReservedScratch { which: &'static str, val: u8 },
     /// A two-operand instruction has `rd == rs` (non-injective datapath).
-    AliasedOperands { mnemonic: &'static str, rd: u8, rs: u8 },
+    AliasedOperands {
+        mnemonic: &'static str,
+        rd: u8,
+        rs: u8,
+    },
     /// CSWAP operands are not pairwise distinct.
     CswapNotDistinct { rd: u8, rs: u8, rt: u8 },
     /// CCNOT operands are not pairwise distinct.
@@ -110,19 +114,31 @@ impl fmt::Display for AsmError {
                 write!(f, "{mnemonic} r{rd}, r{rs}: aliased operands are illegal (non-injective datapath)")
             }
             AsmError::CswapNotDistinct { rd, rs, rt } => {
-                write!(f, "CSWAP r{rd}, r{rs}, r{rt}: operands must be pairwise distinct")
+                write!(
+                    f,
+                    "CSWAP r{rd}, r{rs}, r{rt}: operands must be pairwise distinct"
+                )
             }
             AsmError::CcnotNotDistinct { rd, rs, rt } => {
-                write!(f, "CCNOT r{rd}, r{rs}, r{rt}: operands must be pairwise distinct")
+                write!(
+                    f,
+                    "CCNOT r{rd}, r{rs}, r{rt}: operands must be pairwise distinct"
+                )
             }
             AsmError::XchgScratchOutOfRange { sx } => {
                 write!(f, "XCHG scratch index out of range: s{sx}")
             }
             AsmError::XchgScratchReserved { sx } => {
-                write!(f, "XCHG s{sx}: s0/s1 are decoder-reserved (operand/predicate scratch)")
+                write!(
+                    f,
+                    "XCHG s{sx}: s0/s1 are decoder-reserved (operand/predicate scratch)"
+                )
             }
             AsmError::MexchAddrOutOfRange { addr } => {
-                write!(f, "MEXCH memory address out of range: m{addr} (MEM_WORDS={MEM_WORDS})")
+                write!(
+                    f,
+                    "MEXCH memory address out of range: m{addr} (MEM_WORDS={MEM_WORDS})"
+                )
             }
             AsmError::MexchAddrAliasesData { rd, ra } => {
                 write!(
@@ -239,7 +255,11 @@ fn i_word(opc: u32, rd: u8, imm: u8) -> Result<u32, AsmError> {
 
 fn check_distinct(name: &'static str, rd: u8, rs: u8) -> Result<(), AsmError> {
     if rd == rs {
-        return Err(AsmError::AliasedOperands { mnemonic: name, rd, rs });
+        return Err(AsmError::AliasedOperands {
+            mnemonic: name,
+            rd,
+            rs,
+        });
     }
     Ok(())
 }

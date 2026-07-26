@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Tests for the `bveq` symbolic bit-vector equivalence module.
 //!
 //! T1–T8 cover the full trust-core surface: equiv correctness, the Ccnot
@@ -10,9 +11,7 @@
 //! the adversarial impl-review and asserts the fix holds.
 
 use theseus_tisc::asm::Instr;
-use theseus_tisc::bveq::{
-    self, biodivine_lib_bdd, BvExpr, BveqError, RegTransfer, BITS,
-};
+use theseus_tisc::bveq::{self, biodivine_lib_bdd, BvExpr, BveqError, RegTransfer, BITS};
 use theseus_tisc::compile::{exec_instr, run_rom_on_cpu};
 use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
@@ -69,7 +68,12 @@ fn bveq_wall_break_ccnot_flat8() {
     // MINOR-3: non-reflexive — hand-built `rd ^= rs & rt` spec compared
     // against instr_semantics. Previously both sides were the same call.
     let t = std::time::Instant::now();
-    let model = bveq::instr_semantics(&Instr::Ccnot { rd: 0, rs: 1, rt: 2 }).unwrap();
+    let model = bveq::instr_semantics(&Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 2,
+    })
+    .unwrap();
 
     // Hand-built spec: rd ^= rs & rt (byte-parallel Toffoli).
     let mut spec = RegTransfer::identity();
@@ -213,7 +217,11 @@ fn bveq_major2_global_constraint_escape() {
     // Concrete corruption witness: r3=0xF0, r5=0x0F → r0 corrupted (0→0x0F).
     let model = bveq::symbolic_exec(&[
         Instr::Rotri { rd: 3, imm: 4 },
-        Instr::Ccnot { rd: 0, rs: 3, rt: 5 },
+        Instr::Ccnot {
+            rd: 0,
+            rs: 3,
+            rt: 5,
+        },
         Instr::Rotli { rd: 3, imm: 4 },
     ])
     .unwrap();
@@ -254,7 +262,11 @@ fn bveq_major2_nonoperand_corruption_rejected() {
     // That is exactly the regression guard the r1/r2 review demanded.
     let model = bveq::symbolic_exec(&[
         Instr::Rotri { rd: 3, imm: 4 },
-        Instr::Ccnot { rd: 2, rs: 3, rt: 6 },
+        Instr::Ccnot {
+            rd: 2,
+            rs: 3,
+            rt: 6,
+        },
         Instr::Rotli { rd: 3, imm: 4 },
     ])
     .unwrap();
@@ -276,7 +288,11 @@ fn bveq_major2_overdeclaration_hides_corruption() {
     // sequence. This test pins the hazard so a future reader sees it explicitly.
     let model = bveq::symbolic_exec(&[
         Instr::Rotri { rd: 3, imm: 4 },
-        Instr::Ccnot { rd: 0, rs: 3, rt: 5 },
+        Instr::Ccnot {
+            rd: 0,
+            rs: 3,
+            rt: 5,
+        },
         Instr::Rotli { rd: 3, imm: 4 },
     ])
     .unwrap();
@@ -342,7 +358,10 @@ fn bveq_n2_operand_reg_out_of_range_returns_err() {
     // VarMap::var → panic (itself violating the MAJOR-3 never-panic contract).
     let id = RegTransfer::identity();
     let result = bveq::equiv(&id, &id, 4, &[9]);
-    assert!(result.is_err(), "N2: out-of-range operand_regs must return Err, not panic");
+    assert!(
+        result.is_err(),
+        "N2: out-of-range operand_regs must return Err, not panic"
+    );
     match result.unwrap_err() {
         BveqError::OperandRegOutOfRange { reg: 9 } => {}
         other => panic!("expected OperandRegOutOfRange(9), got: {other}"),
@@ -357,9 +376,16 @@ fn bveq_n3_short_bit_row_returns_err() {
     short.regs[0].truncate(4);
     let id = RegTransfer::identity();
     let result = bveq::equiv(&short, &id, 4, &[0]);
-    assert!(result.is_err(), "N3: short bit-row must return Err, not panic");
+    assert!(
+        result.is_err(),
+        "N3: short bit-row must return Err, not panic"
+    );
     match result.unwrap_err() {
-        BveqError::RowSizeMismatch { side: "a", reg: 0, len: 4 } => {}
+        BveqError::RowSizeMismatch {
+            side: "a",
+            reg: 0,
+            len: 4,
+        } => {}
         other => panic!("expected RowSizeMismatch(a, 0, 4), got: {other}"),
     }
 }
@@ -411,10 +437,7 @@ fn bveq_major3_width_out_of_range_returns_err() {
     // Fix: returns Err(WidthOutOfRange).
     let identity = RegTransfer::identity();
     let result = bveq::equiv(&identity, &identity, 9, &[0]);
-    assert!(
-        result.is_err(),
-        "MAJOR-3: w=9 must return Err, not panic"
-    );
+    assert!(result.is_err(), "MAJOR-3: w=9 must return Err, not panic");
     match result.unwrap_err() {
         BveqError::WidthOutOfRange { w: 9 } => {}
         other => panic!("expected WidthOutOfRange(9), got: {other}"),
@@ -422,10 +445,7 @@ fn bveq_major3_width_out_of_range_returns_err() {
 
     // w=0 must also be rejected.
     let result = bveq::equiv(&identity, &identity, 0, &[0]);
-    assert!(
-        result.is_err(),
-        "MAJOR-3: w=0 must return Err"
-    );
+    assert!(result.is_err(), "MAJOR-3: w=0 must return Err");
 }
 
 // ── MAJOR-4: mis-map negative with teeth on equiv ───────────────────
@@ -455,14 +475,10 @@ fn bveq_mismap_negative() {
 
     // Part 2: equiv-level shared-mapping discipline check.
     let mut transfer_a = RegTransfer::identity();
-    transfer_a.regs[0] = (0..BITS)
-        .map(|b| BvExpr::var(0, b))
-        .collect();
+    transfer_a.regs[0] = (0..BITS).map(|b| BvExpr::var(0, b)).collect();
 
     let mut transfer_b = RegTransfer::identity();
-    transfer_b.regs[0] = (0..BITS)
-        .map(|b| BvExpr::var(1, b))
-        .collect();
+    transfer_b.regs[0] = (0..BITS).map(|b| BvExpr::var(1, b)).collect();
 
     let result = bveq::equiv(&transfer_a, &transfer_b, 8, &[0, 1]);
     assert!(
@@ -544,7 +560,11 @@ fn bveq_major5_aliased_add_rejected() {
 fn bveq_major5_non_distinct_ccnot_rejected() {
     // MAJOR-5 regression (L20): non-distinct Ccnot must be rejected.
     // asm::encode returns CcnotNotDistinct; bveq must mirror this.
-    let result = bveq::instr_semantics(&Instr::Ccnot { rd: 0, rs: 0, rt: 1 });
+    let result = bveq::instr_semantics(&Instr::Ccnot {
+        rd: 0,
+        rs: 0,
+        rt: 1,
+    });
     assert!(
         result.is_err(),
         "MAJOR-5: Ccnot with rd==rs must be rejected"
@@ -555,18 +575,36 @@ fn bveq_major5_non_distinct_ccnot_rejected() {
     }
 
     // All three equal.
-    let result = bveq::instr_semantics(&Instr::Ccnot { rd: 1, rs: 1, rt: 1 });
-    assert!(result.is_err(), "MAJOR-5: Ccnot with all-same must be rejected");
+    let result = bveq::instr_semantics(&Instr::Ccnot {
+        rd: 1,
+        rs: 1,
+        rt: 1,
+    });
+    assert!(
+        result.is_err(),
+        "MAJOR-5: Ccnot with all-same must be rejected"
+    );
 
     // rs == rt.
-    let result = bveq::instr_semantics(&Instr::Ccnot { rd: 0, rs: 1, rt: 1 });
-    assert!(result.is_err(), "MAJOR-5: Ccnot with rs==rt must be rejected");
+    let result = bveq::instr_semantics(&Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 1,
+    });
+    assert!(
+        result.is_err(),
+        "MAJOR-5: Ccnot with rs==rt must be rejected"
+    );
 }
 
 #[test]
 fn bveq_major5_non_distinct_cswap_rejected() {
     // MAJOR-5: non-distinct Cswap → Err.
-    let result = bveq::instr_semantics(&Instr::Cswap { rd: 0, rs: 1, rt: 0 });
+    let result = bveq::instr_semantics(&Instr::Cswap {
+        rd: 0,
+        rs: 1,
+        rt: 0,
+    });
     assert!(
         result.is_err(),
         "MAJOR-5: Cswap with rd==rt must be rejected"
@@ -631,8 +669,16 @@ fn bveq_reconciliation_la_full_domain() {
 
     // 3-operand instructions: 256^3 = 16,777,216 iterations each.
     let three_op: Vec<Instr> = vec![
-        Instr::Cswap { rd: 0, rs: 1, rt: 2 },
-        Instr::Ccnot { rd: 0, rs: 1, rt: 2 },
+        Instr::Cswap {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        },
+        Instr::Ccnot {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        },
     ];
 
     for instr in &three_op {
@@ -733,7 +779,11 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     s.regs[6] = 0xCD;
     cases.push((
         "Cswap(4,2,6) ctrl=1",
-        Instr::Cswap { rd: 4, rs: 2, rt: 6 },
+        Instr::Cswap {
+            rd: 4,
+            rs: 2,
+            rt: 6,
+        },
         s,
     ));
 
@@ -744,7 +794,11 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     s.regs[7] = 0xAA;
     cases.push((
         "Ccnot(3,5,7) vals=0F,FF,AA",
-        Instr::Ccnot { rd: 3, rs: 5, rt: 7 },
+        Instr::Ccnot {
+            rd: 3,
+            rs: 5,
+            rt: 7,
+        },
         s,
     ));
 
@@ -761,39 +815,23 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     // Xori with (7, imm=0xFF).
     let mut s = state_with_regs(&[]);
     s.regs[7] = 0xAA;
-    cases.push((
-        "Xori(7,0xFF) val=AA",
-        Instr::Xori { rd: 7, imm: 0xFF },
-        s,
-    ));
+    cases.push(("Xori(7,0xFF) val=AA", Instr::Xori { rd: 7, imm: 0xFF }, s));
 
     // Rotli with (0, imm=3).
     let mut s = state_with_regs(&[]);
     s.regs[0] = 0b1100_0011;
-    cases.push((
-        "Rotli(0,3) val=C3",
-        Instr::Rotli { rd: 0, imm: 3 },
-        s,
-    ));
+    cases.push(("Rotli(0,3) val=C3", Instr::Rotli { rd: 0, imm: 3 }, s));
 
     // Rotri with (4, imm=5).
     let mut s = state_with_regs(&[]);
     s.regs[4] = 0b1110_0111;
-    cases.push((
-        "Rotri(4,5) val=E7",
-        Instr::Rotri { rd: 4, imm: 5 },
-        s,
-    ));
+    cases.push(("Rotri(4,5) val=E7", Instr::Rotri { rd: 4, imm: 5 }, s));
 
     // MINOR-1: rs=0 case — exercises the rs-port index-0 decoder mux.
     let mut s = state_with_regs(&[]);
     s.regs[1] = 42;
     s.regs[0] = 170;
-    cases.push((
-        "Add(1,0) rs=0",
-        Instr::Add { rd: 1, rs: 0 },
-        s,
-    ));
+    cases.push(("Add(1,0) rs=0", Instr::Add { rd: 1, rs: 0 }, s));
 
     // MINOR-1: additional rt indices — rt=3 for Ccnot.
     let mut s = state_with_regs(&[]);
@@ -802,7 +840,11 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     s.regs[3] = 0x55;
     cases.push((
         "Ccnot(0,1,3) rt=3",
-        Instr::Ccnot { rd: 0, rs: 1, rt: 3 },
+        Instr::Ccnot {
+            rd: 0,
+            rs: 1,
+            rt: 3,
+        },
         s,
     ));
 
@@ -813,7 +855,11 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     s.regs[6] = 0xCD;
     cases.push((
         "Cswap(4,2,6) ctrl=0 (not-taken)",
-        Instr::Cswap { rd: 4, rs: 2, rt: 6 },
+        Instr::Cswap {
+            rd: 4,
+            rs: 2,
+            rt: 6,
+        },
         s,
     ));
 
@@ -824,7 +870,11 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     s.regs[4] = 0xFF;
     cases.push((
         "Ccnot(0,1,4) rt=4",
-        Instr::Ccnot { rd: 0, rs: 1, rt: 4 },
+        Instr::Ccnot {
+            rd: 0,
+            rs: 1,
+            rt: 4,
+        },
         s,
     ));
 
@@ -835,7 +885,11 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     s.regs[5] = 0xAD;
     cases.push((
         "Cswap(0,1,5) rt=5",
-        Instr::Cswap { rd: 0, rs: 1, rt: 5 },
+        Instr::Cswap {
+            rd: 0,
+            rs: 1,
+            rt: 5,
+        },
         s,
     ));
 
@@ -850,14 +904,8 @@ fn bveq_reconciliation_lb_netlist_sampled() {
         let mut exec_state = init.clone();
         exec_instr(*instr, &mut exec_state);
 
-        let netlist_state = run_rom_on_cpu(
-            &[*instr],
-            init.clone(),
-            1,
-            0,
-            theseus_eval::eval,
-        )
-        .unwrap_or_else(|e| panic!("run_rom_on_cpu failed for {name}: {e}"));
+        let netlist_state = run_rom_on_cpu(&[*instr], init.clone(), 1, 0, theseus_eval::eval)
+            .unwrap_or_else(|e| panic!("run_rom_on_cpu failed for {name}: {e}"));
 
         assert_eq!(
             netlist_state.regs, exec_state.regs,
@@ -905,7 +953,12 @@ fn bveq_perf_poc() {
     // --- BDD equiv: Ccnot at full Flat(8) (2^24 domain) ---
     // MINOR-3: non-reflexive — hand-built spec.
     let t = std::time::Instant::now();
-    let ccnot_a = bveq::instr_semantics(&Instr::Ccnot { rd: 0, rs: 1, rt: 2 }).unwrap();
+    let ccnot_a = bveq::instr_semantics(&Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 2,
+    })
+    .unwrap();
     let mut ccnot_b = RegTransfer::identity();
     for bit in 0..BITS {
         let rd_bit = BvExpr::var(0, bit);

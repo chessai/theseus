@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Masked-XOR REDUCE tests: `acc ⊕= key ∧ arr[i]` (M-D.b2.f3.5).
 //!
 //! The program uses the Ccnot instruction (byte-parallel Toffoli) inside a borrow-swap
@@ -17,8 +18,7 @@ use theseus_core::{Iso, Type, Value};
 
 use theseus_tisc::asm::Instr;
 use theseus_tisc::compile::{
-    compile_with_metadata_resident, marshal_resident, memexch_prim,
-    run_on_cpu_fast_resident,
+    compile_with_metadata_resident, marshal_resident, memexch_prim, run_on_cpu_fast_resident,
     value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
 };
 
@@ -31,7 +31,10 @@ fn bit() -> Type {
 /// `(idx:Bit) × (arr0:Bit) × (arr1:Bit) × 1`
 fn idx_arr_ty() -> Type {
     let b = bit();
-    Type::prod(b.clone(), Type::prod(b.clone(), Type::prod(b.clone(), Type::One)))
+    Type::prod(
+        b.clone(),
+        Type::prod(b.clone(), Type::prod(b.clone(), Type::One)),
+    )
 }
 
 /// `(arr0:Bit) × (arr1:Bit) × 1`
@@ -49,7 +52,10 @@ fn body_ty() -> Type {
             b.clone(),
             Type::prod(
                 b.clone(),
-                Type::prod(b.clone(), Type::prod(b.clone(), Type::prod(b.clone(), Type::One))),
+                Type::prod(
+                    b.clone(),
+                    Type::prod(b.clone(), Type::prod(b.clone(), Type::One)),
+                ),
             ),
         ),
     )
@@ -171,17 +177,17 @@ fn dot_reduce_body() -> Iso {
     // assocr_full: inverse of assocl_full
     let inner_assocr = Iso::AssocRProd(b.clone(), b.clone(), idx_arr_ty());
     let outer_assocr = Iso::AssocRProd(b.clone(), kd_ty, idx_arr_ty());
-    let assocr_full = Iso::seq(
-        outer_assocr,
-        Iso::times(Iso::Id(b.clone()), inner_assocr),
-    );
+    let assocr_full = Iso::seq(outer_assocr, Iso::times(Iso::Id(b.clone()), inner_assocr));
 
     // succ part: (id_{acc,key,data} ⊗ succ_idx ⊗ id_arr)
     let succ_part = Iso::times(
         Iso::Id(b.clone()),
         Iso::times(
             Iso::Id(b.clone()),
-            Iso::times(Iso::Id(b.clone()), Iso::times(succ_idx(), Iso::Id(arr_ty()))),
+            Iso::times(
+                Iso::Id(b.clone()),
+                Iso::times(succ_idx(), Iso::Id(arr_ty())),
+            ),
         ),
     );
 
@@ -189,7 +195,10 @@ fn dot_reduce_body() -> Iso {
     Iso::seq(
         Iso::seq(
             Iso::seq(
-                Iso::seq(Iso::seq(id_acc_key_mexch.clone(), assocl_full), rs3_times_id),
+                Iso::seq(
+                    Iso::seq(id_acc_key_mexch.clone(), assocl_full),
+                    rs3_times_id,
+                ),
                 assocr_full,
             ),
             id_acc_key_mexch,
@@ -349,10 +358,7 @@ fn t5_masked_reduce_fast_oracle() {
     for input in &domain {
         let expected = eval_dot_reduce(d, input);
         let got = run_on_cpu_fast_resident(&iso, input, 2).expect("run_on_cpu_fast_resident");
-        assert_eq!(
-            got, expected,
-            "fast oracle mismatch for input {input:?}"
-        );
+        assert_eq!(got, expected, "fast oracle mismatch for input {input:?}");
     }
 }
 
@@ -450,7 +456,8 @@ fn t6a_trace_histogram() {
 
     // T(d-1) == B (park-tax 0 at max k).
     assert_eq!(
-        measured_t[d - 1], b,
+        measured_t[d - 1],
+        b,
         "T(d-1) must equal B (zero park-tax at max k)"
     );
 
@@ -461,8 +468,14 @@ fn t6a_trace_histogram() {
         .iter()
         .map(|&t| (b - t) as f64 / b as f64)
         .collect();
-    assert!((park_taxes[0] - 20.0 / 34.0).abs() < 1e-10, "park_tax(0) must be 20/34");
-    assert!((park_taxes[1] - 10.0 / 34.0).abs() < 1e-10, "park_tax(1) must be 10/34");
+    assert!(
+        (park_taxes[0] - 20.0 / 34.0).abs() < 1e-10,
+        "park_tax(0) must be 20/34"
+    );
+    assert!(
+        (park_taxes[1] - 10.0 / 34.0).abs() < 1e-10,
+        "park_tax(1) must be 10/34"
+    );
     assert!(park_taxes[2].abs() < 1e-10, "park_tax(2) must be 0%");
     for i in 0..d - 1 {
         assert!(
@@ -480,8 +493,8 @@ fn t6a_trace_histogram() {
 #[test]
 #[ignore = "energy pricing requires chardb + netlist lowering; run via --ignored"]
 fn t6b_energy_pricing() {
-    use theseus_tisc::energy::rom_program_energy_resident;
     use theseus_spice::chardb::rung0_measured;
+    use theseus_tisc::energy::rom_program_energy_resident;
 
     let d = 3usize;
     let iso = dot_reduce_iso(d);
@@ -539,7 +552,10 @@ fn t7_system_ring_closure() {
     // Sample with k≥1, key=1, acc≠0.
     let sample = make_input(2, 1, 1, 0, 0, 1, 0);
     let init = marshal_resident(&sample, &ty, 2);
-    assert!(ring.bus_quiescent(&init), "SystemRing must be bus-quiescent");
+    assert!(
+        ring.bus_quiescent(&init),
+        "SystemRing must be bus-quiescent"
+    );
 
     // Check run == eval^R on the sample.
     let sys_val = encode_system(&init);

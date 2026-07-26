@@ -60,8 +60,8 @@ fn main() {
 
     // Price at a reference t_ramp.
     let t_ref = 1e-7;
-    let pe = rom_program_energy(&fib_iso, &input, &db, t_ref, &step_net)
-        .expect("rom_program_energy");
+    let pe =
+        rom_program_energy(&fib_iso, &input, &db, t_ref, &step_net).expect("rom_program_energy");
 
     println!("M-E finale: energy-priced compiled ROM execution (ADR-0042)");
     println!("{:-<72}", "");
@@ -72,9 +72,7 @@ fn main() {
         pe.steps_t,
         pe.park_tax * 100.0
     );
-    println!(
-        "  on the reversible TISC-1 CPU (step(rom), zero-garbage ring body)"
-    );
+    println!("  on the reversible TISC-1 CPU (step(rom), zero-garbage ring body)");
     println!(
         "  total energy: {:.4e} J @ t_ramp = {:.1e} s",
         pe.total_j, t_ref
@@ -143,7 +141,5 @@ fn main() {
     );
     println!("  never pays, the compiled program still crosses below the");
     println!("  CMOS ½CV² floor within the characterized clock range.");
-    println!(
-        "  [claims boundary: CPU-only step(rom); clock-gen/resonator losses excluded]"
-    );
+    println!("  [claims boundary: CPU-only step(rom); clock-gen/resonator losses excluded]");
 }

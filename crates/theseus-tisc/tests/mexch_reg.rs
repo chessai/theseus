@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! MEXCHR (data-dependent memory addressing) tests (M-D.b).
 //!
 //! Proves:
@@ -16,7 +17,7 @@ use theseus_core::Iso;
 use theseus_tisc::asm::{self, AsmError, Instr};
 use theseus_tisc::ring_run::{system_ring, two_body_ring, SystemRing};
 use theseus_tisc::step::system_step;
-use theseus_tisc::types::{decode_system, encode_system, MEM_WORDS, StateVals};
+use theseus_tisc::types::{decode_system, encode_system, StateVals, MEM_WORDS};
 
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -53,9 +54,9 @@ fn eval_system_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 ///   2: SUBI r6, 0x11     — non-MEXCH op
 fn mexchr_rom() -> Vec<u32> {
     vec![
-        i_ins(0, 2, 0x02),          // 0: ADDI r2, 2
-        r_ins(0b1010, 1, 2, 0),     // 1: MEXCHR r1, r2 (rd=1, ra=2, rt=0)
-        i_ins(1, 6, 0x11),          // 2: SUBI r6, 0x11
+        i_ins(0, 2, 0x02),      // 0: ADDI r2, 2
+        r_ins(0b1010, 1, 2, 0), // 1: MEXCHR r1, r2 (rd=1, ra=2, rt=0)
+        i_ins(1, 6, 0x11),      // 2: SUBI r6, 0x11
     ]
 }
 
@@ -65,9 +66,9 @@ fn mexchr_rom() -> Vec<u32> {
 ///   2: MEXCH r4, 1       — immediate MEXCH for comparison
 fn mexchr_wrap_rom() -> Vec<u32> {
     vec![
-        i_ins(0, 3, 0x07),          // 0: ADDI r3, 7
-        r_ins(0b1010, 0, 3, 0),     // 1: MEXCHR r0, r3 (rd=0, ra=3, rt=0)
-        r_ins(0b1001, 4, 0, 1),     // 2: MEXCH r4, mem[1]
+        i_ins(0, 3, 0x07),      // 0: ADDI r3, 7
+        r_ins(0b1010, 0, 3, 0), // 1: MEXCHR r0, r3 (rd=0, ra=3, rt=0)
+        r_ins(0b1001, 4, 0, 1), // 2: MEXCH r4, mem[1]
     ]
 }
 
@@ -78,10 +79,10 @@ fn mexchr_wrap_rom() -> Vec<u32> {
 ///   3: ADDI r5, 0x33     — non-MEXCH
 fn mixed_rom() -> Vec<u32> {
     vec![
-        i_ins(0, 2, 0x01),          // 0: ADDI r2, 1
-        r_ins(0b1001, 3, 0, 0),     // 1: MEXCH r3, mem[0]
-        r_ins(0b1010, 4, 2, 0),     // 2: MEXCHR r4, r2
-        i_ins(0, 5, 0x33),          // 3: ADDI r5, 0x33
+        i_ins(0, 2, 0x01),      // 0: ADDI r2, 1
+        r_ins(0b1001, 3, 0, 0), // 1: MEXCH r3, mem[0]
+        r_ins(0b1010, 4, 2, 0), // 2: MEXCHR r4, r2
+        i_ins(0, 5, 0x33),      // 3: ADDI r5, 0x33
     ]
 }
 
@@ -214,11 +215,7 @@ fn system_ring_mexchr_matches_eval_oracle() {
                 open_result, ring_result,
                 "SystemRing: run_open != run at pc={pc}, r={r} (MEXCHR ROM)"
             );
-            oracle = eval_system_state(
-                &format!("mexchr/pc={pc}/r={r}"),
-                &c.iso,
-                &oracle,
-            );
+            oracle = eval_system_state(&format!("mexchr/pc={pc}/r={r}"), &c.iso, &oracle);
         }
 
         assert!(
@@ -238,18 +235,12 @@ fn two_body_ring_mexchr_matches_system_ring() {
     let sys = system_ring(&rom);
     let iso = system_step(&rom);
 
-    let samples: Vec<StateVals> = SAMPLE_PCS.iter()
-        .map(|&pc| sample_state(pc))
-        .collect();
+    let samples: Vec<StateVals> = SAMPLE_PCS.iter().map(|&pc| sample_state(pc)).collect();
 
     for (si, start) in samples.iter().enumerate() {
         let mut oracle = start.clone();
         for r in 1..=2u32 {
-            oracle = eval_system_state(
-                &format!("two_body_mexchr/si={si}/r={r}"),
-                &iso,
-                &oracle,
-            );
+            oracle = eval_system_state(&format!("two_body_mexchr/si={si}/r={r}"), &iso, &oracle);
             let two_result = two.run(start, r);
             let sys_result = sys.run(start, r);
             assert_eq!(
@@ -339,7 +330,9 @@ fn mexchr_encode_decode_round_trip() {
     // Verify round-trip for legal MexchReg
     for rd in 0..8u8 {
         for ra in 0..8u8 {
-            if rd == ra { continue; }
+            if rd == ra {
+                continue;
+            }
             let word = asm::encode(Instr::MexchReg { rd, ra }).unwrap();
             let decoded = asm::decode(word);
             assert_eq!(

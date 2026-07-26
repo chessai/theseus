@@ -35,8 +35,16 @@ fn all_variants() -> Vec<Instr> {
         Instr::Exch { rd: 0, rs: 7 },
         Instr::Rotl { rd: 2, rs: 3 },
         Instr::Rotr { rd: 4, rs: 5 },
-        Instr::Cswap { rd: 1, rs: 2, rt: 3 },
-        Instr::Ccnot { rd: 4, rs: 5, rt: 6 },
+        Instr::Cswap {
+            rd: 1,
+            rs: 2,
+            rt: 3,
+        },
+        Instr::Ccnot {
+            rd: 4,
+            rs: 5,
+            rt: 6,
+        },
         Instr::Xchg { rd: 3, sx: 5 },
         Instr::Swapbr { rd: 2 },
         Instr::Mexch { rd: 1, addr: 3 },
@@ -62,17 +70,29 @@ fn roundtrip_scratch_operands() {
     // A-0: operand fields address `reg ∪ scratch` (0..16). A Ccnot naming
     // a scratch operand as rt (s2 = index 8+2 = 10) must encode and round-
     // trip with exact field recovery.
-    let ins = Instr::Ccnot { rd: 0, rs: 1, rt: 10 };
+    let ins = Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 10,
+    };
     let word = encode(ins).expect("encode Ccnot with scratch operand");
     // rt field is bits 10..14; index 10 must be recovered exactly.
     assert_eq!(decode(word), Some(ins), "scratch-operand round-trip failed");
-    assert_eq!((word >> 10) & 0x1F, 10, "rt field must hold operand index 10 (s2)");
+    assert_eq!(
+        (word >> 10) & 0x1F,
+        10,
+        "rt field must hold operand index 10 (s2)"
+    );
 
     // rd naming scratch (s5 = 13), rs naming a register.
     let ins2 = Instr::Add { rd: 13, rs: 0 };
     let word2 = encode(ins2).expect("encode Add with scratch rd");
     assert_eq!(decode(word2), Some(ins2));
-    assert_eq!((word2 >> 20) & 0x1F, 13, "rd field must hold operand index 13 (s5)");
+    assert_eq!(
+        (word2 >> 20) & 0x1F,
+        13,
+        "rd field must hold operand index 13 (s5)"
+    );
 
     // The legal operand range round-trips through the rs field: registers
     // r0..r7 (0..8) and scratch operands s2..s7 (10..16). s0/s1 (8/9) are
@@ -87,7 +107,10 @@ fn roundtrip_scratch_operands() {
     }
 
     // Index ≥ 16 (reserved) is rejected.
-    assert!(encode(Instr::Add { rd: 0, rs: 16 }).is_err(), "rs=16 must be rejected");
+    assert!(
+        encode(Instr::Add { rd: 0, rs: 16 }).is_err(),
+        "rs=16 must be rejected"
+    );
 }
 
 #[test]
@@ -101,8 +124,22 @@ fn rejects_reserved_operands() {
         ("rs", Instr::Add { rd: 0, rs: 8 }),
         ("rd", Instr::Add { rd: 9, rs: 0 }),
         ("rs", Instr::Add { rd: 0, rs: 9 }),
-        ("rt", Instr::Ccnot { rd: 0, rs: 1, rt: 8 }),
-        ("rt", Instr::Ccnot { rd: 0, rs: 1, rt: 9 }),
+        (
+            "rt",
+            Instr::Ccnot {
+                rd: 0,
+                rs: 1,
+                rt: 8,
+            },
+        ),
+        (
+            "rt",
+            Instr::Ccnot {
+                rd: 0,
+                rs: 1,
+                rt: 9,
+            },
+        ),
     ] {
         match encode(ins) {
             Err(AsmError::OperandReservedScratch { .. }) => {}
@@ -126,7 +163,11 @@ fn rejects_reserved_operands() {
     for &ins in &[
         Instr::Add { rd: 16, rs: 0 },
         Instr::Add { rd: 0, rs: 31 },
-        Instr::Ccnot { rd: 0, rs: 1, rt: 20 },
+        Instr::Ccnot {
+            rd: 0,
+            rs: 1,
+            rt: 20,
+        },
     ] {
         match encode(ins) {
             Err(AsmError::RegOutOfRange { .. }) => {}
@@ -195,9 +236,14 @@ fn select_operand_routes_reg_and_scratch() {
             0x20 + (idx - 8) as u8 // s[idx-8] (s2..s7 for idx 10..15)
         };
         assert_eq!(
-            got.regs[0], expected_val,
+            got.regs[0],
+            expected_val,
             "operand index {idx}: r0 slot must hold {}'s value {expected_val:#04x}, got {:#04x}",
-            if idx < 8 { format!("r{idx}") } else { format!("s{}", idx - 8) },
+            if idx < 8 {
+                format!("r{idx}")
+            } else {
+                format!("s{}", idx - 8)
+            },
             got.regs[0],
         );
 
@@ -253,7 +299,11 @@ fn compiled_rom_assemble_decode_roundtrip() {
         Instr::Exch { rd: 1, rs: 2 },
         Instr::Xori { rd: 3, imm: 0xAA },
         Instr::Rotli { rd: 4, imm: 3 },
-        Instr::Ccnot { rd: 5, rs: 6, rt: 7 },
+        Instr::Ccnot {
+            rd: 5,
+            rs: 6,
+            rt: 7,
+        },
     ];
     let rom = assemble(&prog).expect("assemble program");
     assert_eq!(rom.len(), prog.len());
@@ -274,7 +324,11 @@ fn compiled_rom_assemble_decode_roundtrip() {
 #[test]
 fn scratch_operand_program_and_fetch() {
     // `Ccnot rd, rs, s2`: rt names scratch s2 (operand index 10).
-    let ins = Instr::Ccnot { rd: 0, rs: 1, rt: 10 };
+    let ins = Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 10,
+    };
     let word = encode(ins).expect("encode Ccnot rd,rs,s2");
     assert_eq!(decode(word), Some(ins), "Ccnot rd,rs,s2 round-trip");
 
@@ -315,7 +369,11 @@ fn ir32_state_encode_decode_roundtrip() {
 
     // Sanity: state_ty has the widened field count and the encoding fills it.
     let bits = theseus_netlist::bits_of(&s.encode(), &state_ty()).unwrap();
-    assert_eq!(bits.len(), NUM_CPU_FIELDS * W, "state bit-width must be 22*8");
+    assert_eq!(
+        bits.len(),
+        NUM_CPU_FIELDS * W,
+        "state bit-width must be 22*8"
+    );
 
     // A raw all-ones IR round-trips (exercises every IR byte).
     let mut s2 = s.clone();

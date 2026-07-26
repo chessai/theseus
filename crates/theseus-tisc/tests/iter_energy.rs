@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Energy-pricing tests for compiled iter/fold/unfold programs (M3b → v0.2).
 //!
 //! Constructs concrete iter and fold programs, lowers them via
@@ -90,7 +91,10 @@ fn price_iso(iso: &Iso, db: &CharDb) -> EnergyBreakdown {
 fn assert_sane_breakdown(bd: &EnergyBreakdown, label: &str) {
     assert!(bd.total_j > 0.0, "{label}: total energy must be positive");
     assert!(bd.active_j > 0.0, "{label}: active energy must be positive");
-    assert!(bd.buffer_j >= 0.0, "{label}: buffer energy must be non-negative");
+    assert!(
+        bd.buffer_j >= 0.0,
+        "{label}: buffer energy must be non-negative"
+    );
     let diff = (bd.total_j - (bd.active_j + bd.buffer_j)).abs();
     assert!(
         diff < 1e-30,
@@ -99,7 +103,10 @@ fn assert_sane_breakdown(bd: &EnergyBreakdown, label: &str) {
         bd.active_j,
         bd.buffer_j,
     );
-    assert!(!bd.by_kind.is_empty(), "{label}: breakdown must have entries");
+    assert!(
+        !bd.by_kind.is_empty(),
+        "{label}: breakdown must have entries"
+    );
 
     // Must have at least one active cell kind (K1, K2, K3, or R1 — the
     // ADR-0040 rail-role-swap cell, e.g. a NOT lowers to R1).
@@ -107,7 +114,10 @@ fn assert_sane_breakdown(bd: &EnergyBreakdown, label: &str) {
         .by_kind
         .keys()
         .any(|k| (k.starts_with("cswap-k") || k.starts_with("cswap-r")) && !k.contains("balance"));
-    assert!(has_active, "{label}: breakdown must contain active cell kinds");
+    assert!(
+        has_active,
+        "{label}: breakdown must contain active cell kinds"
+    );
 }
 
 // ── iter energy tests ───────────────────────────────────────────────
@@ -339,24 +349,43 @@ fn unfold_energy_positive() {
 fn print_iter_fold_energy_summary() {
     let db = char_db();
 
-    eprintln!("\n╔══════════════════════════════════════════════════════════════════════════════════╗");
+    eprintln!(
+        "\n╔══════════════════════════════════════════════════════════════════════════════════╗"
+    );
     eprintln!("║  v0.2 iter/fold/unfold → k-CSWAP cells → joules (rung0 char DB, t_ramp=1e-7)  ║");
-    eprintln!("╚══════════════════════════════════════════════════════════════════════════════════╝\n");
+    eprintln!(
+        "╚══════════════════════════════════════════════════════════════════════════════════╝\n"
+    );
 
     let programs: Vec<(&str, Iso)> = vec![
         ("iter N2 rot3", Iso::iter(Type::numeral_ty(2), rot3())),
         ("iter N4 rot3", Iso::iter(Type::numeral_ty(4), rot3())),
         ("iter N8 rot3", Iso::iter(Type::numeral_ty(8), rot3())),
         ("iter N4 not", Iso::iter(Type::numeral_ty(4), not_iso())),
-        ("fold L2(Bit) cx", Iso::fold(Type::list_spine_ty(bit(), 2), cx())),
-        ("fold L3(Bit) cx", Iso::fold(Type::list_spine_ty(bit(), 3), cx())),
-        ("fold L4(Bit) cx", Iso::fold(Type::list_spine_ty(bit(), 4), cx())),
+        (
+            "fold L2(Bit) cx",
+            Iso::fold(Type::list_spine_ty(bit(), 2), cx()),
+        ),
+        (
+            "fold L3(Bit) cx",
+            Iso::fold(Type::list_spine_ty(bit(), 3), cx()),
+        ),
+        (
+            "fold L4(Bit) cx",
+            Iso::fold(Type::list_spine_ty(bit(), 4), cx()),
+        ),
         (
             "fold L3(Bit) cx;swap",
             Iso::fold(Type::list_spine_ty(bit(), 3), cx_swap()),
         ),
-        ("unfold L3(Bit) cx", Iso::unfold(Type::list_spine_ty(bit(), 3), cx())),
-        ("unfold L4(Bit) cx", Iso::unfold(Type::list_spine_ty(bit(), 4), cx())),
+        (
+            "unfold L3(Bit) cx",
+            Iso::unfold(Type::list_spine_ty(bit(), 3), cx()),
+        ),
+        (
+            "unfold L4(Bit) cx",
+            Iso::unfold(Type::list_spine_ty(bit(), 4), cx()),
+        ),
     ];
 
     eprintln!(

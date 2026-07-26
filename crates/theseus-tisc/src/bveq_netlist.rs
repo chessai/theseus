@@ -189,9 +189,7 @@ pub fn sv_to_u8(sv: &SV, vs: &BddVariableSet) -> u8 {
 /// Convert a constant-BDD Word16 SV (Pair(lo8, hi8)) back to a concrete u16.
 pub fn sv_to_u16(sv: &SV, vs: &BddVariableSet) -> u16 {
     match sv {
-        SV::Pair(lo, hi) => {
-            u16::from(sv_to_u8(lo, vs)) | (u16::from(sv_to_u8(hi, vs)) << 8)
-        }
+        SV::Pair(lo, hi) => u16::from(sv_to_u8(lo, vs)) | (u16::from(sv_to_u8(hi, vs)) << 8),
         _ => panic!("sv_to_u16: expected Pair(lo, hi)"),
     }
 }
@@ -324,9 +322,7 @@ pub fn eval_bdd(
                 let rb = eval_bdd(g, *b, vs, ctx)?;
                 Ok(SV::pair(ra, rb))
             }
-            _ => Err(NetlistWalkError::DomainError(
-                "Times: expected Pair".into(),
-            )),
+            _ => Err(NetlistWalkError::DomainError("Times: expected Pair".into())),
         },
 
         Iso::SwapProd(_, _) => match sv {
@@ -493,7 +489,7 @@ pub fn build_system_init(map: &VarMap, pin_s0_zero: bool) -> SV {
     }
     cpu_fields.push(sv_word8_const(0, vs)); // PC = 0
     cpu_fields.push(sv_word8_const(0, vs)); // BR = 0 (MINOR-7)
-    // IR_b0..IR_b3 = 0 (fetched from ROM); 32-bit IR (A-0).
+                                            // IR_b0..IR_b3 = 0 (fetched from ROM); 32-bit IR (A-0).
     cpu_fields.push(sv_word8_const(0, vs));
     cpu_fields.push(sv_word8_const(0, vs));
     cpu_fields.push(sv_word8_const(0, vs));
@@ -530,10 +526,7 @@ pub fn build_system_init(map: &VarMap, pin_s0_zero: bool) -> SV {
 ///
 /// Used by the T2 bootstrap test to compare walk output against
 /// `run_rom_on_cpu` at concrete points.
-pub fn build_concrete_system_sv(
-    s: &crate::types::StateVals,
-    vs: &BddVariableSet,
-) -> SV {
+pub fn build_concrete_system_sv(s: &crate::types::StateVals, vs: &BddVariableSet) -> SV {
     let mut cpu_fields = Vec::with_capacity(NUM_CPU_FIELDS);
     for &r in &s.regs {
         cpu_fields.push(sv_word8_const(r, vs));

@@ -11,9 +11,9 @@
 //!
 //! All routing is zero-cell (pure wire permutation at the field level).
 
-use theseus_core::{Iso, Type};
 use crate::plumbing::seq_balanced;
 use crate::types::{word8, NUM_FIELDS};
+use theseus_core::{Iso, Type};
 
 // ── Right-nested product helpers (field-level, not bit-level) ──────
 
@@ -62,7 +62,10 @@ pub fn route_to_head_n(indices: &[usize], n_fields: usize) -> Iso {
     let mut swaps: Vec<Iso> = Vec::new();
 
     for (slot, &orig) in indices.iter().enumerate() {
-        let p = arr.iter().position(|&x| x == orig).expect("field index in range");
+        let p = arr
+            .iter()
+            .position(|&x| x == orig)
+            .expect("field index in range");
         assert!(p >= slot, "routing: field already consumed or out of order");
         for k in (slot..p).rev() {
             swaps.push(swap_field_adj(n, k));
@@ -142,10 +145,7 @@ pub fn at_fields_n(op: Iso, indices: &[usize], n_fields: usize) -> Iso {
         // Reshape: fields(n) <-> fields(k) x fields(rest)
         let reshape = split_fields(k, rest_count);
         let apply = Iso::times(op, Iso::Id(fields(rest_count)));
-        let inner = Iso::seq(
-            Iso::seq(reshape.clone(), apply),
-            Iso::sym(reshape),
-        );
+        let inner = Iso::seq(Iso::seq(reshape.clone(), apply), Iso::sym(reshape));
         Iso::seq(Iso::seq(route.clone(), inner), Iso::sym(route))
     }
 }

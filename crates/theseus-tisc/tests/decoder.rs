@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Differential-oracle tests for the TISC-1 decoder
 //! (`decode_execute : State <-> State`).
 //!
@@ -26,7 +27,7 @@ use theseus_netlist::{
     balance, bits_of, lower_iso, rail_width, simulate, CellKind, PhasedCellNetlist,
 };
 use theseus_tisc::decoder::{self, Op};
-use theseus_tisc::types::{MEM_WORDS, StateVals};
+use theseus_tisc::types::{StateVals, MEM_WORDS};
 
 const EVAL_FUEL: u64 = 4_000_000_000;
 
@@ -202,7 +203,7 @@ fn op_samples(op: Op) -> Vec<StateVals> {
 
 fn reserved_samples() -> Vec<StateVals> {
     vec![
-        st(regs_a(), r_ins(9, 0, 0, 0)),  // MEXCH opcode (reserved at CpuState level)
+        st(regs_a(), r_ins(9, 0, 0, 0)), // MEXCH opcode (reserved at CpuState level)
         st(regs_a(), r_ins(10, 1, 2, 3)),
         st(regs_b(), r_ins(15, 7, 6, 5)),
         st(regs_a(), i_ins(5, 3, 0x7C)),
@@ -245,8 +246,7 @@ fn select_reg_crossbar_isolated() {
         decoder::crossbar_model(rd as usize, &mut expected.regs);
         assert_eq!(got, expected, "select_reg: rd={rd}");
         assert_eq!(
-            got.regs[0],
-            s.regs[rd as usize],
+            got.regs[0], s.regs[rd as usize],
             "select_reg: selected register must land at slot 0 (rd={rd})"
         );
     }
@@ -284,7 +284,10 @@ fn per_instruction_lowering_and_semantics() {
         let max_kind = counts.keys().max().copied().unwrap_or(CellKind::K0);
         let total: usize = counts.values().sum();
         eprintln!("{op:?}: {total} cells, max kind {max_kind:?}, counts {counts:?}");
-        assert!((max_kind <= CellKind::K3 || max_kind == CellKind::R1), "{op:?}: max kind {max_kind:?} > K3");
+        assert!(
+            (max_kind <= CellKind::K3 || max_kind == CellKind::R1),
+            "{op:?}: max kind {max_kind:?} > K3"
+        );
 
         // Semantics on this op's samples (eval-level).
         for (i, s) in op_samples(op).iter().enumerate() {
@@ -311,11 +314,17 @@ fn dispatch_exclusivity() {
 
     let swapbr = decoder::instruction(Op::Swapbr);
     let add_sample = &op_samples(Op::Add)[0];
-    assert_eq!(eval_state("swapbr-on-add", &swapbr, add_sample), *add_sample);
+    assert_eq!(
+        eval_state("swapbr-on-add", &swapbr, add_sample),
+        *add_sample
+    );
 
     let rotli = decoder::instruction(Op::Rotli);
     let rotri_sample = &op_samples(Op::Rotri)[0];
-    assert_eq!(eval_state("rotli-on-rotri", &rotli, rotri_sample), *rotri_sample);
+    assert_eq!(
+        eval_state("rotli-on-rotri", &rotli, rotri_sample),
+        *rotri_sample
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -378,7 +387,14 @@ fn ctx() -> &'static Ctx {
         );
 
         let n_data_out = rail_width(&out_ty).unwrap();
-        Ctx { iso, in_ty, out_ty, n_data_out, balanced, ancilla }
+        Ctx {
+            iso,
+            in_ty,
+            out_ty,
+            n_data_out,
+            balanced,
+            ancilla,
+        }
     })
 }
 
@@ -485,7 +501,12 @@ fn full_decoder_reserved_opcodes_are_identity() {
 fn blocker2_ccnot_uses_scratch_operand_through_decode_execute() {
     use theseus_tisc::asm::{encode, Instr};
     // Ccnot rd=r0, rs=r1, rt=s2 (operand index 10). r0 ^= r1 & s2.
-    let ir = encode(Instr::Ccnot { rd: 0, rs: 1, rt: 10 }).expect("encode");
+    let ir = encode(Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 10,
+    })
+    .expect("encode");
     // Distinct values so routing errors are visible: r2 != s2, and the
     // AND with r2 would give a DIFFERENT result than with s2.
     //   r0=0x00, r1=0xFF, r2=0x0F (the wrong operand), s2=0xAA (right).
@@ -529,12 +550,12 @@ fn blocker1_odd_imm_iop_does_not_fire_xchg_through_decode_execute() {
     let ir = encode(Instr::Addi { rd: 7, imm: 0x01 }).expect("encode");
     let mut regs = [0u8; 8];
     regs[7] = 0x87; // arbitrary; expect +1 = 0x88
-    // s0/s1 are the decoder-reserved operand buffer + predicate word; they
-    // MUST be 0 on decode_execute entry (the CPU maintains this between
-    // steps — the adder uses s0 as its operand slot). Put the anti-XCHG
-    // sentinels in the NON-reserved words s2..s7: a spurious XCHG (the
-    // BLOCKER-1 bug) would swap r7 into scratch, dirtying one / leaving r7
-    // wrong; a clean Addi preserves all scratch.
+                    // s0/s1 are the decoder-reserved operand buffer + predicate word; they
+                    // MUST be 0 on decode_execute entry (the CPU maintains this between
+                    // steps — the adder uses s0 as its operand slot). Put the anti-XCHG
+                    // sentinels in the NON-reserved words s2..s7: a spurious XCHG (the
+                    // BLOCKER-1 bug) would swap r7 into scratch, dirtying one / leaving r7
+                    // wrong; a clean Addi preserves all scratch.
     let scratch0 = [0x00, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
     let s = StateVals {
         regs,
@@ -578,7 +599,10 @@ fn blocker1_odd_imm_xori_clean_through_decode_execute() {
     };
     let got = eval_state("blocker1/xori-odd", light_ctx(), &s);
     assert_eq!(got.regs[5], 0xF0 ^ 0x0B, "Xori r5,#0x0B");
-    assert_eq!(got.scratch, scratch0, "scratch untouched (XCHG did not fire)");
+    assert_eq!(
+        got.scratch, scratch0,
+        "scratch untouched (XCHG did not fire)"
+    );
     assert_eq!(got.ir, ir, "IR preserved");
 }
 

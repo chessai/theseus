@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! MEXCHR compiler emission tests (M-D.b2.f1).
 //!
 //! Proves: a `memexch` primitive (Bit-indexed, 2-word resident array)
@@ -15,11 +16,10 @@ use theseus_core::{Iso, Type, Value};
 
 use theseus_tisc::asm::Instr;
 use theseus_tisc::compile::{
-    compile_with_metadata_resident, marshal_resident, memexch_prim,
-    run_on_cpu_fast_resident, run_on_cpu_resident, unmarshal_resident,
-    CompileError,
+    compile_with_metadata_resident, marshal_resident, memexch_prim, run_on_cpu_fast_resident,
+    run_on_cpu_resident, unmarshal_resident, CompileError,
 };
-use theseus_tisc::types::{MEM_WORDS, StateVals};
+use theseus_tisc::types::{StateVals, MEM_WORDS};
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -37,7 +37,13 @@ fn memexch_iso() -> Iso {
 /// = data × addr × arr[0] × arr[1]  (4 leaves)
 fn memexch_ty() -> Type {
     let b = bit();
-    Type::prod(b.clone(), Type::prod(b.clone(), Type::prod(b.clone(), Type::prod(b.clone(), Type::One))))
+    Type::prod(
+        b.clone(),
+        Type::prod(
+            b.clone(),
+            Type::prod(b.clone(), Type::prod(b.clone(), Type::One)),
+        ),
+    )
 }
 
 /// Enumerate the full 16-value domain.
@@ -58,7 +64,10 @@ fn eval_memexch(input: &Value) -> Value {
 fn t1_emission_contains_mexch_reg() {
     let iso = memexch_iso();
     let lowered = compile_with_metadata_resident(&iso, 2).expect("compile memexch");
-    let has_mexchr = lowered.instrs.iter().any(|i| matches!(i, Instr::MexchReg { .. }));
+    let has_mexchr = lowered
+        .instrs
+        .iter()
+        .any(|i| matches!(i, Instr::MexchReg { .. }));
     assert!(
         has_mexchr,
         "compiled memexch ROM must contain MexchReg, got: {:?}",
@@ -73,12 +82,8 @@ fn t2_fast_oracle_whole_domain() {
     let iso = memexch_iso();
     for input in full_domain() {
         let expected = eval_memexch(&input);
-        let got = run_on_cpu_fast_resident(&iso, &input, 2)
-            .expect("run_on_cpu_fast_resident");
-        assert_eq!(
-            got, expected,
-            "fast oracle mismatch for input {input:?}"
-        );
+        let got = run_on_cpu_fast_resident(&iso, &input, 2).expect("run_on_cpu_fast_resident");
+        assert_eq!(got, expected, "fast oracle mismatch for input {input:?}");
     }
 }
 
@@ -92,7 +97,9 @@ fn t3_real_cpu_oracle() {
     // are all addr=0 due to left-factor-major enumeration). Take the first
     // 2 (addr=0) and last 2 (addr=1) to cover both address values.
     let domain = full_domain();
-    let samples: Vec<_> = domain.iter().take(2)
+    let samples: Vec<_> = domain
+        .iter()
+        .take(2)
         .chain(domain.iter().rev().take(2))
         .cloned()
         .collect();
@@ -115,7 +122,7 @@ fn t3_real_cpu_oracle() {
 #[ignore]
 fn t4_system_ring_closure() {
     use theseus_tisc::ring_run::system_ring;
-    use theseus_tisc::types::{encode_system, decode_system};
+    use theseus_tisc::types::{decode_system, encode_system};
 
     let iso = memexch_iso();
     let lowered = compile_with_metadata_resident(&iso, 2).expect("compile");
@@ -129,7 +136,10 @@ fn t4_system_ring_closure() {
     let domain = full_domain();
     let sample = domain.last().unwrap().clone();
     let init = marshal_resident(&sample, &memexch_ty(), 2);
-    assert!(ring.bus_quiescent(&init), "SystemRing must be bus-quiescent");
+    assert!(
+        ring.bus_quiescent(&init),
+        "SystemRing must be bus-quiescent"
+    );
 
     // Check run == eval^R on the sample input.
     let sys_val = encode_system(&init);
@@ -188,8 +198,7 @@ fn t5_f2b_aligned_times_compiles() {
             let mut fuel = 1_000_000u64;
             theseus_eval::eval(&composed, input.clone(), &mut fuel).expect("eval")
         };
-        let got = run_on_cpu_fast_resident(&composed, &input, 2)
-            .expect("fast oracle");
+        let got = run_on_cpu_fast_resident(&composed, &input, 2).expect("fast oracle");
         assert_eq!(got, expected, "T5-F2b oracle mismatch for {input:?}");
     }
 }
@@ -319,8 +328,7 @@ fn t5_f6b_displacement_disjoint() {
     let memexch = memexch_iso();
     let composed = Iso::Times(Box::new(big_id), Box::new(memexch));
     // Total leaves = 8 + 4 = 12; resident=2 → head=10, which fits (≤14).
-    let lowered = compile_with_metadata_resident(&composed, 2)
-        .expect("compile with displacement");
+    let lowered = compile_with_metadata_resident(&composed, 2).expect("compile with displacement");
 
     // Check any immediate Mexch has addr >= 2 (disjoint from resident).
     for instr in &lowered.instrs {
@@ -338,7 +346,9 @@ fn t5_f6b_displacement_disjoint() {
     // both addr values since left-factor-major cycles the rightmost fastest).
     let full_ty = Type::prod(big_ty, memexch_ty());
     let all_vals = enumerate_values(&full_ty);
-    let sample: Vec<_> = all_vals.iter().take(2)
+    let sample: Vec<_> = all_vals
+        .iter()
+        .take(2)
         .chain(all_vals.iter().rev().take(2))
         .cloned()
         .collect();
@@ -367,19 +377,26 @@ fn t5_f7_paging_bracket() {
     let memexch = memexch_iso();
     let composed = Iso::Times(Box::new(pad_id), Box::new(memexch));
 
-    let lowered = compile_with_metadata_resident(&composed, 2)
-        .expect("compile padded");
+    let lowered = compile_with_metadata_resident(&composed, 2).expect("compile padded");
 
     // Must contain MexchReg AND Xchg bracket around it.
-    let has_mexchr = lowered.instrs.iter().any(|i| matches!(i, Instr::MexchReg { .. }));
-    let has_xchg = lowered.instrs.iter().any(|i| matches!(i, Instr::Xchg { .. }));
+    let has_mexchr = lowered
+        .instrs
+        .iter()
+        .any(|i| matches!(i, Instr::MexchReg { .. }));
+    let has_xchg = lowered
+        .instrs
+        .iter()
+        .any(|i| matches!(i, Instr::Xchg { .. }));
     assert!(has_mexchr, "padded ROM must contain MexchReg");
     assert!(has_xchg, "padded ROM must contain Xchg bracket for paging");
 
     // I-2: Sampled oracle — include addr=1 (take first 2 + last 2).
     let full_ty = Type::prod(pad_ty, memexch_ty());
     let all_vals = enumerate_values(&full_ty);
-    let sample: Vec<_> = all_vals.iter().take(2)
+    let sample: Vec<_> = all_vals
+        .iter()
+        .take(2)
         .chain(all_vals.iter().rev().take(2))
         .cloned()
         .collect();
@@ -400,9 +417,11 @@ fn t5_f8_sym_memexch() {
     let memexch = memexch_iso();
     let sym_memexch = Iso::Sym(Box::new(memexch.clone()));
 
-    let lowered = compile_with_metadata_resident(&sym_memexch, 2)
-        .expect("compile Sym(memexch)");
-    let has_mexchr = lowered.instrs.iter().any(|i| matches!(i, Instr::MexchReg { .. }));
+    let lowered = compile_with_metadata_resident(&sym_memexch, 2).expect("compile Sym(memexch)");
+    let has_mexchr = lowered
+        .instrs
+        .iter()
+        .any(|i| matches!(i, Instr::MexchReg { .. }));
     assert!(has_mexchr, "Sym(memexch) ROM must contain MexchReg");
 
     // Whole-domain oracle.
@@ -424,8 +443,8 @@ fn t5_f8_sym_memexch() {
 #[test]
 #[ignore]
 fn t7_energy_prices_mexchr_rom() {
-    use theseus_tisc::energy::{balanced_energy, rom_program_energy_resident};
     use theseus_spice::chardb::rung0_measured;
+    use theseus_tisc::energy::{balanced_energy, rom_program_energy_resident};
 
     let iso = memexch_iso();
     let input = full_domain().into_iter().next().unwrap();
@@ -470,7 +489,10 @@ fn t7_energy_prices_mexchr_rom() {
 
     // Straight-line: B == T (no loops, park tax 0).
     assert_eq!(pe.steps_b, budget, "steps_b must equal static wcet budget");
-    assert_eq!(pe.steps_b, pe.steps_t, "memexch is straight-line: B must equal T");
+    assert_eq!(
+        pe.steps_b, pe.steps_t,
+        "memexch is straight-line: B must equal T"
+    );
     assert!(pe.park_tax.abs() < 1e-15, "memexch park_tax must be 0");
 }
 
@@ -533,8 +555,8 @@ fn i1_occ_obligation_displacement_disjoint() {
     let composed = Iso::Times(Box::new(plus_iso), Box::new(id_arr));
 
     // Compile with resident=2 (head=14).
-    let lowered = compile_with_metadata_resident(&composed, 2)
-        .expect("compile branching + resident=2");
+    let lowered =
+        compile_with_metadata_resident(&composed, 2).expect("compile branching + resident=2");
 
     // (a) Any immediate Mexch displacement must have addr >= 2.
     for instr in &lowered.instrs {
@@ -551,7 +573,9 @@ fn i1_occ_obligation_displacement_disjoint() {
     let full_ty = Type::prod(sum_ty, arr_ty);
     let all_vals = enumerate_values(&full_ty);
     // Sample first 4 + last 4 to cover both sum arms.
-    let sample: Vec<_> = all_vals.iter().take(4)
+    let sample: Vec<_> = all_vals
+        .iter()
+        .take(4)
         .chain(all_vals.iter().rev().take(4))
         .cloned()
         .collect();
@@ -560,8 +584,7 @@ fn i1_occ_obligation_displacement_disjoint() {
             let mut fuel = 10_000_000u64;
             theseus_eval::eval(&composed, input.clone(), &mut fuel).expect("eval")
         };
-        let got = run_on_cpu_fast_resident(&composed, input, 2)
-            .expect("fast oracle");
+        let got = run_on_cpu_fast_resident(&composed, input, 2).expect("fast oracle");
         assert_eq!(got, expected, "I-1 oracle mismatch for {input:?}");
     }
 }

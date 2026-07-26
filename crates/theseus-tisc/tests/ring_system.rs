@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! SystemRing closure certificate (M-C2 Stage 1b-B).
 //!
 //! Recirculates `system_step` through a [`SystemRing`] and proves the
@@ -46,7 +47,7 @@ use std::sync::OnceLock;
 use theseus_core::Iso;
 use theseus_tisc::ring_run::{system_ring, SystemRing};
 use theseus_tisc::step::system_step;
-use theseus_tisc::types::{decode_system, encode_system, MEM_WORDS, StateVals};
+use theseus_tisc::types::{decode_system, encode_system, StateVals, MEM_WORDS};
 
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -182,11 +183,7 @@ fn system_ring_matches_eval_oracle_fast() {
                 open_result, ring_result,
                 "SystemRing: run_open(s, {r}) != run(s, {r}) at pc={pc}"
             );
-            oracle = eval_system_state(
-                &format!("fast_oracle/pc={pc}/r={r}"),
-                &c.iso,
-                &oracle,
-            );
+            oracle = eval_system_state(&format!("fast_oracle/pc={pc}/r={r}"), &c.iso, &oracle);
         }
 
         // bus_quiescent
@@ -213,11 +210,7 @@ fn ring_matches_eval_oracle() {
                 ring_result, oracle,
                 "SystemRing.run(s, {r}) != eval^{r} at pc={pc}"
             );
-            oracle = eval_system_state(
-                &format!("oracle/pc={pc}/r={r}"),
-                &c.iso,
-                &oracle,
-            );
+            oracle = eval_system_state(&format!("oracle/pc={pc}/r={r}"), &c.iso, &oracle);
         }
     }
 }
@@ -243,11 +236,7 @@ fn true_recirculation_matches_eval_oracle() {
                 "SystemRing: run(s, {r}) != eval^{r} at pc={pc} — \
                  the closed (zero-garbage) runner must equal the eval oracle"
             );
-            oracle = eval_system_state(
-                &format!("true_recirc/pc={pc}/r={r}"),
-                &c.iso,
-                &oracle,
-            );
+            oracle = eval_system_state(&format!("true_recirc/pc={pc}/r={r}"), &c.iso, &oracle);
         }
     }
 }

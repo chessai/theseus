@@ -86,7 +86,9 @@ impl fmt::Display for EnergyBreakdown {
 ///
 /// Panics if `line_arrivals` fails (structurally invalid netlist).
 pub fn analytic_buffer_count(net: &PhasedCellNetlist) -> usize {
-    let arrival = net.line_arrivals().expect("line_arrivals must succeed for a valid netlist");
+    let arrival = net
+        .line_arrivals()
+        .expect("line_arrivals must succeed for a valid netlist");
     let mut total: usize = 0;
     for cell in &net.cells {
         let input_arrivals: Vec<u32> = cell
@@ -411,8 +413,8 @@ pub fn rom_program_energy(
         .map_err(|e| RomProgramEnergyError::Asm(format!("{e}")))?;
 
     // Marshal input to initial state.
-    let (in_ty, _out_ty) = theseus_core::type_of(iso)
-        .map_err(|e| RomProgramEnergyError::Type(format!("{e:?}")))?;
+    let (in_ty, _out_ty) =
+        theseus_core::type_of(iso).map_err(|e| RomProgramEnergyError::Type(format!("{e:?}")))?;
     let init = crate::compile::marshal(input, &in_ty);
 
     // Run trace to find T.
@@ -460,8 +462,8 @@ pub fn rom_program_energy_resident(
     let rom = crate::asm::assemble(&lowered.instrs)
         .map_err(|e| RomProgramEnergyError::Asm(format!("{e}")))?;
 
-    let (in_ty, _out_ty) = theseus_core::type_of(iso)
-        .map_err(|e| RomProgramEnergyError::Type(format!("{e:?}")))?;
+    let (in_ty, _out_ty) =
+        theseus_core::type_of(iso).map_err(|e| RomProgramEnergyError::Type(format!("{e:?}")))?;
     let init = crate::compile::marshal_resident(input, &in_ty, resident);
 
     let trace = rom_trace(&rom, init, budget);

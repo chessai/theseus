@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Reversible in-memory array map tests (M-D.b2.f2).
 //!
 //! Proves: `arrayMap = iter Nat_4 BODY` (d=4, n=2, g=notb) compiles via
@@ -12,8 +13,8 @@ use theseus_core::{Iso, Type, Value};
 
 use theseus_tisc::asm::Instr;
 use theseus_tisc::compile::{
-    compile_with_metadata_resident, marshal_resident, memexch_prim,
-    run_on_cpu_fast_resident, run_on_cpu_resident, unmarshal_resident,
+    compile_with_metadata_resident, marshal_resident, memexch_prim, run_on_cpu_fast_resident,
+    run_on_cpu_resident, unmarshal_resident,
 };
 
 // ── Type helpers ────────────────────────────────────────────────────
@@ -32,14 +33,20 @@ fn body_ty() -> Type {
     let b = bit();
     Type::prod(
         b.clone(),
-        Type::prod(b.clone(), Type::prod(b.clone(), Type::prod(b.clone(), Type::One))),
+        Type::prod(
+            b.clone(),
+            Type::prod(b.clone(), Type::prod(b.clone(), Type::One)),
+        ),
     )
 }
 
 /// The idx+arr remainder type: (idx:Bit) × (arr0:Bit) × (arr1:Bit) × 1
 fn idx_arr_ty() -> Type {
     let b = bit();
-    Type::prod(b.clone(), Type::prod(b.clone(), Type::prod(b.clone(), Type::One)))
+    Type::prod(
+        b.clone(),
+        Type::prod(b.clone(), Type::prod(b.clone(), Type::One)),
+    )
 }
 
 /// The arr type: (arr0:Bit) × (arr1:Bit) × 1
@@ -166,7 +173,13 @@ fn decompose_output(v: &Value) -> (usize, u8, u8, u8, u8) {
             _ => panic!("not a bit"),
         }
     };
-    (k, to_bit(data_v), to_bit(idx_v), to_bit(arr0_v), to_bit(arr1_v))
+    (
+        k,
+        to_bit(data_v),
+        to_bit(idx_v),
+        to_bit(arr0_v),
+        to_bit(arr1_v),
+    )
 }
 
 // ── T1: emission contains exactly 2·(d-1) = 6 MexchReg ─────────────
@@ -174,16 +187,14 @@ fn decompose_output(v: &Value) -> (usize, u8, u8, u8, u8) {
 #[test]
 fn t1_emission_mexchr_count() {
     let iso = array_map_iso(4);
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
     let mexchr_count = lowered
         .instrs
         .iter()
         .filter(|i| matches!(i, Instr::MexchReg { .. }))
         .count();
     assert_eq!(
-        mexchr_count,
-        6,
+        mexchr_count, 6,
         "arrayMap d=4 must contain exactly 2·(d-1)=6 MexchReg, got {mexchr_count}; ROM: {:?}",
         lowered.instrs
     );
@@ -216,12 +227,8 @@ fn t2_fast_oracle_whole_domain() {
 
     for input in &domain {
         let expected = eval_array_map(d, input);
-        let got =
-            run_on_cpu_fast_resident(&iso, input, 2).expect("run_on_cpu_fast_resident");
-        assert_eq!(
-            got, expected,
-            "fast oracle mismatch for input {input:?}"
-        );
+        let got = run_on_cpu_fast_resident(&iso, input, 2).expect("run_on_cpu_fast_resident");
+        assert_eq!(got, expected, "fast oracle mismatch for input {input:?}");
     }
 }
 
@@ -302,8 +309,7 @@ fn t4_map_semantics_and_g_squared() {
 #[test]
 fn t5_varying_address_exact_shape() {
     let iso = array_map_iso(4);
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
 
     // The ROM structure: aux_page_in, then d-1=3 skip-guarded copies,
     // then aux_page_out. Each copy is:
@@ -374,7 +380,10 @@ fn t5_varying_address_exact_shape() {
             instrs[pos2 + 2]
         );
         // data and address registers must differ (MexchReg aliasing is rejected).
-        assert_ne!(rd1, ra1, "copy {pair_idx}: data reg must differ from address reg");
+        assert_ne!(
+            rd1, ra1,
+            "copy {pair_idx}: data reg must differ from address reg"
+        );
     }
 }
 
@@ -392,8 +401,7 @@ fn t6a_trace_histogram() {
 
     let d = 4usize;
     let iso = array_map_iso(d);
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
 
     // B = 30 (ROM length for d=4 iter).
@@ -421,7 +429,10 @@ fn t6a_trace_histogram() {
     }
 
     // Strictly decreasing: 40% > 26.7% > 13.3% > 0%.
-    assert!((park_taxes[0] - 0.4).abs() < 1e-10, "park_tax(0) must be 40%");
+    assert!(
+        (park_taxes[0] - 0.4).abs() < 1e-10,
+        "park_tax(0) must be 40%"
+    );
     assert!(
         (park_taxes[1] - 8.0 / 30.0).abs() < 1e-10,
         "park_tax(1) must be 8/30 ≈ 26.7%"
@@ -447,16 +458,15 @@ fn t6a_trace_histogram() {
 #[test]
 #[ignore]
 fn t6b_park_tax_pricing() {
-    use theseus_tisc::energy::rom_program_energy_resident;
     use theseus_spice::chardb::rung0_measured;
+    use theseus_tisc::energy::rom_program_energy_resident;
 
     let d = 4usize;
     let iso = array_map_iso(d);
     let db = rung0_measured();
     let t_ramp = 1e-7;
 
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
     let step_iso = theseus_tisc::step::step(&rom);
     let step_net = theseus_netlist::lower_iso(&step_iso).expect("lower step");
@@ -470,7 +480,10 @@ fn t6b_park_tax_pricing() {
             .expect("rom_program_energy_resident");
         assert_eq!(pe.steps_b, b, "steps_b must equal B={b}");
         assert_eq!(pe.steps_t, expected_t(k), "T(k={k}) must match the trace");
-        assert!(pe.step_j > 0.0, "step_j must be > 0 (a memory-touching ROM is priced)");
+        assert!(
+            pe.step_j > 0.0,
+            "step_j must be > 0 (a memory-touching ROM is priced)"
+        );
         // total_j == B·step_j is the static-inventory MODEL IDENTITY (F2-I2 — not a
         // falsifiable cross-check; the genuine two-path energy check is memexch T7).
         assert!(
@@ -498,15 +511,17 @@ fn t7_system_ring_closure() {
     let iso = array_map_iso(d);
     let ty = carrier_ty(d);
 
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=4");
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
     let ring = system_ring(&rom);
 
     // Use a sample with idx=1, k≥1 (nonzero varying address).
     let sample = make_input(2, 1, 1, 0, 1);
     let init = marshal_resident(&sample, &ty, 2);
-    assert!(ring.bus_quiescent(&init), "SystemRing must be bus-quiescent");
+    assert!(
+        ring.bus_quiescent(&init),
+        "SystemRing must be bus-quiescent"
+    );
 
     // Check run == eval^R on the sample.
     let sys_val = encode_system(&init);
@@ -530,14 +545,14 @@ fn t_f2_7_displaced_idx_d5() {
     let d = 5;
     let iso = array_map_iso(d);
 
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=5");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile arrayMap d=5");
 
     // Assert the aux page-in contains a displacement Mexch{_, addr≥2}
     // (idx displaced to Mem(2) or higher).
-    let has_displacement_mexch = lowered.instrs.iter().any(|instr| {
-        matches!(instr, Instr::Mexch { rd: _, addr } if *addr >= 2)
-    });
+    let has_displacement_mexch = lowered
+        .instrs
+        .iter()
+        .any(|instr| matches!(instr, Instr::Mexch { rd: _, addr } if *addr >= 2));
     assert!(
         has_displacement_mexch,
         "d=5 ROM must contain a displacement Mexch{{_, addr≥2}}; ROM: {:?}",
@@ -551,8 +566,7 @@ fn t_f2_7_displaced_idx_d5() {
 
     for input in &domain {
         let expected = eval_array_map(d, input);
-        let got =
-            run_on_cpu_fast_resident(&iso, input, 2).expect("run_on_cpu_fast_resident d=5");
+        let got = run_on_cpu_fast_resident(&iso, input, 2).expect("run_on_cpu_fast_resident d=5");
         assert_eq!(
             got, expected,
             "d=5 fast oracle mismatch for input {input:?}"

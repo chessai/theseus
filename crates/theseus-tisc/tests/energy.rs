@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Tests for the analytic per-clause energy model (M4-v1).
 //!
 //! (a) analytic_buffer_count matches balance()'s actual K0 count on >=2
@@ -25,8 +26,8 @@ use theseus_spice::chardb::{rung0_measured, CharDb};
 use theseus_tisc::compile::{compile_with_metadata, marshal};
 use theseus_tisc::decoder::Op;
 use theseus_tisc::energy::{
-    analytic_buffer_count, balanced_energy, clause_report, instruction_energy,
-    rom_program_energy, rom_trace, step_energy, ProgramEnergy,
+    analytic_buffer_count, balanced_energy, clause_report, instruction_energy, rom_program_energy,
+    rom_trace, step_energy, ProgramEnergy,
 };
 use theseus_tisc::money_plot::{cmos_crossing_t_ramp, CMOS_STATIC_E_PER_GATE_J};
 
@@ -69,7 +70,11 @@ fn lower_and_check_buffer_count(iso: &theseus_core::Iso, label: &str) {
     let net = lower_iso(iso).expect("lower_iso");
     let analytic = analytic_buffer_count(&net);
     let balanced = balance(&net).expect("balance");
-    let actual_k0 = balanced.cell_counts().get(&CellKind::K0).copied().unwrap_or(0);
+    let actual_k0 = balanced
+        .cell_counts()
+        .get(&CellKind::K0)
+        .copied()
+        .unwrap_or(0);
     // The original net may already have active K0 cells; the balanced
     // net's K0 count = original_active_k0 + inserted_buffers.
     let original_k0 = net.cell_counts().get(&CellKind::K0).copied().unwrap_or(0);
@@ -190,10 +195,7 @@ fn fib_step_net() -> &'static PhasedCellNetlist {
         let iso = fib_iso();
         let lowered = compile_with_metadata(iso).expect("compile fib");
         let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble fib");
-        eprintln!(
-            "fib ROM: {} instructions, lowering step(rom)...",
-            rom.len()
-        );
+        eprintln!("fib ROM: {} instructions, lowering step(rom)...", rom.len());
         let step_iso = theseus_tisc::step::step(&rom);
         lower_iso(&step_iso).expect("lower_iso fib step")
     })
@@ -359,7 +361,11 @@ fn me_a3_golden() {
 
     eprintln!(
         "me_a3 GOLDEN: total_j={:.10e}, B={}, T={}, step_j={:.10e}, park_tax={:.2}% ✓",
-        pe.total_j, pe.steps_b, pe.steps_t, pe.step_j, pe.park_tax * 100.0
+        pe.total_j,
+        pe.steps_b,
+        pe.steps_t,
+        pe.step_j,
+        pe.park_tax * 100.0
     );
 }
 
@@ -402,8 +408,7 @@ fn me_a4_honest_crossing() {
     }
 
     // The program crossing: where B*E_step(t) = T*E_cmos_step
-    let program_crossing =
-        cmos_crossing_t_ramp(&program_curve, cmos_program_j);
+    let program_crossing = cmos_crossing_t_ramp(&program_curve, cmos_program_j);
 
     let tc = program_crossing.expect("program crossing must exist");
     eprintln!("me_a4: program crossing at t_ramp ~ {tc:.3e} s");
@@ -426,8 +431,7 @@ fn me_a4_honest_crossing() {
         })
         .collect();
     let per_step_crossing =
-        cmos_crossing_t_ramp(&per_step_curve, cmos_step_j)
-            .expect("per-step crossing must exist");
+        cmos_crossing_t_ramp(&per_step_curve, cmos_step_j).expect("per-step crossing must exist");
     // The program crossing must be the per-step crossing shifted right by
     // EXACTLY B/T (cmos_crossing_t_ramp is linear in the energy ratio; F3:
     // reversible pays B steps, CMOS pays only T). This FALSIFIES a B-vs-B

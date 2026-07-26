@@ -8,11 +8,9 @@
 
 use theseus_core::{type_of, Iso};
 use theseus_netlist::lower::lower_iso_with_ancillas;
-use theseus_netlist::{
-    balance, bits_of, rail_width, simulate, CellKind,
-};
+use theseus_netlist::{balance, bits_of, rail_width, simulate, CellKind};
 use theseus_tisc::instr;
-use theseus_tisc::types::{MEM_WORDS, StateVals};
+use theseus_tisc::types::{StateVals, MEM_WORDS};
 
 const EVAL_FUEL: u64 = 50_000_000;
 
@@ -44,7 +42,11 @@ fn prepare(name: &str, iso: &Iso) -> Lowered {
     eprintln!("{name}: cell counts {counts:?}, max kind {max_kind:?}");
 
     let balanced = balance(&net).unwrap_or_else(|e| panic!("{name}: balance failed: {e:?}"));
-    assert_eq!(balanced.validate(), Ok(()), "{name}: balanced netlist invalid");
+    assert_eq!(
+        balanced.validate(),
+        Ok(()),
+        "{name}: balanced netlist invalid"
+    );
     assert!(
         balanced.tick_imbalances().unwrap().is_empty(),
         "{name}: balanced netlist has tick imbalances"
@@ -52,7 +54,13 @@ fn prepare(name: &str, iso: &Iso) -> Lowered {
     eprintln!("{name}: balanced cell counts {:?}", balanced.cell_counts());
 
     let n_data_out = rail_width(&out_ty).unwrap();
-    Lowered { balanced, in_ty, out_ty, n_data_out, ancilla_init }
+    Lowered {
+        balanced,
+        in_ty,
+        out_ty,
+        n_data_out,
+        ancilla_init,
+    }
 }
 
 fn check_case(name: &str, iso: &Iso, low: &Lowered, sample: &StateVals) {
@@ -140,7 +148,10 @@ fn check_semantics(
     let mut expected = sample.clone();
     reference(&mut expected);
 
-    assert_eq!(got, expected, "{name}: semantics mismatch\n  got:      {got:?}\n  expected: {expected:?}");
+    assert_eq!(
+        got, expected,
+        "{name}: semantics mismatch\n  got:      {got:?}\n  expected: {expected:?}"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -189,10 +200,7 @@ fn add_sub_adjoint() {
         let mut fuel = EVAL_FUEL;
         let added = theseus_eval::eval(&add_iso, val.clone(), &mut fuel).unwrap();
         let back = theseus_eval::eval(&sub_iso, added, &mut fuel).unwrap();
-        assert_eq!(
-            StateVals::decode(&back), *s,
-            "SUB(ADD(x)) != x"
-        );
+        assert_eq!(StateVals::decode(&back), *s, "SUB(ADD(x)) != x");
     }
 }
 
@@ -238,10 +246,7 @@ fn addi_subi_adjoint() {
         let mut fuel = EVAL_FUEL;
         let added = theseus_eval::eval(&addi_iso, val.clone(), &mut fuel).unwrap();
         let back = theseus_eval::eval(&subi_iso, added, &mut fuel).unwrap();
-        assert_eq!(
-            StateVals::decode(&back), *s,
-            "SUBI(ADDI(x)) != x"
-        );
+        assert_eq!(StateVals::decode(&back), *s, "SUBI(ADDI(x)) != x");
     }
 }
 
@@ -433,10 +438,7 @@ fn rotl_rotr_adjoint() {
         let mut fuel = EVAL_FUEL;
         let rotated = theseus_eval::eval(&rotl_iso, val.clone(), &mut fuel).unwrap();
         let back = theseus_eval::eval(&rotr_iso, rotated, &mut fuel).unwrap();
-        assert_eq!(
-            StateVals::decode(&back), *s,
-            "ROTR(ROTL(x)) != x"
-        );
+        assert_eq!(StateVals::decode(&back), *s, "ROTR(ROTL(x)) != x");
     }
 }
 
@@ -482,9 +484,6 @@ fn rotli_rotri_adjoint() {
         let mut fuel = EVAL_FUEL;
         let rotated = theseus_eval::eval(&rotli_iso, val.clone(), &mut fuel).unwrap();
         let back = theseus_eval::eval(&rotri_iso, rotated, &mut fuel).unwrap();
-        assert_eq!(
-            StateVals::decode(&back), *s,
-            "ROTRI(ROTLI(x)) != x"
-        );
+        assert_eq!(StateVals::decode(&back), *s, "ROTRI(ROTLI(x)) != x");
     }
 }

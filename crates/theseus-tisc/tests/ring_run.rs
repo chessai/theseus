@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Differential-oracle tests for the TISC-1 ring runner
 //! (ADR-0033, M4-v2): `step_ring(rom).run(&s, R)` ≡ `eval(step)^R`.
 //!
@@ -13,11 +14,9 @@
 use std::sync::OnceLock;
 
 use theseus_core::Iso;
-use theseus_tisc::ring_run::{
-    closed_step_ring, step_ring, ClosedStepRing, StepRing,
-};
+use theseus_tisc::ring_run::{closed_step_ring, step_ring, ClosedStepRing, StepRing};
 use theseus_tisc::step::step;
-use theseus_tisc::types::{state_ty, MEM_WORDS, StateVals};
+use theseus_tisc::types::{state_ty, StateVals, MEM_WORDS};
 
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -116,8 +115,7 @@ fn ring_matches_eval_oracle_fast() {
                 open_result, ring_result,
                 "run_open(s, {r}) != run(s, {r}) at pc={pc}"
             );
-            oracle =
-                eval_state(&format!("fast_oracle/pc={pc}/r={r}"), &c.iso, &oracle);
+            oracle = eval_state(&format!("fast_oracle/pc={pc}/r={r}"), &c.iso, &oracle);
         }
     }
 }
@@ -139,8 +137,7 @@ fn ring_matches_eval_oracle() {
                 ring_result, oracle,
                 "ring.run(s, {r}) != eval^{r} at pc={pc}"
             );
-            oracle =
-                eval_state(&format!("oracle/pc={pc}/r={r}"), &c.iso, &oracle);
+            oracle = eval_state(&format!("oracle/pc={pc}/r={r}"), &c.iso, &oracle);
         }
     }
 }
@@ -232,11 +229,7 @@ fn true_recirculation_matches_eval_oracle() {
                  the default closed (zero-garbage) runner feeds ancilla \
                  outputs back and must equal the eval oracle"
             );
-            oracle = eval_state(
-                &format!("true_recirc/pc={pc}/r={r}"),
-                &c.iso,
-                &oracle,
-            );
+            oracle = eval_state(&format!("true_recirc/pc={pc}/r={r}"), &c.iso, &oracle);
         }
     }
 
@@ -290,10 +283,19 @@ fn zero_boundary_vs_bennett_boundary() {
     // Bennett path: fixed 2·w boundary re-supplied per revolution.
     let bennett_boundary = closed.boundary_size();
 
-    eprintln!("plain  path (run_true): boundary per revolution = {plain_boundary} (zero — ancilla-clean)");
-    eprintln!("Bennett path (closed) : boundary per revolution = {bennett_boundary} (2·w = 2·{})", closed.data_width());
-    eprintln!("plain  path ancilla count: {} (all restored)", plain.ancilla_count());
-    eprintln!("Bennett path ancilla count: {} (forward: {}, boundary: {})",
+    eprintln!(
+        "plain  path (run_true): boundary per revolution = {plain_boundary} (zero — ancilla-clean)"
+    );
+    eprintln!(
+        "Bennett path (closed) : boundary per revolution = {bennett_boundary} (2·w = 2·{})",
+        closed.data_width()
+    );
+    eprintln!(
+        "plain  path ancilla count: {} (all restored)",
+        plain.ancilla_count()
+    );
+    eprintln!(
+        "Bennett path ancilla count: {} (forward: {}, boundary: {})",
         closed.ancilla_count(),
         closed.forward_ancilla_count(),
         closed.boundary_size(),
@@ -358,11 +360,7 @@ fn closed_ring_matches_eval_oracle() {
                 ring_result, oracle,
                 "closed_ring.run(s, {r}) != eval^{r} at pc={pc}"
             );
-            oracle = eval_state(
-                &format!("closed_oracle/pc={pc}/r={r}"),
-                iso,
-                &oracle,
-            );
+            oracle = eval_state(&format!("closed_oracle/pc={pc}/r={r}"), iso, &oracle);
         }
     }
 }
@@ -427,14 +425,13 @@ fn closed_ring_forward_ancillas_clean_and_boundary_fixed() {
         let residue = closed.boundary_residue(&start);
         assert_eq!(residue.len(), 2 * w);
         let ty = state_ty();
-        let x_bits =
-            theseus_netlist::bits_of(&start.encode(), &ty).expect("bits_of");
+        let x_bits = theseus_netlist::bits_of(&start.encode(), &ty).expect("bits_of");
         let next = eval_state(&format!("residue/pc={pc}"), iso, &start);
-        let y_bits =
-            theseus_netlist::bits_of(&next.encode(), &ty).expect("bits_of");
+        let y_bits = theseus_netlist::bits_of(&next.encode(), &ty).expect("bits_of");
         for j in 0..w {
             assert_eq!(
-                residue[2 * j], y_bits[j],
+                residue[2 * j],
+                y_bits[j],
                 "boundary spare slot {j} != y_{j} at pc={pc}"
             );
             assert_eq!(

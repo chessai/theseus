@@ -103,11 +103,7 @@ enum Row {
     /// bit-0-controlled swap of two registers → one `Cswap`.
     ///
     /// This row writes BOTH `u` and `v` and reads `c`, `u`, `v`.
-    Cswap {
-        ctrl: usize,
-        u: usize,
-        v: usize,
-    },
+    Cswap { ctrl: usize, u: usize, v: usize },
 }
 
 impl Row {
@@ -131,7 +127,10 @@ impl Row {
             Row::Identity => vec![],
             Row::Affine { xor_sources, .. } => xor_sources.clone(),
             Row::AffineCcnot {
-                xor_sources, rs, rt, ..
+                xor_sources,
+                rs,
+                rt,
+                ..
             } => {
                 let mut v = xor_sources.clone();
                 v.push(*rs);
@@ -288,9 +287,7 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
             None => {
                 return Err(SynthError::RowNotInPlace {
                     reg: r,
-                    detail: format!(
-                        "bit {b} is not `Var({r},{b}) ⊕ f`; got {e:?}"
-                    ),
+                    detail: format!("bit {b} is not `Var({r},{b}) ⊕ f`; got {e:?}"),
                 });
             }
         }
@@ -595,9 +592,17 @@ const NUM_OPERAND_LOCS: usize = 16;
 /// and ≥16 would panic `operand_get`). Returns `Err(MalformedSpec)` — a
 /// verification-time reject, not a ROM-time panic (MINOR-3).
 fn check_operand_legal(what: &str, op: u8) -> Result<(), SynthError> {
-    if (op as usize) >= NUM_OPERAND_LOCS {
+    // MEASUREMENT-ONLY relaxation: `transcribe_word_bennett_peak_measure` raises the
+    // operand cap for the duration of its call (thread-local) so an over-budget body
+    // can PLACE for length/peak COUNTING using the future widen-state scratch slots
+    // (idx 16..=19). Production (the flag unset) keeps the strict `NUM_OPERAND_LOCS`
+    // cap → behavior is byte-identical off the measurement path. The reserved s0/s1
+    // (8/9) are rejected regardless. Bodies emitted under the relaxed cap are NOT
+    // executable (`exec_instr` panics at idx ≥ 16).
+    let cap = RELAXED_OPERAND_CAP.with(|c| c.get());
+    if (op as usize) >= cap {
         return Err(SynthError::MalformedSpec {
-            detail: format!("{what} operand {op} is out of range (≥{NUM_OPERAND_LOCS})"),
+            detail: format!("{what} operand {op} is out of range (≥{cap})"),
         });
     }
     if op == NUM_REGS as u8 || op == NUM_REGS as u8 + 1 {
@@ -609,6 +614,33 @@ fn check_operand_legal(what: &str, op: u8) -> Result<(), SynthError> {
         });
     }
     Ok(())
+}
+
+thread_local! {
+    /// Exclusive upper bound for operand-index legality. Defaults to the strict
+    /// machine cap `NUM_OPERAND_LOCS` (=16). Raised ONLY inside
+    /// `transcribe_word_bennett_peak_measure` (measurement-only) so over-budget
+    /// bodies can PLACE for length/peak counting; restored on exit (RAII guard).
+    static RELAXED_OPERAND_CAP: std::cell::Cell<usize> = const { std::cell::Cell::new(NUM_OPERAND_LOCS) };
+}
+
+/// RAII guard that raises `RELAXED_OPERAND_CAP` for the duration of a
+/// MEASUREMENT-ONLY word-Bennett placement and restores it on drop (even on the
+/// early-return `?` paths). Production code never constructs this guard.
+struct RelaxedOperandCap {
+    prev: usize,
+}
+impl RelaxedOperandCap {
+    fn new(cap: usize) -> Self {
+        let prev = RELAXED_OPERAND_CAP.with(|c| c.replace(cap));
+        RelaxedOperandCap { prev }
+    }
+}
+impl Drop for RelaxedOperandCap {
+    fn drop(&mut self) {
+        let prev = self.prev;
+        RELAXED_OPERAND_CAP.with(|c| c.set(prev));
+    }
 }
 
 /// Recognized fresh-target row: `(affine sources, const mask, optional single
@@ -998,7 +1030,10 @@ fn emit_anf_term(
 ) -> Result<(), SynthError> {
     let factors: Vec<(usize, usize)> = match term {
         BvExpr::Const(true) => {
-            out.push(Instr::Xori { rd: dst, imm: 1u8 << b });
+            out.push(Instr::Xori {
+                rd: dst,
+                imm: 1u8 << b,
+            });
             return Ok(());
         }
         BvExpr::Const(false) => return Ok(()), // XOR identity — no-op
@@ -1025,9 +1060,19 @@ fn emit_anf_term(
         }
         let sh = b as i32 - c as i32;
         rotate_by(s, sh, out);
-        out.push(Instr::Xori { rd: helpers.mask, imm: 1u8 << b });
-        out.push(Instr::Ccnot { rd: dst, rs: s, rt: helpers.mask });
-        out.push(Instr::Xori { rd: helpers.mask, imm: 1u8 << b });
+        out.push(Instr::Xori {
+            rd: helpers.mask,
+            imm: 1u8 << b,
+        });
+        out.push(Instr::Ccnot {
+            rd: dst,
+            rs: s,
+            rt: helpers.mask,
+        });
+        out.push(Instr::Xori {
+            rd: helpers.mask,
+            imm: 1u8 << b,
+        });
         rotate_by(s, -sh, out);
         return Ok(());
     }
@@ -1054,7 +1099,11 @@ fn emit_anf_term(
         let s = src_ops[y];
         let sh = b as i32 - c as i32;
         rotate_by(s, sh, out);
-        out.push(Instr::Ccnot { rd: acc, rs: x, rt: s });
+        out.push(Instr::Ccnot {
+            rd: acc,
+            rs: x,
+            rt: s,
+        });
         rotate_by(s, -sh, out);
     };
 
@@ -1063,7 +1112,10 @@ fn emit_anf_term(
     //   temp_{k-1} := temp_{k-2} ∧ f_k                          clean accumulator
     // Because temp0 is clean (0 outside bit b), every downstream AND stays clean,
     // so the final XOR onto dst needs no mask.
-    out.push(Instr::Xori { rd: helpers.mask, imm: 1u8 << b }); // mask = 1<<b
+    out.push(Instr::Xori {
+        rd: helpers.mask,
+        imm: 1u8 << b,
+    }); // mask = 1<<b
     emit_and(out, helpers.temps[0], helpers.mask, 0); // temp0 = mask ∧ f0 (clean)
     for k in 1..degree - 1 {
         // temp[k] = temp[k-1] ∧ f_k  (factors 1..degree-1; the last goes to dst)
@@ -1079,7 +1131,10 @@ fn emit_anf_term(
         emit_and(out, helpers.temps[k], helpers.temps[k - 1], k);
     }
     emit_and(out, helpers.temps[0], helpers.mask, 0); // clears temp0
-    out.push(Instr::Xori { rd: helpers.mask, imm: 1u8 << b }); // mask back to 0
+    out.push(Instr::Xori {
+        rd: helpers.mask,
+        imm: 1u8 << b,
+    }); // mask back to 0
     Ok(())
 }
 
@@ -1408,8 +1463,14 @@ fn classify_term(t: &BvExpr, b: usize) -> Option<Term> {
         BvExpr::And(a, c) => {
             // Require Var(y,b) ∧ Var(z,b) — matching bit, two distinct-or-not regs.
             if let (
-                BvExpr::Var { operand: y, bit: yb },
-                BvExpr::Var { operand: z, bit: zb },
+                BvExpr::Var {
+                    operand: y,
+                    bit: yb,
+                },
+                BvExpr::Var {
+                    operand: z,
+                    bit: zb,
+                },
             ) = (a.as_ref(), c.as_ref())
             {
                 if *yb == b && *zb == b {
@@ -1540,9 +1601,18 @@ fn recognize_cswap(spec: &RegTransfer, r: usize) -> Option<(usize, usize, usize)
 fn parse_mux_bit(e: &BvExpr) -> Option<(usize, usize, usize)> {
     if let BvExpr::Mux { sel, then_, else_ } = e {
         if let (
-            BvExpr::Var { operand: c, bit: cb },
-            BvExpr::Var { operand: t, bit: _tb },
-            BvExpr::Var { operand: el, bit: _eb },
+            BvExpr::Var {
+                operand: c,
+                bit: cb,
+            },
+            BvExpr::Var {
+                operand: t,
+                bit: _tb,
+            },
+            BvExpr::Var {
+                operand: el,
+                bit: _eb,
+            },
         ) = (sel.as_ref(), then_.as_ref(), else_.as_ref())
         {
             if *cb == 0 {
@@ -1631,8 +1701,7 @@ fn schedule(rows: &[Row]) -> Result<Vec<Row>, SynthError> {
     }
 
     // Kahn topological sort.
-    let mut queue: std::collections::VecDeque<usize> =
-        (0..m).filter(|&i| indeg[i] == 0).collect();
+    let mut queue: std::collections::VecDeque<usize> = (0..m).filter(|&i| indeg[i] == 0).collect();
     let mut order: Vec<usize> = Vec::with_capacity(m);
     while let Some(i) = queue.pop_front() {
         order.push(i);
@@ -1794,7 +1863,10 @@ fn emit_bdd_output_bit(
         return Ok(()); // dst bit b already 0
     }
     if root.is_one() {
-        out.push(Instr::Xori { rd: dst, imm: 1u8 << b });
+        out.push(Instr::Xori {
+            rd: dst,
+            imm: 1u8 << b,
+        });
         return Ok(());
     }
 
@@ -1862,7 +1934,10 @@ fn emit_bdd_output_bit(
         });
     }
     rotate_by(root_word, b as i32, out); // bit0 → bit b
-    out.push(Instr::Xor { rd: dst, rs: root_word });
+    out.push(Instr::Xor {
+        rd: dst,
+        rs: root_word,
+    });
     rotate_by(root_word, -(b as i32), out); // restore
 
     // REVERSE PASS: uncompute every node line (replay its gadget = its inverse).
@@ -1960,10 +2035,8 @@ fn xor_clean_line(word: u8, line: Line, out: &mut Vec<Instr>) -> Result<(), Synt
 
 /// True iff two [`Line`]s denote the same value source.
 fn lines_equal(a: Line, b: Line) -> bool {
-    matches!(
-        (a, b),
-        (Line::Zero, Line::Zero) | (Line::One, Line::One)
-    ) || matches!((a, b), (Line::Node(x), Line::Node(y)) if x == y)
+    matches!((a, b), (Line::Zero, Line::Zero) | (Line::One, Line::One))
+        || matches!((a, b), (Line::Node(x), Line::Node(y)) if x == y)
 }
 
 /// BDD analog of [`transcribe_bennett_general`]: realize a permutation `P`
@@ -2225,14 +2298,22 @@ fn transcribe_word_op(op: WOp) -> Result<Instr, SynthError> {
             check_operand_legal("s", s)?;
             check_operand_legal("t", t)?;
             check_three_distinct("WCcnot", d, s, t)?;
-            Ok(Instr::Ccnot { rd: d, rs: s, rt: t })
+            Ok(Instr::Ccnot {
+                rd: d,
+                rs: s,
+                rt: t,
+            })
         }
         WOp::WCswap { c, u, v } => {
             check_operand_legal("c", c)?;
             check_operand_legal("u", u)?;
             check_operand_legal("v", v)?;
             check_three_distinct("WCswap", c, u, v)?;
-            Ok(Instr::Cswap { rd: c, rs: u, rt: v })
+            Ok(Instr::Cswap {
+                rd: c,
+                rs: u,
+                rt: v,
+            })
         }
     }
 }
@@ -2317,17 +2398,48 @@ pub fn emit_wselect(
     }
     // Isolate guard bit0 into mask_tmp (clean), then broadcast to 0x00/0xFF.
     out.push(Instr::Xori { rd: one, imm: 1 }); // one.bit0 = 1
-    out.push(Instr::Ccnot { rd: mask_tmp, rs: guard, rt: one }); // mask.bit0 = guard.bit0
-    out.push(Instr::Xori { rd: mask_tmp, imm: 0xFF }); // mask = ~mask
-    out.push(Instr::Addi { rd: mask_tmp, imm: 1 }); // mask = -guardbit0 = 0x00/0xFF
-    // Guarded copy: dst ^= else ⊕ (then⊕else)&mask.
-    out.push(Instr::Xor { rd: dst, rs: else_w }); // dst ^= else
-    out.push(Instr::Ccnot { rd: dst, rs: then_w, rt: mask_tmp }); // dst ^= then & mask
-    out.push(Instr::Ccnot { rd: dst, rs: else_w, rt: mask_tmp }); // dst ^= else & mask
-    // Uncompute mask + one (exact inverse of isolate/broadcast).
-    out.push(Instr::Subi { rd: mask_tmp, imm: 1 });
-    out.push(Instr::Xori { rd: mask_tmp, imm: 0xFF });
-    out.push(Instr::Ccnot { rd: mask_tmp, rs: guard, rt: one });
+    out.push(Instr::Ccnot {
+        rd: mask_tmp,
+        rs: guard,
+        rt: one,
+    }); // mask.bit0 = guard.bit0
+    out.push(Instr::Xori {
+        rd: mask_tmp,
+        imm: 0xFF,
+    }); // mask = ~mask
+    out.push(Instr::Addi {
+        rd: mask_tmp,
+        imm: 1,
+    }); // mask = -guardbit0 = 0x00/0xFF
+        // Guarded copy: dst ^= else ⊕ (then⊕else)&mask.
+    out.push(Instr::Xor {
+        rd: dst,
+        rs: else_w,
+    }); // dst ^= else
+    out.push(Instr::Ccnot {
+        rd: dst,
+        rs: then_w,
+        rt: mask_tmp,
+    }); // dst ^= then & mask
+    out.push(Instr::Ccnot {
+        rd: dst,
+        rs: else_w,
+        rt: mask_tmp,
+    }); // dst ^= else & mask
+        // Uncompute mask + one (exact inverse of isolate/broadcast).
+    out.push(Instr::Subi {
+        rd: mask_tmp,
+        imm: 1,
+    });
+    out.push(Instr::Xori {
+        rd: mask_tmp,
+        imm: 0xFF,
+    });
+    out.push(Instr::Ccnot {
+        rd: mask_tmp,
+        rs: guard,
+        rt: one,
+    });
     out.push(Instr::Xori { rd: one, imm: 1 });
     Ok(())
 }
@@ -2408,7 +2520,10 @@ pub fn emit_weqzero_width(
     let ntemp = weqzero_ntemp(width); // `width` partial-OR words + 1 `one` word
     if temps.len() < ntemp {
         return Err(SynthError::MalformedSpec {
-            detail: format!("WEqZero(width={width}) needs ≥ {ntemp} temp words, have {}", temps.len()),
+            detail: format!(
+                "WEqZero(width={width}) needs ≥ {ntemp} temp words, have {}",
+                temps.len()
+            ),
         });
     }
     let p = &temps[..width]; // p[0..width): running-OR partial words
@@ -2444,10 +2559,18 @@ pub fn emit_weqzero_width(
         if rot != 0 {
             out.push(Instr::Rotri { rd: src, imm: rot }); // src bit k → bit 0
         }
-        out.push(Instr::Ccnot { rd: w, rs: src, rt: one }); // w.bit0 ^= x
+        out.push(Instr::Ccnot {
+            rd: w,
+            rs: src,
+            rt: one,
+        }); // w.bit0 ^= x
         if let Some(a) = acc {
             out.push(Instr::Xor { rd: w, rs: a }); // w.bit0 ^= acc
-            out.push(Instr::Ccnot { rd: w, rs: a, rt: src }); // w.bit0 ^= acc∧x
+            out.push(Instr::Ccnot {
+                rd: w,
+                rs: a,
+                rt: src,
+            }); // w.bit0 ^= acc∧x
         }
         if rot != 0 {
             out.push(Instr::Rotli { rd: src, imm: rot }); // restore src
@@ -2463,9 +2586,16 @@ pub fn emit_weqzero_width(
     }
     // p[width-1] = OR of all `width` src bits; is-zero = ¬p[width-1].bit0.
     let last = p[width - 1];
-    out.push(Instr::Xori { rd: dst_bit, imm: 1 }); // dst.bit0 ^= 1
-    out.push(Instr::Ccnot { rd: dst_bit, rs: last, rt: one }); // dst.bit0 ^= p_last
-    // reverse chain: uncompute p[k] for k = width-1 .. 1, then p[0].
+    out.push(Instr::Xori {
+        rd: dst_bit,
+        imm: 1,
+    }); // dst.bit0 ^= 1
+    out.push(Instr::Ccnot {
+        rd: dst_bit,
+        rs: last,
+        rt: one,
+    }); // dst.bit0 ^= p_last
+        // reverse chain: uncompute p[k] for k = width-1 .. 1, then p[0].
     for k in (1..width).rev() {
         emit_or_node(out, p[k], Some(p[k - 1]), k);
     }
@@ -2560,7 +2690,10 @@ pub fn emit_wlt_width(
     let ntemp = wlt_ntemp(width);
     if temps.len() < ntemp {
         return Err(SynthError::MalformedSpec {
-            detail: format!("WLt(width={width}) needs ≥ {ntemp} temp words, have {}", temps.len()),
+            detail: format!(
+                "WLt(width={width}) needs ≥ {ntemp} temp words, have {}",
+                temps.len()
+            ),
         });
     }
     for (i, &t) in temps[..ntemp].iter().enumerate() {
@@ -2602,16 +2735,36 @@ pub fn emit_wlt_width(
             out.push(Instr::Rotri { rd: b, imm: rot }); // b bit k → bit 0
         }
         // na.bit0 = ¬a_k  (compute; uncomputed at the tail of this node).
-        out.push(Instr::Ccnot { rd: na, rs: a, rt: one }); // na.bit0 ^= a_k
+        out.push(Instr::Ccnot {
+            rd: na,
+            rs: a,
+            rt: one,
+        }); // na.bit0 ^= a_k
         out.push(Instr::Xori { rd: na, imm: 1 }); // na.bit0 ^= 1  → ¬a_k
-        out.push(Instr::Ccnot { rd: c, rs: na, rt: b }); // c ^= ¬a_k ∧ b_k
+        out.push(Instr::Ccnot {
+            rd: c,
+            rs: na,
+            rt: b,
+        }); // c ^= ¬a_k ∧ b_k
         if let Some(prev) = bin {
-            out.push(Instr::Ccnot { rd: c, rs: na, rt: prev }); // c ^= ¬a_k ∧ bin
-            out.push(Instr::Ccnot { rd: c, rs: b, rt: prev }); //  c ^= b_k ∧ bin
+            out.push(Instr::Ccnot {
+                rd: c,
+                rs: na,
+                rt: prev,
+            }); // c ^= ¬a_k ∧ bin
+            out.push(Instr::Ccnot {
+                rd: c,
+                rs: b,
+                rt: prev,
+            }); //  c ^= b_k ∧ bin
         }
         // uncompute na
         out.push(Instr::Xori { rd: na, imm: 1 });
-        out.push(Instr::Ccnot { rd: na, rs: a, rt: one });
+        out.push(Instr::Ccnot {
+            rd: na,
+            rs: a,
+            rt: one,
+        });
         if rot != 0 {
             out.push(Instr::Rotli { rd: a, imm: rot }); // restore a
             out.push(Instr::Rotli { rd: b, imm: rot }); // restore b
@@ -2718,9 +2871,17 @@ pub enum WValue {
     Gt(Box<WValue>, Box<WValue>),
     /// WIDTH-AWARE `(x < y)` over the low `width` bits (A-6 W.2). A bit-0
     /// predicate; uses [`emit_wlt_width`] → [`wlt_ntemp`]`(width)` temps.
-    LtW { x: Box<WValue>, y: Box<WValue>, width: usize },
+    LtW {
+        x: Box<WValue>,
+        y: Box<WValue>,
+        width: usize,
+    },
     /// WIDTH-AWARE `(x > y)` over the low `width` bits (A-6 W.2).
-    GtW { x: Box<WValue>, y: Box<WValue>, width: usize },
+    GtW {
+        x: Box<WValue>,
+        y: Box<WValue>,
+        width: usize,
+    },
     /// WIDTH-AWARE `(x == 0)` over the low `width` bits (A-6 W.2). A bit-0
     /// predicate; uses [`emit_weqzero_width`] → [`weqzero_ntemp`]`(width)` temps.
     EqZeroW { x: Box<WValue>, width: usize },
@@ -2735,7 +2896,10 @@ pub enum WValue {
     /// `Select(guard, val, 0)` (needs only ONE scratch mask word — no `one`, no
     /// else-temp), so a FLAT XOR of disjoint `Masked` arm-corrections keeps the
     /// concurrent-work peak low. Pure-XOR-top.
-    Masked { guard: Box<WValue>, val: Box<WValue> },
+    Masked {
+        guard: Box<WValue>,
+        val: Box<WValue>,
+    },
     /// `guard.bit0 ? then : else` (guard is any WValue; its bit 0 selects).
     Select {
         guard: Box<WValue>,
@@ -2775,23 +2939,40 @@ impl WValue {
     }
     /// Width-aware `x < y` over the low `width` bits.
     pub fn ltw(x: WValue, y: WValue, width: usize) -> Self {
-        WValue::LtW { x: Box::new(x), y: Box::new(y), width }
+        WValue::LtW {
+            x: Box::new(x),
+            y: Box::new(y),
+            width,
+        }
     }
     /// Width-aware `x > y` over the low `width` bits.
     pub fn gtw(x: WValue, y: WValue, width: usize) -> Self {
-        WValue::GtW { x: Box::new(x), y: Box::new(y), width }
+        WValue::GtW {
+            x: Box::new(x),
+            y: Box::new(y),
+            width,
+        }
     }
     /// Width-aware `x == 0` over the low `width` bits.
     pub fn eqzerow(x: WValue, width: usize) -> Self {
-        WValue::EqZeroW { x: Box::new(x), width }
+        WValue::EqZeroW {
+            x: Box::new(x),
+            width,
+        }
     }
     /// Bit-0 boolean AND of two bit-0 predicates (one `Ccnot`).
     pub fn andbit(x: WValue, y: WValue) -> Self {
-        WValue::AndBit { x: Box::new(x), y: Box::new(y) }
+        WValue::AndBit {
+            x: Box::new(x),
+            y: Box::new(y),
+        }
     }
     /// `guard.bit0 ? val : 0` via a broadcast byte mask (one scratch word).
     pub fn masked(guard: WValue, val: WValue) -> Self {
-        WValue::Masked { guard: Box::new(guard), val: Box::new(val) }
+        WValue::Masked {
+            guard: Box::new(guard),
+            val: Box::new(val),
+        }
     }
     pub fn select(guard: WValue, then_: WValue, else_: WValue) -> Self {
         WValue::Select {
@@ -2935,7 +3116,11 @@ fn realize_wvalue(
             let (fop, f_body, fmark) = operand_or_temp(first, carriers, work, next, peak, out)?;
             let (sop, s_body, smark) = operand_or_temp(second, carriers, work, next, peak, out)?;
             check_three_distinct("AndBit Ccnot", dst, fop, sop)?;
-            out.push(Instr::Ccnot { rd: dst, rs: fop, rt: sop });
+            out.push(Instr::Ccnot {
+                rd: dst,
+                rs: fop,
+                rt: sop,
+            });
             free_temp(&s_body, smark, next, out);
             free_temp(&f_body, fmark, next, out);
         }
@@ -2950,19 +3135,33 @@ fn realize_wvalue(
             let mask = alloc_work(work, next, peak)?; // fresh mask word (clean 0)
             let g_body = realize_wvalue(guard, mask, carriers, work, next, peak, out)?;
             // broadcast mask.bit0 → 0x00/0xFF
-            out.push(Instr::Xori { rd: mask, imm: 0xFF });
+            out.push(Instr::Xori {
+                rd: mask,
+                imm: 0xFF,
+            });
             out.push(Instr::Addi { rd: mask, imm: 1 });
             let (vop, v_body, vmark) = operand_or_temp(val, carriers, work, next, peak, out)?;
             check_three_distinct("Masked Ccnot", dst, vop, mask)?;
-            out.push(Instr::Ccnot { rd: dst, rs: vop, rt: mask }); // dst ^= val & mask
+            out.push(Instr::Ccnot {
+                rd: dst,
+                rs: vop,
+                rt: mask,
+            }); // dst ^= val & mask
             free_temp(&v_body, vmark, next, out);
             // unbroadcast mask, then uncompute the guard, then free the mask word.
             out.push(Instr::Subi { rd: mask, imm: 1 });
-            out.push(Instr::Xori { rd: mask, imm: 0xFF });
+            out.push(Instr::Xori {
+                rd: mask,
+                imm: 0xFF,
+            });
             out.extend(invert_body(&g_body));
             *next = gmark;
         }
-        WValue::Select { guard, then_, else_ } => {
+        WValue::Select {
+            guard,
+            then_,
+            else_,
+        } => {
             // WSelect needs dst ∉ {then_w, else_w}; a bare-carrier then/else is
             // used directly. mask/one are fresh temps (freed after).
             let (gop, g_body, gmark) = operand_or_temp(guard, carriers, work, next, peak, out)?;
@@ -2999,8 +3198,14 @@ fn factor_internal_cost(v: &WValue) -> usize {
             1 + factor_internal_cost(x).max(factor_internal_cost(y))
         }
         WValue::Rotl(x, _) | WValue::Rotr(x, _) => factor_internal_cost(x),
-        WValue::Masked { guard, val } => 1 + factor_internal_cost(guard).max(factor_internal_cost(val)),
-        WValue::Select { guard, then_, else_ } => {
+        WValue::Masked { guard, val } => {
+            1 + factor_internal_cost(guard).max(factor_internal_cost(val))
+        }
+        WValue::Select {
+            guard,
+            then_,
+            else_,
+        } => {
             2 + factor_internal_cost(guard)
                 .max(factor_internal_cost(then_))
                 .max(factor_internal_cost(else_))
@@ -3010,9 +3215,12 @@ fn factor_internal_cost(v: &WValue) -> usize {
 
 /// Resolve a carrier-index `WValue::Var(i)` to its operand.
 fn resolve_var(i: usize, carriers: &[u8]) -> Result<u8, SynthError> {
-    carriers.get(i).copied().ok_or_else(|| SynthError::MalformedSpec {
-        detail: format!("WValue::Var({i}) out of carrier range ({})", carriers.len()),
-    })
+    carriers
+        .get(i)
+        .copied()
+        .ok_or_else(|| SynthError::MalformedSpec {
+            detail: format!("WValue::Var({i}) out of carrier range ({})", carriers.len()),
+        })
 }
 
 /// Yield an OPERAND for a sub-value, plus its (compute-body, saved-mark) for
@@ -3077,7 +3285,8 @@ fn alloc_work_n(
         return Err(SynthError::MalformedSpec {
             detail: format!(
                 "work pool exhausted: needed {n} words at #{}, have {}",
-                *next, work.len()
+                *next,
+                work.len()
             ),
         });
     }
@@ -3205,6 +3414,44 @@ pub fn transcribe_word_bennett_peak(
     out_ancilla: &[u8],
     work_ops: &[u8],
 ) -> Result<(Vec<Instr>, usize), SynthError> {
+    transcribe_word_bennett_peak_impl(fwd, bwd, carrier_ops, out_ancilla, work_ops)
+}
+
+/// MEASUREMENT-ONLY entry — DO NOT USE for execution / ROM emission. Identical to
+/// [`transcribe_word_bennett_peak`] except the operand-legality cap is RELAXED
+/// (thread-local, RAII-scoped) so indices ≥ 16 (the future widen-state scratch
+/// slots and beyond) are permitted. This lets an over-budget body (e.g. word-level
+/// gcd2, whose peak concurrent work far exceeds the 6 free machine work operands)
+/// actually PLACE so its `body.len()` / peak can be COUNTED. The emitted body reads
+/// operand indices ≥ 16 that `exec_instr` panics on — it is a length/peak
+/// measurement artifact, never a runnable program. The relaxation is scoped to this
+/// call: production behavior of every other entry is unchanged.
+pub fn transcribe_word_bennett_peak_measure(
+    fwd: &WForward,
+    bwd: &WForward,
+    carrier_ops: &[u8],
+    out_ancilla: &[u8],
+    work_ops: &[u8],
+) -> Result<(Vec<Instr>, usize), SynthError> {
+    // Relaxed cap = 200 → generous headroom (regs 0..7, scratch 10..200), still
+    // rejects the decoder-reserved s0/s1 (8/9), so the HONEST peak is measured even
+    // if it far exceeds the +4 (=18-operand) widen-state target; the caller reports
+    // whether it fits 18. The guard restores the strict cap on every exit path
+    // (including `?` early returns).
+    let _guard = RelaxedOperandCap::new(200);
+    transcribe_word_bennett_peak_impl(fwd, bwd, carrier_ops, out_ancilla, work_ops)
+}
+
+/// Shared implementation of the word-level Bennett wrapper. Operand legality is
+/// enforced by `check_operand_legal`, which consults the thread-local operand cap
+/// (strict `NUM_OPERAND_LOCS` in production; raised only on the measurement path).
+fn transcribe_word_bennett_peak_impl(
+    fwd: &WForward,
+    bwd: &WForward,
+    carrier_ops: &[u8],
+    out_ancilla: &[u8],
+    work_ops: &[u8],
+) -> Result<(Vec<Instr>, usize), SynthError> {
     let n = carrier_ops.len();
     // ── Operand-legality + disjointness guards (mirror transcribe_bennett) ──
     for &c in carrier_ops {
@@ -3269,10 +3516,10 @@ pub fn transcribe_word_bennett_peak(
         });
     }
     let active = fwd_slots; // sorted, deduped, identical to bwd
-    // ONE ancilla per ACTIVE carrier, indexed by position in the sorted active set
-    // (`out_ancilla[k]` is the clean ancilla for carrier `active[k]`). Identity
-    // carriers consume no ancilla. This is the free-operand saving that lets a
-    // permutation with many preserved guards (e.g. gcd2) fit the operand budget.
+                            // ONE ancilla per ACTIVE carrier, indexed by position in the sorted active set
+                            // (`out_ancilla[k]` is the clean ancilla for carrier `active[k]`). Identity
+                            // carriers consume no ancilla. This is the free-operand saving that lets a
+                            // permutation with many preserved guards (e.g. gcd2) fit the operand budget.
     if out_ancilla.len() < active.len() {
         return Err(SynthError::MalformedSpec {
             detail: format!(
@@ -3299,7 +3546,14 @@ pub fn transcribe_word_bennett_peak(
     // Step 1: O ^= fwd(x)  (each active slot's clean ancilla XOR-accumulates the
     // forward value; UNLISTED carriers are identity — untouched, held in place).
     for (slot, val) in &fwd.outputs {
-        emit_clean_accumulate(ancilla_of(*slot), val, carrier_ops, work_ops, &mut peak, &mut out)?;
+        emit_clean_accumulate(
+            ancilla_of(*slot),
+            val,
+            carrier_ops,
+            work_ops,
+            &mut peak,
+            &mut out,
+        )?;
     }
     // Step 2: swap ACTIVE carriers ↔ ancilla, per pair. Identity carriers stay put
     // (still hold their inputs), so bwd can read them in step 3.
@@ -3310,7 +3564,14 @@ pub fn transcribe_word_bennett_peak(
     // still hold their inputs. bwd(y, identity-inputs) = x is XORed into O (which
     // holds x), zeroing every ancilla → net-zero.
     for (slot, val) in &bwd.outputs {
-        emit_clean_accumulate(ancilla_of(*slot), val, carrier_ops, work_ops, &mut peak, &mut out)?;
+        emit_clean_accumulate(
+            ancilla_of(*slot),
+            val,
+            carrier_ops,
+            work_ops,
+            &mut peak,
+            &mut out,
+        )?;
     }
     Ok((out, peak))
 }
@@ -3350,7 +3611,11 @@ fn check_wvalue_vars(val: &WValue, n: usize, which: &str) -> Result<(), SynthErr
             check_wvalue_vars(guard, n, which)?;
             check_wvalue_vars(val, n, which)
         }
-        WValue::Select { guard, then_, else_ } => {
+        WValue::Select {
+            guard,
+            then_,
+            else_,
+        } => {
             check_wvalue_vars(guard, n, which)?;
             check_wvalue_vars(then_, n, which)?;
             check_wvalue_vars(else_, n, which)

@@ -29,7 +29,7 @@
 use theseus_core::Iso;
 use theseus_tisc::asm::{assemble, decode, encode, AsmError, Instr};
 use theseus_tisc::step::step;
-use theseus_tisc::types::{MEM_WORDS, StateVals};
+use theseus_tisc::types::{StateVals, MEM_WORDS};
 
 /// Generous per-eval fuel (same order as the step tests).
 const EVAL_FUEL: u64 = 8_000_000_000;
@@ -125,7 +125,10 @@ fn assembler_encode_roundtrip() {
     // EXCH r1, r2: fmt=1, op=3, rd=1, rs=2 = 0x8611_0000.
     assert_eq!(encode(Instr::Exch { rd: 1, rs: 2 }).unwrap(), 0x8611_0000);
     // ADDI r3, 0x5A: fmt=0, op=0, rd=3, imm=0x5A = 0x0030_005A.
-    assert_eq!(encode(Instr::Addi { rd: 3, imm: 0x5A }).unwrap(), 0x0030_005A);
+    assert_eq!(
+        encode(Instr::Addi { rd: 3, imm: 0x5A }).unwrap(),
+        0x0030_005A
+    );
     // SWAPBR r0: fmt=1, op=8, rd=0 = 0x9000_0000.
     assert_eq!(encode(Instr::Swapbr { rd: 0 }).unwrap(), 0x9000_0000);
 
@@ -137,7 +140,11 @@ fn assembler_encode_roundtrip() {
         Instr::Exch { rd: 1, rs: 2 },
         Instr::Rotl { rd: 7, rs: 0 },
         Instr::Rotr { rd: 0, rs: 7 },
-        Instr::Cswap { rd: 1, rs: 2, rt: 3 },
+        Instr::Cswap {
+            rd: 1,
+            rs: 2,
+            rt: 3,
+        },
         Instr::Xchg { rd: 4, sx: 5 },
         Instr::Swapbr { rd: 0 },
         Instr::Addi { rd: 0, imm: 0xFF },
@@ -155,7 +162,11 @@ fn assembler_encode_roundtrip() {
     // ADD r1,r2 with spare bit 0 set = 0x8011_0001.
     assert_eq!(decode(0x8011_0001), None, "R-format spare bit set");
     // R opcode 0b1001 is now MEXCH (M-C2 Layer 1): fmt=1, op=9, rd=0 = 0x9200_0000.
-    assert_eq!(decode(0x9200_0000), Some(Instr::Mexch { rd: 0, addr: 0 }), "MEXCH r0, m0");
+    assert_eq!(
+        decode(0x9200_0000),
+        Some(Instr::Mexch { rd: 0, addr: 0 }),
+        "MEXCH r0, m0"
+    );
     // R opcode 0b1010 is MEXCHR (M-D.b): fmt=1, op=10, rd=1, rs=0 = 0x9410_0000.
     assert_eq!(
         decode(0x9410_0000),
@@ -178,7 +189,11 @@ fn assembler_encode_roundtrip() {
 fn assembler_rejects_aliased_add() {
     assert!(matches!(
         encode(Instr::Add { rd: 3, rs: 3 }),
-        Err(AsmError::AliasedOperands { mnemonic: "ADD", rd: 3, rs: 3 })
+        Err(AsmError::AliasedOperands {
+            mnemonic: "ADD",
+            rd: 3,
+            rs: 3
+        })
     ));
 }
 
@@ -201,7 +216,10 @@ fn fib_forward() {
     let iso = step(&rom);
     let pairs = fib_pairs();
 
-    eprintln!("== TISC-1 Fibonacci ROM ({} words, N = {N} pairs) ==", rom.len());
+    eprintln!(
+        "== TISC-1 Fibonacci ROM ({} words, N = {N} pairs) ==",
+        rom.len()
+    );
     for (p, &w) in rom.iter().enumerate() {
         eprintln!("  {p:3}: {w:#06X}  {:?}", decode(w).unwrap());
     }
@@ -213,7 +231,12 @@ fn fib_forward() {
         // One fib pair = 2 machine cycles (ADD, then EXCH).
         cur = eval_state(&format!("fib/pair{k}/add"), &iso, &cur);
         cur = eval_state(&format!("fib/pair{k}/exch"), &iso, &cur);
-        eprintln!("  after pair {:2}: (r1, r2) = ({:3}, {:3})", k + 1, cur.regs[1], cur.regs[2]);
+        eprintln!(
+            "  after pair {:2}: (r1, r2) = ({:3}, {:3})",
+            k + 1,
+            cur.regs[1],
+            cur.regs[2]
+        );
         assert_eq!(
             (cur.regs[1], cur.regs[2]),
             pairs[k + 1],
@@ -226,7 +249,11 @@ fn fib_forward() {
     }
     computed.push(cur.regs[2]);
 
-    assert_eq!((cur.regs[1], cur.regs[2]), (89, 144), "final regs = (fib(10), fib(11))");
+    assert_eq!(
+        (cur.regs[1], cur.regs[2]),
+        (89, 144),
+        "final regs = (fib(10), fib(11))"
+    );
     eprintln!("Fibonacci sequence computed by the CPU: {computed:?}");
     assert_eq!(computed, vec![1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144]);
 }
@@ -241,7 +268,10 @@ fn fib_step_adjoint_identity() {
     let fwd = eval_state("adj/fwd", &iso, &s);
     assert_ne!(fwd, s, "one step must change the state");
     let rec = eval_state("adj/back", &back, &fwd);
-    assert_eq!(rec, s, "one forward step then one adjoint step must be the identity");
+    assert_eq!(
+        rec, s,
+        "one forward step then one adjoint step must be the identity"
+    );
 }
 
 #[test]

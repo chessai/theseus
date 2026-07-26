@@ -53,16 +53,26 @@ fn chi_instrs() -> Vec<Instr> {
     let masked_and = |target: u8, ctrl: u8, other: u8| {
         // target ^= (¬ctrl) & other ; ctrl restored.
         vec![
-            Instr::Xori { rd: ctrl, imm: 0xFF },
-            Instr::Ccnot { rd: target, rs: ctrl, rt: other },
-            Instr::Xori { rd: ctrl, imm: 0xFF },
+            Instr::Xori {
+                rd: ctrl,
+                imm: 0xFF,
+            },
+            Instr::Ccnot {
+                rd: target,
+                rs: ctrl,
+                rt: other,
+            },
+            Instr::Xori {
+                rd: ctrl,
+                imm: 0xFF,
+            },
         ]
     };
     let mut p = Vec::new();
     // Save OLD a0, a1 into ancilla r5, r6 (copy: r5^=r0, r6^=r1).
     p.push(Instr::Xor { rd: 5, rs: 0 }); // r5 = a0
     p.push(Instr::Xor { rd: 6, rs: 1 }); // r6 = a1
-    // g0: A0 = a0 ⊕ (¬a1 ∧ a2)   ctrls r1(a1), r2(a2)
+                                         // g0: A0 = a0 ⊕ (¬a1 ∧ a2)   ctrls r1(a1), r2(a2)
     p.extend(masked_and(0, 1, 2));
     // g1: A1 = a1 ⊕ (¬a2 ∧ a3)
     p.extend(masked_and(1, 2, 3));
@@ -148,12 +158,14 @@ fn chi_whole_perrow_domain_packed() {
             );
         }
         // Cross-check against scalar χ (bit 0 of each byte).
-        let scalar_in = [
-            a[0] & 1, a[1] & 1, a[2] & 1, a[3] & 1, a[4] & 1,
-        ];
+        let scalar_in = [a[0] & 1, a[1] & 1, a[2] & 1, a[3] & 1, a[4] & 1];
         let scalar_out = chi_ref_scalar(scalar_in);
         for i in 0..5 {
-            assert_eq!(out.regs[i] & 1, scalar_out[i], "scalar χ lane {i} row {row}");
+            assert_eq!(
+                out.regs[i] & 1,
+                scalar_out[i],
+                "scalar χ lane {i} row {row}"
+            );
         }
         // Rev-A FINDING: ancilla r5, r6 dirtiness after forward-only run.
         // This assertion is the L20 regression test — it must FAIL if
@@ -189,7 +201,9 @@ fn chi_discriminating_lane_packing() {
     let budget = chi_instrs().len();
 
     // 8 distinct rows, one per bit position b (row_b = the 5-bit state in bit b).
-    let rows: [u8; 8] = [0b00000, 0b11111, 0b10110, 0b01001, 0b10101, 0b01010, 0b00011, 0b11000];
+    let rows: [u8; 8] = [
+        0b00000, 0b11111, 0b10110, 0b01001, 0b10101, 0b01010, 0b00011, 0b11000,
+    ];
 
     // Build the 5 lane-bytes: lane i, bit b = bit i of rows[b].
     let mut a = [0u8; 5];
@@ -205,13 +219,19 @@ fn chi_discriminating_lane_packing() {
     // Each bit position must independently equal scalar χ of its row.
     for b in 0..8 {
         let ain = [
-            (a[0] >> b) & 1, (a[1] >> b) & 1, (a[2] >> b) & 1, (a[3] >> b) & 1, (a[4] >> b) & 1,
+            (a[0] >> b) & 1,
+            (a[1] >> b) & 1,
+            (a[2] >> b) & 1,
+            (a[3] >> b) & 1,
+            (a[4] >> b) & 1,
         ];
         let expect = chi_ref_scalar(ain);
         for i in 0..5 {
             assert_eq!(
-                (out.regs[i] >> b) & 1, expect[i],
-                "discriminating: bit-lane {b} (row {:#07b}) lane {i}", rows[b]
+                (out.regs[i] >> b) & 1,
+                expect[i],
+                "discriminating: bit-lane {b} (row {:#07b}) lane {i}",
+                rows[b]
             );
         }
     }
@@ -238,7 +258,11 @@ fn chi_keccak_golden_vector() {
     // => (0,0,1,0,0)  — PINNED, not derived from the compiled path.
     const GOLDEN_IN: [u8; 5] = [1, 0, 1, 1, 0];
     const GOLDEN_OUT: [u8; 5] = [0, 0, 1, 0, 0];
-    assert_eq!(chi_ref_scalar(GOLDEN_IN), GOLDEN_OUT, "scalar ref must match hand golden");
+    assert_eq!(
+        chi_ref_scalar(GOLDEN_IN),
+        GOLDEN_OUT,
+        "scalar ref must match hand golden"
+    );
 
     let rom = chi_rom();
     let budget = chi_instrs().len();
@@ -268,8 +292,13 @@ fn chi_forward_injective_over_domain() {
         let out = run_rom_fast(rom, state_with_lanes(a), budget);
         // Full extended state (r0..r6) must be injective — reversibility.
         let key: [u8; 7] = [
-            out.regs[0], out.regs[1], out.regs[2], out.regs[3], out.regs[4],
-            out.regs[5], out.regs[6],
+            out.regs[0],
+            out.regs[1],
+            out.regs[2],
+            out.regs[3],
+            out.regs[4],
+            out.regs[5],
+            out.regs[6],
         ];
         assert!(seen.insert(key), "collision at row {row}: NOT injective");
     }
@@ -285,16 +314,26 @@ fn chi_forward_injective_over_domain() {
 fn chi_instruction_inventory() {
     let instrs = chi_instrs();
     assert_eq!(instrs.len(), 17, "χ = 2 saves + 5×3 gate instrs = 17");
-    let ccnots = instrs.iter().filter(|i| matches!(i, Instr::Ccnot { .. })).count();
-    let xoris = instrs.iter().filter(|i| matches!(i, Instr::Xori { .. })).count();
-    let xors = instrs.iter().filter(|i| matches!(i, Instr::Xor { .. })).count();
+    let ccnots = instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Ccnot { .. }))
+        .count();
+    let xoris = instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Xori { .. }))
+        .count();
+    let xors = instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Xor { .. }))
+        .count();
     assert_eq!(ccnots, 5, "5 byte-parallel masked-ANDs");
     assert_eq!(xoris, 10, "5 gates × 2 negate/restore Xori");
     assert_eq!(xors, 2, "2 ancilla saves");
     eprintln!(
         "χ inventory: {} instrs = {ccnots} Ccnot + {xoris} Xori + {xors} Xor; \
          Rev-B garbage-free in-place would add ~{} cleanup instrs (χ⁻¹ over live outputs).",
-        instrs.len(), chi_gf_extra_cleanup_len()
+        instrs.len(),
+        chi_gf_extra_cleanup_len()
     );
 }
 
@@ -333,7 +372,10 @@ fn chi_reversible_roundtrip_eval() {
         cur = theseus_eval::eval(&back, cur, &mut fuel).expect("back");
     }
     let restored = StateVals::decode(&cur);
-    assert_eq!(restored, start, "adjoint must restore the exact input state (Rev-A: ancillas → 0)");
+    assert_eq!(
+        restored, start,
+        "adjoint must restore the exact input state (Rev-A: ancillas → 0)"
+    );
     eprintln!(
         "χ ROM reversible (Rev-A): {t} fwd cycles then {t} adjoint cycles \
          restore input + ancillas → 0."
@@ -359,7 +401,10 @@ fn chi_energy_and_bitslicing() {
     let b = rom.len(); // straight-line: B = ROM length (PC += 1 each cycle)
     let total_j = step_j * b as f64;
 
-    let ccnots = instrs.iter().filter(|i| matches!(i, Instr::Ccnot { .. })).count();
+    let ccnots = instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Ccnot { .. }))
+        .count();
     assert_eq!(ccnots, 5, "χ has 5 byte-parallel masked-AND gates");
 
     // Bit-slicing: the SAME ROM/energy computes χ for 8 rows at once (data-
@@ -367,7 +412,10 @@ fn chi_energy_and_bitslicing() {
     let j_per_rowchi_sliced = total_j / 8.0;
     let j_per_rowchi_unsliced = total_j / 1.0;
 
-    eprintln!("== χ ROM energy ({} instrs, {ccnots} Ccnots) ==", instrs.len());
+    eprintln!(
+        "== χ ROM energy ({} instrs, {ccnots} Ccnots) ==",
+        instrs.len()
+    );
     eprintln!("  step_j = {step_j:.4e} J/cycle;  B = {b} cycles;  total = {total_j:.4e} J");
     eprintln!("  bit-sliced (Flat8, 8 rows): {j_per_rowchi_sliced:.4e} J / row-χ");
     eprintln!("  un-sliced  (Flat1, 1 row):  {j_per_rowchi_unsliced:.4e} J / row-χ");
@@ -413,12 +461,18 @@ fn chi_system_ring_authority() {
         let scalar_in = [a[0] & 1, a[1] & 1, a[2] & 1, a[3] & 1, a[4] & 1];
         let scalar_out = chi_ref_scalar(scalar_in);
         for i in 0..5 {
-            assert_eq!(out.regs[i] & 1, scalar_out[i], "ring scalar χ lane {i} row {row}");
+            assert_eq!(
+                out.regs[i] & 1,
+                scalar_out[i],
+                "ring scalar χ lane {i} row {row}"
+            );
         }
     }
 
     // ── 2. Discriminating packing (8 distinct rows one-per-bit) ──────
-    let disc_rows: [u8; 8] = [0b00000, 0b11111, 0b10110, 0b01001, 0b10101, 0b01010, 0b00011, 0b11000];
+    let disc_rows: [u8; 8] = [
+        0b00000, 0b11111, 0b10110, 0b01001, 0b10101, 0b01010, 0b00011, 0b11000,
+    ];
     let mut a_disc = [0u8; 5];
     for i in 0..5 {
         for b in 0..8 {
@@ -430,7 +484,10 @@ fn chi_system_ring_authority() {
     let disc_out = ring.run(&state_with_lanes(a_disc), t);
     let disc_expect = chi_ref_bytes(a_disc);
     for i in 0..5 {
-        assert_eq!(disc_out.regs[i], disc_expect[i], "ring discriminating lane {i}");
+        assert_eq!(
+            disc_out.regs[i], disc_expect[i],
+            "ring discriminating lane {i}"
+        );
     }
 
     // ── 3. Keccak golden vector ──────────────────────────────────────
@@ -438,7 +495,11 @@ fn chi_system_ring_authority() {
     let golden_expect: [u8; 5] = [0, 0, 1, 0, 0];
     let golden_out = ring.run(&state_with_lanes(golden_in), t);
     for i in 0..5 {
-        assert_eq!(golden_out.regs[i] & 1, golden_expect[i], "ring golden χ lane {i}");
+        assert_eq!(
+            golden_out.regs[i] & 1,
+            golden_expect[i],
+            "ring golden χ lane {i}"
+        );
     }
 
     // ── 4. Forward + adjoint restores input, ancillas → 0 ───────────
@@ -459,7 +520,13 @@ fn chi_system_ring_authority() {
     // χ is NOT an involution: χ∘χ ≠ id.
     let double = ring.run(&sample_state, 2 * t);
     assert_ne!(
-        [double.regs[0], double.regs[1], double.regs[2], double.regs[3], double.regs[4]],
+        [
+            double.regs[0],
+            double.regs[1],
+            double.regs[2],
+            double.regs[3],
+            double.regs[4]
+        ],
         sample_a,
         "χ must NOT be an involution"
     );

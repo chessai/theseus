@@ -58,7 +58,13 @@ fn decode_composite(val: &Value) -> (u8, u8, u8, u8, u8) {
         }
         v
     };
-    (read_u8(0), read_u8(8), read_u8(16), read_u8(24), read_u8(32))
+    (
+        read_u8(0),
+        read_u8(8),
+        read_u8(16),
+        read_u8(24),
+        read_u8(32),
+    )
 }
 
 #[test]
@@ -78,8 +84,8 @@ fn cross_ctrl_fredkin_self_inverse() {
 
     let f = cross_ctrl_fredkin(ctrl_field, ctrl_bit, word_a, word_b, n_left, n_right);
 
-    let unused_lf0: u8 = 0;   // left factor field 0 (non-participating)
-    let unused_rf1: u8 = 0;   // right factor field 1 (non-participating)
+    let unused_lf0: u8 = 0; // left factor field 0 (non-participating)
+    let unused_rf1: u8 = 0; // right factor field 1 (non-participating)
 
     // Strided edge set instead of full 0..=255 × 0..=255.
     // Self-inverse is structural; edge coverage suffices.
@@ -90,19 +96,11 @@ fn cross_ctrl_fredkin_self_inverse() {
         let ctrl_byte = ctrl_bit_val; // only bit 0 set or clear
         for &wa_val in &edge_vals {
             for &wb_val in &edge_vals {
-                let input = encode_composite(
-                    unused_lf0,
-                    ctrl_byte,
-                    wb_val,
-                    unused_rf1,
-                    wa_val,
-                );
+                let input = encode_composite(unused_lf0, ctrl_byte, wb_val, unused_rf1, wa_val);
                 let mut fuel = FUEL;
-                let once = theseus_eval::eval(&f, input.clone(), &mut fuel)
-                    .expect("eval once");
+                let once = theseus_eval::eval(&f, input.clone(), &mut fuel).expect("eval once");
                 let mut fuel2 = FUEL;
-                let twice = theseus_eval::eval(&f, once, &mut fuel2)
-                    .expect("eval twice");
+                let twice = theseus_eval::eval(&f, once, &mut fuel2).expect("eval twice");
                 assert_eq!(
                     input, twice,
                     "self-inverse failed: ctrl={ctrl_byte:#04x} wa={wa_val:#04x} wb={wb_val:#04x}"
@@ -116,19 +114,11 @@ fn cross_ctrl_fredkin_self_inverse() {
         let ctrl_byte = 0xFE | ctrl_bit_val;
         for &wa_val in &edge_vals {
             for &wb_val in &edge_vals {
-                let input = encode_composite(
-                    unused_lf0,
-                    ctrl_byte,
-                    wb_val,
-                    unused_rf1,
-                    wa_val,
-                );
+                let input = encode_composite(unused_lf0, ctrl_byte, wb_val, unused_rf1, wa_val);
                 let mut fuel = FUEL;
-                let once = theseus_eval::eval(&f, input.clone(), &mut fuel)
-                    .expect("eval once");
+                let once = theseus_eval::eval(&f, input.clone(), &mut fuel).expect("eval once");
                 let mut fuel2 = FUEL;
-                let twice = theseus_eval::eval(&f, once, &mut fuel2)
-                    .expect("eval twice");
+                let twice = theseus_eval::eval(&f, once, &mut fuel2).expect("eval twice");
                 assert_eq!(
                     input, twice,
                     "self-inverse failed (sweep 2): ctrl={ctrl_byte:#04x} wa={wa_val:#04x} wb={wb_val:#04x}"

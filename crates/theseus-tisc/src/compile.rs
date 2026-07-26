@@ -17,10 +17,7 @@ use theseus_core::{adjoint, Iso, Type, Value};
 
 use crate::asm::{assemble, Instr};
 use crate::bveq;
-use crate::types::{
-    decode_system, encode_system,
-    StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH,
-};
+use crate::types::{decode_system, encode_system, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
 // ── Errors ────────────────────────────────────────────────────────────
 
@@ -288,11 +285,7 @@ fn apply_factor(v: &Value) -> Value {
 /// Check whether a structural iso is the identity on the M-B leaf-byte
 /// encoding. Returns `true` if every inhabitant maps to the same byte
 /// vector (i.e. the no-op lowering is correct), `false` otherwise.
-fn structural_iso_is_identity(
-    in_ty: &Type,
-    out_ty: &Type,
-    transform: fn(&Value) -> Value,
-) -> bool {
+fn structural_iso_is_identity(in_ty: &Type, out_ty: &Type, transform: fn(&Value) -> Value) -> bool {
     let vals = enumerate_values(in_ty);
     for v_in in &vals {
         let v_out = transform(v_in);
@@ -334,7 +327,11 @@ pub struct OccSet {
 
 impl OccSet {
     fn empty() -> Self {
-        OccSet { regs: 0, scratch: 0, mem: 0 }
+        OccSet {
+            regs: 0,
+            scratch: 0,
+            mem: 0,
+        }
     }
 
     pub fn from_locations(locs: &[Location]) -> Self {
@@ -476,7 +473,10 @@ impl Ctx {
         );
         let mut homes = left.homes.clone();
         homes.extend_from_slice(&right.homes);
-        Ctx { homes, occ: left.occ }
+        Ctx {
+            homes,
+            occ: left.occ,
+        }
     }
 }
 
@@ -530,9 +530,7 @@ fn with_registers(
     let mut page_out_stack: Vec<Instr> = Vec::new();
 
     for &(i, sx) in &scratch_ops {
-        let spare = spares
-            .pop()
-            .expect("with_registers: no spare register");
+        let spare = spares.pop().expect("with_registers: no spare register");
         reg_for[i] = spare;
         page_in.push(Instr::Xchg { rd: spare, sx });
         page_out_stack.push(Instr::Xchg { rd: spare, sx });
@@ -572,12 +570,10 @@ fn swap_homes(ctx: &Ctx, leaf_a: usize, leaf_b: usize) -> Vec<Instr> {
                 vec![Instr::Exch { rd: ra, rs: rb }]
             }
         }
-        (Location::Reg(r), Location::Scratch(sx))
-        | (Location::Scratch(sx), Location::Reg(r)) => {
+        (Location::Reg(r), Location::Scratch(sx)) | (Location::Scratch(sx), Location::Reg(r)) => {
             vec![Instr::Xchg { rd: r, sx }]
         }
-        (Location::Reg(r), Location::Mem(addr))
-        | (Location::Mem(addr), Location::Reg(r)) => {
+        (Location::Reg(r), Location::Mem(addr)) | (Location::Mem(addr), Location::Reg(r)) => {
             vec![Instr::Mexch { rd: r, addr }]
         }
         (Location::Scratch(sa), Location::Scratch(sb)) => {
@@ -986,8 +982,7 @@ pub fn bveq_verify_emission(
                 return Err(CompileError::EmissionVerificationFailed(format!(
                     "pointwise mismatch for '{}': input={:?}, reg {} (leaf {}): \
                      got {} expected {}",
-                    def.forward_name, in_bytes, r, leaf_idx,
-                    result_regs[r as usize], expected
+                    def.forward_name, in_bytes, r, leaf_idx, result_regs[r as usize], expected
                 )));
             }
         }
@@ -1118,15 +1113,31 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
         // 3-cycle forward: (a, b) ↦ (a⊕b⊕1, a)
         // Instruction sequence: XOR r0,r1; XORI r0,1; XOR r1,r0; XORI r1,1
         // Used as the Trace body witness for the k=|u|+1 maximal trajectory.
-        if check_pattern_2leaf(&def.forward, &vals, &def.input_ty, &def.output_ty, |a, b| {
-            (a ^ b ^ 1, a)
-        }) {
+        if check_pattern_2leaf(
+            &def.forward,
+            &vals,
+            &def.input_ty,
+            &def.output_ty,
+            |a, b| (a ^ b ^ 1, a),
+        ) {
             return with_registers(ctx, &leaves, |regs| {
                 let body = vec![
-                    Instr::Xor { rd: regs[0], rs: regs[1] },
-                    Instr::Xori { rd: regs[0], imm: 1 },
-                    Instr::Xor { rd: regs[1], rs: regs[0] },
-                    Instr::Xori { rd: regs[1], imm: 1 },
+                    Instr::Xor {
+                        rd: regs[0],
+                        rs: regs[1],
+                    },
+                    Instr::Xori {
+                        rd: regs[0],
+                        imm: 1,
+                    },
+                    Instr::Xor {
+                        rd: regs[1],
+                        rs: regs[0],
+                    },
+                    Instr::Xori {
+                        rd: regs[1],
+                        imm: 1,
+                    },
                 ];
                 bveq_verify_emission(&body, def, regs)?;
                 Ok(body)
@@ -1134,15 +1145,31 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
         }
 
         // 3-cycle inverse (adjoint): (a, b) ↦ (b, a⊕b⊕1)
-        if check_pattern_2leaf(&def.forward, &vals, &def.input_ty, &def.output_ty, |a, b| {
-            (b, a ^ b ^ 1)
-        }) {
+        if check_pattern_2leaf(
+            &def.forward,
+            &vals,
+            &def.input_ty,
+            &def.output_ty,
+            |a, b| (b, a ^ b ^ 1),
+        ) {
             return with_registers(ctx, &leaves, |regs| {
                 let body = vec![
-                    Instr::Xor { rd: regs[1], rs: regs[0] },
-                    Instr::Xori { rd: regs[1], imm: 1 },
-                    Instr::Xor { rd: regs[0], rs: regs[1] },
-                    Instr::Xori { rd: regs[0], imm: 1 },
+                    Instr::Xor {
+                        rd: regs[1],
+                        rs: regs[0],
+                    },
+                    Instr::Xori {
+                        rd: regs[1],
+                        imm: 1,
+                    },
+                    Instr::Xor {
+                        rd: regs[0],
+                        rs: regs[1],
+                    },
+                    Instr::Xori {
+                        rd: regs[0],
+                        imm: 1,
+                    },
                 ];
                 bveq_verify_emission(&body, def, regs)?;
                 Ok(body)
@@ -1175,9 +1202,7 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
 
         // ccnot (byte-parallel): (t, c1, c2) ↦ (t ^ (c1 & c2), c1, c2)
         // TARGET-FIRST: regs[0] = target (rd), regs[1] = control1 (rs), regs[2] = control2 (rt).
-        if check_pattern_3reg(&def.forward, &vals, |t, c1, c2| {
-            (t ^ (c1 & c2), c1, c2)
-        }) {
+        if check_pattern_3reg(&def.forward, &vals, |t, c1, c2| (t ^ (c1 & c2), c1, c2)) {
             return with_registers(ctx, &leaves, |regs| {
                 let body = vec![Instr::Ccnot {
                     rd: regs[0],
@@ -1190,9 +1215,7 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
         }
 
         // ccnot TARGET-LAST: (c1, c2, t) ↦ (c1, c2, t ^ (c1 & c2))
-        if check_pattern_3reg(&def.forward, &vals, |c1, c2, t| {
-            (c1, c2, t ^ (c1 & c2))
-        }) {
+        if check_pattern_3reg(&def.forward, &vals, |c1, c2, t| (c1, c2, t ^ (c1 & c2))) {
             return with_registers(ctx, &leaves, |regs| {
                 let body = vec![Instr::Ccnot {
                     rd: regs[2],
@@ -1321,7 +1344,14 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
     // (exponential in leaves) — acceptable for k=5 (7 values).
     if def.forward_name == "mde_spill_walk" && n_in == 5 && n_out == 5 {
         let vals = enumerate_values(&def.input_ty);
-        if check_pattern_kleaf(&def.forward, &vals, &def.input_ty, &def.output_ty, 5, mde_walk_bytes) {
+        if check_pattern_kleaf(
+            &def.forward,
+            &vals,
+            &def.input_ty,
+            &def.output_ty,
+            5,
+            mde_walk_bytes,
+        ) {
             // Emit all 13 instructions in ONE `with_registers` call →
             // the paging is a WHOLE-BODY bracket (one page-in at entry,
             // one page-out at exit), NOT per-instruction.
@@ -1334,9 +1364,21 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
                     Instr::Xor { rd: p2, rs: p3 },
                     Instr::Xor { rd: p3, rs: p4 },
                     Instr::Xori { rd: t, imm: 1 },
-                    Instr::Cswap { rd: t, rs: p1, rt: p2 },
-                    Instr::Cswap { rd: t, rs: p2, rt: p3 },
-                    Instr::Cswap { rd: t, rs: p3, rt: p4 },
+                    Instr::Cswap {
+                        rd: t,
+                        rs: p1,
+                        rt: p2,
+                    },
+                    Instr::Cswap {
+                        rd: t,
+                        rs: p2,
+                        rt: p3,
+                    },
+                    Instr::Cswap {
+                        rd: t,
+                        rs: p3,
+                        rt: p4,
+                    },
                     Instr::Xori { rd: t, imm: 1 },
                     Instr::Xor { rd: p3, rs: p4 },
                     Instr::Xor { rd: p2, rs: p3 },
@@ -1463,16 +1505,40 @@ fn generate_arm_candidates(n_leaves: usize, regs: &[u8]) -> Vec<Vec<Instr>> {
             }]);
             // 3-cycle multi-instruction bodies (Trace witness patterns).
             candidates.push(vec![
-                Instr::Xor { rd: regs[0], rs: regs[1] },
-                Instr::Xori { rd: regs[0], imm: 1 },
-                Instr::Xor { rd: regs[1], rs: regs[0] },
-                Instr::Xori { rd: regs[1], imm: 1 },
+                Instr::Xor {
+                    rd: regs[0],
+                    rs: regs[1],
+                },
+                Instr::Xori {
+                    rd: regs[0],
+                    imm: 1,
+                },
+                Instr::Xor {
+                    rd: regs[1],
+                    rs: regs[0],
+                },
+                Instr::Xori {
+                    rd: regs[1],
+                    imm: 1,
+                },
             ]);
             candidates.push(vec![
-                Instr::Xor { rd: regs[1], rs: regs[0] },
-                Instr::Xori { rd: regs[1], imm: 1 },
-                Instr::Xor { rd: regs[0], rs: regs[1] },
-                Instr::Xori { rd: regs[0], imm: 1 },
+                Instr::Xor {
+                    rd: regs[1],
+                    rs: regs[0],
+                },
+                Instr::Xori {
+                    rd: regs[1],
+                    imm: 1,
+                },
+                Instr::Xor {
+                    rd: regs[0],
+                    rs: regs[1],
+                },
+                Instr::Xori {
+                    rd: regs[0],
+                    imm: 1,
+                },
             ]);
         }
         3 => {
@@ -1731,10 +1797,7 @@ pub fn memexch_prim_idx(elem_ty: &Type, idx_ty: &Type, n: usize) -> Result<PrimD
     // Full type: (data × (addr × arr))
     // Flatten as a product: data × addr × arr[0] × arr[1] × ... × arr[n-1]
     // which gives num_leaves = 1 + 1 + n leaves (for single-leaf elem_ty).
-    let full_ty = Type::prod(
-        elem_ty.clone(),
-        Type::prod(idx_ty.clone(), arr_ty.clone()),
-    );
+    let full_ty = Type::prod(elem_ty.clone(), Type::prod(idx_ty.clone(), arr_ty.clone()));
 
     let vals = enumerate_values(&full_ty);
     let n_leaves = num_leaves(&full_ty)?;
@@ -1753,7 +1816,7 @@ pub fn memexch_prim_idx(elem_ty: &Type, idx_ty: &Type, n: usize) -> Result<PrimD
         // Output: (arr[idx], a, arr[idx ← d])
         let mut out_bytes = bytes.clone();
         out_bytes[0] = bytes[2 + idx]; // data_out = arr[idx]
-        // out_bytes[1] = a (unchanged)
+                                       // out_bytes[1] = a (unchanged)
         out_bytes[2 + idx] = d; // arr[idx] ← d
 
         let (out_val, _) = value_from_leaf_bytes(&out_bytes, &full_ty);
@@ -2118,9 +2181,8 @@ impl Lowered {
 
 /// Compile a core `Iso` to a TISC-1 instruction sequence with metadata.
 pub fn compile_with_metadata(iso: &Iso) -> Result<Lowered, CompileError> {
-    let (in_ty, _out_ty) = theseus_core::type_of(iso).map_err(|e| {
-        CompileError::Deferred(format!("type error: {e:?}"))
-    })?;
+    let (in_ty, _out_ty) = theseus_core::type_of(iso)
+        .map_err(|e| CompileError::Deferred(format!("type error: {e:?}")))?;
     let n = num_leaves(&in_ty)?;
     if n > MAX_LEAVES {
         return Err(CompileError::TooManyLeaves {
@@ -2142,9 +2204,8 @@ pub fn compile_with_metadata(iso: &Iso) -> Result<Lowered, CompileError> {
 /// mem[0..resident]. The head leaves (n - resident) must fit in 14 slots
 /// (8 regs + 6 scratch). `resident == 0` reproduces `compile_with_metadata`.
 pub fn compile_with_metadata_resident(iso: &Iso, resident: usize) -> Result<Lowered, CompileError> {
-    let (in_ty, _out_ty) = theseus_core::type_of(iso).map_err(|e| {
-        CompileError::Deferred(format!("type error: {e:?}"))
-    })?;
+    let (in_ty, _out_ty) = theseus_core::type_of(iso)
+        .map_err(|e| CompileError::Deferred(format!("type error: {e:?}")))?;
     let n = num_leaves(&in_ty)?;
     // I-7: Reject: resident > n (would underflow n - resident)
     if resident > n {
@@ -2230,7 +2291,11 @@ fn lower(iso: &Iso, ctx: &Ctx, meta: &mut LowerMeta) -> Result<(Vec<Instr>, Ctx)
     result
 }
 
-fn lower_dispatch(iso: &Iso, ctx: &Ctx, meta: &mut LowerMeta) -> Result<(Vec<Instr>, Ctx), CompileError> {
+fn lower_dispatch(
+    iso: &Iso,
+    ctx: &Ctx,
+    meta: &mut LowerMeta,
+) -> Result<(Vec<Instr>, Ctx), CompileError> {
     // First, try matching the controlled-op idiom (before decomposing Seq).
     if let Some((ctrl_ty, tgt_ty, ctrl_l, ctrl_r, f, g)) = match_controlled_idiom(iso) {
         return lower_controlled_idiom(ctrl_ty, tgt_ty, ctrl_l, ctrl_r, f, g, ctx, meta);
@@ -2247,9 +2312,8 @@ fn lower_dispatch(iso: &Iso, ctx: &Ctx, meta: &mut LowerMeta) -> Result<(Vec<Ins
         }
 
         Iso::Times(f, g) => {
-            let (in_f, _) = theseus_core::type_of(f).map_err(|e| {
-                CompileError::Deferred(format!("type error in Times/f: {e:?}"))
-            })?;
+            let (in_f, _) = theseus_core::type_of(f)
+                .map_err(|e| CompileError::Deferred(format!("type error in Times/f: {e:?}")))?;
             let n_left = num_leaves(&in_f)?;
             let (ctx_f, ctx_g) = ctx.split(n_left);
             let (mut instrs_f, ctx_f2) = lower(f, &ctx_f, meta)?;
@@ -2340,16 +2404,12 @@ fn lower_dispatch(iso: &Iso, ctx: &Ctx, meta: &mut LowerMeta) -> Result<(Vec<Ins
             lower_bare_plus(f, g, ctx, meta)
         }
 
-        Iso::AssocLSum(_, _, _)
-        | Iso::AssocRSum(_, _, _)
-        | Iso::UniteSum(_)
-        | Iso::UnitiSum(_) => {
+        Iso::AssocLSum(_, _, _) | Iso::AssocRSum(_, _, _) | Iso::UniteSum(_) | Iso::UnitiSum(_) => {
             // F7 guard: verify the structural sum-renaming is identity
             // on the M-B leaf-byte encoding. If not, reject rather than
             // silently miscompile.
-            let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
-                CompileError::Deferred(format!("type error: {e:?}"))
-            })?;
+            let (in_ty, out_ty) = theseus_core::type_of(iso)
+                .map_err(|e| CompileError::Deferred(format!("type error: {e:?}")))?;
             let transform: fn(&Value) -> Value = match iso {
                 Iso::AssocRSum(_, _, _) => apply_assoc_r_sum,
                 Iso::AssocLSum(_, _, _) => apply_assoc_l_sum,
@@ -2370,9 +2430,8 @@ fn lower_dispatch(iso: &Iso, ctx: &Ctx, meta: &mut LowerMeta) -> Result<(Vec<Ins
 
         Iso::Distrib(_, _, _) | Iso::Factor(_, _, _) => {
             // F7 guard: same identity check for distributivity isos.
-            let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
-                CompileError::Deferred(format!("type error: {e:?}"))
-            })?;
+            let (in_ty, out_ty) = theseus_core::type_of(iso)
+                .map_err(|e| CompileError::Deferred(format!("type error: {e:?}")))?;
             let transform: fn(&Value) -> Value = match iso {
                 Iso::Distrib(_, _, _) => apply_distrib,
                 Iso::Factor(_, _, _) => apply_factor,
@@ -2495,9 +2554,8 @@ fn lower_trace(
     meta: &mut LowerMeta,
 ) -> Result<(Vec<Instr>, Ctx), CompileError> {
     // ── Type analysis ──────────────────────────────────────────────
-    let (body_in_ty, body_out_ty) = theseus_core::type_of(body).map_err(|e| {
-        CompileError::Deferred(format!("type error in Trace body: {e:?}"))
-    })?;
+    let (body_in_ty, body_out_ty) = theseus_core::type_of(body)
+        .map_err(|e| CompileError::Deferred(format!("type error in Trace body: {e:?}")))?;
 
     // body : u+a ↔ u+b. Extract a, b.
     let a_ty = match &body_in_ty {
@@ -2594,9 +2652,9 @@ fn lower_trace(
     // M-D.e slice 1: registers available to the carrier = NUM_REGS - 4 aux.
     // Overflow zero-init padding leaves spill to Scratch(SCRATCH_SPILL_BASE+).
     let carrier_reg_budget = NUM_REGS - 4; // = 4
-    // Guard (a): tag + all LIVE INPUT leaves must be register-resident.
-    // This is the ONLY barrier against live-input silent corruption (r1 F5.2):
-    // a live leaf forced to Scratch with no relocation → loop reads 0.
+                                           // Guard (a): tag + all LIVE INPUT leaves must be register-resident.
+                                           // This is the ONLY barrier against live-input silent corruption (r1 F5.2):
+                                           // a live leaf forced to Scratch with no relocation → loop reads 0.
     if n_input + 1 > carrier_reg_budget {
         return Err(CompileError::Deferred(format!(
             "Trace tag+input needs {} registers but carrier budget is {carrier_reg_budget} \
@@ -2767,10 +2825,15 @@ fn lower_trace(
     // Aux registers are allocated after all carrier registers.
     let tag_reg: u8 = tag_reg_idx;
     // Find the highest register used by the carrier.
-    let max_carrier_reg = body_ctx.homes.iter().filter_map(|h| match h {
-        Location::Reg(r) => Some(*r),
-        _ => None,
-    }).max().unwrap_or(0);
+    let max_carrier_reg = body_ctx
+        .homes
+        .iter()
+        .filter_map(|h| match h {
+            Location::Reg(r) => Some(*r),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
     let aux_base = max_carrier_reg + 1;
     let rc: u8 = aux_base;
     let rb: u8 = aux_base + 1;
@@ -2788,16 +2851,32 @@ fn lower_trace(
     // ── Emit the skeleton ──────────────────────────────────────────
     let mut instrs = vec![
         // Prologue (2 instructions):
-        Instr::Xori { rd: tag_reg, imm: 1 },        // inject Right (a→u+a)
-        Instr::Addi { rd: temp, imm: delta_u },      // mint token
+        Instr::Xori {
+            rd: tag_reg,
+            imm: 1,
+        }, // inject Right (a→u+a)
+        Instr::Addi {
+            rd: temp,
+            imm: delta_u,
+        }, // mint token
         // Ltop: SWAPBR rc
         Instr::Swapbr { rd: rc },
         // Join-dispatch: CSWAP ctrl, rc, temp
-        Instr::Cswap { rd: ctrl, rs: rc, rt: temp },
+        Instr::Cswap {
+            rd: ctrl,
+            rs: rc,
+            rt: temp,
+        },
         // Burn token: SUBI temp, δu
-        Instr::Subi { rd: temp, imm: delta_u },
+        Instr::Subi {
+            rd: temp,
+            imm: delta_u,
+        },
         // Uncompute ctrl from tag (top): XOR ctrl, tag; XORI ctrl, 1
-        Instr::Xor { rd: ctrl, rs: tag_reg },
+        Instr::Xor {
+            rd: ctrl,
+            rs: tag_reg,
+        },
         Instr::Xori { rd: ctrl, imm: 1 },
     ];
 
@@ -2806,15 +2885,25 @@ fn lower_trace(
 
     // Compute ctrl from tag (bottom): XOR ctrl, tag; XORI ctrl, 1
     // ctrl := ¬tag (1 = continue [Left], 0 = exit [Right])
-    instrs.push(Instr::Xor { rd: ctrl, rs: tag_reg });
+    instrs.push(Instr::Xor {
+        rd: ctrl,
+        rs: tag_reg,
+    });
     instrs.push(Instr::Xori { rd: ctrl, imm: 1 });
 
     // Mint token: ADDI temp, δu
-    instrs.push(Instr::Addi { rd: temp, imm: delta_u });
+    instrs.push(Instr::Addi {
+        rd: temp,
+        imm: delta_u,
+    });
 
     // Route: CSWAP ctrl, temp, rb
     // continue: rb=δu, temp=0 · exit: rb=0, temp=δu
-    instrs.push(Instr::Cswap { rd: ctrl, rs: temp, rt: rb });
+    instrs.push(Instr::Cswap {
+        rd: ctrl,
+        rs: temp,
+        rt: rb,
+    });
 
     // Lend: SWAPBR rb
     // continue: BR=δu → PC jumps back to Ltop · exit: BR=0 → fall through
@@ -2822,9 +2911,15 @@ fn lower_trace(
 
     // Epilogue (2 instructions):
     // Burn token (exit path): SUBI temp, δu
-    instrs.push(Instr::Subi { rd: temp, imm: delta_u });
+    instrs.push(Instr::Subi {
+        rd: temp,
+        imm: delta_u,
+    });
     // Strip Right: XORI tag, 1
-    instrs.push(Instr::Xori { rd: tag_reg, imm: 1 });
+    instrs.push(Instr::Xori {
+        rd: tag_reg,
+        imm: 1,
+    });
 
     // ── Record metadata ────────────────────────────────────────────
     // The loop's backward bracket contributes 0 to forward skip distance.
@@ -2876,18 +2971,16 @@ fn lower_fold_unfold(
     ascending: bool,
     meta: &mut LowerMeta,
 ) -> Result<(Vec<Instr>, Ctx), CompileError> {
-    let (depth, elem_ty) = spine_info(l).ok_or_else(|| {
-        CompileError::Deferred("Fold/Unfold with non-list-spine type".into())
-    })?;
+    let (depth, elem_ty) = spine_info(l)
+        .ok_or_else(|| CompileError::Deferred("Fold/Unfold with non-list-spine type".into()))?;
 
     let m = num_leaves(&elem_ty)?;
     let n_spine = num_leaves(l)?;
     let stride = 1 + m; // leaves per cons layer: 1 tag + m element
 
     // Extract accumulator type from body: body : b × c ↔ b × c.
-    let (body_in, _) = theseus_core::type_of(body).map_err(|e| {
-        CompileError::Deferred(format!("type error in Fold/Unfold body: {e:?}"))
-    })?;
+    let (body_in, _) = theseus_core::type_of(body)
+        .map_err(|e| CompileError::Deferred(format!("type error in Fold/Unfold body: {e:?}")))?;
     let n_acc = match &body_in {
         Type::Prod(_, c) => num_leaves(c)?,
         _ => {
@@ -2959,7 +3052,10 @@ fn lower_fold_unfold(
         for k in 0..n_acc {
             body_homes.push(dctx.homes[acc_start + k]);
         }
-        let body_ctx = Ctx { homes: body_homes, occ: dctx.occ };
+        let body_ctx = Ctx {
+            homes: body_homes,
+            occ: dctx.occ,
+        };
 
         // Lower the body against this per-copy context.
         let (body_instrs, body_ctx_out) = lower(body, &body_ctx, meta)?;
@@ -3019,12 +3115,10 @@ fn lower_bare_plus(
     ctx: &Ctx,
     meta: &mut LowerMeta,
 ) -> Result<(Vec<Instr>, Ctx), CompileError> {
-    let (in_f, _) = theseus_core::type_of(f).map_err(|e| {
-        CompileError::Deferred(format!("type error in Plus/f: {e:?}"))
-    })?;
-    let (in_g, _) = theseus_core::type_of(g).map_err(|e| {
-        CompileError::Deferred(format!("type error in Plus/g: {e:?}"))
-    })?;
+    let (in_f, _) = theseus_core::type_of(f)
+        .map_err(|e| CompileError::Deferred(format!("type error in Plus/f: {e:?}")))?;
+    let (in_g, _) = theseus_core::type_of(g)
+        .map_err(|e| CompileError::Deferred(format!("type error in Plus/g: {e:?}")))?;
     let n_f = num_leaves(&in_f)?;
     let n_g = num_leaves(&in_g)?;
 
@@ -3265,9 +3359,8 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
     s_max_val: usize,
     eval_fn: impl Fn(&Iso, Value, &mut u64) -> Result<Value, E>,
 ) -> Result<StateVals, CompileError> {
-    let rom = assemble(instrs).map_err(|e| {
-        CompileError::Deferred(format!("assemble failed: {e}"))
-    })?;
+    let rom =
+        assemble(instrs).map_err(|e| CompileError::Deferred(format!("assemble failed: {e}")))?;
 
     // PARK-SAFETY GUARD (P2): parked PC must not wrap.
     if budget + s_max_val > 256 {
@@ -3287,9 +3380,8 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
     let step_iso = crate::step::system_step(&rom);
     let mut cur = encode_system(&init);
     for _ in 0..budget {
-        cur = eval_fn(&step_iso, cur, &mut fuel).map_err(|e| {
-            CompileError::Deferred(format!("CPU eval failed: {e:?}"))
-        })?;
+        cur = eval_fn(&step_iso, cur, &mut fuel)
+            .map_err(|e| CompileError::Deferred(format!("CPU eval failed: {e:?}")))?;
     }
     let final_state = decode_system(&cur);
 
@@ -3319,9 +3411,8 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
     input: &Value,
     eval_fn: impl Fn(&Iso, Value, &mut u64) -> Result<Value, E>,
 ) -> Result<Value, CompileError> {
-    let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
-        CompileError::Deferred(format!("type error: {e:?}"))
-    })?;
+    let (in_ty, out_ty) = theseus_core::type_of(iso)
+        .map_err(|e| CompileError::Deferred(format!("type error: {e:?}")))?;
 
     let lowered = compile_with_metadata(iso)?;
     let budget = lowered.wcet();
@@ -3349,10 +3440,16 @@ pub fn exec_instr(instr: Instr, state: &mut StateVals) {
     // indices (not operand indices) and index directly.
     match instr {
         Instr::Add { rd, rs } => {
-            state.operand_set(rd, state.operand_get(rd).wrapping_add(state.operand_get(rs)));
+            state.operand_set(
+                rd,
+                state.operand_get(rd).wrapping_add(state.operand_get(rs)),
+            );
         }
         Instr::Sub { rd, rs } => {
-            state.operand_set(rd, state.operand_get(rd).wrapping_sub(state.operand_get(rs)));
+            state.operand_set(
+                rd,
+                state.operand_get(rd).wrapping_sub(state.operand_get(rs)),
+            );
         }
         Instr::Xor { rd, rs } => {
             state.operand_set(rd, state.operand_get(rd) ^ state.operand_get(rs));
@@ -3374,7 +3471,10 @@ pub fn exec_instr(instr: Instr, state: &mut StateVals) {
             }
         }
         Instr::Ccnot { rd, rs, rt } => {
-            state.operand_set(rd, state.operand_get(rd) ^ (state.operand_get(rs) & state.operand_get(rt)));
+            state.operand_set(
+                rd,
+                state.operand_get(rd) ^ (state.operand_get(rs) & state.operand_get(rt)),
+            );
         }
         Instr::Xchg { rd, sx } => {
             let rv = state.operand_get(rd);
@@ -3428,18 +3528,13 @@ pub fn exec_instr(instr: Instr, state: &mut StateVals) {
 /// routine tests assert fast == eval). Do not treat a green `run_on_cpu_fast`
 /// as acceptance on its own. The budget is `instrs.len()` steps (worst-case
 /// trace length; after the ROM ends the machine idles).
-pub fn run_on_cpu_fast(
-    iso: &Iso,
-    input: &Value,
-) -> Result<Value, CompileError> {
-    let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
-        CompileError::Deferred(format!("type error: {e:?}"))
-    })?;
+pub fn run_on_cpu_fast(iso: &Iso, input: &Value) -> Result<Value, CompileError> {
+    let (in_ty, out_ty) = theseus_core::type_of(iso)
+        .map_err(|e| CompileError::Deferred(format!("type error: {e:?}")))?;
 
     let lowered = compile_with_metadata(iso)?;
-    let rom = assemble(&lowered.instrs).map_err(|e| {
-        CompileError::Deferred(format!("assemble failed: {e}"))
-    })?;
+    let rom = assemble(&lowered.instrs)
+        .map_err(|e| CompileError::Deferred(format!("assemble failed: {e}")))?;
     let budget = lowered.wcet();
 
     let mut state = marshal(input, &in_ty);
@@ -3468,9 +3563,8 @@ pub fn run_on_cpu_resident<E: std::fmt::Debug>(
     resident: usize,
     eval_fn: impl Fn(&Iso, Value, &mut u64) -> Result<Value, E>,
 ) -> Result<Value, CompileError> {
-    let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
-        CompileError::Deferred(format!("type error: {e:?}"))
-    })?;
+    let (in_ty, out_ty) = theseus_core::type_of(iso)
+        .map_err(|e| CompileError::Deferred(format!("type error: {e:?}")))?;
     if resident > 0 {
         let n_in = num_leaves(&in_ty)?;
         let n_out = num_leaves(&out_ty)?;
@@ -3497,9 +3591,8 @@ pub fn run_on_cpu_fast_resident(
     input: &Value,
     resident: usize,
 ) -> Result<Value, CompileError> {
-    let (in_ty, out_ty) = theseus_core::type_of(iso).map_err(|e| {
-        CompileError::Deferred(format!("type error: {e:?}"))
-    })?;
+    let (in_ty, out_ty) = theseus_core::type_of(iso)
+        .map_err(|e| CompileError::Deferred(format!("type error: {e:?}")))?;
     if resident > 0 {
         let n_in = num_leaves(&in_ty)?;
         let n_out = num_leaves(&out_ty)?;
@@ -3510,9 +3603,8 @@ pub fn run_on_cpu_fast_resident(
     }
 
     let lowered = compile_with_metadata_resident(iso, resident)?;
-    let rom = assemble(&lowered.instrs).map_err(|e| {
-        CompileError::Deferred(format!("assemble failed: {e}"))
-    })?;
+    let rom = assemble(&lowered.instrs)
+        .map_err(|e| CompileError::Deferred(format!("assemble failed: {e}")))?;
     let budget = lowered.wcet();
 
     let mut state = marshal_resident(input, &in_ty, resident);

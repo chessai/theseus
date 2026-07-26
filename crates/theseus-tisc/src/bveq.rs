@@ -19,9 +19,9 @@
 //! Z3 differential cross-check (feature-gated), and the I4 upper-output-bits
 //! obligation (r2 MAJOR-1).
 
-use biodivine_lib_bdd::{Bdd, BddVariable, BddVariableSet};
 use crate::asm::Instr;
 use crate::types::NUM_REGS;
+use biodivine_lib_bdd::{Bdd, BddVariable, BddVariableSet};
 
 /// Re-export for tests that need direct BDD access (e.g. T4 mis-map negative).
 pub use biodivine_lib_bdd;
@@ -31,7 +31,7 @@ pub const BITS: usize = 8;
 
 // ── BvExpr AST (canonical home: theseus-core/src/bvexpr.rs) ─────────
 
-pub use theseus_core::bvexpr::{BvExpr, eval_expr};
+pub use theseus_core::bvexpr::{eval_expr, BvExpr};
 
 // ── RegTransfer ─────────────────────────────────────────────────────
 
@@ -81,9 +81,9 @@ impl VarMap {
     ///
     /// Returns `Err` if `BITS * num_operands` overflows `u16` (NIT-1).
     pub fn new(num_operands: usize) -> Result<Self, BveqError> {
-        let total = BITS.checked_mul(num_operands).ok_or(BveqError::VarMapOverflow {
-            num_operands,
-        })?;
+        let total = BITS
+            .checked_mul(num_operands)
+            .ok_or(BveqError::VarMapOverflow { num_operands })?;
         if total > u16::MAX as usize {
             return Err(BveqError::VarMapOverflow { num_operands });
         }
@@ -272,9 +272,7 @@ fn bv_rotl_const(bits: &[BvExpr], amount: usize) -> Vec<BvExpr> {
     let n = bits.len();
     let amount = amount % n;
     // rotl: bit i of output = bit (i - amount) mod n of input
-    (0..n)
-        .map(|i| bits[(i + n - amount) % n].clone())
-        .collect()
+    (0..n).map(|i| bits[(i + n - amount) % n].clone()).collect()
 }
 
 /// Constant right rotation by `amount` positions (wire permutation).
@@ -319,13 +317,7 @@ fn bv_rotr_var(val: &[BvExpr], amount_bits: &[BvExpr]) -> Vec<BvExpr> {
         let sel = sel_src.clone();
         let prev = bits.clone();
         bits = (0..n)
-            .map(|i| {
-                BvExpr::mux(
-                    sel.clone(),
-                    prev[(i + shift) % n].clone(),
-                    prev[i].clone(),
-                )
-            })
+            .map(|i| BvExpr::mux(sel.clone(), prev[(i + shift) % n].clone(), prev[i].clone()))
             .collect();
     }
     bits
@@ -348,7 +340,11 @@ pub enum BveqError {
     NonRegisterPure(Instr),
     /// Register index out of range (rd/rs/rt ≥ NUM_REGS) in an instruction.
     /// MAJOR-3: apply_instr must reject, not panic.
-    RegisterOutOfRange { instr: Instr, which: &'static str, val: u8 },
+    RegisterOutOfRange {
+        instr: Instr,
+        which: &'static str,
+        val: u8,
+    },
     /// Two-operand instruction has rd == rs — the ISA rejects these
     /// (non-injective datapath) and the hardware deviates. MAJOR-5.
     AliasedOperands { instr: Instr },
@@ -357,14 +353,22 @@ pub enum BveqError {
     NonDistinctOperands { instr: Instr },
     /// BvExpr Var node references an out-of-range (operand, bit).
     /// MAJOR-3: silent aliasing fix — Var(20,0) no longer maps onto Var(4,2).
-    VarOutOfRange { operand: usize, bit: usize, num_operands: usize },
+    VarOutOfRange {
+        operand: usize,
+        bit: usize,
+        num_operands: usize,
+    },
     /// Width parameter out of range (w > BITS or w == 0).
     WidthOutOfRange { w: usize },
     /// RegTransfer frame size mismatch (must be NUM_REGS).
     FrameSizeMismatch { side: &'static str, len: usize },
     /// A register bit-row has the wrong length (must be BITS). N3: a short row
     /// must return Err, not panic on index.
-    RowSizeMismatch { side: &'static str, reg: usize, len: usize },
+    RowSizeMismatch {
+        side: &'static str,
+        reg: usize,
+        len: usize,
+    },
     /// An `operand_regs` entry is out of range (≥ NUM_REGS). N2: the new
     /// MAJOR-2 parameter must be validated, not fed to VarMap::var (which panics).
     OperandRegOutOfRange { reg: usize },
@@ -391,7 +395,11 @@ impl std::fmt::Display for BveqError {
                 write!(f, "non-register-pure instruction rejected: {instr:?}")
             }
             BveqError::RegisterOutOfRange { instr, which, val } => {
-                write!(f, "register index out of range in {instr:?}: {which}={val} (max {})", NUM_REGS - 1)
+                write!(
+                    f,
+                    "register index out of range in {instr:?}: {which}={val} (max {})",
+                    NUM_REGS - 1
+                )
             }
             BveqError::AliasedOperands { instr } => {
                 write!(f, "aliased operands rejected (ISA-illegal): {instr:?}")
@@ -399,23 +407,37 @@ impl std::fmt::Display for BveqError {
             BveqError::NonDistinctOperands { instr } => {
                 write!(f, "non-distinct operands rejected (ISA-illegal): {instr:?}")
             }
-            BveqError::VarOutOfRange { operand, bit, num_operands } => {
+            BveqError::VarOutOfRange {
+                operand,
+                bit,
+                num_operands,
+            } => {
                 write!(f, "BvExpr Var out of range: operand={operand} (max {num_operands}), bit={bit} (max {})", BITS)
             }
             BveqError::WidthOutOfRange { w } => {
                 write!(f, "width out of range: w={w} (must be 1..={BITS})")
             }
             BveqError::FrameSizeMismatch { side, len } => {
-                write!(f, "RegTransfer frame size mismatch on {side}: len={len} (expected {NUM_REGS})")
+                write!(
+                    f,
+                    "RegTransfer frame size mismatch on {side}: len={len} (expected {NUM_REGS})"
+                )
             }
             BveqError::RowSizeMismatch { side, reg, len } => {
                 write!(f, "RegTransfer bit-row size mismatch on {side} reg {reg}: len={len} (expected {BITS})")
             }
             BveqError::OperandRegOutOfRange { reg } => {
-                write!(f, "operand_regs entry out of range: {reg} (max {})", NUM_REGS - 1)
+                write!(
+                    f,
+                    "operand_regs entry out of range: {reg} (max {})",
+                    NUM_REGS - 1
+                )
             }
             BveqError::VarMapOverflow { num_operands } => {
-                write!(f, "VarMap overflow: BITS({BITS}) * num_operands({num_operands}) exceeds u16")
+                write!(
+                    f,
+                    "VarMap overflow: BITS({BITS}) * num_operands({num_operands}) exceeds u16"
+                )
             }
             BveqError::NotEquivalent(cex) => {
                 write!(f, "transfers not equivalent: {cex}")
@@ -956,8 +978,16 @@ mod z3_tests {
             ),
             (
                 "ccnot_eq_ccnot",
-                vec![Instr::Ccnot { rd: 0, rs: 1, rt: 2 }],
-                vec![Instr::Ccnot { rd: 0, rs: 1, rt: 2 }],
+                vec![Instr::Ccnot {
+                    rd: 0,
+                    rs: 1,
+                    rt: 2,
+                }],
+                vec![Instr::Ccnot {
+                    rd: 0,
+                    rs: 1,
+                    rt: 2,
+                }],
                 8,
                 vec![0, 1, 2],
                 true,
@@ -1125,7 +1155,9 @@ pub fn admit_symbolic(spec: &theseus_core::prim::PrimSpec) -> Result<(), BveqErr
 
     // Validate backward shape matches forward.
     if spec.backward.width as usize != width {
-        return Err(BveqError::WidthOutOfRange { w: spec.backward.width as usize });
+        return Err(BveqError::WidthOutOfRange {
+            w: spec.backward.width as usize,
+        });
     }
     if spec.backward.leaves.len() != num_operands {
         return Err(BveqError::FrameSizeMismatch {
@@ -1139,10 +1171,24 @@ pub fn admit_symbolic(spec: &theseus_core::prim::PrimSpec) -> Result<(), BveqErr
     // Check backward ∘ forward == id:
     // For each operand `op` and bit `b`:
     //   substitute forward's outputs into backward's expression and check == Var(op, b).
-    check_composition_is_identity(&spec.forward, &spec.backward, &map, width, num_operands, "backward∘forward")?;
+    check_composition_is_identity(
+        &spec.forward,
+        &spec.backward,
+        &map,
+        width,
+        num_operands,
+        "backward∘forward",
+    )?;
 
     // Check forward ∘ backward == id:
-    check_composition_is_identity(&spec.backward, &spec.forward, &map, width, num_operands, "forward∘backward")?;
+    check_composition_is_identity(
+        &spec.backward,
+        &spec.forward,
+        &map,
+        width,
+        num_operands,
+        "forward∘backward",
+    )?;
 
     Ok(())
 }

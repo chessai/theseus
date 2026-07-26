@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! M4-v2 HEADLINE DEMO: the TISC-1 CPU computes Fibonacci by
 //! RECIRCULATING one compact-balanced step — not by unrolling.
 //!
@@ -22,7 +23,7 @@ use std::sync::OnceLock;
 use theseus_tisc::asm::{assemble, Instr};
 use theseus_tisc::ring_run::{step_ring, StepRing};
 use theseus_tisc::step::step;
-use theseus_tisc::types::{MEM_WORDS, StateVals};
+use theseus_tisc::types::{StateVals, MEM_WORDS};
 
 /// Generous per-eval fuel.
 const EVAL_FUEL: u64 = 8_000_000_000;
@@ -135,10 +136,7 @@ fn ring_fib_matches_reference_and_oracle() {
         );
 
         // Assert ring matches oracle.
-        assert_eq!(
-            ring_result, oracle,
-            "ring.run(seed, {r}) != eval(step)^{r}"
-        );
+        assert_eq!(ring_result, oracle, "ring.run(seed, {r}) != eval(step)^{r}");
 
         // Assert registers match reference Fibonacci.
         assert_eq!(
@@ -208,11 +206,6 @@ fn ring_fib_constant_area() {
     eprintln!(
         "HEADLINE: recirculating body = {} cells (+ {} k0 buffers = {} total), \
          unrolled {}-step machine would be {} cells — {:.0}x area saving",
-        total_cells,
-        k0,
-        total_with_k0,
-        unrolled_cycles,
-        unrolled_cells,
-        unrolled_cycles as f64,
+        total_cells, k0, total_with_k0, unrolled_cycles, unrolled_cells, unrolled_cycles as f64,
     );
 }

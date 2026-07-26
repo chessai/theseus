@@ -92,11 +92,9 @@ use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_balanced, seq_list,
 };
 use crate::types::{
-    flat, reg_field, scratch_field, word8, BR_FIELD,
-    IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, IR_LO_FIELD,
-    MemWidth, MEM_WIDTH, MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_FIELDS,
-    NUM_REGS, W,
-    BUS_ADDR_FIELD, BUS_ENABLE_FIELD, BUS_WORD_FIELD,
+    flat, reg_field, scratch_field, word8, MemWidth, BR_FIELD, BUS_ADDR_FIELD, BUS_ENABLE_FIELD,
+    BUS_WORD_FIELD, IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, IR_LO_FIELD, MEM_WIDTH,
+    MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_FIELDS, NUM_REGS, W,
 };
 
 // ── Aux-field conventions ──────────────────────────────────────────
@@ -156,8 +154,10 @@ pub(crate) fn cnot_prim() -> Iso {
 pub(crate) fn toffoli_prim() -> Iso {
     let t3 = flat(3);
     Iso::Prim(Box::new(
-        prim_from_bits("dec_tof", t3.clone(), t3, |b| vec![b[0], b[1], b[2] ^ (b[0] & b[1])])
-            .expect("tof"),
+        prim_from_bits("dec_tof", t3.clone(), t3, |b| {
+            vec![b[0], b[1], b[2] ^ (b[0] & b[1])]
+        })
+        .expect("tof"),
     ))
 }
 
@@ -275,7 +275,10 @@ pub fn cross_ctrl_fredkin(
     n_right: usize,
 ) -> Iso {
     use crate::addressing::split_fields;
-    assert!(ctrl_field < n_left, "ctrl_field out of range in left factor");
+    assert!(
+        ctrl_field < n_left,
+        "ctrl_field out of range in left factor"
+    );
     assert!(ctrl_bit < W, "ctrl_bit out of range");
     assert!(word_a < n_right, "word_a out of range in right factor");
     assert!(word_b < n_right, "word_b out of range in right factor");
@@ -461,7 +464,13 @@ const CSWAP_CTRL_WIRE_IN_S1: usize = 4; // s1 bit 4: CSWAP rd[0] copy
 
 /// The five fields the predicate core lifts over (four IR bytes + s1).
 fn pred_fields() -> [usize; 5] {
-    [IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, AUX_PRED_FIELD]
+    [
+        IR_B0_FIELD,
+        IR_B1_FIELD,
+        IR_B2_FIELD,
+        IR_B3_FIELD,
+        AUX_PRED_FIELD,
+    ]
 }
 
 /// Compute the AND of the given IR-bit literals into s1 bit 0.
@@ -482,7 +491,11 @@ fn pred_compute(controls: &[(usize, bool)]) -> Iso {
     let mut gates: Vec<Iso> = nots.clone();
     let mut acc = controls[0].0;
     for (j, c) in controls.iter().enumerate().skip(1) {
-        let tgt = if j == k - 1 { PRED_WIRE } else { CHAIN0_WIRE + (j - 1) };
+        let tgt = if j == k - 1 {
+            PRED_WIRE
+        } else {
+            CHAIN0_WIRE + (j - 1)
+        };
         gates.push(gate_at(n, &[acc, c.0, tgt], toffoli_prim()));
         acc = tgt;
     }
@@ -540,19 +553,40 @@ fn gated_tk_gates(n: usize, pred: usize, b0: usize, a0: usize) -> Vec<Iso> {
         g.push(Tk::C { c: a(i), t: b(i) });
     }
     for i in (1..W - 1).rev() {
-        g.push(Tk::C { c: a(i), t: a(i + 1) });
+        g.push(Tk::C {
+            c: a(i),
+            t: a(i + 1),
+        });
     }
     for i in 0..W - 1 {
-        g.push(Tk::T { c1: a(i), c2: b(i), t: a(i + 1) });
+        g.push(Tk::T {
+            c1: a(i),
+            c2: b(i),
+            t: a(i + 1),
+        });
     }
-    g.push(Tk::C { c: a(W - 1), t: b(W - 1) });
-    g.push(Tk::T { c1: a(W - 2), c2: b(W - 2), t: a(W - 1) });
+    g.push(Tk::C {
+        c: a(W - 1),
+        t: b(W - 1),
+    });
+    g.push(Tk::T {
+        c1: a(W - 2),
+        c2: b(W - 2),
+        t: a(W - 1),
+    });
     for i in (1..W - 1).rev() {
         g.push(Tk::C { c: a(i), t: b(i) });
-        g.push(Tk::T { c1: a(i - 1), c2: b(i - 1), t: a(i) });
+        g.push(Tk::T {
+            c1: a(i - 1),
+            c2: b(i - 1),
+            t: a(i),
+        });
     }
     for i in 1..W - 1 {
-        g.push(Tk::C { c: a(i), t: a(i + 1) });
+        g.push(Tk::C {
+            c: a(i),
+            t: a(i + 1),
+        });
     }
     for i in 0..W - 1 {
         g.push(Tk::C { c: a(i), t: b(i) });
@@ -579,7 +613,11 @@ fn gated_rotl_gates(n: usize, pred: usize, t0: usize, ctrl: impl Fn(usize) -> us
     let mut gates = Vec::new();
     for k in 0..3 {
         for (i, j) in rot_transpositions(1 << k) {
-            gates.push(gate_at(n, &[pred, ctrl(k), t0 + i, t0 + j], gated_fredkin_prim()));
+            gates.push(gate_at(
+                n,
+                &[pred, ctrl(k), t0 + i, t0 + j],
+                gated_fredkin_prim(),
+            ));
         }
     }
     gates
@@ -1026,9 +1064,9 @@ pub fn instruction(op: Op) -> Iso {
         Op::Ccnot => ccnot_instr(),
         Op::Xchg => xchg_instr(),
         Op::Swapbr => swapbr_instr(),
-        Op::Mexch | Op::MexchReg => panic!(
-            "Op::{op:?} operates on (CpuState, MemState); use system_decode_execute"
-        ),
+        Op::Mexch | Op::MexchReg => {
+            panic!("Op::{op:?} operates on (CpuState, MemState); use system_decode_execute")
+        }
         Op::Addi => addi_instr(),
         Op::Subi => subi_instr(),
         Op::Xori => xori_instr(),
@@ -1129,10 +1167,10 @@ fn group_a_shared() -> Iso {
 fn group_b_shared() -> Iso {
     let sel_rd = select_operand(R_RD, operand_field);
     let cores = seq_balanced(vec![
-        predicated(&i_pred(0b000), addi_core()),          // Addi
-        predicated(&i_pred(0b001), Iso::sym(addi_core())), // Subi
-        predicated(&i_pred(0b010), xori_core()),          // Xori
-        predicated(&i_pred(0b011), rotli_core()),         // Rotli
+        predicated(&i_pred(0b000), addi_core()),            // Addi
+        predicated(&i_pred(0b001), Iso::sym(addi_core())),  // Subi
+        predicated(&i_pred(0b010), xori_core()),            // Xori
+        predicated(&i_pred(0b011), rotli_core()),           // Rotli
         predicated(&i_pred(0b100), Iso::sym(rotli_core())), // Rotri
     ]);
     Iso::seq(sel_rd.clone(), Iso::seq(cores, Iso::sym(sel_rd)))
@@ -1245,7 +1283,10 @@ fn cross_cnot(
     use crate::addressing::split_fields;
     assert!(src_field < n_left, "src_field out of range in left factor");
     assert!(src_bit < W, "src_bit out of range");
-    assert!(tgt_field < n_right, "tgt_field out of range in right factor");
+    assert!(
+        tgt_field < n_right,
+        "tgt_field out of range in right factor"
+    );
     assert!(tgt_bit < W, "tgt_bit out of range");
 
     let n_total = n_left + n_right;
@@ -1281,11 +1322,20 @@ fn cross_toffoli(
     n_right: usize,
 ) -> Iso {
     use crate::addressing::split_fields;
-    assert!(ctrl1_field < n_left, "ctrl1_field out of range in left factor");
-    assert!(ctrl2_field < n_left, "ctrl2_field out of range in left factor");
+    assert!(
+        ctrl1_field < n_left,
+        "ctrl1_field out of range in left factor"
+    );
+    assert!(
+        ctrl2_field < n_left,
+        "ctrl2_field out of range in left factor"
+    );
     assert!(ctrl1_bit < W, "ctrl1_bit out of range");
     assert!(ctrl2_bit < W, "ctrl2_bit out of range");
-    assert!(tgt_field < n_right, "tgt_field out of range in right factor");
+    assert!(
+        tgt_field < n_right,
+        "tgt_field out of range in right factor"
+    );
     assert!(tgt_bit < W, "tgt_bit out of range");
 
     let n_total = n_left + n_right;
@@ -1422,19 +1472,17 @@ pub fn emit_on_cpu_bus() -> Iso {
         let mut addr_cnots: Vec<Iso> = Vec::new();
         for i in 0..n_addr {
             let (rt_field, rt_b) = R_RT.bits[i];
-            addr_cnots.push(cross_cnot(
-                rt_field,
-                rt_b,
-                BUS_ADDR_FIELD,
-                i,
-                n_cpu,
-                n_bus,
-            ));
+            addr_cnots.push(cross_cnot(rt_field, rt_b, BUS_ADDR_FIELD, i, n_cpu, n_bus));
         }
 
         // 3. Predicate-gated swap: reg[0] ↔ BusMsg.word
         let gsw = cross_factor_gated_swap(
-            AUX_PRED_FIELD, 0, reg_field(0), BUS_WORD_FIELD, n_cpu, n_bus,
+            AUX_PRED_FIELD,
+            0,
+            reg_field(0),
+            BUS_WORD_FIELD,
+            n_cpu,
+            n_bus,
         );
 
         let mut inner_steps = vec![enable_cnot];
@@ -1463,10 +1511,14 @@ pub fn emit_on_cpu_bus() -> Iso {
         let mut gated_addr_copies: Vec<Iso> = Vec::new();
         for i in 0..n_addr {
             gated_addr_copies.push(cross_toffoli(
-                AUX_PRED_FIELD, 0,   // predicate control
-                reg_field(0), i,     // source: reg[0] bit i (= reg[ra] after sela)
-                BUS_ADDR_FIELD, i,   // target: BUS_ADDR bit i
-                n_cpu, n_bus,
+                AUX_PRED_FIELD,
+                0, // predicate control
+                reg_field(0),
+                i, // source: reg[0] bit i (= reg[ra] after sela)
+                BUS_ADDR_FIELD,
+                i, // target: BUS_ADDR bit i
+                n_cpu,
+                n_bus,
             ));
         }
         let ra_bracket = Iso::seq(
@@ -1479,7 +1531,12 @@ pub fn emit_on_cpu_bus() -> Iso {
         let selr = Iso::times(select_operand(R_RD, operand_field), bus_id.clone());
         let enable_cnot = cross_cnot(AUX_PRED_FIELD, 0, BUS_ENABLE_FIELD, 0, n_cpu, n_bus);
         let gsw = cross_factor_gated_swap(
-            AUX_PRED_FIELD, 0, reg_field(0), BUS_WORD_FIELD, n_cpu, n_bus,
+            AUX_PRED_FIELD,
+            0,
+            reg_field(0),
+            BUS_WORD_FIELD,
+            n_cpu,
+            n_bus,
         );
         let rd_bracket = Iso::seq(
             selr.clone(),
@@ -1538,10 +1595,7 @@ pub fn mem_body() -> Iso {
     let mem_sub_bm = Iso::seq(select.clone(), Iso::seq(gsw, Iso::sym(select)));
 
     // mem_sub on (Mem, Bus): swap ; mem_sub_bm ; swap^{-1}
-    Iso::seq(
-        swap_mb.clone(),
-        Iso::seq(mem_sub_bm, Iso::sym(swap_mb)),
-    )
+    Iso::seq(swap_mb.clone(), Iso::seq(mem_sub_bm, Iso::sym(swap_mb)))
 }
 
 /// `mem_phase : system_state_ty <-> system_state_ty` — the second phase

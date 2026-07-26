@@ -42,7 +42,11 @@ fn gcd2_hist_bytes(bb: &mut [u8]) {
         [0, x, y, 2 * h + s] // A4: normalize-subtract
     } else if ((a, b) == (2, 1) || (a, b) == (1, 2)) && h >= 4 {
         let (x, y) = if (a, b) == (2, 1) {
-            if h < 6 { (1, 3) } else { (3, 1) }
+            if h < 6 {
+                (1, 3)
+            } else {
+                (3, 1)
+            }
         } else if h < 6 {
             (2, 3)
         } else {
@@ -273,12 +277,15 @@ fn bdd_body_length() -> usize {
     }
     let nodes = measurement_node_bank();
     // temp at index 55 — also outside the real space, count-only.
-    let helpers = BddHelpers { temp: 55, nodes: &nodes };
+    let helpers = BddHelpers {
+        temp: 55,
+        nodes: &nodes,
+    };
 
-    let fwd_body = transcribe_bdd_into(&fwd, &dst_map, &src_map, helpers)
-        .expect("transcribe_bdd_into(fwd)");
-    let bwd_body = transcribe_bdd_into(&bwd, &dst_map, &src_map, helpers)
-        .expect("transcribe_bdd_into(bwd)");
+    let fwd_body =
+        transcribe_bdd_into(&fwd, &dst_map, &src_map, helpers).expect("transcribe_bdd_into(fwd)");
+    let bwd_body =
+        transcribe_bdd_into(&bwd, &dst_map, &src_map, helpers).expect("transcribe_bdd_into(bwd)");
     // + 4 carrier↔ancilla swaps (the middle step of the Bennett wrapper).
     fwd_body.len() + 4 + bwd_body.len()
 }
@@ -399,7 +406,10 @@ fn gcd2_bdd_per_bit_exec_verify_fittable() {
                 dst_map[r] = dst;
                 // Row r must not be treated as an identity self-map: dst != src[r].
                 let _ = &mut src_map; // src self-maps; leaf reads reg==leaf index.
-                let helpers = BddHelpers { temp, nodes: &node_words };
+                let helpers = BddHelpers {
+                    temp,
+                    nodes: &node_words,
+                };
                 let body = transcribe_bdd_into(&one, &dst_map, &src_map, helpers)
                     .expect("transcribe_bdd_into(single bit)");
 
@@ -463,7 +473,10 @@ fn gcd2_bdd_per_bit_exec_verify_fittable() {
     for (w, r, b, n) in &skipped {
         eprintln!("  UNFITTABLE: {w} reg {r} bit {b} — {n} nodes > {max_fit}");
     }
-    assert!(verified_bits > 0, "at least some gcd2 bits must be exec-verified");
+    assert!(
+        verified_bits > 0,
+        "at least some gcd2 bits must be exec-verified"
+    );
 }
 
 // ── (3) Budget verdict: node-line count vs machine words ─────────────────────
@@ -512,7 +525,9 @@ fn gcd2_bdd_budget_verdict() {
     eprintln!("=== gcd2 BDD budget verdict ===");
     eprintln!("required node LINES, NO recycling (= total nodes)         = {worst_total}");
     eprintln!("required node LINES, ideal recycling (antichain floor)    = {worst_level}");
-    eprintln!("node words the 16-word machine can spare (4c+4a+1t used)  = {free_for_nodes_realistic}");
+    eprintln!(
+        "node words the 16-word machine can spare (4c+4a+1t used)  = {free_for_nodes_realistic}"
+    );
     eprintln!(
         "VERDICT: even the antichain floor ({worst_level}) {} the {free_for_nodes_realistic} spare words → \
          gcd2 BDD needs WIDEN-STATE (A-6.4) regardless of recycling.",
@@ -534,7 +549,10 @@ fn gcd2_bdd_budget_verdict() {
     // Try the most generous legal node bank we can assemble that is disjoint from
     // carriers(PHYS=3,0,1,2)+ancilla(10..14)+temp: r4,r5,r6,r7 + s7(15) = 5 words.
     let nodes: Vec<u8> = vec![4, 5, 6, 7, 15];
-    let helpers = BddHelpers { temp: 14, nodes: &nodes };
+    let helpers = BddHelpers {
+        temp: 14,
+        nodes: &nodes,
+    };
     let res = transcribe_bdd_bennett(&fwd, &bwd, &PHYS, &ancilla, helpers);
     assert!(
         res.is_err(),

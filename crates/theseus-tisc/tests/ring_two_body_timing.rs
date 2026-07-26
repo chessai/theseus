@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Two-body timing realizability certificate (M-C2 Stage 2b-lite).
 //!
 //! Proves the two-body ring (cpu_pre / mem_body / cpu_post) can be
@@ -23,9 +24,7 @@
 
 use theseus_core::Type;
 use theseus_netlist::lower::lower_iso_with_ancillas;
-use theseus_tisc::ring_run::{
-    two_body_timing_certificate, CPU_BODY_N_DATA, MEM_BODY_N_DATA,
-};
+use theseus_tisc::ring_run::{two_body_timing_certificate, CPU_BODY_N_DATA, MEM_BODY_N_DATA};
 use theseus_tisc::types::{bus_state_ty, mem_state_ty, state_ty};
 
 // A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
@@ -66,9 +65,17 @@ fn golden_pin_mexch_rom() {
     // d_locked/period 3676→3288. d_mem=35, delta2=1 unchanged. validate()==Ok
     // (physical lockstep intact — a re-pin from the netlist size change, not a
     // regression). Behavior verified separately (t2 real-CPU all-8).
-    assert_eq!(t.d_pre, 2874, "GOLDEN PIN: d_pre={} (expected 2874)", t.d_pre);
+    assert_eq!(
+        t.d_pre, 2874,
+        "GOLDEN PIN: d_pre={} (expected 2874)",
+        t.d_pre
+    );
     assert_eq!(t.d_mem, 35, "GOLDEN PIN: d_mem={} (expected 35)", t.d_mem);
-    assert_eq!(t.d_post, 374, "GOLDEN PIN: d_post={} (expected 374)", t.d_post);
+    assert_eq!(
+        t.d_post, 374,
+        "GOLDEN PIN: d_post={} (expected 374)",
+        t.d_post
+    );
     assert_eq!(t.delta1, 2, "GOLDEN PIN: delta1={} (expected 2)", t.delta1);
     assert_eq!(t.delta2, 1, "GOLDEN PIN: delta2={} (expected 1)", t.delta2);
     assert_eq!(
@@ -81,7 +88,11 @@ fn golden_pin_mexch_rom() {
         "GOLDEN PIN: d_locked={} (expected 3288)",
         t.d_locked
     );
-    assert_eq!(t.period, 3288, "GOLDEN PIN: period={} (expected 3288)", t.period);
+    assert_eq!(
+        t.period, 3288,
+        "GOLDEN PIN: period={} (expected 3288)",
+        t.period
+    );
 
     // validate() must pass on the golden ROM
     t.validate().expect("validate() failed on MEXCH golden ROM");
@@ -126,36 +137,42 @@ fn line_audit_input_types() {
 
     // cpu_pre
     let iso_pre = theseus_tisc::step::cpu_pre(&rom);
-    let (net_pre, anc_pre) =
-        lower_iso_with_ancillas(&iso_pre).expect("cpu_pre lowers");
+    let (net_pre, anc_pre) = lower_iso_with_ancillas(&iso_pre).expect("cpu_pre lowers");
     let n_data_pre = net_pre.inputs.len() - anc_pre.len();
     assert_eq!(
         net_pre.input_ty, cpu_bus_ty,
         "cpu_pre input_ty must be Prod(state_ty(), bus_state_ty())"
     );
-    assert_eq!(n_data_pre, CPU_BODY_N_DATA, "cpu_pre n_data must be {CPU_BODY_N_DATA}");
+    assert_eq!(
+        n_data_pre, CPU_BODY_N_DATA,
+        "cpu_pre n_data must be {CPU_BODY_N_DATA}"
+    );
 
     // mem_body
     let iso_mem = theseus_tisc::decoder::mem_body();
-    let (net_mem, anc_mem) =
-        lower_iso_with_ancillas(&iso_mem).expect("mem_body lowers");
+    let (net_mem, anc_mem) = lower_iso_with_ancillas(&iso_mem).expect("mem_body lowers");
     let n_data_mem = net_mem.inputs.len() - anc_mem.len();
     assert_eq!(
         net_mem.input_ty, mem_bus_ty,
         "mem_body input_ty must be Prod(mem_state_ty(), bus_state_ty())"
     );
-    assert_eq!(n_data_mem, MEM_BODY_N_DATA, "mem_body n_data must be {MEM_BODY_N_DATA}");
+    assert_eq!(
+        n_data_mem, MEM_BODY_N_DATA,
+        "mem_body n_data must be {MEM_BODY_N_DATA}"
+    );
 
     // cpu_post
     let iso_post = theseus_tisc::step::cpu_post(&rom);
-    let (net_post, anc_post) =
-        lower_iso_with_ancillas(&iso_post).expect("cpu_post lowers");
+    let (net_post, anc_post) = lower_iso_with_ancillas(&iso_post).expect("cpu_post lowers");
     let n_data_post = net_post.inputs.len() - anc_post.len();
     assert_eq!(
         net_post.input_ty, cpu_bus_ty,
         "cpu_post input_ty must be Prod(state_ty(), bus_state_ty())"
     );
-    assert_eq!(n_data_post, CPU_BODY_N_DATA, "cpu_post n_data must be {CPU_BODY_N_DATA}");
+    assert_eq!(
+        n_data_post, CPU_BODY_N_DATA,
+        "cpu_post n_data must be {CPU_BODY_N_DATA}"
+    );
 }
 
 // ── Mutation / negative tests: prove validate() has real teeth ─────
@@ -218,48 +235,69 @@ fn validate_rejects_mutations() {
     // delta_hold += 1: re-derivation computes delta_hold from delta1+d_mem+delta2,
     // stored delta_hold no longer matches → "delta_hold mismatch".
     // (Defense-in-depth assertion A would also catch this, but re-derivation fires first.)
-    assert_rejects!("delta_hold += 1", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.delta_hold += 1;
-    });
+    assert_rejects!(
+        "delta_hold += 1",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.delta_hold += 1;
+        }
+    );
 
     // F1 revolution-skew: period = d_locked + P (one full phase-period late).
     // Re-derivation computes period == d_locked; stored period is d_locked + P
     // → "period mismatch". This explicitly reproduces the F1 timing-skew bug
     // where the bus return is a full period late.
-    assert_rejects!("F1 revolution-skew: period = d_locked + P", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.period = t.d_locked + P;
-    });
+    assert_rejects!(
+        "F1 revolution-skew: period = d_locked + P",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.period = t.d_locked + P;
+        }
+    );
 
     // d_locked += P: re-derivation computes d_locked from the basis fields;
     // stored d_locked no longer matches → "d_locked mismatch".
-    assert_rejects!("d_locked += P", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.d_locked += P;
-    });
+    assert_rejects!(
+        "d_locked += P",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.d_locked += P;
+        }
+    );
 
     // delta1 += 1: re-derivation computes delta1 from d_pre; stored delta1
     // no longer matches → "delta1 mismatch".
-    assert_rejects!("delta1 += 1", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.delta1 += 1;
-    });
+    assert_rejects!(
+        "delta1 += 1",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.delta1 += 1;
+        }
+    );
 
     // delta2 += 1: re-derivation computes delta2 from d_pre+delta1+d_mem;
     // stored delta2 no longer matches → "delta2 mismatch".
-    assert_rejects!("delta2 += 1", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.delta2 += 1;
-    });
+    assert_rejects!(
+        "delta2 += 1",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.delta2 += 1;
+        }
+    );
 
     // ── Basis-field mutations (change re-derivation result → mismatch) ──
 
     // d_pre += 1: changes re-derived delta1 (different phase alignment)
     // → "delta1 mismatch" (or whichever derived field diverges first).
-    assert_rejects!("d_pre += 1", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.d_pre += 1;
-    });
+    assert_rejects!(
+        "d_pre += 1",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.d_pre += 1;
+        }
+    );
 
     // d_mem += 1: changes re-derived delta2 → "delta2 mismatch".
-    assert_rejects!("d_mem += 1", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.d_mem += 1;
-    });
+    assert_rejects!(
+        "d_mem += 1",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.d_mem += 1;
+        }
+    );
 
     // d_post += P: d_post feeds d_locked via period-alignment (align-up to P), so a
     // sub-period perturbation (+1) is ABSORBED by the delta_hold slack — that is correct
@@ -268,27 +306,39 @@ fn validate_rejects_mutations() {
     // full period P to shift the aligned d_locked → "d_locked mismatch". (delta1/delta2
     // are mod-P residues, so d_pre/d_mem +1 above ARE caught; d_post's alignment is not
     // +1-sensitive.)
-    assert_rejects!("d_post += P", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.d_post += P;
-    });
+    assert_rejects!(
+        "d_post += P",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.d_post += P;
+        }
+    );
 
     // ── Assertion G: independently reachable (not implied by re-derivation) ──
 
     // Truncate pre_bus_pads: re-derivation doesn't check pad vectors,
     // so this is caught by assertion G's length check directly.
-    assert_rejects!("truncate pre_bus_pads", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.pre_bus_pads.pop();
-    });
+    assert_rejects!(
+        "truncate pre_bus_pads",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.pre_bus_pads.pop();
+        }
+    );
 
     // Truncate mem_bus_pads: same — assertion G length check.
-    assert_rejects!("truncate mem_bus_pads", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.mem_bus_pads.pop();
-    });
+    assert_rejects!(
+        "truncate mem_bus_pads",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.mem_bus_pads.pop();
+        }
+    );
 
     // Truncate post_bus_pads: same — assertion G length check.
-    assert_rejects!("truncate post_bus_pads", |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
-        t.post_bus_pads.pop();
-    });
+    assert_rejects!(
+        "truncate post_bus_pads",
+        |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
+            t.post_bus_pads.pop();
+        }
+    );
 }
 
 /// All Stage 2b-lite certificate checks, run SEQUENTIALLY in one test to

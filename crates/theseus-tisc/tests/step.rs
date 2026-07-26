@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Differential-oracle tests for the TISC-1 `step` iso
 //! (`step(rom) : State <-> State`, tisc-1-spec §4, ADR-0034).
 //!
@@ -31,11 +32,9 @@ use std::sync::OnceLock;
 
 use theseus_core::{type_of, Iso};
 use theseus_netlist::lower::lower_iso_with_ancillas;
-use theseus_netlist::{
-    balance, bits_of, lower_iso, rail_width, simulate, CellKind,
-};
+use theseus_netlist::{balance, bits_of, lower_iso, rail_width, simulate, CellKind};
 use theseus_tisc::step::{fetch, pc_add_br, pc_inc, step};
-use theseus_tisc::types::{MEM_WORDS, StateVals};
+use theseus_tisc::types::{StateVals, MEM_WORDS};
 
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -117,24 +116,24 @@ fn ref_step(rom: &[u32], s: &StateVals) -> StateVals {
 /// balanced netlist is built for.
 fn rom1() -> Vec<u32> {
     vec![
-        i_ins(0, 1, 0x05),  // 0: ADDI r1, 5
-        r_ins(0, 2, 1, 0),  // 1: ADD  r2, r1
-        r_ins(2, 3, 2, 0),  // 2: XOR  r3, r2
-        r_ins(4, 4, 1, 0),  // 3: ROTL r4, r1   (amount = r1 & 7)
-        r_ins(3, 5, 0, 0),  // 4: EXCH r5, r0
-        i_ins(1, 6, 0x11),  // 5: SUBI r6, 0x11
-        r_ins(6, 7, 2, 3),  // 6: CSWAP r7, r2, r3  (cond on r7[0])
-        i_ins(4, 0, 0x02),  // 7: ROTRI r0, 2
+        i_ins(0, 1, 0x05), // 0: ADDI r1, 5
+        r_ins(0, 2, 1, 0), // 1: ADD  r2, r1
+        r_ins(2, 3, 2, 0), // 2: XOR  r3, r2
+        r_ins(4, 4, 1, 0), // 3: ROTL r4, r1   (amount = r1 & 7)
+        r_ins(3, 5, 0, 0), // 4: EXCH r5, r0
+        i_ins(1, 6, 0x11), // 5: SUBI r6, 0x11
+        r_ins(6, 7, 2, 3), // 6: CSWAP r7, r2, r3  (cond on r7[0])
+        i_ins(4, 0, 0x02), // 7: ROTRI r0, 2
     ]
 }
 
 /// Secondary ROM (eval-only, no lowering): SUB, ROTR, XORI, XCHG.
 fn rom2() -> Vec<u32> {
     vec![
-        r_ins(1, 1, 4, 0),  // 0: SUB  r1, r4
-        r_ins(5, 2, 5, 0),  // 1: ROTR r2, r5
-        i_ins(2, 3, 0x5A),  // 2: XORI r3, 0x5A
-        r_ins(7, 6, 0, 3),  // 3: XCHG r6, s3
+        r_ins(1, 1, 4, 0), // 0: SUB  r1, r4
+        r_ins(5, 2, 5, 0), // 1: ROTR r2, r5
+        i_ins(2, 3, 0x5A), // 2: XORI r3, 0x5A
+        r_ins(7, 6, 0, 3), // 3: XCHG r6, s3
     ]
 }
 
@@ -217,7 +216,14 @@ fn pc_add_br_isolated() {
     );
 
     // Sample: PC += BR for various (pc, br) pairs.
-    for (pc, br) in [(0u8, 0u8), (10, 5), (0xFF, 1), (0x80, 0x80), (0, 0xFF), (42, 200)] {
+    for (pc, br) in [
+        (0u8, 0u8),
+        (10, 5),
+        (0xFF, 1),
+        (0x80, 0x80),
+        (0, 0xFF),
+        (42, 200),
+    ] {
         let mut s = st(regs_a(), pc);
         s.br = br;
         let got = eval_state("pc_add_br", &iso, &s);
@@ -287,7 +293,10 @@ fn pc_inc_sampled() {
         let got = eval_state("pc_inc/sampled", &iso, &s);
         let mut expected = s.clone();
         expected.pc = pc.wrapping_add(1);
-        assert_eq!(got, expected, "pc_inc: pc={pc} (carry scratch must restore)");
+        assert_eq!(
+            got, expected,
+            "pc_inc: pc={pc} (carry scratch must restore)"
+        );
     }
 }
 
@@ -300,7 +309,10 @@ fn pc_inc_exhaustive_all_256() {
         let got = eval_state("pc_inc/all", &iso, &s);
         let mut expected = s.clone();
         expected.pc = pc.wrapping_add(1);
-        assert_eq!(got, expected, "pc_inc: pc={pc} (carry scratch must restore)");
+        assert_eq!(
+            got, expected,
+            "pc_inc: pc={pc} (carry scratch must restore)"
+        );
     }
 }
 
@@ -342,7 +354,10 @@ fn verify_lowering() -> &'static () {
         let total: usize = counts.values().sum();
         eprintln!("== PER-STEP COST (rom1, 8 words) ==");
         eprintln!("step: {total} cells, max kind {max_kind:?}, counts {counts:?}");
-        assert!((max_kind <= CellKind::K3 || max_kind == CellKind::R1), "step: max kind {max_kind:?} > K3");
+        assert!(
+            (max_kind <= CellKind::K3 || max_kind == CellKind::R1),
+            "step: max kind {max_kind:?} > K3"
+        );
 
         let n_data = rail_width(&in_ty).unwrap();
         assert_eq!(net.inputs.len(), n_data + ancilla.len());
@@ -468,7 +483,10 @@ fn forward_then_backward_run() {
     for t in 0..T {
         let next = eval_state(&format!("run/fwd[{t}]"), iso, &cur);
         let expected = ref_step(rom, &cur);
-        assert_eq!(next, expected, "forward run diverged from reference at step {t}");
+        assert_eq!(
+            next, expected,
+            "forward run diverged from reference at step {t}"
+        );
         refs.push(next.clone());
         cur = next;
     }
@@ -506,7 +524,11 @@ fn swapbr_step_swaps_br_and_rd() {
     assert_eq!(got, expected, "SWAPBR r2 step semantics mismatch");
     assert_eq!(got.regs[2], 0, "r2 should get old BR value (0)");
     assert_eq!(got.br, 0xAA, "BR should get old r2 value (0xAA)");
-    assert_eq!(got.pc, 0u8.wrapping_add(0xAA).wrapping_add(1), "PC = 0 + 0xAA + 1");
+    assert_eq!(
+        got.pc,
+        0u8.wrapping_add(0xAA).wrapping_add(1),
+        "PC = 0 + 0xAA + 1"
+    );
     assert_eq!(got.ir, 0, "P4: IR must re-zero after SWAPBR");
     assert_eq!(got.scratch[1], 0, "s1 must be restored");
 

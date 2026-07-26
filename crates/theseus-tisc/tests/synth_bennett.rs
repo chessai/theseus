@@ -51,7 +51,10 @@ fn assert_all_encode(body: &[Instr]) {
 /// layout whole-domain discharges the wiring/inverse risk the scratch samples
 /// cannot. Carriers = regs 0..n, ancilla = regs n..2n.
 fn bennett_register_symbolic_dryrun(fwd: &RegTransfer, bwd: &RegTransfer, n: usize) {
-    assert!(2 * n <= NUM_REGS, "register dry-run needs 2n ≤ NUM_REGS regs");
+    assert!(
+        2 * n <= NUM_REGS,
+        "register dry-run needs 2n ≤ NUM_REGS regs"
+    );
     let carrier_ops: Vec<u8> = (0..n as u8).collect();
     let ancilla_ops: Vec<u8> = (n as u8..2 * n as u8).collect();
     let body =
@@ -168,7 +171,11 @@ fn transcribe_into_toffoli_fresh_target_verifies() {
         body,
         vec![
             Instr::Xor { rd: 3, rs: 0 },
-            Instr::Ccnot { rd: 3, rs: 1, rt: 2 },
+            Instr::Ccnot {
+                rd: 3,
+                rs: 1,
+                rt: 2
+            },
             Instr::Xor { rd: 4, rs: 1 },
             Instr::Xor { rd: 5, rs: 2 },
         ],
@@ -180,8 +187,8 @@ fn transcribe_into_toffoli_fresh_target_verifies() {
     let got0 = transfer_zero_out(&symbolic_exec(&body).expect("symbolic_exec"), &[3, 4, 5]);
     let expected = spec(|r, b| match r {
         3 => v(0, b).xor(v(1, b).and(v(2, b))), // = a ⊕ (b∧c)
-        4 => v(1, b),                            // = b
-        5 => v(2, b),                            // = c
+        4 => v(1, b),                           // = b
+        5 => v(2, b),                           // = c
         _ => v(r, b),
     });
     equiv(&got0, &expected, BITS, &[0, 1, 2, 3, 4, 5])
@@ -218,8 +225,8 @@ fn transcribe_into_teeth() {
 fn bennett_symbolic_check(fwd: &RegTransfer, bwd: &RegTransfer, n: usize) {
     let carrier_ops: Vec<u8> = (0..n as u8).collect();
     let ancilla_ops: Vec<u8> = (n as u8..2 * n as u8).collect();
-    let body = transcribe_bennett(fwd, bwd, &carrier_ops, &ancilla_ops)
-        .expect("transcribe_bennett");
+    let body =
+        transcribe_bennett(fwd, bwd, &carrier_ops, &ancilla_ops).expect("transcribe_bennett");
 
     let got = symbolic_exec(&body).expect("symbolic_exec of Bennett body");
     // The permutation is realized only when the ancilla started at 0.
@@ -260,8 +267,7 @@ fn bennett_exec_netzero(
     apply_fwd: impl Fn(&[u8]) -> Vec<u8>,
 ) {
     let n = carrier_ops.len();
-    let body = transcribe_bennett(fwd, bwd, carrier_ops, ancilla_ops)
-        .expect("transcribe_bennett");
+    let body = transcribe_bennett(fwd, bwd, carrier_ops, ancilla_ops).expect("transcribe_bennett");
     // MAJOR-3(1): every emitted instruction must assemble (catches ISA-illegal
     // gates the permissive exec_instr would run silently).
     assert_all_encode(&body);
@@ -340,7 +346,12 @@ fn bennett_swap_netzero_register_ancilla() {
         &swap_fwd(),
         &[0, 1],
         &[2, 3],
-        &[vec![0x00, 0x00], vec![0xA5, 0x3C], vec![0xFF, 0x01], vec![0x12, 0x34]],
+        &[
+            vec![0x00, 0x00],
+            vec![0xA5, 0x3C],
+            vec![0xFF, 0x01],
+            vec![0x12, 0x34],
+        ],
         |x| vec![x[1], x[0]],
     );
 }
@@ -429,7 +440,10 @@ fn bennett_wrong_backward_breaks_netzero() {
 fn bennett_ancilla_too_small_errs() {
     let fwd = toffoli_fwd();
     let res = transcribe_bennett(&fwd, &fwd, &[0, 1, 2], &[3, 4]);
-    assert!(res.is_err(), "too-few ancilla words must return Err, got {res:?}");
+    assert!(
+        res.is_err(),
+        "too-few ancilla words must return Err, got {res:?}"
+    );
 }
 
 /// Edge: a permutation that touches a non-carrier register is rejected (the

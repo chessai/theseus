@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Value-width slice-1: Type::Flat(n) foundation + bare byte-Xor.
 //!
 //! T1: structural properties (num_leaves, cardinality, enumerate, round-trip).
@@ -15,8 +16,8 @@ use theseus_core::{Iso, Type, Value};
 
 use theseus_tisc::asm::Instr;
 use theseus_tisc::compile::{
-    compile, compile_with_metadata, run_on_cpu, run_on_cpu_fast,
-    value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
+    compile, compile_with_metadata, run_on_cpu, run_on_cpu_fast, value_from_leaf_bytes_pub,
+    value_to_leaf_bytes_pub,
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -138,7 +139,8 @@ fn t2_flat4_xor_compiles_to_single_xor() {
     let iso = xor_prim_iso(4);
     let lowered = compile_with_metadata(&iso).expect("compile Flat(4) Xor");
     assert_eq!(
-        lowered.instrs.len(), 1,
+        lowered.instrs.len(),
+        1,
         "Flat(4) Xor must compile to exactly 1 instruction, got {:?}",
         lowered.instrs
     );
@@ -159,8 +161,8 @@ fn t2_flat4_xor_fast_equals_eval() {
     assert_eq!(domain.len(), 256, "Flat(4)×Flat(4) has 256 inputs");
 
     for v in &domain {
-        let fast_out = run_on_cpu_fast(&iso, v)
-            .unwrap_or_else(|e| panic!("fast failed on {v:?}: {e}"));
+        let fast_out =
+            run_on_cpu_fast(&iso, v).unwrap_or_else(|e| panic!("fast failed on {v:?}: {e}"));
         let mut fuel = 100_000u64;
         let eval_out = theseus_eval::eval(&iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("eval failed on {v:?}: {e:?}"));
@@ -178,7 +180,8 @@ fn t3_flat8_xor_compiles_to_single_xor() {
     let iso = xor_prim_iso(8);
     let lowered = compile_with_metadata(&iso).expect("compile Flat(8) Xor");
     assert_eq!(
-        lowered.instrs.len(), 1,
+        lowered.instrs.len(),
+        1,
         "Flat(8) Xor must compile to exactly 1 instruction, got {:?}",
         lowered.instrs
     );
@@ -211,8 +214,8 @@ fn t3_flat8_xor_fast_equals_eval_strided() {
     for (a, b) in &pairs {
         let input_bytes = vec![*a, *b];
         let (v, _) = value_from_leaf_bytes_pub(&input_bytes, &ty);
-        let fast_out = run_on_cpu_fast(&iso, &v)
-            .unwrap_or_else(|e| panic!("fast failed on ({a},{b}): {e}"));
+        let fast_out =
+            run_on_cpu_fast(&iso, &v).unwrap_or_else(|e| panic!("fast failed on ({a},{b}): {e}"));
         let mut fuel = 100_000u64;
         let eval_out = theseus_eval::eval(&iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("eval failed on ({a},{b}): {e:?}"));
@@ -235,12 +238,7 @@ fn t4_flat8_xor_real_cpu() {
     let ty = Type::prod(Type::Flat(8), Type::Flat(8));
 
     // A handful of dense-byte inputs.
-    let test_pairs: Vec<(u8, u8)> = vec![
-        (0x01, 0x02),
-        (0xAA, 0x55),
-        (0xFF, 0x01),
-        (0xC3, 0x3C),
-    ];
+    let test_pairs: Vec<(u8, u8)> = vec![(0x01, 0x02), (0xAA, 0x55), (0xFF, 0x01), (0xC3, 0x3C)];
 
     for (a, b) in &test_pairs {
         let input_bytes = vec![*a, *b];
@@ -267,8 +265,8 @@ fn t6_flat4_xor_register_bytes_canonical() {
     let domain = enumerate_values(&ty);
 
     for v in &domain {
-        let fast_out = run_on_cpu_fast(&iso, v)
-            .unwrap_or_else(|e| panic!("fast failed on {v:?}: {e}"));
+        let fast_out =
+            run_on_cpu_fast(&iso, v).unwrap_or_else(|e| panic!("fast failed on {v:?}: {e}"));
         let out_bytes = value_to_leaf_bytes_pub(&fast_out, &out_ty);
         for (i, &byte) in out_bytes.iter().enumerate() {
             assert!(

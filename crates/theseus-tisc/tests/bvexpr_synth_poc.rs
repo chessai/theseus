@@ -40,7 +40,11 @@ fn v(r: usize, b: usize) -> BvExpr {
 /// byte-parallel Ccnot. Verified symbolically — no table, no enumeration.
 #[test]
 fn ccnot_mix_symbolic_transcribe_verify() {
-    let body = vec![Instr::Ccnot { rd: 0, rs: 1, rt: 2 }];
+    let body = vec![Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 2,
+    }];
     let spec_t = spec(|r, b| match r {
         0 => v(0, b).xor(v(1, b).and(v(2, b))),
         _ => v(r, b),
@@ -57,8 +61,12 @@ fn ccnot_mix_symbolic_transcribe_verify() {
 #[test]
 fn affine_nonlinear_mix_multi_gate_verify() {
     let body = vec![
-        Instr::Xor { rd: 0, rs: 3 },          // x ^= w
-        Instr::Ccnot { rd: 0, rs: 1, rt: 2 }, // x ^= y & z
+        Instr::Xor { rd: 0, rs: 3 }, // x ^= w
+        Instr::Ccnot {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        }, // x ^= y & z
     ];
     let spec_t = spec(|r, b| match r {
         0 => v(0, b).xor(v(3, b)).xor(v(1, b).and(v(2, b))),
@@ -74,7 +82,11 @@ fn affine_nonlinear_mix_multi_gate_verify() {
 #[test]
 fn wrong_transcription_is_symbolically_rejected() {
     // Uses w (reg 3) instead of z (reg 2) in the AND term — a real bug.
-    let wrong = vec![Instr::Ccnot { rd: 0, rs: 1, rt: 3 }];
+    let wrong = vec![Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 3,
+    }];
     let spec_t = spec(|r, b| match r {
         0 => v(0, b).xor(v(1, b).and(v(2, b))),
         _ => v(r, b),

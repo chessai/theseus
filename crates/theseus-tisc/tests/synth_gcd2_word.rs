@@ -29,7 +29,8 @@ use theseus_tisc::bveq::{BvExpr, RegTransfer};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{
     emit_weqzero, emit_weqzero_width, emit_wlt, emit_wlt_width, table_to_regtransfer,
-    transcribe_word_bennett_peak, weqzero_ntemp, wlt_ntemp, WForward, WValue,
+    transcribe_word_bennett_peak, transcribe_word_bennett_peak_measure, weqzero_ntemp, wlt_ntemp,
+    WForward, WValue,
 };
 use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
@@ -57,7 +58,11 @@ fn gcd2_hist_bytes(bb: &mut [u8]) {
         [0, x, y, 2 * h + s] // A4
     } else if ((a, b) == (2, 1) || (a, b) == (1, 2)) && h >= 4 {
         let (x, y) = if (a, b) == (2, 1) {
-            if h < 6 { (1, 3) } else { (3, 1) }
+            if h < 6 {
+                (1, 3)
+            } else {
+                (3, 1)
+            }
         } else if h < 6 {
             (2, 3)
         } else {
@@ -199,9 +204,17 @@ fn eval_wvalue(v: &WValue, c: &[u8]) -> u8 {
         WValue::EqZeroW { x, width } => ((eval_wvalue(x, c) & mask(*width)) == 0) as u8,
         WValue::AndBit { x, y } => (eval_wvalue(x, c) & eval_wvalue(y, c)) & 1,
         WValue::Masked { guard, val } => {
-            if eval_wvalue(guard, c) & 1 == 1 { eval_wvalue(val, c) } else { 0 }
+            if eval_wvalue(guard, c) & 1 == 1 {
+                eval_wvalue(val, c)
+            } else {
+                0
+            }
         }
-        WValue::Select { guard, then_, else_ } => {
+        WValue::Select {
+            guard,
+            then_,
+            else_,
+        } => {
             if eval_wvalue(guard, c) & 1 == 1 {
                 eval_wvalue(then_, c)
             } else {
@@ -212,7 +225,11 @@ fn eval_wvalue(v: &WValue, c: &[u8]) -> u8 {
 }
 
 fn mask(width: usize) -> u8 {
-    if width >= 8 { 0xFF } else { ((1u16 << width) - 1) as u8 }
+    if width >= 8 {
+        0xFF
+    } else {
+        ((1u16 << width) - 1) as u8
+    }
 }
 
 /// Evaluate a whole WForward: start from carriers, override each listed slot.
@@ -225,28 +242,50 @@ fn eval_forward(f: &WForward, carriers: [u8; 4]) -> [u8; 4] {
 }
 
 // ── WValue builders (leaf indices: t=0, a=1, b=2, h=3) ────────────────────────
-fn var(i: usize) -> WValue { WValue::var(i) }
-fn k(c: u8) -> WValue { WValue::Const(c) }
-fn sel(g: WValue, t: WValue, e: WValue) -> WValue { WValue::select(g, t, e) }
-fn notp(p: WValue) -> WValue { WValue::xor(p, k(1)) }
+fn var(i: usize) -> WValue {
+    WValue::var(i)
+}
+fn k(c: u8) -> WValue {
+    WValue::Const(c)
+}
+fn sel(g: WValue, t: WValue, e: WValue) -> WValue {
+    WValue::select(g, t, e)
+}
+fn notp(p: WValue) -> WValue {
+    WValue::xor(p, k(1))
+}
 // Boolean AND via the one-Ccnot AndBit primitive (a single gate, NOT a Select
 // level) — this keeps compound arm guards from DOUBLING the decision-tree depth
 // (each Select-based `and2` would add a full mask/one/broadcast level).
-fn and2(p: WValue, q: WValue) -> WValue { WValue::andbit(p, q) }
+fn and2(p: WValue, q: WValue) -> WValue {
+    WValue::andbit(p, q)
+}
 // OR via De Morgan on AndBit.
-fn or2(p: WValue, q: WValue) -> WValue { notp(and2(notp(p), notp(q))) }
+fn or2(p: WValue, q: WValue) -> WValue {
+    notp(and2(notp(p), notp(q)))
+}
 /// x == c over `width` bits.
 fn eq(x: WValue, c: u8, width: usize) -> WValue {
     WValue::eqzerow(WValue::sub(x, k(c)), width)
 }
 /// x == 0 over `width` bits.
-fn eqz(x: WValue, width: usize) -> WValue { WValue::eqzerow(x, width) }
+fn eqz(x: WValue, width: usize) -> WValue {
+    WValue::eqzerow(x, width)
+}
 
 // carrier accessors
-fn t() -> WValue { var(0) }
-fn a() -> WValue { var(1) }
-fn b() -> WValue { var(2) }
-fn h() -> WValue { var(3) }
+fn t() -> WValue {
+    var(0)
+}
+fn a() -> WValue {
+    var(1)
+}
+fn b() -> WValue {
+    var(2)
+}
+fn h() -> WValue {
+    var(3)
+}
 
 /// `(a == ca) & (b == cb)` = `and2` of two width-2 equalities.
 fn peq(ca: u8, cb: u8) -> WValue {
@@ -256,15 +295,29 @@ fn peq(ca: u8, cb: u8) -> WValue {
 // derived guards (each a fresh subtree — WForward outputs are independent, and
 // `emit_clean_accumulate` restarts scratch per output, so guards recomputed per
 // byte cost body length but NOT peak work).
-fn g_t1() -> WValue { t() } // t is 1-bit; bit0 = t
-fn g_h0() -> WValue { eqz(h(), 3) }
-fn g_a1b1() -> WValue { peq(1, 1) } // a==1 & b==1
-fn g_hge2() -> WValue { WValue::gtw(h(), k(1), 3) } // h > 1
-fn g_h1() -> WValue { eq(h(), 1, 3) }
-fn g_hge4() -> WValue { WValue::gtw(h(), k(3), 3) } // h > 3
-// 1<=h<=3  ⟺  (h-1) < 3 over 3 bits (single width-aware compare, no and2 level):
-//   h=0→(h-1)=7 !<3 ; h=1→0<3 ; h=2→1<3 ; h=3→2<3 ; h≥4→≥3 !<3.
-fn g_hin13() -> WValue { WValue::ltw(WValue::sub(h(), k(1)), k(3), 3) }
+fn g_t1() -> WValue {
+    t()
+} // t is 1-bit; bit0 = t
+fn g_h0() -> WValue {
+    eqz(h(), 3)
+}
+fn g_a1b1() -> WValue {
+    peq(1, 1)
+} // a==1 & b==1
+fn g_hge2() -> WValue {
+    WValue::gtw(h(), k(1), 3)
+} // h > 1
+fn g_h1() -> WValue {
+    eq(h(), 1, 3)
+}
+fn g_hge4() -> WValue {
+    WValue::gtw(h(), k(3), 3)
+} // h > 3
+  // 1<=h<=3  ⟺  (h-1) < 3 over 3 bits (single width-aware compare, no and2 level):
+  //   h=0→(h-1)=7 !<3 ; h=1→0<3 ; h=2→1<3 ; h=3→2<3 ; h≥4→≥3 !<3.
+fn g_hin13() -> WValue {
+    WValue::ltw(WValue::sub(h(), k(1)), k(3), 3)
+}
 /// d = (a!=b) & (a!=0) & (b!=0). Ordered so the costlier both-nonzero subtree is
 /// realized + collapsed to one temp before the cheaper `a!=b` (lower peak).
 fn g_d() -> WValue {
@@ -274,7 +327,9 @@ fn g_d() -> WValue {
     )
 }
 /// (a,b) ∈ {(2,1),(1,2)}
-fn g_yab() -> WValue { or2(peq(2, 1), peq(1, 2)) }
+fn g_yab() -> WValue {
+    or2(peq(2, 1), peq(1, 2))
+}
 
 // A2scat lookups (h∈2..7): a'={2:1,3:2,4:1,5:3,6:2,7:3}, b'={2:2,3:1,4:3,5:1,6:3,7:2}
 fn lut_h(table: &[(u8, u8)], default: u8) -> WValue {
@@ -285,13 +340,23 @@ fn lut_h(table: &[(u8, u8)], default: u8) -> WValue {
     }
     acc
 }
-fn a2_a() -> WValue { lut_h(&[(2, 1), (3, 2), (4, 1), (5, 3), (6, 2)], 3) } // h==7 → 3
-fn a2_b() -> WValue { lut_h(&[(2, 2), (3, 1), (4, 3), (5, 1), (6, 3)], 2) } // h==7 → 2
+fn a2_a() -> WValue {
+    lut_h(&[(2, 1), (3, 2), (4, 1), (5, 3), (6, 2)], 3)
+} // h==7 → 3
+fn a2_b() -> WValue {
+    lut_h(&[(2, 2), (3, 1), (4, 3), (5, 1), (6, 3)], 2)
+} // h==7 → 2
 
 // A4 arithmetic: a>b ? (a-b,b,2h+0) : (b-a,a,2h+1)
-fn g_agtb() -> WValue { WValue::gtw(a(), b(), 2) }
-fn a4_a() -> WValue { sel(g_agtb(), WValue::sub(a(), b()), WValue::sub(b(), a())) }
-fn a4_b() -> WValue { sel(g_agtb(), b(), a()) }
+fn g_agtb() -> WValue {
+    WValue::gtw(a(), b(), 2)
+}
+fn a4_a() -> WValue {
+    sel(g_agtb(), WValue::sub(a(), b()), WValue::sub(b(), a()))
+}
+fn a4_b() -> WValue {
+    sel(g_agtb(), b(), a())
+}
 // h' = 2h + s ; s = (a<=b) i.e. NOT(a>b). 2h = rotl(h,1) works only if h<128 (true).
 fn a4_h() -> WValue {
     // 2*h via Add(h,h); + s where s = a<=b = notp(a>b)
@@ -299,8 +364,12 @@ fn a4_h() -> WValue {
 }
 
 // Yremap: (2,1)→ h<6?(1,3):(3,1) ; (1,2)→ h<6?(2,3):(3,2) ; h'=2+(h&1)
-fn g_a2b1() -> WValue { peq(2, 1) }
-fn g_hlt6() -> WValue { WValue::ltw(h(), k(6), 3) }
+fn g_a2b1() -> WValue {
+    peq(2, 1)
+}
+fn g_hlt6() -> WValue {
+    WValue::ltw(h(), k(6), 3)
+}
 fn yr_a() -> WValue {
     // (a,b)==(2,1): h<6?1:3 ; else (1,2): h<6?2:3
     sel(
@@ -335,12 +404,24 @@ fn yr_h() -> WValue {
 // each arm, so their XOR-correction terms don't overlap.
 // Each predicate ANDs its factors with the COSTLIEST realized first (so it
 // collapses to one temp before the cheaper factors are computed) → lower peak.
-fn p_a1() -> WValue { and2(g_h0(), g_t1()) } // t==1 & h==0
-fn p_a2s() -> WValue { and2(and2(g_a1b1(), g_hge2()), g_t1()) } // t==1 & a=b=1 & h>=2
-fn p_a3ze() -> WValue { and2(and2(notp(g_d()), g_h1()), notp(g_t1())) } // t==0 & ¬d & h==1
-fn p_a3e() -> WValue { and2(and2(g_a1b1(), g_hge2()), notp(g_t1())) } // t==0 & a=b=1 & h>=2
-fn p_a4() -> WValue { and2(and2(g_d(), g_hin13()), notp(g_t1())) } // t==0 & d & 1<=h<=3
-fn p_yr() -> WValue { and2(and2(g_yab(), g_hge4()), notp(g_t1())) } // t==0 & (a,b)∈{(2,1),(1,2)} & h>=4
+fn p_a1() -> WValue {
+    and2(g_h0(), g_t1())
+} // t==1 & h==0
+fn p_a2s() -> WValue {
+    and2(and2(g_a1b1(), g_hge2()), g_t1())
+} // t==1 & a=b=1 & h>=2
+fn p_a3ze() -> WValue {
+    and2(and2(notp(g_d()), g_h1()), notp(g_t1()))
+} // t==0 & ¬d & h==1
+fn p_a3e() -> WValue {
+    and2(and2(g_a1b1(), g_hge2()), notp(g_t1()))
+} // t==0 & a=b=1 & h>=2
+fn p_a4() -> WValue {
+    and2(and2(g_d(), g_hin13()), notp(g_t1()))
+} // t==0 & d & 1<=h<=3
+fn p_yr() -> WValue {
+    and2(and2(g_yab(), g_hge4()), notp(g_t1()))
+} // t==0 & (a,b)∈{(2,1),(1,2)} & h>=4
 
 /// Build one output byte as a FLAT, LEFT-nested XOR of disjoint arm corrections
 /// onto the base carrier: `byte = base ⊕ Σ_arm (P_arm ? (v_arm ⊕ base) : 0)`.
@@ -411,7 +492,7 @@ fn gcd2_bwd_wforward() -> WForward {
     let is31 = || peq(3, 1);
     let is23 = || peq(2, 3);
     let hl3 = || eq(h(), 2, 3); // h==2 (vs h==3)
-    // yr_inv a' : (1,3)/(3,1)→2 ; (2,3)/(3,2)→1
+                                // yr_inv a' : (1,3)/(3,1)→2 ; (2,3)/(3,2)→1
     let yri_a = || sel(or2(is13(), is31()), k(2), k(1));
     // yr_inv b' : (1,3)/(3,1)→1 ; (2,3)/(3,2)→2
     let yri_b = || sel(or2(is13(), is31()), k(1), k(2));
@@ -425,10 +506,10 @@ fn gcd2_bwd_wforward() -> WForward {
 
     // iA4: s=h&1, h0=h>>1 ; s==0→(a+b,b,h0) ; s==1→(b,a+b,h0)
     let s0 = || eqz(h(), 1); // h.bit0==0  ⇔ s==0 (h even)
-    // NOTE: h has only bits 0..2 set; rotr by 1 moves bit0 to bit7. For h even
-    // (s==0) bit0=0 so rotr = logical >>1 exactly. For h odd we still use rotr but
-    // then the h' output for iA4 is h>>1 (h0). h odd → bit0=1 → rotr puts 1 at bit7
-    // (0x80), WRONG. So compute h0 = (h - (h&1)) >> 1 to clear bit0 first.
+                             // NOTE: h has only bits 0..2 set; rotr by 1 moves bit0 to bit7. For h even
+                             // (s==0) bit0=0 so rotr = logical >>1 exactly. For h odd we still use rotr but
+                             // then the h' output for iA4 is h>>1 (h0). h odd → bit0=1 → rotr puts 1 at bit7
+                             // (0x80), WRONG. So compute h0 = (h - (h&1)) >> 1 to clear bit0 first.
     let h0_val = || WValue::rotr(WValue::sub(h(), notp(s0())), 1); // (h - (h&1))>>1
 
     let iyr = |byte: usize| match byte {
@@ -615,12 +696,17 @@ fn width_aware_macros_gate_and_temp_counts() {
 #[test]
 fn andbit_masked_exec_through_bennett() {
     // g = (a<b) ∧ (a≠0) ; c' = c ⊕ (g ? 0xFF : 0).
-    let g = || WValue::andbit(
-        WValue::ltw(WValue::var(0), WValue::var(1), 2),
-        WValue::xor(WValue::eqzerow(WValue::var(0), 2), WValue::Const(1)), // a≠0
-    );
+    let g = || {
+        WValue::andbit(
+            WValue::ltw(WValue::var(0), WValue::var(1), 2),
+            WValue::xor(WValue::eqzerow(WValue::var(0), 2), WValue::Const(1)), // a≠0
+        )
+    };
     let f = WForward {
-        outputs: vec![(2, WValue::xor(WValue::var(2), WValue::masked(g(), WValue::Const(0xFF))))],
+        outputs: vec![(
+            2,
+            WValue::xor(WValue::var(2), WValue::masked(g(), WValue::Const(0xFF))),
+        )],
     };
     // carriers a=r0,b=r1,c=r2 (a,b identity → pass-through); ancilla s2=10; work.
     let carriers = [0u8, 1, 2];
@@ -644,8 +730,12 @@ fn andbit_masked_exec_through_bennett() {
                 assert_eq!(st.operand_get(0), av, "a preserved");
                 assert_eq!(st.operand_get(1), bv, "b preserved");
                 assert_eq!(st.operand_get(2), want, "c' on a={av} b={bv} c={cv:#x}");
-                for &t in &ancilla { assert_eq!(st.operand_get(t), 0, "ancilla net-zero"); }
-                for &t in &work { assert_eq!(st.operand_get(t), 0, "work {t} net-zero"); }
+                for &t in &ancilla {
+                    assert_eq!(st.operand_get(t), 0, "ancilla net-zero");
+                }
+                for &t in &work {
+                    assert_eq!(st.operand_get(t), 0, "work {t} net-zero");
+                }
             }
         }
     }
@@ -683,7 +773,11 @@ fn gcd2_bwd_wforward_matches_inverse_256() {
     }
     // first: our analytic gcd2_inv_bytes == the table
     for s in canonical_states() {
-        assert_eq!(gcd2_inv_bytes(s), inv[&s], "analytic inverse wrong on {s:?}");
+        assert_eq!(
+            gcd2_inv_bytes(s),
+            inv[&s],
+            "analytic inverse wrong on {s:?}"
+        );
     }
     // then: the bwd WForward == the analytic inverse
     let bwd = gcd2_bwd_wforward();
@@ -733,8 +827,12 @@ fn gcd2_word_synthesize_measure_and_verify() {
     let mut max_peak = 0usize;
     let mut per_byte: Vec<(usize, usize, usize)> = Vec::new(); // (slot, len, peak)
     for slot in 0..4usize {
-        let sf = WForward { outputs: vec![(slot, fwd.outputs[slot].1.clone())] };
-        let sb = WForward { outputs: vec![(slot, bwd.outputs[slot].1.clone())] };
+        let sf = WForward {
+            outputs: vec![(slot, fwd.outputs[slot].1.clone())],
+        };
+        let sb = WForward {
+            outputs: vec![(slot, bwd.outputs[slot].1.clone())],
+        };
         let (blen, speak) = synth_and_exec_wide(slot, &sf, &sb);
         per_byte.push((slot, blen, speak));
         total_len += blen;
@@ -763,7 +861,9 @@ fn gcd2_word_synthesize_measure_and_verify() {
         "operand budget (COMBINED body): 4 carriers + 4 ancilla + peak {peak} work = {total_operands} of 14 usable"
     );
     if total_operands <= 14 {
-        eprintln!("VERDICT: FITS the 14-operand budget (peak {peak} ≤ 6 free work) — NO widen-state");
+        eprintln!(
+            "VERDICT: FITS the 14-operand budget (peak {peak} ≤ 6 free work) — NO widen-state"
+        );
     } else {
         eprintln!(
             "VERDICT: the COMBINED body EXCEEDS the 14-operand budget by {} (peak {peak}); needs widen-state = +{} scratch word(s) (a {}-operand machine).",
@@ -794,11 +894,104 @@ fn gcd2_word_synthesize_measure_and_verify() {
     for s in canonical_states() {
         let word_out = eval_forward(&fwd, s); // interpreter over the word WForward
         let anf_out = eval_anf(&anf, s);
-        assert_eq!(word_out, anf_out, "word WForward disagrees with independent ANF spec on {s:?}");
+        assert_eq!(
+            word_out, anf_out,
+            "word WForward disagrees with independent ANF spec on {s:?}"
+        );
         diff_pass += 1;
     }
     assert_eq!(diff_pass, 256);
     eprintln!("DIFFERENTIAL: word WForward == independent ANF spec on {diff_pass}/256");
+}
+
+/// A-6.4 SIZING MEASUREMENT (measurement-only, NOT executable) — place the COMBINED
+/// 4-carrier word-level gcd2 Bennett body under a RELAXED operand cap (permitting
+/// the future widen-state scratch slots and beyond) so its `body.len()` and
+/// peak_work can be COUNTED. The combined body's peak concurrent work far exceeds
+/// the 6 free machine work operands, so it cannot PLACE (let alone run) under the
+/// production strict cap. The measurement path used here relaxes ONLY the operand
+/// legality bound; the body reads operand indices ≥ 16 that `exec_instr` panics on,
+/// so it is a SIZING artifact, never a runnable program. Drives the A-6.4 widen
+/// budget B = 4 + 5·(len+10). HONEST FINDING: this flat XOR-correction realization
+/// is ~778k instrs / peak 23 — LARGER than the bit-level BDD/ANF, not smaller (the
+/// earlier "peak 10 / len 0" figure was an allocator-first-failure artifact, not a
+/// real placement).
+#[test]
+fn gcd2_word_body_length_measurement() {
+    let fwd = gcd2_fwd_wforward();
+    let bwd = gcd2_bwd_wforward();
+
+    // Carrier layout: PHYS regs [3,0,1,2]. One ancilla per ACTIVE carrier (all 4
+    // are active) → 4 scratch ancilla (s2..s5 = 10..13).
+    let ancilla = [10u8, 11, 12, 13];
+    // Generous work pool (regs r4..r7 + scratch s6.. up to idx 199) so the HONEST
+    // combined peak is measured even if it far exceeds the +4 (=18-operand) widen
+    // target. Whether it FITS 18 operands is reported below from the measured peak.
+    let work: Vec<u8> = (4u8..8).chain(14u8..200).collect(); // 190 words
+
+    // Per-output-byte single-output placements (each with the generous relaxed pool
+    // + 1 ancilla). The combined body length = Σ per-byte lengths and the combined
+    // peak = max per-byte peak, because each byte's fwd/bwd accumulate reads ONLY the
+    // carriers and `emit_clean_accumulate` restarts the work cursor per output.
+    let mut per_byte: Vec<(usize, usize, usize)> = Vec::new(); // (slot, len, peak)
+    let mut sum_len = 0usize;
+    for slot in 0..4usize {
+        let sf = WForward {
+            outputs: vec![(slot, fwd.outputs[slot].1.clone())],
+        };
+        let sb = WForward {
+            outputs: vec![(slot, bwd.outputs[slot].1.clone())],
+        };
+        let (b1, p1) = transcribe_word_bennett_peak_measure(&sf, &sb, &PHYS, &[10u8], &work)
+            .expect("single-output byte PLACES under relaxed cap");
+        sum_len += b1.len();
+        per_byte.push((slot, b1.len(), p1));
+    }
+
+    let (body, peak) = transcribe_word_bennett_peak_measure(&fwd, &bwd, &PHYS, &ancilla, &work)
+        .expect("combined gcd2 word body PLACES under the relaxed (widen-state) operand cap");
+
+    let len = body.len();
+    let b_budget = 4 + 5 * (len + 10);
+
+    eprintln!("=== A-6.4 word-level gcd2 body SIZING (measurement-only, NOT executable) ===");
+    for (slot, l, p) in &per_byte {
+        eprintln!("  byte {slot}: single-output body.len()={l}, peak_work={p}");
+    }
+    eprintln!("Σ per-byte body.len() = {sum_len}");
+    eprintln!("COMBINED body.len() = {len}  (Bennett: fwd-accumulate ‖ 4 swaps ‖ bwd-accumulate)");
+    eprintln!("peak_work = {peak}  (max concurrent work words over the combined body)");
+    eprintln!("B = 4 + 5*(len+10) = {b_budget}");
+    eprintln!(
+        "vs BDD 5408/27094 ; vs ANF 15148/75794 -> body ratio BDD {:.3}x ANF {:.3}x ; B ratio BDD {:.3}x ANF {:.3}x",
+        len as f64 / 5408.0,
+        len as f64 / 15148.0,
+        b_budget as f64 / 27094.0,
+        b_budget as f64 / 75794.0,
+    );
+    let total_operands = 8 + peak; // 4 carriers + 4 ancilla + peak work
+    eprintln!(
+        "operand budget: 4 carriers + 4 ancilla + peak {peak} work = {total_operands} operands"
+    );
+    // +4 widen-state = 18 operands available (14 usable machine operands + s8..s11).
+    eprintln!(
+        "PLACES with +4 widen-state (18 operands: 4 carriers + 4 ancilla + {} free work): {}",
+        18 - 8,
+        if total_operands <= 18 {
+            "YES"
+        } else {
+            "NO — needs > 18"
+        }
+    );
+
+    // Assert nothing fragile: only that it PLACED (non-empty body) and that the
+    // combined length equals the sum of the per-byte single-output lengths (the
+    // decomposition the measurement relies on). No golden length pinned.
+    assert!(len > 0, "combined body placed but is empty");
+    assert_eq!(
+        len, sum_len,
+        "combined body.len() must equal Σ per-byte lengths"
+    );
 }
 
 /// Synthesize + exec-verify one output byte in a WIDENED operand model, returning
@@ -831,9 +1024,17 @@ fn synth_and_exec_wide(slot: usize, sf: &WForward, sb: &WForward) -> (usize, usi
                     let want = if i == slot { exp_full[i] } else { s[i] };
                     assert_eq!(got, want, "byte {slot} exec carrier {i} on {s:?}");
                 }
-                assert_eq!(st.operand_get(10), 0, "byte {slot} ancilla net-zero on {s:?}");
+                assert_eq!(
+                    st.operand_get(10),
+                    0,
+                    "byte {slot} ancilla net-zero on {s:?}"
+                );
                 for &w in &work {
-                    assert_eq!(st.operand_get(w), 0, "byte {slot} work {w} net-zero on {s:?}");
+                    assert_eq!(
+                        st.operand_get(w),
+                        0,
+                        "byte {slot} work {w} net-zero on {s:?}"
+                    );
                 }
             }
             (body.len(), peak)
@@ -853,9 +1054,19 @@ fn synth_and_exec_wide(slot: usize, sf: &WForward, sb: &WForward) -> (usize, usi
 /// Parse "... needed N words at #M ..." → peak = M + N. (The allocator failed
 /// wanting N words when M were already used, so it WOULD reach M+N concurrent.)
 fn parse_peak(msg: &str) -> Option<usize> {
-    let needed = msg.split("needed ").nth(1)?.split(' ').next()?.parse::<usize>().ok()?;
+    let needed = msg
+        .split("needed ")
+        .nth(1)?
+        .split(' ')
+        .next()?
+        .parse::<usize>()
+        .ok()?;
     let at = msg.split("at #").nth(1)?;
-    let m = at.split(|c: char| !c.is_ascii_digit()).next()?.parse::<usize>().ok()?;
+    let m = at
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?
+        .parse::<usize>()
+        .ok()?;
     Some(m + needed)
 }
 

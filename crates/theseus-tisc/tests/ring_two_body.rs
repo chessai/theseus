@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! TwoBodyRing closure certificate (M-C2 Stage 2a).
 //!
 //! Proves the two-body value decomposition:
@@ -22,13 +23,11 @@ use std::sync::OnceLock;
 
 use theseus_core::{Iso, Type};
 use theseus_tisc::ring_run::{
-    system_ring, two_body_ring, SystemRing, TwoBodyRing,
-    CPU_BODY_N_DATA, MEM_BODY_N_DATA,
+    system_ring, two_body_ring, SystemRing, TwoBodyRing, CPU_BODY_N_DATA, MEM_BODY_N_DATA,
 };
 use theseus_tisc::step::system_step;
 use theseus_tisc::types::{
-    bus_state_ty, decode_system, encode_system, mem_state_ty, state_ty,
-    MEM_WORDS, StateVals,
+    bus_state_ty, decode_system, encode_system, mem_state_ty, state_ty, StateVals, MEM_WORDS,
 };
 
 const EVAL_FUEL: u64 = 8_000_000_000;
@@ -364,11 +363,7 @@ fn two_body_matches_system_ring_and_eval_oracle() {
     for (si, start) in samples.iter().enumerate() {
         let mut oracle = start.clone();
         for r in 1..=2u32 {
-            oracle = eval_system_state(
-                &format!("oracle/si={si}/r={r}"),
-                &c.iso,
-                &oracle,
-            );
+            oracle = eval_system_state(&format!("oracle/si={si}/r={r}"), &c.iso, &oracle);
 
             let two_result = c.two.run(start, r);
             let sys_result = c.sys.run(start, r);
@@ -399,11 +394,7 @@ fn two_body_matches_eval_oracle_wide_strided() {
     for (si, start) in samples.iter().enumerate() {
         let mut oracle = start.clone();
         for r in 1..=3u32 {
-            oracle = eval_system_state(
-                &format!("wide/si={si}/r={r}"),
-                &c.iso,
-                &oracle,
-            );
+            oracle = eval_system_state(&format!("wide/si={si}/r={r}"), &c.iso, &oracle);
             let two_result = c.two.run(start, r);
             let sys_result = c.sys.run(start, r);
             assert_eq!(
@@ -479,22 +470,24 @@ fn direct_per_body_ancilla_check() {
     let samples = f5_sample_states();
     for (si, start) in samples.iter().enumerate() {
         for r in 1..=3u32 {
-            let (pre_mm, mem_mm, post_mm) =
-                c.two.body_ancilla_mismatches(start, r);
+            let (pre_mm, mem_mm, post_mm) = c.two.body_ancilla_mismatches(start, r);
             assert!(
                 pre_mm.is_empty(),
                 "cpu_pre ancilla mismatch at sample {si} (pc={}), r={r}: {:?}",
-                start.pc, pre_mm
+                start.pc,
+                pre_mm
             );
             assert!(
                 mem_mm.is_empty(),
                 "mem_body ancilla mismatch at sample {si} (pc={}), r={r}: {:?}",
-                start.pc, mem_mm
+                start.pc,
+                mem_mm
             );
             assert!(
                 post_mm.is_empty(),
                 "cpu_post ancilla mismatch at sample {si} (pc={}), r={r}: {:?}",
-                start.pc, post_mm
+                start.pc,
+                post_mm
             );
         }
     }

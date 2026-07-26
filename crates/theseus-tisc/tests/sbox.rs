@@ -71,12 +71,30 @@ const TMP: u8 = 5;
 fn sbox_instrs() -> Vec<Instr> {
     let mut p = Vec::new();
     let lin = |p: &mut Vec<Instr>, i: u8| p.push(Instr::Xor { rd: ACC, rs: i });
-    let quad = |p: &mut Vec<Instr>, i: u8, j: u8| p.push(Instr::Ccnot { rd: ACC, rs: i, rt: j });
+    let quad = |p: &mut Vec<Instr>, i: u8, j: u8| {
+        p.push(Instr::Ccnot {
+            rd: ACC,
+            rs: i,
+            rt: j,
+        })
+    };
     // acc ^= x_i x_j x_k, uncomputing TMP back to 0 (inputs still resident).
     let cube = |p: &mut Vec<Instr>, i: u8, j: u8, k: u8| {
-        p.push(Instr::Ccnot { rd: TMP, rs: i, rt: j });
-        p.push(Instr::Ccnot { rd: ACC, rs: TMP, rt: k });
-        p.push(Instr::Ccnot { rd: TMP, rs: i, rt: j });
+        p.push(Instr::Ccnot {
+            rd: TMP,
+            rs: i,
+            rt: j,
+        });
+        p.push(Instr::Ccnot {
+            rd: ACC,
+            rs: TMP,
+            rt: k,
+        });
+        p.push(Instr::Ccnot {
+            rd: TMP,
+            rs: i,
+            rt: j,
+        });
     };
     let const1 = |p: &mut Vec<Instr>| p.push(Instr::Xori { rd: ACC, imm: 0xFF });
     let park = |p: &mut Vec<Instr>, sx: u8| p.push(Instr::Xchg { rd: ACC, sx });
@@ -182,7 +200,11 @@ fn sbox_whole_domain_packed() {
         }
         // Whole parked bytes are 0x00/0xFF (uniform packing).
         for i in 0..4 {
-            let want = if (PRESENT_SBOX[x as usize] >> i) & 1 == 1 { 0xFF } else { 0x00 };
+            let want = if (PRESENT_SBOX[x as usize] >> i) & 1 == 1 {
+                0xFF
+            } else {
+                0x00
+            };
             assert_eq!(out.scratch[2 + i], want, "x={x:#04X} output byte y{i}");
         }
         // STANDALONE garbage-free: inputs preserved, acc + temp back to 0.
@@ -231,7 +253,9 @@ fn sbox_discriminating_packing() {
             PRESENT_SBOX[inp as usize]
         );
     }
-    eprintln!("PRESENT discriminating packing: 8 distinct inputs computed independently in one ROM run.");
+    eprintln!(
+        "PRESENT discriminating packing: 8 distinct inputs computed independently in one ROM run."
+    );
 }
 
 // ── 3. Golden vectors (independent, pinned from the published table) ──
@@ -241,13 +265,20 @@ fn sbox_golden_vectors() {
     // Pinned PRESENT golden entries (published S-box), not derived from the ROM.
     const GOLDENS: [(u8, u8); 4] = [(0x0, 0xC), (0x7, 0xD), (0xA, 0xF), (0xF, 0x2)];
     for (x, y) in GOLDENS {
-        assert_eq!(PRESENT_SBOX[x as usize], y, "table must match published golden S({x:#X})={y:#X}");
+        assert_eq!(
+            PRESENT_SBOX[x as usize], y,
+            "table must match published golden S({x:#X})={y:#X}"
+        );
     }
     let rom = assemble(&sbox_instrs()).expect("assemble S-box");
     let budget = sbox_instrs().len();
     for (x, y) in GOLDENS {
         let out = run_rom_fast(&rom, state_packed(x), budget);
-        assert_eq!(out_nibble(&out, 0), y, "golden ROM S({x:#X}) expected {y:#X}");
+        assert_eq!(
+            out_nibble(&out, 0),
+            y,
+            "golden ROM S({x:#X}) expected {y:#X}"
+        );
     }
     eprintln!("PRESENT golden vectors S(0)=C, S(7)=D, S(A)=F, S(F)=2: ROM matches.");
 }
@@ -263,9 +294,16 @@ fn sbox_forward_bijective() {
     for x in 0u8..16 {
         let out = run_rom_fast(&rom, state_packed(x), budget);
         let y = out_nibble(&out, 0);
-        assert!(seen.insert(y), "collision: S maps two inputs to {y:#X} — not a permutation");
+        assert!(
+            seen.insert(y),
+            "collision: S maps two inputs to {y:#X} — not a permutation"
+        );
     }
-    assert_eq!(seen.len(), 16, "S-box must be a bijection on all 16 nibbles");
+    assert_eq!(
+        seen.len(),
+        16,
+        "S-box must be a bijection on all 16 nibbles"
+    );
     eprintln!("PRESENT S-box is a bijection over all 16 nibbles (permutation).");
 }
 
@@ -274,12 +312,27 @@ fn sbox_forward_bijective() {
 #[test]
 fn sbox_instruction_inventory() {
     let instrs = sbox_instrs();
-    let ccnots = instrs.iter().filter(|i| matches!(i, Instr::Ccnot { .. })).count();
-    let xors = instrs.iter().filter(|i| matches!(i, Instr::Xor { .. })).count();
-    let xoris = instrs.iter().filter(|i| matches!(i, Instr::Xori { .. })).count();
-    let xchgs = instrs.iter().filter(|i| matches!(i, Instr::Xchg { .. })).count();
+    let ccnots = instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Ccnot { .. }))
+        .count();
+    let xors = instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Xor { .. }))
+        .count();
+    let xoris = instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Xori { .. }))
+        .count();
+    let xchgs = instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Xchg { .. }))
+        .count();
     assert_eq!(instrs.len(), 47, "PRESENT S-box schedule length");
-    assert_eq!(ccnots, 31, "31 byte-parallel AND-gates (quadratic + cubic products)");
+    assert_eq!(
+        ccnots, 31,
+        "31 byte-parallel AND-gates (quadratic + cubic products)"
+    );
     assert_eq!(xors, 10, "10 linear XOR terms");
     assert_eq!(xoris, 2, "2 constant-1 (NOT) terms (y2, y3)");
     assert_eq!(xchgs, 4, "4 output parks to scratch");
@@ -323,15 +376,24 @@ fn sbox_reversible_roundtrip_eval() {
             | (((start.regs[1] >> b) & 1) << 1)
             | (((start.regs[2] >> b) & 1) << 2)
             | (((start.regs[3] >> b) & 1) << 3);
-        assert_eq!(out_nibble(&fwd, b), PRESENT_SBOX[x as usize], "fwd lane {b}");
+        assert_eq!(
+            out_nibble(&fwd, b),
+            PRESENT_SBOX[x as usize],
+            "fwd lane {b}"
+        );
     }
     // Backward t cycles restores EVERYTHING (inputs + temps + parked scratch).
     for _ in 0..t {
         cur = theseus_eval::eval(&back, cur, &mut fuel).expect("back");
     }
     let restored = StateVals::decode(&cur);
-    assert_eq!(restored, start, "adjoint must restore the exact input state");
-    eprintln!("PRESENT ROM reversible: {t} fwd then {t} adjoint cycles restore input + temps + scratch.");
+    assert_eq!(
+        restored, start,
+        "adjoint must restore the exact input state"
+    );
+    eprintln!(
+        "PRESENT ROM reversible: {t} fwd then {t} adjoint cycles restore input + temps + scratch."
+    );
 }
 
 // ── 7. Energy / perf-win: price the S-box ROM; 8× bit-slicing ──
@@ -354,8 +416,14 @@ fn sbox_energy_and_bitslicing() {
     let j_per_sbox_sliced = total_j / 8.0;
     let j_per_sbox_unsliced = total_j / 1.0;
 
-    let ccnots = instrs.iter().filter(|i| matches!(i, Instr::Ccnot { .. })).count();
-    eprintln!("== PRESENT S-box ROM energy ({} instrs, {ccnots} Ccnots) ==", instrs.len());
+    let ccnots = instrs
+        .iter()
+        .filter(|i| matches!(i, Instr::Ccnot { .. }))
+        .count();
+    eprintln!(
+        "== PRESENT S-box ROM energy ({} instrs, {ccnots} Ccnots) ==",
+        instrs.len()
+    );
     eprintln!("  step_j = {step_j:.4e} J/cycle;  B = {b} cycles;  total = {total_j:.4e} J");
     eprintln!("  bit-sliced (Flat8, 8 evals): {j_per_sbox_sliced:.4e} J / S-box");
     eprintln!("  un-sliced  (Flat1, 1 eval):  {j_per_sbox_unsliced:.4e} J / S-box");
@@ -376,7 +444,10 @@ fn sbox_system_ring_authority() {
     // the FIRST step of the ring genuinely closes (ancillas restored, bus quiescent).
     for &x in &[0x0u8, 0x5, 0xA, 0xF] {
         let start = state_packed(x);
-        assert!(ring.ancillas_restored(&start), "x={x:#04X}: ring ancillas not restored");
+        assert!(
+            ring.ancillas_restored(&start),
+            "x={x:#04X}: ring ancillas not restored"
+        );
         assert!(ring.bus_quiescent(&start), "x={x:#04X}: bus not quiescent");
     }
 
@@ -394,7 +465,10 @@ fn sbox_system_ring_authority() {
         // Inputs preserved on the real ring too.
         for i in 0..4 {
             let inp = if (x >> i) & 1 == 1 { 0xFF } else { 0x00 };
-            assert_eq!(out.regs[i], inp, "system-ring x={x:#04X}: input r{i} not preserved");
+            assert_eq!(
+                out.regs[i], inp,
+                "system-ring x={x:#04X}: input r{i} not preserved"
+            );
         }
     }
     eprintln!(

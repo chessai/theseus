@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use theseus_core::prim::PrimDef;
 use theseus_core::{Iso, Type, Value};
-use theseus_tisc::asm::{decode, encode, assemble, AsmError, Instr};
+use theseus_tisc::asm::{assemble, decode, encode, AsmError, Instr};
 use theseus_tisc::compile::{compile, CompileError};
 
 // ── asm::decode: reserved opcodes → None ────────────────────────────
@@ -31,10 +31,24 @@ fn decode_mexchr_opcode_1010() {
 #[test]
 fn decode_r_format_opcode_1011_is_ccnot() {
     // R-format opcode 0b1011 (=11) is CCNOT: fmt=1, op=11, rd=rs=rt=0 = 0x9600_0000.
-    assert_eq!(decode(0x9600_0000), Some(Instr::Ccnot { rd: 0, rs: 0, rt: 0 }));
+    assert_eq!(
+        decode(0x9600_0000),
+        Some(Instr::Ccnot {
+            rd: 0,
+            rs: 0,
+            rt: 0
+        })
+    );
     // With distinct operands: rd=1, rs=2, rt=3.
     let word = (1u32 << 31) | (0b1011 << 25) | (1 << 20) | (2 << 15) | (3 << 10);
-    assert_eq!(decode(word), Some(Instr::Ccnot { rd: 1, rs: 2, rt: 3 }));
+    assert_eq!(
+        decode(word),
+        Some(Instr::Ccnot {
+            rd: 1,
+            rs: 2,
+            rt: 3
+        })
+    );
 }
 
 #[test]
@@ -166,31 +180,52 @@ fn encode_operand_out_of_range() {
     // rd=16 is out of range.
     assert!(matches!(
         encode(Instr::Add { rd: 16, rs: 0 }),
-        Err(AsmError::RegOutOfRange { which: "rd", val: 16 })
+        Err(AsmError::RegOutOfRange {
+            which: "rd",
+            val: 16
+        })
     ));
     // rs=20 is out of range.
     assert!(matches!(
         encode(Instr::Sub { rd: 0, rs: 20 }),
-        Err(AsmError::RegOutOfRange { which: "rs", val: 20 })
+        Err(AsmError::RegOutOfRange {
+            which: "rs",
+            val: 20
+        })
     ));
     // I-format: rd out of range.
     assert!(matches!(
         encode(Instr::Addi { rd: 31, imm: 0 }),
-        Err(AsmError::RegOutOfRange { which: "rd", val: 31 })
+        Err(AsmError::RegOutOfRange {
+            which: "rd",
+            val: 31
+        })
     ));
     // s0 (idx 8) and s1 (idx 9) are decoder-reserved (operand buffer +
     // predicate) → rejected as OperandReservedScratch, NOT accepted.
     assert!(matches!(
         encode(Instr::Add { rd: 0, rs: 8 }),
-        Err(AsmError::OperandReservedScratch { which: "rs", val: 8 })
+        Err(AsmError::OperandReservedScratch {
+            which: "rs",
+            val: 8
+        })
     ));
     assert!(matches!(
         encode(Instr::Add { rd: 9, rs: 0 }),
-        Err(AsmError::OperandReservedScratch { which: "rd", val: 9 })
+        Err(AsmError::OperandReservedScratch {
+            which: "rd",
+            val: 9
+        })
     ));
     // Legal scratch operands are s2..s7 (idx 10..16) — scratch-addressable, A-0.
-    assert!(encode(Instr::Add { rd: 10, rs: 0 }).is_ok(), "rd=10 (s2) is a valid operand");
-    assert!(encode(Instr::Add { rd: 0, rs: 15 }).is_ok(), "rs=15 (s7) is a valid operand");
+    assert!(
+        encode(Instr::Add { rd: 10, rs: 0 }).is_ok(),
+        "rd=10 (s2) is a valid operand"
+    );
+    assert!(
+        encode(Instr::Add { rd: 0, rs: 15 }).is_ok(),
+        "rs=15 (s7) is a valid operand"
+    );
 }
 
 #[test]
@@ -198,27 +233,46 @@ fn encode_aliased_operands() {
     // All two-operand R-format instructions reject rd == rs.
     assert!(matches!(
         encode(Instr::Add { rd: 2, rs: 2 }),
-        Err(AsmError::AliasedOperands { mnemonic: "ADD", rd: 2, rs: 2 })
+        Err(AsmError::AliasedOperands {
+            mnemonic: "ADD",
+            rd: 2,
+            rs: 2
+        })
     ));
     assert!(matches!(
         encode(Instr::Sub { rd: 5, rs: 5 }),
-        Err(AsmError::AliasedOperands { mnemonic: "SUB", .. })
+        Err(AsmError::AliasedOperands {
+            mnemonic: "SUB",
+            ..
+        })
     ));
     assert!(matches!(
         encode(Instr::Xor { rd: 0, rs: 0 }),
-        Err(AsmError::AliasedOperands { mnemonic: "XOR", .. })
+        Err(AsmError::AliasedOperands {
+            mnemonic: "XOR",
+            ..
+        })
     ));
     assert!(matches!(
         encode(Instr::Exch { rd: 1, rs: 1 }),
-        Err(AsmError::AliasedOperands { mnemonic: "EXCH", .. })
+        Err(AsmError::AliasedOperands {
+            mnemonic: "EXCH",
+            ..
+        })
     ));
     assert!(matches!(
         encode(Instr::Rotl { rd: 3, rs: 3 }),
-        Err(AsmError::AliasedOperands { mnemonic: "ROTL", .. })
+        Err(AsmError::AliasedOperands {
+            mnemonic: "ROTL",
+            ..
+        })
     ));
     assert!(matches!(
         encode(Instr::Rotr { rd: 7, rs: 7 }),
-        Err(AsmError::AliasedOperands { mnemonic: "ROTR", .. })
+        Err(AsmError::AliasedOperands {
+            mnemonic: "ROTR",
+            ..
+        })
     ));
 }
 
@@ -226,18 +280,42 @@ fn encode_aliased_operands() {
 fn encode_cswap_not_distinct() {
     // rd == rs
     assert!(matches!(
-        encode(Instr::Cswap { rd: 1, rs: 1, rt: 2 }),
-        Err(AsmError::CswapNotDistinct { rd: 1, rs: 1, rt: 2 })
+        encode(Instr::Cswap {
+            rd: 1,
+            rs: 1,
+            rt: 2
+        }),
+        Err(AsmError::CswapNotDistinct {
+            rd: 1,
+            rs: 1,
+            rt: 2
+        })
     ));
     // rd == rt
     assert!(matches!(
-        encode(Instr::Cswap { rd: 3, rs: 0, rt: 3 }),
-        Err(AsmError::CswapNotDistinct { rd: 3, rs: 0, rt: 3 })
+        encode(Instr::Cswap {
+            rd: 3,
+            rs: 0,
+            rt: 3
+        }),
+        Err(AsmError::CswapNotDistinct {
+            rd: 3,
+            rs: 0,
+            rt: 3
+        })
     ));
     // rs == rt
     assert!(matches!(
-        encode(Instr::Cswap { rd: 0, rs: 4, rt: 4 }),
-        Err(AsmError::CswapNotDistinct { rd: 0, rs: 4, rt: 4 })
+        encode(Instr::Cswap {
+            rd: 0,
+            rs: 4,
+            rt: 4
+        }),
+        Err(AsmError::CswapNotDistinct {
+            rd: 0,
+            rs: 4,
+            rt: 4
+        })
     ));
 }
 

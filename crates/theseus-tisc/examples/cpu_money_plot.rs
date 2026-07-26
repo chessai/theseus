@@ -22,7 +22,7 @@ fn main() {
     // barely moves the machine-level energy.
     // A-0 32-bit words: I-format = fmt(31)=0 | opcode[30:25] | rd[24:20] | imm[19:0].
     let rom: Vec<u32> = vec![
-        (0b011u32 << 25) | 1,             // ROTLI r0, #1 (opc 0b011 = ROTLI)
+        (0b011u32 << 25) | 1,                // ROTLI r0, #1 (opc 0b011 = ROTLI)
         (0b101u32 << 25) | (1 << 20) | 0xFF, // reserved I-format opc 0b101 (decodes None)
     ];
 

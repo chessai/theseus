@@ -9,9 +9,7 @@
 
 use theseus_core::{enumerate_values, type_of, Iso, Value};
 use theseus_tisc::asm::{assemble, Instr};
-use theseus_tisc::compile::{
-    compile, compile_with_metadata, marshal, run_on_cpu, run_on_cpu_fast,
-};
+use theseus_tisc::compile::{compile, compile_with_metadata, marshal, run_on_cpu, run_on_cpu_fast};
 
 // ── Surface → core Iso ──────────────────────────────────────────────
 
@@ -55,9 +53,8 @@ fn assert_oracle_with(
     assert!(!vals.is_empty(), "{name}: domain is empty");
     let mut checked = 0usize;
     for v in &vals {
-        let cpu_out = run(iso, v).unwrap_or_else(|e| {
-            panic!("{name} ({which}): run failed on {v:?}: {e}")
-        });
+        let cpu_out =
+            run(iso, v).unwrap_or_else(|e| panic!("{name} ({which}): run failed on {v:?}: {e}"));
         let mut fuel = 100_000u64;
         let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("{name}: eval failed on {v:?}: {e:?}"));
@@ -82,7 +79,12 @@ fn t1_lfsr_compiles_and_emission() {
     // lfsrStep must be Swapbr-free (straight-line body), exactly 4 instructions.
     let lfsr_step = elaborate(LFSR_SRC, "lfsrStep");
     let step_instrs = compile(&lfsr_step).expect("lfsrStep should compile");
-    assert_eq!(step_instrs.len(), 4, "lfsrStep must be 4 instructions (1 Xor + 3 Exch), got {}", step_instrs.len());
+    assert_eq!(
+        step_instrs.len(),
+        4,
+        "lfsrStep must be 4 instructions (1 Xor + 3 Exch), got {}",
+        step_instrs.len()
+    );
     let step_swapbr_count = step_instrs
         .iter()
         .filter(|i| matches!(i, Instr::Swapbr { .. }))
@@ -124,7 +126,12 @@ fn t2_lfsr_whole_domain_oracle() {
     let iso = elaborate(LFSR_SRC, "lfsr");
     let (in_ty, _) = type_of(&iso).unwrap();
     let vals = enumerate_values(&in_ty);
-    assert_eq!(vals.len(), 96, "lfsr domain must be 96 (6×16), got {}", vals.len());
+    assert_eq!(
+        vals.len(),
+        96,
+        "lfsr domain must be 96 (6×16), got {}",
+        vals.len()
+    );
     assert_oracle_fast("lfsr", &iso);
 }
 
@@ -144,8 +151,8 @@ fn t3_lfsr_real_cpu() {
     for (k_idx, &expected_out) in expected_outputs.iter().enumerate() {
         let k = k_idx + 1; // k=1..=5
         let input = Value::pair(encode_nat6(k), encode_reg(seed));
-        let cpu_out = cpu_run(&iso, &input)
-            .unwrap_or_else(|e| panic!("real CPU failed for k={k}: {e}"));
+        let cpu_out =
+            cpu_run(&iso, &input).unwrap_or_else(|e| panic!("real CPU failed for k={k}: {e}"));
 
         // Output is (Nat@6, Reg) — extract both parts.
         let (out_k, reg_val) = match &cpu_out {
@@ -156,7 +163,10 @@ fn t3_lfsr_real_cpu() {
                 loop {
                     match cur {
                         Value::Left(_) => break,
-                        Value::Right(inner) => { depth += 1; cur = inner.as_ref().clone(); }
+                        Value::Right(inner) => {
+                            depth += 1;
+                            cur = inner.as_ref().clone();
+                        }
                         _ => panic!("malformed Nat in output"),
                     }
                 }
@@ -183,7 +193,7 @@ fn t3_lfsr_real_cpu() {
 fn encode_reg(val: u8) -> Value {
     let bit = |b: u8| -> Value {
         if b == 0 {
-            Value::left(Value::Unit)  // O
+            Value::left(Value::Unit) // O
         } else {
             Value::right(Value::Unit) // I
         }
@@ -266,7 +276,8 @@ fn t4_orbit_correctness() {
     for (i, &expected) in expected_outputs.iter().enumerate() {
         x = galois_step(x);
         assert_eq!(
-            x, expected,
+            x,
+            expected,
             "reference Galois step {}: expected {expected}, got {x}",
             i + 1
         );
@@ -289,7 +300,10 @@ fn t4_orbit_correctness() {
                 loop {
                     match cur {
                         Value::Left(_) => break,
-                        Value::Right(inner) => { depth += 1; cur = inner.as_ref().clone(); }
+                        Value::Right(inner) => {
+                            depth += 1;
+                            cur = inner.as_ref().clone();
+                        }
                         _ => panic!("malformed Nat in output"),
                     }
                 }
@@ -297,7 +311,10 @@ fn t4_orbit_correctness() {
             }
             _ => panic!("expected Pair(nat, reg), got {output:?}"),
         };
-        assert_eq!(out_k, k, "iter must preserve k in output: expected {k}, got {out_k}");
+        assert_eq!(
+            out_k, k,
+            "iter must preserve k in output: expected {k}, got {out_k}"
+        );
         assert_eq!(
             reg_val, expected_out,
             "orbit k={k}: expected register={expected_out} (0b{expected_out:04b}), got {reg_val} (0b{reg_val:04b})"
@@ -379,8 +396,12 @@ fn t5_park_tax_trace() {
         "T(k) regression: expected [34,48,62,76,90,104], got {t_values:?}"
     );
     eprintln!("lfsr T(k) for k=0..5: {t_values:?}");
-    eprintln!("lfsr B={b}, park_taxes: {:?}",
-        t_values.iter().map(|&t| (b - t) as f64 / b as f64).collect::<Vec<_>>()
+    eprintln!(
+        "lfsr B={b}, park_taxes: {:?}",
+        t_values
+            .iter()
+            .map(|&t| (b - t) as f64 / b as f64)
+            .collect::<Vec<_>>()
     );
 
     // Verify affine: stride = T(k+1) - T(k) must be constant for all k.
@@ -395,7 +416,10 @@ fn t5_park_tax_trace() {
             "T(k) must be affine: stride[{i}]={s} != stride[0]={stride}"
         );
     }
-    assert!(stride > 0, "stride must be positive (T is strictly increasing)");
+    assert!(
+        stride > 0,
+        "stride must be positive (T is strictly increasing)"
+    );
 }
 
 // ── T5b: energy pricing (joules — #[ignore], step-net lowering costly) ──
@@ -403,8 +427,8 @@ fn t5_park_tax_trace() {
 #[test]
 #[ignore = "step-net lowering at ROM=104 is expensive (>9min release CPU, never yet run to completion); assertions (step_j>0, total_j==B·step_j) are sound but costly"]
 fn t5b_energy_pricing() {
-    use theseus_tisc::energy::rom_program_energy;
     use theseus_spice::chardb::rung0_measured;
+    use theseus_tisc::energy::rom_program_energy;
 
     let iso = elaborate(LFSR_SRC, "lfsr");
     let db = rung0_measured();
@@ -420,8 +444,8 @@ fn t5b_energy_pricing() {
 
     // Run at k=5 (maximum — zero park tax).
     let input = Value::pair(encode_nat6(5), encode_reg(seed));
-    let pe = rom_program_energy(&iso, &input, &db, t_ramp, &step_net)
-        .expect("rom_program_energy lfsr");
+    let pe =
+        rom_program_energy(&iso, &input, &db, t_ramp, &step_net).expect("rom_program_energy lfsr");
 
     assert_eq!(pe.steps_b, b, "steps_b must equal B={b}");
     assert!(pe.step_j > 0.0, "step_j must be > 0");

@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! M-C2 Stage 1a-B acceptance tests: composite (CpuState, MemState) carrier.
 //!
 //! (a) COMPOSITE ORACLE: run_on_cpu(system_step) == eval(surface iso)
@@ -15,8 +16,8 @@ use theseus_netlist::{rail_width, PhasedCellNetlist, RailPair};
 use theseus_tisc::compile::{compile, marshal, run_on_cpu, run_on_cpu_fast};
 use theseus_tisc::decoder;
 use theseus_tisc::types::{
-    decode_bus, decode_composite, decode_system, encode_composite, encode_system,
-    MEM_WORDS, MemWidth, NUM_BUS_FIELDS, NUM_CPU_FIELDS, StateVals, W,
+    decode_bus, decode_composite, decode_system, encode_composite, encode_system, MemWidth,
+    StateVals, MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, W,
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -44,9 +45,8 @@ fn assert_oracle_fast(name: &str, iso: &Iso) {
     assert!(!vals.is_empty(), "{name}: domain is empty");
     let mut checked = 0usize;
     for v in &vals {
-        let cpu_out = run_on_cpu_fast(iso, v).unwrap_or_else(|e| {
-            panic!("{name} (fast-sim): run failed on {v:?}: {e}")
-        });
+        let cpu_out = run_on_cpu_fast(iso, v)
+            .unwrap_or_else(|e| panic!("{name} (fast-sim): run failed on {v:?}: {e}"));
         let mut fuel = 100_000u64;
         let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("{name}: eval failed on {v:?}: {e:?}"));
@@ -69,7 +69,11 @@ fn assert_oracle_sample(name: &str, iso: &Iso, count: usize) {
     let n = vals.len();
     let mut indices: Vec<usize> = (0..count)
         .map(|i| {
-            if count <= 1 { 0 } else { i * (n - 1) / (count - 1) }
+            if count <= 1 {
+                0
+            } else {
+                i * (n - 1) / (count - 1)
+            }
         })
         .collect();
     indices.push(0);
@@ -82,9 +86,8 @@ fn assert_oracle_sample(name: &str, iso: &Iso, count: usize) {
     let mut checked = 0usize;
     for &i in &indices {
         let v = &vals[i];
-        let cpu_out = cpu_run(iso, v).unwrap_or_else(|e| {
-            panic!("{name} (real-CPU sample): failed on #{i}: {e}")
-        });
+        let cpu_out = cpu_run(iso, v)
+            .unwrap_or_else(|e| panic!("{name} (real-CPU sample): failed on #{i}: {e}"));
         let mut fuel = 100_000u64;
         let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("{name}: eval failed on #{i}: {e:?}"));
@@ -94,9 +97,7 @@ fn assert_oracle_sample(name: &str, iso: &Iso, count: usize) {
         );
         checked += 1;
     }
-    eprintln!(
-        "{name} (real-CPU sample): oracle agrees on {checked}/{n} inputs"
-    );
+    eprintln!("{name} (real-CPU sample): oracle agrees on {checked}/{n} inputs");
 }
 
 /// Bounded fast oracle: strided ≤256-input sample of run_on_cpu_fast == eval.
@@ -107,7 +108,11 @@ fn assert_oracle_fast_bounded(name: &str, iso: &Iso, cap: usize) {
     let count = cap.min(n);
     let mut indices: Vec<usize> = (0..count)
         .map(|i| {
-            if count <= 1 { 0 } else { i * (n - 1) / (count - 1) }
+            if count <= 1 {
+                0
+            } else {
+                i * (n - 1) / (count - 1)
+            }
         })
         .collect();
     indices.push(0);
@@ -120,9 +125,8 @@ fn assert_oracle_fast_bounded(name: &str, iso: &Iso, cap: usize) {
     let mut checked = 0usize;
     for &i in &indices {
         let v = &vals[i];
-        let cpu_out = run_on_cpu_fast(iso, v).unwrap_or_else(|e| {
-            panic!("{name} (fast-bounded): run failed on #{i}: {e}")
-        });
+        let cpu_out = run_on_cpu_fast(iso, v)
+            .unwrap_or_else(|e| panic!("{name} (fast-bounded): run failed on #{i}: {e}"));
         let mut fuel = 100_000u64;
         let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("{name}: eval failed on #{i}: {e:?}"));
@@ -268,15 +272,13 @@ fn assert_ancilla_clean_on_samples(
         let out = eval_cells(&net, &full_input);
 
         assert_eq!(
-            &out[..w_out], &expected_data[..],
+            &out[..w_out],
+            &expected_data[..],
             "{name}: data mismatch on sample {idx}"
         );
 
         for (i, (got, expected)) in out[w_out..].iter().zip(&inits).enumerate() {
-            assert_eq!(
-                got, expected,
-                "{name}: ancilla {i} dirty on sample {idx}"
-            );
+            assert_eq!(got, expected, "{name}: ancilla {i} dirty on sample {idx}");
         }
     }
 
@@ -485,12 +487,8 @@ fn shared_isa_guard_ring_vs_system() {
 
         // System path: system_decode_execute ⊗ id_Bus on 3-factor carrier
         let mut fuel = fuel_budget;
-        let sys_out = theseus_eval::eval(
-            &sys_decoder_3f,
-            encode_system(&state),
-            &mut fuel,
-        )
-        .unwrap_or_else(|e| panic!("system eval failed on IR={ir_word:#06x}: {e:?}"));
+        let sys_out = theseus_eval::eval(&sys_decoder_3f, encode_system(&state), &mut fuel)
+            .unwrap_or_else(|e| panic!("system eval failed on IR={ir_word:#06x}: {e:?}"));
         let sys_state = decode_system(&sys_out);
 
         // Compare CpuState fields
@@ -508,8 +506,10 @@ fn shared_isa_guard_ring_vs_system() {
 
         // Bus quiescence: BusMsg must remain zero for non-MEXCH
         let bus = decode_bus(&sys_out);
-        assert_eq!(bus, [0u8; NUM_BUS_FIELDS],
-            "ISA guard: bus not quiescent after non-MEXCH IR={ir_word:#06x}");
+        assert_eq!(
+            bus, [0u8; NUM_BUS_FIELDS],
+            "ISA guard: bus not quiescent after non-MEXCH IR={ir_word:#06x}"
+        );
     }
     eprintln!(
         "shared-ISA guard: ring and system decoders agree on {} non-MEXCH samples",
@@ -531,7 +531,10 @@ fn ceiling_straight_line_unchanged() {
 
     let over = max + 1;
     let iso_over = Iso::Id(bit_prod(over));
-    assert!(compile(&iso_over).is_err(), "above ceiling {over} must reject");
+    assert!(
+        compile(&iso_over).is_err(),
+        "above ceiling {over} must reject"
+    );
 }
 
 #[test]
@@ -559,7 +562,10 @@ fn ceiling_branching_unchanged() {
             ),
         ),
     );
-    assert!(compile(&iso).is_ok(), "branching ceiling {max} must compile");
+    assert!(
+        compile(&iso).is_ok(),
+        "branching ceiling {max} must compile"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -622,7 +628,10 @@ fn encode_decode_system_round_trip() {
 
     // Bus must be zero
     let bus = decode_bus(&system);
-    assert_eq!(bus, [0u8; NUM_BUS_FIELDS], "encode_system: bus must init to zero");
+    assert_eq!(
+        bus, [0u8; NUM_BUS_FIELDS],
+        "encode_system: bus must init to zero"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -646,7 +655,11 @@ fn assert_oracle_fast_with_bus_quiescence(name: &str, iso: &Iso) {
     let count = CAP.min(n);
     let mut indices: Vec<usize> = (0..count)
         .map(|i| {
-            if count <= 1 { 0 } else { i * (n - 1) / (count - 1) }
+            if count <= 1 {
+                0
+            } else {
+                i * (n - 1) / (count - 1)
+            }
         })
         .collect();
     indices.push(0);
@@ -666,9 +679,8 @@ fn assert_oracle_fast_with_bus_quiescence(name: &str, iso: &Iso) {
     for &i in &indices {
         let v = &vals[i];
         // Fast-sim oracle (existing)
-        let cpu_out = run_on_cpu_fast(iso, v).unwrap_or_else(|e| {
-            panic!("{name} (fast-sim): run failed on {v:?}: {e}")
-        });
+        let cpu_out = run_on_cpu_fast(iso, v)
+            .unwrap_or_else(|e| panic!("{name} (fast-sim): run failed on {v:?}: {e}"));
         let mut fuel = 100_000u64;
         let eval_out = theseus_eval::eval(iso, v.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("{name}: eval failed on {v:?}: {e:?}"));
@@ -683,22 +695,24 @@ fn assert_oracle_fast_with_bus_quiescence(name: &str, iso: &Iso) {
         let mut cur = encode_system(&state);
         // Check input bus == 0
         let bus_in = decode_bus(&cur);
-        assert_eq!(bus_in, [0u8; NUM_BUS_FIELDS],
-            "{name}: bus not zero at input for {v:?}");
+        assert_eq!(
+            bus_in, [0u8; NUM_BUS_FIELDS],
+            "{name}: bus not zero at input for {v:?}"
+        );
         let mut step_fuel = 8_000_000_000u64;
         for step_idx in 0..budget {
             cur = theseus_eval::eval(&step_iso, cur, &mut step_fuel)
                 .unwrap_or_else(|e| panic!("{name}: step eval failed at step {step_idx}: {e:?}"));
             let bus = decode_bus(&cur);
-            assert_eq!(bus, [0u8; NUM_BUS_FIELDS],
-                "{name}: bus not quiescent after step {step_idx} for input {v:?}");
+            assert_eq!(
+                bus, [0u8; NUM_BUS_FIELDS],
+                "{name}: bus not quiescent after step {step_idx} for input {v:?}"
+            );
         }
 
         checked += 1;
     }
-    eprintln!(
-        "{name} (1b-A): oracle + bus-quiescence OK on {checked}/{n} inputs",
-    );
+    eprintln!("{name} (1b-A): oracle + bus-quiescence OK on {checked}/{n} inputs",);
 }
 
 #[test]
@@ -719,11 +733,7 @@ fn stage1b_oracle_store_reload_with_bus_quiescence() {
 #[test]
 #[ignore = "authoritative real-CPU oracle (slow)"]
 fn stage1b_oracle_spill_15_real_cpu() {
-    assert_oracle_sample(
-        "1b_spill_15",
-        &Iso::SwapProd(bit_prod(7), bit_prod(8)),
-        12,
-    );
+    assert_oracle_sample("1b_spill_15", &Iso::SwapProd(bit_prod(7), bit_prod(8)), 12);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -757,19 +767,23 @@ fn stage1b_line_audit_mem_phase() {
     // Check: no active cell has a CpuState line among its inputs or outputs
     let mut violations = 0usize;
     for cell in &net.cells {
-        let has_cpu_input = cell.inputs.iter().any(|p| {
-            cpu_lines.contains(&p.line0.0) || cpu_lines.contains(&p.line1.0)
-        });
-        let has_cpu_output = cell.outputs.iter().any(|p| {
-            cpu_lines.contains(&p.line0.0) || cpu_lines.contains(&p.line1.0)
-        });
+        let has_cpu_input = cell
+            .inputs
+            .iter()
+            .any(|p| cpu_lines.contains(&p.line0.0) || cpu_lines.contains(&p.line1.0));
+        let has_cpu_output = cell
+            .outputs
+            .iter()
+            .any(|p| cpu_lines.contains(&p.line0.0) || cpu_lines.contains(&p.line1.0));
         if has_cpu_input || has_cpu_output {
             violations += 1;
         }
     }
 
-    assert_eq!(violations, 0,
-        "line-audit: mem_phase has {violations} cells touching CpuState fields");
+    assert_eq!(
+        violations, 0,
+        "line-audit: mem_phase has {violations} cells touching CpuState fields"
+    );
     eprintln!(
         "line-audit: mem_phase has {} cells, 0 touch CpuState (cpu_bits={cpu_bits})",
         net.cells.len()
@@ -802,7 +816,7 @@ fn stage1b_emit_mem_absorb_correctness() {
         (1, 1, 0xFF, 0x00),
         (3, 2, 0x55, 0xAA),
         (7, 3, 0x01, 0xFE),
-        (2, 0, 0x00, 0x00),  // zero/zero
+        (2, 0, 0x00, 0x00), // zero/zero
     ];
 
     for &(rd, addr, reg_val, mem_val) in &test_cases {
@@ -828,34 +842,41 @@ fn stage1b_emit_mem_absorb_correctness() {
         let result = decode_system(&output);
 
         // After swap: reg[rd] should have old mem[addr], mem[addr] should have old reg[rd]
-        assert_eq!(result.regs[rd as usize], mem_val,
+        assert_eq!(
+            result.regs[rd as usize], mem_val,
             "rd={rd},addr={addr}: reg[rd] should be old mem[addr]={mem_val:#x}, got {:#x}",
-            result.regs[rd as usize]);
-        assert_eq!(result.mem[addr as usize], reg_val,
+            result.regs[rd as usize]
+        );
+        assert_eq!(
+            result.mem[addr as usize], reg_val,
             "rd={rd},addr={addr}: mem[addr] should be old reg[rd]={reg_val:#x}, got {:#x}",
-            result.mem[addr as usize]);
+            result.mem[addr as usize]
+        );
 
         // Bus must be zero after the 3-cycle
         let bus = decode_bus(&output);
-        assert_eq!(bus, [0u8; NUM_BUS_FIELDS],
-            "rd={rd},addr={addr}: bus not quiescent after emit;mem;absorb");
+        assert_eq!(
+            bus, [0u8; NUM_BUS_FIELDS],
+            "rd={rd},addr={addr}: bus not quiescent after emit;mem;absorb"
+        );
 
         // All other registers must be unchanged
         for i in 0..8 {
             if i != rd as usize {
-                assert_eq!(result.regs[i], 0,
-                    "rd={rd},addr={addr}: reg[{i}] corrupted");
+                assert_eq!(result.regs[i], 0, "rd={rd},addr={addr}: reg[{i}] corrupted");
             }
         }
         // All other mem words must be unchanged
         for i in 0..MEM_WORDS {
             if i != addr as usize {
-                assert_eq!(result.mem[i], 0,
-                    "rd={rd},addr={addr}: mem[{i}] corrupted");
+                assert_eq!(result.mem[i], 0, "rd={rd},addr={addr}: mem[{i}] corrupted");
             }
         }
     }
-    eprintln!("emit;mem;absorb correctness: {} cases passed", test_cases.len());
+    eprintln!(
+        "emit;mem;absorb correctness: {} cases passed",
+        test_cases.len()
+    );
 }
 
 #[test]
@@ -869,11 +890,8 @@ fn stage1b_emit_mem_absorb_self_inverse() {
 
     let fuel_budget = 4_000_000_000u64;
 
-    let test_cases: Vec<(u8, u8, u8, u8)> = vec![
-        (0, 0, 0x42, 0xAB),
-        (3, 2, 0x55, 0xAA),
-        (7, 3, 0xFF, 0x01),
-    ];
+    let test_cases: Vec<(u8, u8, u8, u8)> =
+        vec![(0, 0, 0x42, 0xAB), (3, 2, 0x55, 0xAA), (7, 3, 0xFF, 0x01)];
 
     for &(rd, addr, reg_val, mem_val) in &test_cases {
         let ir = mexch_ir(rd as u32, addr as u32);
@@ -894,12 +912,19 @@ fn stage1b_emit_mem_absorb_self_inverse() {
             .unwrap_or_else(|e| panic!("ema^2 failed: {e:?}"));
 
         let result = decode_system(&output);
-        assert_eq!(result.regs[rd as usize], reg_val,
-            "self-inverse: reg[rd] not restored");
-        assert_eq!(result.mem[addr as usize], mem_val,
-            "self-inverse: mem[addr] not restored");
+        assert_eq!(
+            result.regs[rd as usize], reg_val,
+            "self-inverse: reg[rd] not restored"
+        );
+        assert_eq!(
+            result.mem[addr as usize], mem_val,
+            "self-inverse: mem[addr] not restored"
+        );
     }
-    eprintln!("emit;mem;absorb self-inverse: {} cases passed", test_cases.len());
+    eprintln!(
+        "emit;mem;absorb self-inverse: {} cases passed",
+        test_cases.len()
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1060,14 +1085,20 @@ fn stage1b_emit_mem_absorb_identity_on_non_mexch() {
             .unwrap_or_else(|e| panic!("ema failed on IR={ir_word:#06x}: {e:?}"));
 
         let result = decode_system(&output);
-        assert_eq!(result.regs, state.regs,
-            "non-MEXCH IR={ir_word:#06x}: regs corrupted by ema");
-        assert_eq!(result.mem, state.mem,
-            "non-MEXCH IR={ir_word:#06x}: mem corrupted by ema");
+        assert_eq!(
+            result.regs, state.regs,
+            "non-MEXCH IR={ir_word:#06x}: regs corrupted by ema"
+        );
+        assert_eq!(
+            result.mem, state.mem,
+            "non-MEXCH IR={ir_word:#06x}: mem corrupted by ema"
+        );
 
         let bus = decode_bus(&output);
-        assert_eq!(bus, [0u8; NUM_BUS_FIELDS],
-            "non-MEXCH IR={ir_word:#06x}: bus not quiescent");
+        assert_eq!(
+            bus, [0u8; NUM_BUS_FIELDS],
+            "non-MEXCH IR={ir_word:#06x}: bus not quiescent"
+        );
     }
     eprintln!(
         "emit;mem;absorb identity on non-MEXCH: {} samples passed",

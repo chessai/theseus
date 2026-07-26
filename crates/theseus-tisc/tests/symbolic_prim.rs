@@ -73,10 +73,7 @@ fn masked_accum_table_prim(w: u8) -> PrimDef {
         for k in 0..card as u8 {
             for e in 0..card as u8 {
                 let inp = Value::pair(u8_leaf(a), Value::pair(u8_leaf(k), u8_leaf(e)));
-                let out = Value::pair(
-                    u8_leaf(a ^ (k & e)),
-                    Value::pair(u8_leaf(k), u8_leaf(e)),
-                );
+                let out = Value::pair(u8_leaf(a ^ (k & e)), Value::pair(u8_leaf(k), u8_leaf(e)));
                 fwd.insert(inp, out);
             }
         }
@@ -126,10 +123,8 @@ fn i2_eval_via_spec_matches_table_flat4() {
     assert_eq!(domain.len(), 4096); // 16^3
 
     for v in &domain {
-        let table_out = theseus_eval::eval(&table_iso, v.clone(), &mut 1000)
-            .expect("table eval");
-        let spec_out = theseus_eval::eval(&sym_iso, v.clone(), &mut 1000)
-            .expect("spec eval");
+        let table_out = theseus_eval::eval(&table_iso, v.clone(), &mut 1000).expect("table eval");
+        let spec_out = theseus_eval::eval(&sym_iso, v.clone(), &mut 1000).expect("spec eval");
         assert_eq!(
             spec_out, table_out,
             "oracle divergence (eval-via-spec vs eval-via-table)"
@@ -147,7 +142,10 @@ fn adjoint_involution_symbolic_prim() {
     def.symbolic = Some(spec);
 
     let double = def.adjoint().adjoint();
-    assert_eq!(double, def, "adjoint∘adjoint must be identity on symbolic prims");
+    assert_eq!(
+        double, def,
+        "adjoint∘adjoint must be identity on symbolic prims"
+    );
 }
 
 // ── admit: symbolic-only → SymbolicOnly ─────────────────────────────
@@ -190,8 +188,7 @@ fn admit_symbolic_rejects_non_inverse() {
     let mut spec = masked_accum_spec(w);
     // forward: acc ^ (key & elem), backward (corrupted): acc ^ (key | elem)
     for b in 0..ww {
-        spec.backward.leaves[0][b] =
-            BvExpr::var(0, b).xor(BvExpr::var(1, b).or(BvExpr::var(2, b)));
+        spec.backward.leaves[0][b] = BvExpr::var(0, b).xor(BvExpr::var(1, b).or(BvExpr::var(2, b)));
     }
     let err = bveq::admit_symbolic(&spec);
     assert!(err.is_err(), "corrupted backward must be rejected");
@@ -244,7 +241,14 @@ fn recognize_prim_selects_ccnot_for_symbolic_only() {
     // The selected body must be [Ccnot{rd:0, rs:1, rt:2}].
     assert_eq!(body.len(), 1, "expected single Ccnot instruction");
     assert!(
-        matches!(body[0], Instr::Ccnot { rd: 0, rs: 1, rt: 2 }),
+        matches!(
+            body[0],
+            Instr::Ccnot {
+                rd: 0,
+                rs: 1,
+                rt: 2
+            }
+        ),
         "expected Ccnot{{rd:0, rs:1, rt:2}}, got {:?}",
         body[0]
     );
@@ -272,7 +276,11 @@ fn bveq_verify_emission_rejects_empty_table() {
     };
 
     // A dummy body — the guard should reject BEFORE reaching symbolic_exec.
-    let body = [Instr::Ccnot { rd: 0, rs: 1, rt: 2 }];
+    let body = [Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 2,
+    }];
     let operand_regs = &[0u8, 1, 2];
 
     let result = theseus_tisc::compile::bveq_verify_emission(&body, &def, operand_regs);
@@ -292,8 +300,7 @@ fn admit_rejects_spec_table_mismatch() {
     // Corrupt the forward spec (OR instead of AND).
     let ww = w as usize;
     for b in 0..ww {
-        spec.forward.leaves[0][b] =
-            BvExpr::var(0, b).xor(BvExpr::var(1, b).or(BvExpr::var(2, b)));
+        spec.forward.leaves[0][b] = BvExpr::var(0, b).xor(BvExpr::var(1, b).or(BvExpr::var(2, b)));
     }
     def.symbolic = Some(spec);
 
@@ -358,8 +365,7 @@ fn f1_control_corrupted_spec_detected_by_eval() {
     // Corrupt forward leaf 0: use OR instead of AND.
     let ww = w as usize;
     for b in 0..ww {
-        spec.forward.leaves[0][b] =
-            BvExpr::var(0, b).xor(BvExpr::var(1, b).or(BvExpr::var(2, b)));
+        spec.forward.leaves[0][b] = BvExpr::var(0, b).xor(BvExpr::var(1, b).or(BvExpr::var(2, b)));
     }
     let table_def = masked_accum_table_prim(w);
     let sym_def = PrimDef {
@@ -378,10 +384,8 @@ fn f1_control_corrupted_spec_detected_by_eval() {
     // There must exist at least one input where the corrupted spec diverges.
     // acc=1, key=2, elem=3: AND gives 2, OR gives 3 → different XOR results.
     let input = Value::pair(u8_leaf(1), Value::pair(u8_leaf(2), u8_leaf(3)));
-    let table_out = theseus_eval::eval(&table_iso, input.clone(), &mut 1000)
-        .expect("table eval");
-    let spec_out = theseus_eval::eval(&sym_iso, input, &mut 1000)
-        .expect("spec eval");
+    let table_out = theseus_eval::eval(&table_iso, input.clone(), &mut 1000).expect("table eval");
+    let spec_out = theseus_eval::eval(&sym_iso, input, &mut 1000).expect("spec eval");
     assert_ne!(
         spec_out, table_out,
         "F1 CONTROL: corrupted spec MUST diverge from table — \
@@ -539,8 +543,7 @@ fn f4_corrupted_backward_spec_rejected() {
     // Corrupt the backward spec (OR instead of AND).
     let ww = w as usize;
     for b in 0..ww {
-        spec.backward.leaves[0][b] =
-            BvExpr::var(0, b).xor(BvExpr::var(1, b).or(BvExpr::var(2, b)));
+        spec.backward.leaves[0][b] = BvExpr::var(0, b).xor(BvExpr::var(1, b).or(BvExpr::var(2, b)));
     }
     let mut def = masked_accum_table_prim(w);
     def.symbolic = Some(spec);
@@ -610,10 +613,7 @@ fn r1_bit_index_out_of_range_rejected() {
     let def = masked_accum_table_prim(w);
 
     let err = spec.validate_against(&def.input_ty, &def.output_ty);
-    assert!(
-        err.is_err(),
-        "R1: bit index >= width must be rejected"
-    );
+    assert!(err.is_err(), "R1: bit index >= width must be rejected");
     let msg = err.unwrap_err();
     assert!(
         msg.contains("bit index 8"),
@@ -698,7 +698,14 @@ fn r3_partial_table_spec_recognize_prim_fast() {
     );
     assert_eq!(body.len(), 1);
     assert!(
-        matches!(body[0], Instr::Ccnot { rd: 0, rs: 1, rt: 2 }),
+        matches!(
+            body[0],
+            Instr::Ccnot {
+                rd: 0,
+                rs: 1,
+                rt: 2
+            }
+        ),
         "R3: expected Ccnot, got {:?}",
         body[0]
     );
@@ -776,8 +783,7 @@ fn payoff_flat8_masked_accum_recognized_as_ccnot() {
     for (acc, key, elem) in test_inputs {
         // Eval-via-spec (the ground truth for symbolic-only prims).
         let input = Value::pair(u8_leaf(acc), Value::pair(u8_leaf(key), u8_leaf(elem)));
-        let spec_out = theseus_eval::eval(&sym_iso, input, &mut 1000)
-            .expect("eval-via-spec");
+        let spec_out = theseus_eval::eval(&sym_iso, input, &mut 1000).expect("eval-via-spec");
 
         // Exec the emitted Ccnot directly.
         let mut regs = [0u8; 8];
@@ -934,7 +940,14 @@ fn selection_non_identity_register_mapping() {
         .expect("scrambled-home masked-accum must still be recognized");
     assert_eq!(body.len(), 1, "expected single instr, got {body:?}");
     assert!(
-        matches!(body[0], Instr::Ccnot { rd: 4, rs: 2, rt: 7 }),
+        matches!(
+            body[0],
+            Instr::Ccnot {
+                rd: 4,
+                rs: 2,
+                rt: 7
+            }
+        ),
         "expected Ccnot{{rd:4, rs:2, rt:7}}, got {:?}",
         body[0]
     );

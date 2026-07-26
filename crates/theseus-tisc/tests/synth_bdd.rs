@@ -20,9 +20,7 @@
 //! Plus `assert_all_encode` on every emitted instruction.
 
 use theseus_tisc::asm::{encode, Instr};
-use theseus_tisc::bveq::{
-    equiv, expr_to_bdd, symbolic_exec, BvExpr, RegTransfer, VarMap, BITS,
-};
+use theseus_tisc::bveq::{equiv, expr_to_bdd, symbolic_exec, BvExpr, RegTransfer, VarMap, BITS};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{
     transcribe_bdd_bennett, transcribe_bennett_general, BddHelpers, HelperBank,
@@ -137,8 +135,13 @@ fn bdd_bennett_symbolic_dryrun(
     let carrier_ops: Vec<u8> = (0..n as u8).collect();
     let ancilla_ops: Vec<u8> = (n as u8..2 * n as u8).collect();
     let temp = (2 * n) as u8;
-    let nodes: Vec<u8> = ((2 * n + 1)..(2 * n + 1 + n_nodes)).map(|x| x as u8).collect();
-    let helpers = BddHelpers { temp, nodes: &nodes };
+    let nodes: Vec<u8> = ((2 * n + 1)..(2 * n + 1 + n_nodes))
+        .map(|x| x as u8)
+        .collect();
+    let helpers = BddHelpers {
+        temp,
+        nodes: &nodes,
+    };
     let body = transcribe_bdd_bennett(fwd, bwd, &carrier_ops, &ancilla_ops, helpers)
         .expect("transcribe_bdd_bennett");
     assert_all_encode(&body);
@@ -205,7 +208,11 @@ fn bdd_bennett_exec_netzero(
         }
         let want = apply_fwd(&sample);
         for (i, &op) in carrier_ops.iter().enumerate() {
-            assert_eq!(st.operand_get(op), want[i], "carrier op {op} wrong for {sample:?}");
+            assert_eq!(
+                st.operand_get(op),
+                want[i],
+                "carrier op {op} wrong for {sample:?}"
+            );
         }
         for &h in &all_helpers {
             assert_eq!(
@@ -253,7 +260,13 @@ fn bdd_swap_exec_netzero_scratch() {
         &[10, 11],
         12,
         &[13],
-        [vec![0x00, 0x00], vec![0xA5, 0x3C], vec![0xFF, 0x01], vec![0x12, 0x34]].into_iter(),
+        [
+            vec![0x00, 0x00],
+            vec![0xA5, 0x3C],
+            vec![0xFF, 0x01],
+            vec![0x12, 0x34],
+        ]
+        .into_iter(),
         |x| vec![x[1], x[0]],
     );
     eprintln!("[REPORT swap-scratch] gate_count={g} (scratch helpers, Xchg swap)");
@@ -354,7 +367,10 @@ fn bdd_nonlinear_report_and_exhaustive_exec() {
     // Direct compactness comparison: the SAME permutation through the A-6.2 ANF
     // path (`transcribe_bennett_general`). Its length is set by the ANF (a
     // degree-2 monomial in EVERY output bit) rather than the shared ROBDD.
-    let anf_helpers = HelperBank { mask: 5, temps: &[6] }; // degree-2 ⇒ 1 temp
+    let anf_helpers = HelperBank {
+        mask: 5,
+        temps: &[6],
+    }; // degree-2 ⇒ 1 temp
     let anf_body = transcribe_bennett_general(&fwd, &bwd, &[0, 1], &[2, 3], anf_helpers)
         .expect("transcribe_bennett_general");
     let anf_gates = anf_body.len();
@@ -387,9 +403,11 @@ fn bdd_wrong_backward_fails_symbolic() {
     let ancilla_ops: Vec<u8> = (n as u8..2 * n as u8).collect();
     let temp = (2 * n) as u8;
     let nodes: Vec<u8> = ((2 * n + 1)..(2 * n + 1 + nc)).map(|x| x as u8).collect();
-    let helpers = BddHelpers { temp, nodes: &nodes };
-    let body =
-        transcribe_bdd_bennett(&fwd, &wrong, &carrier_ops, &ancilla_ops, helpers).unwrap();
+    let helpers = BddHelpers {
+        temp,
+        nodes: &nodes,
+    };
+    let body = transcribe_bdd_bennett(&fwd, &wrong, &carrier_ops, &ancilla_ops, helpers).unwrap();
     let got = symbolic_exec(&body).unwrap();
     let mut zero_regs: Vec<usize> = (n..2 * n).collect();
     zero_regs.push(temp as usize);
@@ -424,9 +442,11 @@ fn bdd_wrong_backward_breaks_exec_netzero() {
     let ancilla_ops = [2u8, 3];
     let temp = 4u8;
     let nodes = [10u8, 11, 12, 13, 14];
-    let helpers = BddHelpers { temp, nodes: &nodes };
-    let body =
-        transcribe_bdd_bennett(&fwd, &wrong, &carrier_ops, &ancilla_ops, helpers).unwrap();
+    let helpers = BddHelpers {
+        temp,
+        nodes: &nodes,
+    };
+    let body = transcribe_bdd_bennett(&fwd, &wrong, &carrier_ops, &ancilla_ops, helpers).unwrap();
     let mut st = zero_state();
     st.operand_set(0, 0x0F);
     st.operand_set(1, 0x03); // control fires ⇒ carriers change
@@ -434,7 +454,10 @@ fn bdd_wrong_backward_breaks_exec_netzero() {
         exec_instr(instr, &mut st);
     }
     let dirty = [2u8, 3].iter().any(|&a| st.operand_get(a) != 0);
-    assert!(dirty, "a wrong backward must leave the ancilla dirty (exec net-zero teeth)");
+    assert!(
+        dirty,
+        "a wrong backward must leave the ancilla dirty (exec net-zero teeth)"
+    );
 }
 
 // ── Guard regressions (carry MAJOR-1/2 from transcribe_bennett) ───────
@@ -446,15 +469,24 @@ fn bdd_bennett_carrier_reads_noncarrier_errs() {
         _ => v(r, b),
     });
     let nodes = [10u8, 11, 12, 13, 14];
-    let helpers = BddHelpers { temp: 4, nodes: &nodes };
+    let helpers = BddHelpers {
+        temp: 4,
+        nodes: &nodes,
+    };
     let res = transcribe_bdd_bennett(&cnot, &cnot, &[0, 1], &[2, 3], helpers);
-    assert!(res.is_err(), "carrier reading a non-carrier must Err, got {res:?}");
+    assert!(
+        res.is_err(),
+        "carrier reading a non-carrier must Err, got {res:?}"
+    );
 }
 
 #[test]
 fn bdd_bennett_duplicate_ancilla_errs() {
     let nodes = [10u8, 11];
-    let helpers = BddHelpers { temp: 4, nodes: &nodes };
+    let helpers = BddHelpers {
+        temp: 4,
+        nodes: &nodes,
+    };
     let res = transcribe_bdd_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[3, 3], helpers);
     assert!(res.is_err(), "duplicate ancilla must Err, got {res:?}");
 }
@@ -462,33 +494,62 @@ fn bdd_bennett_duplicate_ancilla_errs() {
 #[test]
 fn bdd_bennett_helper_aliases_carrier_errs() {
     let nodes = [10u8, 11];
-    let helpers = BddHelpers { temp: 0, nodes: &nodes }; // temp aliases carrier r0
+    let helpers = BddHelpers {
+        temp: 0,
+        nodes: &nodes,
+    }; // temp aliases carrier r0
     let res = transcribe_bdd_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[2, 3], helpers);
-    assert!(res.is_err(), "helper aliasing a carrier must Err, got {res:?}");
+    assert!(
+        res.is_err(),
+        "helper aliasing a carrier must Err, got {res:?}"
+    );
 }
 
 #[test]
 fn bdd_bennett_node_aliases_temp_errs() {
     let nodes = [4u8, 11]; // node word 4 == temp
-    let helpers = BddHelpers { temp: 4, nodes: &nodes };
+    let helpers = BddHelpers {
+        temp: 4,
+        nodes: &nodes,
+    };
     let res = transcribe_bdd_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[2, 3], helpers);
-    assert!(res.is_err(), "node word aliasing temp must Err, got {res:?}");
+    assert!(
+        res.is_err(),
+        "node word aliasing temp must Err, got {res:?}"
+    );
 }
 
 #[test]
 fn bdd_bennett_reserved_helper_errs() {
     let nodes = [8u8, 9]; // s0/s1 decoder-reserved
-    let helpers = BddHelpers { temp: 4, nodes: &nodes };
+    let helpers = BddHelpers {
+        temp: 4,
+        nodes: &nodes,
+    };
     let res = transcribe_bdd_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[2, 3], helpers);
-    assert!(res.is_err(), "reserved helper (s0/s1) must Err, got {res:?}");
+    assert!(
+        res.is_err(),
+        "reserved helper (s0/s1) must Err, got {res:?}"
+    );
 }
 
 #[test]
 fn bdd_bennett_node_bank_too_small_errs() {
     // Nonlinear needs 5 node words; give 0 → must Err at synth.
     let nodes: [u8; 0] = [];
-    let helpers = BddHelpers { temp: 4, nodes: &nodes };
-    let res =
-        transcribe_bdd_bennett(&nonlinear_fwd(), &nonlinear_fwd(), &[0, 1], &[2, 3], helpers);
-    assert!(res.is_err(), "an undersized node bank must Err, got {res:?}");
+    let helpers = BddHelpers {
+        temp: 4,
+        nodes: &nodes,
+    };
+    let res = transcribe_bdd_bennett(
+        &nonlinear_fwd(),
+        &nonlinear_fwd(),
+        &[0, 1],
+        &[2, 3],
+        helpers,
+    );
+    assert!(
+        res.is_err(),
+        "an undersized node bank must Err, got {res:?}"
+    );
 }

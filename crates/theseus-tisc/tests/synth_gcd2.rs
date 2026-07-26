@@ -46,7 +46,11 @@ fn gcd2_hist_bytes(bb: &mut [u8]) {
         [0, x, y, 2 * h + s] // A4: normalize-subtract
     } else if ((a, b) == (2, 1) || (a, b) == (1, 2)) && h >= 4 {
         let (x, y) = if (a, b) == (2, 1) {
-            if h < 6 { (1, 3) } else { (3, 1) }
+            if h < 6 {
+                (1, 3)
+            } else {
+                (3, 1)
+            }
         } else if h < 6 {
             (2, 3)
         } else {
@@ -290,11 +294,19 @@ fn general_emitter_small_map_netzero() {
     let dst: Vec<u8> = vec![3, 4, 5, 3, 4, 5, 6, 7];
     let src: Vec<u8> = (0..8u8).collect();
     let temps = [11u8];
-    let helpers = HelperBank { mask: 10, temps: &temps };
+    let helpers = HelperBank {
+        mask: 10,
+        temps: &temps,
+    };
     let body = transcribe_into_general(&fwd, &dst, &src, helpers).expect("emit");
     // exec check: for a few concrete states, ancilla 3,4,5 = P(regs 0,1,2), and
     // helpers 6,7 net-zero.
-    for &(r0, r1, r2) in &[(0u8, 0u8, 0u8), (0xFF, 0x0F, 0xF0), (0xAA, 0xFF, 0xFF), (0x12, 0x34, 0x56)] {
+    for &(r0, r1, r2) in &[
+        (0u8, 0u8, 0u8),
+        (0xFF, 0x0F, 0xF0),
+        (0xAA, 0xFF, 0xFF),
+        (0x12, 0x34, 0x56),
+    ] {
         let mut st = zero_state();
         st.operand_set(0, r0);
         st.operand_set(1, r1);
@@ -302,7 +314,11 @@ fn general_emitter_small_map_netzero() {
         for &ins in &body {
             exec_instr(ins, &mut st);
         }
-        assert_eq!(st.operand_get(3), r0 ^ (r1 & r2), "reg3 wrong for {r0:x},{r1:x},{r2:x}");
+        assert_eq!(
+            st.operand_get(3),
+            r0 ^ (r1 & r2),
+            "reg3 wrong for {r0:x},{r1:x},{r2:x}"
+        );
         assert_eq!(st.operand_get(4), r1);
         assert_eq!(st.operand_get(5), r2);
         assert_eq!(st.operand_get(10), 0, "mask leak");
@@ -392,7 +408,10 @@ fn gcd2_bennett_exec_verify_256_and_report() {
     // this is the budget wall the design predicted, now quantified.
     //   mask = r4 ; temps = r5,r6,r7, s6(14), s7(15), s0(8).
     let temps = [5u8, 6u8, 7u8, 14u8, 15u8, 8u8];
-    let helpers = HelperBank { mask: 4, temps: &temps };
+    let helpers = HelperBank {
+        mask: 4,
+        temps: &temps,
+    };
     let body = transcribe_bennett_general(&fwd, &bwd, &PHYS, &ancilla, helpers)
         .expect("transcribe_bennett_general of the ANF gcd2 specs");
 
@@ -401,7 +420,14 @@ fn gcd2_bennett_exec_verify_256_and_report() {
     eprintln!("=== A-6.2 GCD synthesis (ANF → Bennett) ===");
     eprintln!("body.len() = {len}");
     eprintln!("B = 4 + 5*(len+10) = {b_budget}");
-    eprintln!("(B vs 256: {})", if b_budget > 256 { "EXCEEDS 256 (needs widen-PC / A-6.4)" } else { "fits in 256" });
+    eprintln!(
+        "(B vs 256: {})",
+        if b_budget > 256 {
+            "EXCEEDS 256 (needs widen-PC / A-6.4)"
+        } else {
+            "fits in 256"
+        }
+    );
 
     let mut pass = 0usize;
     for s in canonical_states() {
@@ -481,7 +507,10 @@ fn gcd2_body_encode_only_reserved_scratch_wall() {
     let bwd = table_to_regtransfer(inv, &SPEC_LEAVES, &WIDTHS);
     let ancilla: [u8; 4] = [10, 11, 12, 13];
     let temps = [5u8, 6u8, 7u8, 14u8, 15u8, 8u8]; // s0 (op 8) is the reserved borrow
-    let helpers = HelperBank { mask: 4, temps: &temps };
+    let helpers = HelperBank {
+        mask: 4,
+        temps: &temps,
+    };
     let body = transcribe_bennett_general(&fwd, &bwd, &PHYS, &ancilla, helpers)
         .expect("transcribe_bennett_general");
 
@@ -491,9 +520,9 @@ fn gcd2_body_encode_only_reserved_scratch_wall() {
         match encode(ins) {
             Ok(_) => ok += 1,
             Err(ref e) if is_reserved_scratch_only(e) => reserved += 1,
-            Err(e) => panic!(
-                "gcd2 body instr {i} ({ins:?}) fails encode for a NON-budget reason: {e}"
-            ),
+            Err(e) => {
+                panic!("gcd2 body instr {i} ({ins:?}) fails encode for a NON-budget reason: {e}")
+            }
         }
     }
     // The borrow is real: at least one reserved-s0 failure must exist (else the
@@ -512,7 +541,11 @@ fn gcd2_body_encode_only_reserved_scratch_wall() {
 /// teeth for the register/Bennett path where NO reserved borrow is allowed).
 #[test]
 fn encode_check_rejects_nondistinct_ccnot() {
-    let bad = Instr::Ccnot { rd: 0, rs: 0, rt: 2 }; // non-distinct → ISA-illegal
+    let bad = Instr::Ccnot {
+        rd: 0,
+        rs: 0,
+        rt: 2,
+    }; // non-distinct → ISA-illegal
     assert!(
         encode(bad).is_err(),
         "encode must reject a non-distinct Ccnot (MAJOR-3 encode-check teeth)"

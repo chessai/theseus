@@ -84,7 +84,8 @@ fn assert_ancilla_clean(name: &str, iso: &Iso, reference: impl Fn(&[bool]) -> Ve
 
         // Check data correctness.
         assert_eq!(
-            &out[..w_out], &expected_data[..],
+            &out[..w_out],
+            &expected_data[..],
             "{name}: data mismatch on input {x:#06x}"
         );
 
@@ -98,9 +99,7 @@ fn assert_ancilla_clean(name: &str, iso: &Iso, reference: impl Fn(&[bool]) -> Ve
         }
     }
 
-    eprintln!(
-        "{name}: ancilla-clean on all {domain_size} inputs, {n_anc} ancilla lines"
-    );
+    eprintln!("{name}: ancilla-clean on all {domain_size} inputs, {n_anc} ancilla lines");
     n_anc
 }
 
@@ -122,26 +121,21 @@ fn build_mexch_prim(n: usize) -> Iso {
     let total_bits = n_ctrl + 1 + n;
     let ty = flat(total_bits);
 
-    let def = prim_from_bits(
-        &format!("mexch_n{n}"),
-        ty.clone(),
-        ty,
-        |bits| {
-            let mut out = bits.to_vec();
-            let mut addr = 0usize;
-            for (i, &b) in bits.iter().take(n_ctrl).enumerate() {
-                if b {
-                    addr |= 1 << i;
-                }
+    let def = prim_from_bits(&format!("mexch_n{n}"), ty.clone(), ty, |bits| {
+        let mut out = bits.to_vec();
+        let mut addr = 0usize;
+        for (i, &b) in bits.iter().take(n_ctrl).enumerate() {
+            if b {
+                addr |= 1 << i;
             }
-            let tgt = n_ctrl;       // target bit index
-            let mem = |k: usize| n_ctrl + 1 + k; // mem[k] bit index
-            if addr < n {
-                out.swap(tgt, mem(addr));
-            }
-            out
-        },
-    )
+        }
+        let tgt = n_ctrl; // target bit index
+        let mem = |k: usize| n_ctrl + 1 + k; // mem[k] bit index
+        if addr < n {
+            out.swap(tgt, mem(addr));
+        }
+        out
+    })
     .expect("prim creation");
 
     Iso::Prim(Box::new(def))
@@ -206,7 +200,8 @@ fn mexch_instr_iso_is_garbage_free() {
     let iso = theseus_tisc::instr::mexch(0, 0);
     let (net, inits) = lower_iso_with_ancillas(&iso).expect("mexch lowers");
     assert_eq!(
-        inits.len(), 0,
+        inits.len(),
+        0,
         "mexch instr iso should have zero ancillas (pure swap)"
     );
     assert_eq!(net.validate(), Ok(()));

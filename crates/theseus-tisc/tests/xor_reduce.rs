@@ -18,9 +18,8 @@ use theseus_core::{Iso, Type, Value};
 
 use theseus_tisc::asm::Instr;
 use theseus_tisc::compile::{
-    compile_with_metadata_resident, marshal_resident, memexch_prim,
-    run_on_cpu_fast_resident, run_on_cpu_resident, unmarshal_resident,
-    value_to_leaf_bytes_pub, value_from_leaf_bytes_pub,
+    compile_with_metadata_resident, marshal_resident, memexch_prim, run_on_cpu_fast_resident,
+    run_on_cpu_resident, unmarshal_resident, value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
 };
 
 // ── Type helpers ────────────────────────────────────────────────────
@@ -32,7 +31,10 @@ fn bit() -> Type {
 /// `(idx:Bit) × (arr0:Bit) × (arr1:Bit) × 1`
 fn idx_arr_ty() -> Type {
     let b = bit();
-    Type::prod(b.clone(), Type::prod(b.clone(), Type::prod(b.clone(), Type::One)))
+    Type::prod(
+        b.clone(),
+        Type::prod(b.clone(), Type::prod(b.clone(), Type::One)),
+    )
 }
 
 /// `(arr0:Bit) × (arr1:Bit) × 1`
@@ -48,7 +50,10 @@ fn body_ty() -> Type {
         b.clone(),
         Type::prod(
             b.clone(),
-            Type::prod(b.clone(), Type::prod(b.clone(), Type::prod(b.clone(), Type::One))),
+            Type::prod(
+                b.clone(),
+                Type::prod(b.clone(), Type::prod(b.clone(), Type::One)),
+            ),
         ),
     )
 }
@@ -149,7 +154,10 @@ fn xor_reduce_body() -> Iso {
     // (id_{acc,data} ⊗ succ_idx ⊗ id_arr): on (acc, (data, (idx, arr)))
     let succ_part = Iso::times(
         Iso::Id(b.clone()),
-        Iso::times(Iso::Id(b.clone()), Iso::times(succ_idx(), Iso::Id(arr_ty()))),
+        Iso::times(
+            Iso::Id(b.clone()),
+            Iso::times(succ_idx(), Iso::Id(arr_ty())),
+        ),
     );
 
     // Compose all:
@@ -253,7 +261,14 @@ fn decompose_output(v: &Value) -> (usize, u8, u8, u8, u8, u8) {
             _ => panic!("not a bit"),
         }
     };
-    (k, to_bit(acc_v), to_bit(data_v), to_bit(idx_v), to_bit(arr0_v), to_bit(arr1_v))
+    (
+        k,
+        to_bit(acc_v),
+        to_bit(data_v),
+        to_bit(idx_v),
+        to_bit(arr0_v),
+        to_bit(arr1_v),
+    )
 }
 
 // ── T1: emission contains exactly 2·(d-1)=4 MexchReg and d-1=2 Xor ──
@@ -261,8 +276,7 @@ fn decompose_output(v: &Value) -> (usize, u8, u8, u8, u8, u8) {
 #[test]
 fn t1_emission_counts() {
     let iso = xor_reduce_iso(3);
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=3");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=3");
     let mexchr_count = lowered
         .instrs
         .iter()
@@ -312,12 +326,8 @@ fn t2_fast_oracle_whole_domain() {
 
     for input in &domain {
         let expected = eval_xor_reduce(d, input);
-        let got =
-            run_on_cpu_fast_resident(&iso, input, 2).expect("run_on_cpu_fast_resident");
-        assert_eq!(
-            got, expected,
-            "fast oracle mismatch for input {input:?}"
-        );
+        let got = run_on_cpu_fast_resident(&iso, input, 2).expect("run_on_cpu_fast_resident");
+        assert_eq!(got, expected, "fast oracle mismatch for input {input:?}");
     }
 }
 
@@ -436,10 +446,7 @@ fn t4_reduce_semantics() {
                         "§8.4: acc_out = acc0 ⊕ arr[1] (arr[0] XOR-ed twice cancels)"
                     );
                     assert_eq!(data_out, data, "data preserved");
-                    assert_eq!(
-                        idx_out, 1,
-                        "idx_out = idx0 ⊕ (k mod 2) = 0⊕1 = 1"
-                    );
+                    assert_eq!(idx_out, 1, "idx_out = idx0 ⊕ (k mod 2) = 0⊕1 = 1");
                     assert_eq!(a0_out, arr0, "arr[0] preserved");
                     assert_eq!(a1_out, arr1, "arr[1] preserved");
                 }
@@ -453,8 +460,7 @@ fn t4_reduce_semantics() {
 #[test]
 fn t5_varying_address_exact_shape() {
     let iso = xor_reduce_iso(3);
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=3");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=3");
     let instrs = &lowered.instrs;
 
     // Collect all MexchReg positions.
@@ -492,7 +498,10 @@ fn t5_varying_address_exact_shape() {
             "copy {copy_idx}: both MexchReg must share ra, got ra1={ra1} ra2={ra2}"
         );
         // rd ≠ ra (aliasing rejected).
-        assert_ne!(rd1, ra1, "copy {copy_idx}: data reg must differ from address reg");
+        assert_ne!(
+            rd1, ra1,
+            "copy {copy_idx}: data reg must differ from address reg"
+        );
 
         let d_r = rd1; // data home register
         let ra = ra1; // address register (idx home)
@@ -514,7 +523,10 @@ fn t5_varying_address_exact_shape() {
                 if r1 == d_r {
                     (r2, r1)
                 } else {
-                    assert_eq!(r2, d_r, "copy {copy_idx}: Exch must involve data reg d_r={d_r}");
+                    assert_eq!(
+                        r2, d_r,
+                        "copy {copy_idx}: Exch must involve data reg d_r={d_r}"
+                    );
                     (r1, r2)
                 }
             }
@@ -529,8 +541,14 @@ fn t5_varying_address_exact_shape() {
         // reg (ra) and the data reg (d_r). Without this, T5 alone would accept an
         // acc-untouched "xor idx into data" slice (a_r==ra) — compositionally killed by
         // T2/T4, but pin it here too so T5 has teeth in isolation.
-        assert_ne!(a_r, ra, "copy {copy_idx}: acc reg a_r must differ from address reg ra");
-        assert_ne!(a_r, d_r, "copy {copy_idx}: acc reg a_r must differ from data reg d_r");
+        assert_ne!(
+            a_r, ra,
+            "copy {copy_idx}: acc reg a_r must differ from address reg ra"
+        );
+        assert_ne!(
+            a_r, d_r,
+            "copy {copy_idx}: acc reg a_r must differ from data reg d_r"
+        );
 
         // instrs[pos1+2] = Xor{rd: d_r, rs: a_r}  (F3-1: Xor writes DATA's reg, NOT acc's)
         assert_eq!(
@@ -541,7 +559,8 @@ fn t5_varying_address_exact_shape() {
 
         // instrs[pos1+3] = Exch{a_r, d_r} (same as pos1+1)
         assert_eq!(
-            instrs[pos1 + 3], instrs[pos1 + 1],
+            instrs[pos1 + 3],
+            instrs[pos1 + 1],
             "copy {copy_idx}: second Exch must match first"
         );
 
@@ -569,8 +588,7 @@ fn t6a_trace_histogram() {
 
     let d = 3usize;
     let iso = xor_reduce_iso(d);
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=3");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=3");
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
 
     // B = wcet for d=3 iter (predicted: 24).
@@ -598,8 +616,14 @@ fn t6a_trace_histogram() {
     }
 
     // Strictly decreasing: 50% > 25% > 0%.
-    assert!((park_taxes[0] - 0.5).abs() < 1e-10, "park_tax(0) must be 50%");
-    assert!((park_taxes[1] - 0.25).abs() < 1e-10, "park_tax(1) must be 25%");
+    assert!(
+        (park_taxes[0] - 0.5).abs() < 1e-10,
+        "park_tax(0) must be 50%"
+    );
+    assert!(
+        (park_taxes[1] - 0.25).abs() < 1e-10,
+        "park_tax(1) must be 25%"
+    );
     assert!(park_taxes[2].abs() < 1e-10, "park_tax(2) must be 0%");
     for i in 0..2 {
         assert!(
@@ -617,16 +641,15 @@ fn t6a_trace_histogram() {
 #[test]
 #[ignore]
 fn t6b_park_tax_pricing() {
-    use theseus_tisc::energy::rom_program_energy_resident;
     use theseus_spice::chardb::rung0_measured;
+    use theseus_tisc::energy::rom_program_energy_resident;
 
     let d = 3usize;
     let iso = xor_reduce_iso(d);
     let db = rung0_measured();
     let t_ramp = 1e-7;
 
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=3");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=3");
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
     let step_iso = theseus_tisc::step::step(&rom);
     let step_net = theseus_netlist::lower_iso(&step_iso).expect("lower step");
@@ -640,7 +663,10 @@ fn t6b_park_tax_pricing() {
             .expect("rom_program_energy_resident");
         assert_eq!(pe.steps_b, b, "steps_b must equal B={b}");
         assert_eq!(pe.steps_t, expected_t(k), "T(k={k}) must match the trace");
-        assert!(pe.step_j > 0.0, "step_j must be > 0 (a memory-touching ROM is priced)");
+        assert!(
+            pe.step_j > 0.0,
+            "step_j must be > 0 (a memory-touching ROM is priced)"
+        );
         // total_j == B·step_j is the static-inventory MODEL IDENTITY (not a falsifiable check).
         assert!(
             (pe.total_j - b as f64 * pe.step_j).abs() < 1e-30,
@@ -661,15 +687,17 @@ fn t7_system_ring_closure() {
     let iso = xor_reduce_iso(d);
     let ty = carrier_ty(d);
 
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=3");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=3");
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).expect("assemble");
     let ring = system_ring(&rom);
 
     // Sample with idx=1, k≥1, acc≠0.
     let sample = make_input(2, 1, 0, 1, 1, 0);
     let init = marshal_resident(&sample, &ty, 2);
-    assert!(ring.bus_quiescent(&init), "SystemRing must be bus-quiescent");
+    assert!(
+        ring.bus_quiescent(&init),
+        "SystemRing must be bus-quiescent"
+    );
 
     // Check run == eval^R on the sample.
     let sys_val = encode_system(&init);
@@ -693,13 +721,13 @@ fn t_d4_displaced_idx() {
     let d = 4;
     let iso = xor_reduce_iso(d);
 
-    let lowered =
-        compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=4");
+    let lowered = compile_with_metadata_resident(&iso, 2).expect("compile xorReduce d=4");
 
     // Assert idx-displacement Mexch{_, addr≥2} is present.
-    let has_displacement_mexch = lowered.instrs.iter().any(|instr| {
-        matches!(instr, Instr::Mexch { rd: _, addr } if *addr >= 2)
-    });
+    let has_displacement_mexch = lowered
+        .instrs
+        .iter()
+        .any(|instr| matches!(instr, Instr::Mexch { rd: _, addr } if *addr >= 2));
     assert!(
         has_displacement_mexch,
         "d=4 ROM must contain a displacement Mexch{{_, addr≥2}}; ROM: {:?}",
@@ -735,10 +763,7 @@ fn t_d4_displaced_idx() {
         .iter()
         .filter(|i| matches!(i, Instr::Xor { .. }))
         .count();
-    assert_eq!(
-        xor_count, 3,
-        "d=4 must have exactly 3 Xor, got {xor_count}"
-    );
+    assert_eq!(xor_count, 3, "d=4 must have exactly 3 Xor, got {xor_count}");
 
     // Whole-domain fast oracle: d=4 × 32 body vals = 128 inputs.
     let ty = carrier_ty(d);
@@ -751,8 +776,7 @@ fn t_d4_displaced_idx() {
 
     for input in &domain {
         let expected = eval_xor_reduce(d, input);
-        let got =
-            run_on_cpu_fast_resident(&iso, input, 2).expect("run_on_cpu_fast_resident d=4");
+        let got = run_on_cpu_fast_resident(&iso, input, 2).expect("run_on_cpu_fast_resident d=4");
         assert_eq!(
             got, expected,
             "d=4 fast oracle mismatch for input {input:?}"

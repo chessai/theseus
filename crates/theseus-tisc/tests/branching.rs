@@ -1,4 +1,5 @@
-#![cfg(feature = "heavy-tests")] // HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
+#![cfg(feature = "heavy-tests")]
+// HEAVY tier (measured >4min): gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! ADR-0034 branching tests: SWAPBR rd + offset-BR PC update.
 //!
 //! Verifies that the TISC-1 step iso implements data-dependent branching
@@ -17,7 +18,7 @@
 use theseus_core::Iso;
 use theseus_tisc::asm::{assemble, Instr};
 use theseus_tisc::step::step;
-use theseus_tisc::types::{MEM_WORDS, StateVals};
+use theseus_tisc::types::{StateVals, MEM_WORDS};
 
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -95,8 +96,8 @@ fn taken_branch_with_come_from() {
     let target = delta as usize + 2; // = 5
 
     let mut prog: Vec<Instr> = vec![
-        Instr::Xori { rd: 0, imm: delta },     // 0: load offset
-        Instr::Swapbr { rd: 0 },                // 1: branch (BR ← δ)
+        Instr::Xori { rd: 0, imm: delta }, // 0: load offset
+        Instr::Swapbr { rd: 0 },           // 1: branch (BR ← δ)
     ];
     // Pad with NOPs (ADDI r0, 0 = word 0x0000... actually we want zero words)
     // Actually, we need real NOP instructions. word 0 = ADDI r0, 0 which
@@ -107,7 +108,7 @@ fn taken_branch_with_come_from() {
         // may not be 0 here). Let's use XORI r7, 0 which is always identity.
         prog.push(Instr::Xori { rd: 7, imm: 0 });
     }
-    prog.push(Instr::Swapbr { rd: 0 });         // 5: come-from (BR ← 0)
+    prog.push(Instr::Swapbr { rd: 0 }); // 5: come-from (BR ← 0)
     prog.push(Instr::Subi { rd: 0, imm: delta }); // 6: clear witness
     prog.push(Instr::Addi { rd: 1, imm: 0x42 }); // 7: prove arrival
 
@@ -151,10 +152,16 @@ fn taken_branch_with_come_from() {
     // After step 1 (SWAPBR r0): r0 = 0 (old BR), BR = δ, PC = 1 + δ + 1 = target
     assert_eq!(trace[2].regs[0], 0, "after SWAPBR: r0 = old BR = 0");
     assert_eq!(trace[2].br, delta, "after SWAPBR: BR = δ");
-    assert_eq!(trace[2].pc, target as u8, "after SWAPBR: PC = target (branch taken!)");
+    assert_eq!(
+        trace[2].pc, target as u8,
+        "after SWAPBR: PC = target (branch taken!)"
+    );
 
     // After step 2 (come-from SWAPBR r0 at target): BR = 0, r0 = δ (witness)
-    assert_eq!(trace[3].br, 0, "after come-from: BR = 0 (resume sequential)");
+    assert_eq!(
+        trace[3].br, 0,
+        "after come-from: BR = 0 (resume sequential)"
+    );
     assert_eq!(trace[3].regs[0], delta, "after come-from: r0 = δ (witness)");
 
     // After step 3 (SUBI r0, δ): r0 = 0 (witness cleared)
@@ -220,7 +227,10 @@ fn ir_zero_and_scratch_after_branch() {
         };
         let got = eval_state(&format!("p4/pc={pc},br={br}"), &iso, &s);
         let expected = ref_step(&rom, &s);
-        assert_eq!(got, expected, "semantics: pc={pc}, br={br}, r0={r0}, r1={r1}");
+        assert_eq!(
+            got, expected,
+            "semantics: pc={pc}, br={br}, r0={r0}, r1={r1}"
+        );
         assert_eq!(got.ir, 0, "P4: IR must be zero (pc={pc}, br={br})");
         assert_eq!(got.scratch[0], 0, "s0 restored (pc={pc}, br={br})");
         assert_eq!(got.scratch[1], 0, "s1 restored (pc={pc}, br={br})");

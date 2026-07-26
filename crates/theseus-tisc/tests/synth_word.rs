@@ -115,8 +115,16 @@ fn transcribe_word_maps_1to1() {
             Instr::Rotli { rd: 6, imm: 3 },
             Instr::Rotri { rd: 7, imm: 2 },
             Instr::Xori { rd: 0, imm: 0x5A },
-            Instr::Ccnot { rd: 0, rs: 1, rt: 2 },
-            Instr::Cswap { rd: 3, rs: 4, rt: 5 },
+            Instr::Ccnot {
+                rd: 0,
+                rs: 1,
+                rt: 2
+            },
+            Instr::Cswap {
+                rd: 3,
+                rs: 4,
+                rt: 5
+            },
         ]
     );
     assert_all_encode(&body);
@@ -152,8 +160,16 @@ fn transcribe_word_symbolic_verifies() {
         Instr::Add { rd: 2, rs: 3 },
         Instr::Rotli { rd: 4, imm: 1 },
         Instr::Xori { rd: 0, imm: 0x0F },
-        Instr::Ccnot { rd: 5, rs: 1, rt: 2 },
-        Instr::Cswap { rd: 6, rs: 3, rt: 4 },
+        Instr::Ccnot {
+            rd: 5,
+            rs: 1,
+            rt: 2,
+        },
+        Instr::Cswap {
+            rd: 6,
+            rs: 3,
+            rt: 4,
+        },
     ];
     let expected = symbolic_exec(&ref_body).unwrap();
     equiv(&got, &expected, BITS, &[0, 1, 2, 3, 4, 5, 6])
@@ -222,7 +238,11 @@ fn wselect_symbolic_both_branches() {
     let expected_dst = spec(|r, b| {
         if r == dst as usize {
             // dst = guard.bit0 ? then : else
-            BvExpr::mux(v(guard as usize, 0), v(then_w as usize, b), v(else_w as usize, b))
+            BvExpr::mux(
+                v(guard as usize, 0),
+                v(then_w as usize, b),
+                v(else_w as usize, b),
+            )
         } else if r == mask as usize || r == one as usize {
             // these temps started at 0 (we zeroed their inputs) and net-zero → 0.
             BvExpr::Const(false)
@@ -238,7 +258,7 @@ fn wselect_symbolic_both_branches() {
     // allowed to change (it is the output). We check the non-dst rows equal
     // identity — this proves mask/one net-zero for ANY init and sources preserved.
     let preserved = spec(|r, b| v(r, b)); // full identity
-    // Compare each preserved row: guard(1), then(2), else(3), mask(4), one(5).
+                                          // Compare each preserved row: guard(1), then(2), else(3), mask(4), one(5).
     for r in [guard, then_w, else_w, mask, one] {
         let single_got = RegTransfer {
             regs: (0..NUM_REGS)
@@ -269,7 +289,11 @@ fn wselect_teeth() {
     // Corrupt: swap then/else branches.
     let corrupted = spec(|r, b| {
         if r == dst as usize {
-            BvExpr::mux(v(guard as usize, 0), v(else_w as usize, b), v(then_w as usize, b))
+            BvExpr::mux(
+                v(guard as usize, 0),
+                v(else_w as usize, b),
+                v(then_w as usize, b),
+            )
         } else {
             v(r, b)
         }
@@ -339,7 +363,11 @@ fn weqzero_whole_domain_exec_and_netzero() {
             "WEqZero must touch only dst bit 0 (src={x:#04x})"
         );
         // src preserved.
-        assert_eq!(st.operand_get(src), x, "WEqZero must preserve src (={x:#04x})");
+        assert_eq!(
+            st.operand_get(src),
+            x,
+            "WEqZero must preserve src (={x:#04x})"
+        );
         // NET-ZERO: every temp back to 0.
         for &t in &temps {
             assert_eq!(
@@ -441,11 +469,19 @@ fn wlt_whole_domain_exec_and_netzero() {
                 "WLt(a={av},b={bv}) wrong: dst.bit0={}, want {want}",
                 st.operand_get(dst_bit) & 1
             );
-            assert_eq!(st.operand_get(dst_bit) & !1u8, 0, "WLt touched dst>bit0 (a={av},b={bv})");
+            assert_eq!(
+                st.operand_get(dst_bit) & !1u8,
+                0,
+                "WLt touched dst>bit0 (a={av},b={bv})"
+            );
             assert_eq!(st.operand_get(a), av, "WLt must preserve a (a={av},b={bv})");
             assert_eq!(st.operand_get(b), bv, "WLt must preserve b (a={av},b={bv})");
             for &t in &temps {
-                assert_eq!(st.operand_get(t), 0, "WLt temp {t} not netzero (a={av},b={bv})");
+                assert_eq!(
+                    st.operand_get(t),
+                    0,
+                    "WLt temp {t} not netzero (a={av},b={bv})"
+                );
             }
         }
     }
@@ -470,11 +506,19 @@ fn wgt_whole_domain_exec_and_netzero() {
                 exec_instr(instr, &mut st);
             }
             let want = if av > bv { 1u8 } else { 0u8 };
-            assert_eq!(st.operand_get(dst_bit) & 1, want, "WGt(a={av},b={bv}) wrong");
+            assert_eq!(
+                st.operand_get(dst_bit) & 1,
+                want,
+                "WGt(a={av},b={bv}) wrong"
+            );
             assert_eq!(st.operand_get(a), av, "WGt must preserve a");
             assert_eq!(st.operand_get(b), bv, "WGt must preserve b");
             for &t in &temps {
-                assert_eq!(st.operand_get(t), 0, "WGt temp {t} not netzero (a={av},b={bv})");
+                assert_eq!(
+                    st.operand_get(t),
+                    0,
+                    "WGt temp {t} not netzero (a={av},b={bv})"
+                );
             }
         }
     }
@@ -498,7 +542,10 @@ fn wlt_teeth_wrong_body_disagrees() {
         .copied()
         .filter(|ins| !matches!(ins, Instr::Ccnot { rd, .. } if *rd == dst_bit))
         .collect();
-    assert!(corrupted.len() < body.len(), "test setup: expected Ccnots into dst_bit");
+    assert!(
+        corrupted.len() < body.len(),
+        "test setup: expected Ccnots into dst_bit"
+    );
     // a=0,b=1 → true a<b = 1; the corrupted body yields 0 → disagreement.
     let mut st = zero_state();
     st.operand_set(a, 0);

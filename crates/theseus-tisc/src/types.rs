@@ -319,7 +319,14 @@ impl StateVals {
             *s = read_u8_bits(&all_bits, (14 + i) * W);
         }
 
-        StateVals { regs, pc, br, ir, scratch, mem: [0; MEM_WORDS] }
+        StateVals {
+            regs,
+            pc,
+            br,
+            ir,
+            scratch,
+            mem: [0; MEM_WORDS],
+        }
     }
 
     /// Read an operand-indexed word over `reg ∪ scratch` (A-0): idx
@@ -419,7 +426,14 @@ pub fn decode_composite(val: &Value) -> StateVals {
         *m = read_u8_bits(&mem_bits, i * W);
     }
 
-    StateVals { regs, pc, br, ir, scratch, mem }
+    StateVals {
+        regs,
+        pc,
+        br,
+        ir,
+        scratch,
+        mem,
+    }
 }
 
 // ── System encode / decode (3-factor carrier, Stage 1b-A) ─────────

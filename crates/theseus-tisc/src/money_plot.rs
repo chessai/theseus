@@ -142,11 +142,7 @@ pub fn cpu_money_plot(
             .map(|(_, v)| v.count)
             .sum();
         buffer_cells = bd.buffer_count;
-        r1_cells = bd
-            .by_kind
-            .get("cswap-r1")
-            .map(|v| v.count)
-            .unwrap_or(0);
+        r1_cells = bd.by_kind.get("cswap-r1").map(|v| v.count).unwrap_or(0);
     }
 
     let cmos_ref_j = active_cells as f64 * CMOS_STATIC_E_PER_GATE_J;
@@ -216,16 +212,9 @@ impl std::fmt::Display for CpuMoneyPlot {
             "  full-step slope:    {:+.4}  (ideal adiabatic = -1)",
             self.full_step_slope()
         )?;
-        writeln!(
-            f,
-            "  active-logic slope: {:+.4}",
-            self.active_logic_slope()
-        )?;
+        writeln!(f, "  active-logic slope: {:+.4}", self.active_logic_slope())?;
         if let Some(tc) = cmos_crossing_t_ramp(&self.full_step, self.cmos_ref_j) {
-            writeln!(
-                f,
-                "  full-step crosses below CMOS at t_ramp ~ {tc:.3e} s"
-            )?;
+            writeln!(f, "  full-step crosses below CMOS at t_ramp ~ {tc:.3e} s")?;
         }
         writeln!(
             f,
