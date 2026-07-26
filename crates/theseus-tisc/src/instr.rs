@@ -227,19 +227,37 @@ enum Gate {
 
 /// The 46-gate zero-ancilla in-place adder on flat(16).
 fn tk_add_gates() -> Vec<Gate> {
-    let a = |i: usize| W + i;
-    let b = |i: usize| i;
+    tk_add_gates_n(W)
+}
+
+/// Width-parametric Takahashi–Kunihiro zero-ancilla in-place ripple adder on
+/// `flat(2m)`: operand `a` = wires `m..2m` (PRESERVED), target `b` = wires
+/// `0..m` (MODIFIED: `b := b + a mod 2^m`). Zero ancilla — the carry is
+/// threaded transiently through `a`'s OWN wires (the middle two forward/reverse
+/// CNOT+Toffoli sweeps set `a[i+1] ^= carry_i` and then undo it), so `a` is
+/// bit-identical on exit.
+///
+/// This is the EXACT construction `tk_add_gates()`/`pc_add_br()` use at `m = W`,
+/// with every `W` replaced by the parameter `m`. Because the ripple is a
+/// *bit-level* chain (carry_i depends on `a[0..=i], b[0..=i]`), it crosses any
+/// notional byte boundary for FREE: at `m = k·W` the carry out of byte j feeds
+/// byte j+1 with no special cross-lane machinery — there are no byte boundaries
+/// at the wire level. Requires `m >= 2`.
+fn tk_add_gates_n(m: usize) -> Vec<Gate> {
+    assert!(m >= 2, "TK ripple adder needs width >= 2");
+    let a = |i: usize| m + i; // operand (preserved)
+    let b = |i: usize| i; // target (b += a)
     let mut g: Vec<Gate> = Vec::new();
-    for i in 1..W - 1 {
+    for i in 1..m - 1 {
         g.push(Gate::Cnot { c: a(i), t: b(i) });
     }
-    for i in (1..W - 1).rev() {
+    for i in (1..m - 1).rev() {
         g.push(Gate::Cnot {
             c: a(i),
             t: a(i + 1),
         });
     }
-    for i in 0..W - 1 {
+    for i in 0..m - 1 {
         g.push(Gate::Tof {
             c1: a(i),
             c2: b(i),
@@ -247,15 +265,15 @@ fn tk_add_gates() -> Vec<Gate> {
         });
     }
     g.push(Gate::Cnot {
-        c: a(W - 1),
-        t: b(W - 1),
+        c: a(m - 1),
+        t: b(m - 1),
     });
     g.push(Gate::Tof {
-        c1: a(W - 2),
-        c2: b(W - 2),
-        t: a(W - 1),
+        c1: a(m - 2),
+        c2: b(m - 2),
+        t: a(m - 1),
     });
-    for i in (1..W - 1).rev() {
+    for i in (1..m - 1).rev() {
         g.push(Gate::Cnot { c: a(i), t: b(i) });
         g.push(Gate::Tof {
             c1: a(i - 1),
@@ -263,13 +281,13 @@ fn tk_add_gates() -> Vec<Gate> {
             t: a(i),
         });
     }
-    for i in 1..W - 1 {
+    for i in 1..m - 1 {
         g.push(Gate::Cnot {
             c: a(i),
             t: a(i + 1),
         });
     }
-    for i in 0..W - 1 {
+    for i in 0..m - 1 {
         g.push(Gate::Cnot { c: a(i), t: b(i) });
     }
     g
@@ -318,6 +336,74 @@ fn add_operand() -> Iso {
 /// SUB operand iso: adjoint of ADD.
 fn sub_operand() -> Iso {
     Iso::sym(add_operand())
+}
+
+// ── A-7.1: wide reversible ripple adder (cross-byte carry) ──────────
+
+/// A wide little-endian byte-word: a right-nested product of `k` `Word8`s,
+/// LSB byte first (matching the IR convention). `wide_word_ty(1) == Word8`.
+pub fn wide_word_ty(k: usize) -> Type {
+    assert!(k >= 1, "wide word needs >= 1 byte");
+    let mut ty = word8();
+    for _ in 1..k {
+        ty = Type::prod(word8(), ty);
+    }
+    ty
+}
+
+/// WIDE ADD iso over `k`-byte words:
+/// `(a: kbytes, b: kbytes) ↦ (a + b mod 2^(8k), b)`.
+///
+/// `a` is the target (the FIRST wide word, modified in place); `b` is the
+/// operand (the SECOND wide word, preserved) — matching `add_operand`'s
+/// "first-word is `rd`, second is `rs`" convention. Keeping `b` intact makes
+/// the map a bijection (`(a,b) ↦ (a+b, b)`, inverse `(a,b) ↦ (a−b, b)`).
+///
+/// # Construction (generalizes `pc_add_br` / `tk_add_gates` from 1 byte to k)
+///
+/// The type `(wideWord, wideWord)` flattens (LSB byte first, LSB bit first
+/// within a byte) to `flat(2m)` with `m = k·W`: target bits at wires `0..m`,
+/// operand bits at wires `m..2m`. We then run the SAME Takahashi–Kunihiro
+/// zero-ancilla in-place ripple adder used for the byte adder, but at width
+/// `m`. The carry is a single bit-level chain that ripples from wire 0 up to
+/// wire `m−1`; because the flattened target is a contiguous little-endian
+/// `m`-bit number, the carry crosses each byte boundary automatically — a
+/// `Times` of independent byte adds would DROP exactly this inter-byte carry.
+///
+/// # Soundness (bijectivity + carry correctness + net-zero ancilla)
+///
+/// Same argument as `pc_add_br`, over `m` wires instead of `W`:
+/// - **Bijective:** the whole body is a composition of CNOT and Toffoli gates,
+///   each of which is a self-inverse permutation of `{0,1}^{2m}`; a composition
+///   of bijections is a bijection. Its adjoint (`Iso::sym`) is the exact wide
+///   subtract `(a,b) ↦ (a−b, b)`.
+/// - **Zero-ancilla / net-zero:** no wire outside the `2m` operand/target wires
+///   is touched. The carry is threaded transiently through the operand `a`'s own
+///   wires (`a[i+1] ^= carry_i`) and the mirror-image reverse sweep restores
+///   every `a[i]`, so `a` is bit-identical on exit — there is NO garbage bit to
+///   clean up (the "net-zero" is exact, not a bracketed page-in/page-out).
+/// - **Carry correctness:** the forward sweep computes the majority carry
+///   `c_{i+1} = maj(a[i], b[i], c_i)` into `a[i+1]` and adds it into `b[i+1]`;
+///   the reverse sweep uncomputes it MSB-down reading not-yet-restored wires.
+///   This is verified end-to-end by the BDD `equiv` check (complete over the
+///   full `m`-bit domain) in `tests/wide_add.rs`, not asserted by hand.
+///
+/// Parametric in `k` (any `k >= 1`); zero cells beyond the ripple gates.
+pub fn wide_add(k: usize) -> Iso {
+    assert!(k >= 1, "wide add needs >= 1 byte");
+    let m = k * W;
+    let wide = wide_word_ty(k);
+    let pair_ty = Type::prod(wide.clone(), wide);
+    let fl = flatten(&pair_ty);
+    Iso::seq(
+        Iso::seq(fl.clone(), gates_iso(2 * m, &tk_add_gates_n(m))),
+        Iso::sym(fl),
+    )
+}
+
+/// WIDE SUB iso: adjoint of `wide_add(k)` — `(a,b) ↦ (a − b mod 2^(8k), b)`.
+pub fn wide_sub(k: usize) -> Iso {
+    Iso::sym(wide_add(k))
 }
 
 /// Immediate mask: XOR aux word (flat wires 8..16) with constant imm.
