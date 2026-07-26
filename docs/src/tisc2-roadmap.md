@@ -67,7 +67,19 @@
 >   general synthesizer's `2^total_bits` blowup / `NeedsProvisioning`. So: the general synthesizer
 >   handles a single prim up to ~20 input bits; **wider values must be COMPOSED (Times/fold over
 >   bytes)**, which is how real wide programs are built anyway. A-7.1 harness landed.
-> - **NEXT: A-7.1** (wide **arithmetic** — `Add`/`Sub`) = a NEW parametric zero-ancilla ripple-adder
+> - **✅ A-7.1 MERGED (`ccfdfe1`): wide ARITHMETIC.** `wide_add(k)`/`wide_sub(k)` generalize
+>   `pc_add_br`'s TK ripple across k·W wires (zero-ancilla operand-iso; carry ripples free — no
+>   wire-level byte boundary). Fable-reviewed SOUND (reviewer closed the k>2 gap: k=3 BDD 2⁴⁸ + k=4
+>   BDD 2⁶⁴ pass, exhaustive u128 m=2..12; `tk_add_gates` refactor byte-identical by netlist
+>   fingerprint). **⇒ FULL COVERAGE for "compile arbitrary well-formed programs" is now on v2:** any
+>   prim lowers + control composes to arbitrary depth + wide bitwise & arithmetic data. 3 MINOR
+>   follow-ups (byte-order pin test, netlist-vs-term comment, un-ignore fast k=4 BDD).
+> - **NEXT (reordered to ship the goal-proof first): CAPSTONE** — a small end-to-end *arbitrary*
+>   program (synthesized prim + nested control + wide words, B≤256 so no widen-PC) compiled +
+>   `run_on_cpu==eval` — the holistic proof. THEN **provisioning** (widen-PC A-2/B-2) so LARGE bodies
+>   run (handle me_a3 energy-repin OOM per decision-default: behavior-validate + defer energy repin,
+>   or lean-`lower_iso` first). THEN A-5b Option A, MINORs, Phase B.
+> - **(prior plan) A-7.1** (wide arithmetic) = a NEW parametric zero-ancilla ripple-adder
 >   iso (cross-byte carry — canNOT be `Times` of independent byte-adds; highest-bar: adversarial
 >   review + BDD `equiv` + real-CPU + adjoint round-trip) → **provisioning** (per-program widen-PC
 >   A-2/B-2; lean-`lower_iso` for the me_a3 memory borderline; heavy tier `--test-threads=1`).
