@@ -2612,6 +2612,61 @@ fn numeral_count(ty: &Type) -> Option<usize> {
 
 // ── Core lowering ────────────────────────────────────────────────────
 
+/// A node in the compositional WCET **cost tree** (A-3, BLOCKER-2).
+///
+/// Each `Trace` loop emits exactly one `CostTree` node. A node's `inner`
+/// children are the loop nodes lowered *inside* this loop's body — the ROM
+/// contains each inner body straight-line (once), but at run time the inner
+/// loop actually runs up to its own `k_max` times per *outer* iteration. The
+/// flat `(k_max, iter_len)` sibling list this replaces could not express that
+/// multiply, so it under-counted `B` for nested loops (outer k=4 / inner k=100
+/// / iter=12: true B ≈ 4800, flat sum ≈ 88 — a 55× under-count that lets the
+/// park guard pass a bogus budget → PC wrap → L15-class corruption).
+///
+/// `iter_len` is the *ROM* length of one straight-line body iteration
+/// (`|body| + LOOP_OVERHEAD`); it counts each inner loop's body **once**
+/// (the ROM does). The extra dynamic cost of the inner loops is folded in
+/// separately via `k_max · Σ extra(child)` — see [`CostTree::extra`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CostTree {
+    /// Trajectory-derived outer iteration bound, `min(k_exact, |u| + 1)`.
+    pub k_max: usize,
+    /// ROM length of one straight-line body iteration (`|body| + LOOP_OVERHEAD`).
+    /// Counts each inner loop's straight-line body exactly once.
+    pub iter_len: usize,
+    /// Loop nodes nested inside this loop's body. The ROM runs each once;
+    /// at run time each runs up to `k_max` times *per outer iteration*.
+    pub inner: Vec<CostTree>,
+}
+
+impl CostTree {
+    /// The **extra** dynamic step count this loop contributes *beyond* its
+    /// straight-line ROM footprint:
+    ///
+    /// ```text
+    /// extra(node) = (k_max − 1) · iter_len          # outer spine repeats
+    ///             + k_max · Σ_child extra(child)     # each inner loop's extra,
+    ///                                                #   once per outer iteration
+    /// ```
+    ///
+    /// **Why this is a sound upper bound (`B_fold ≥ true_B`).** The ROM already
+    /// counts one straight-line pass of the body (that pass is inside
+    /// `instrs.len()`), which includes one pass of every inner loop's body. On
+    /// each of the `k_max` outer iterations the inner loops may run up to their
+    /// own `k_max` — so the extra work an inner loop does *beyond its one ROM
+    /// pass* (`extra(child)`) happens at most `k_max` times. `k_max` is itself an
+    /// over-estimate of the true outer trajectory (min of the trajectory walk
+    /// and the cardinality bound `|u|+1`), and each `extra(child)` is recursively
+    /// an over-estimate, so the product is `≥ true_B`. Multiplication of
+    /// non-negative over-estimates preserves the inequality at every level: the
+    /// fold **cannot under-count**.
+    pub fn extra(&self) -> usize {
+        let outer = (self.k_max - 1) * self.iter_len;
+        let inner_extra: usize = self.inner.iter().map(CostTree::extra).sum();
+        outer + self.k_max * inner_extra
+    }
+}
+
 /// Structured metadata returned by compilation (M-D.d §4).
 ///
 /// Replaces the ROM-scanning `max_skip_distance` with compositionally-
@@ -2623,24 +2678,26 @@ pub struct Lowered {
     /// Total forward-skip distance (from forward skip-blocks only;
     /// the loop's backward bracket contributes 0).
     pub forward_skip_total: usize,
-    /// Loop terms: `(k_max, iter_len)` for each Trace loop emitted.
-    /// `k_max = min(k_exact, |u| + 1)` — trajectory-derived exact bound,
-    /// falling back to `|u| + 1` if any trajectory is inconclusive.
-    /// `iter_len = |body| + LOOP_OVERHEAD` (one full iteration).
-    pub loop_terms: Vec<(usize, usize)>,
+    /// Cost tree: one node per top-level Trace loop, each carrying its nested
+    /// inner loops (A-3). Replaces the old flat `Vec<(k_max, iter_len)>` that
+    /// could not multiply an inner loop's cost through the enclosing `k_max`.
+    /// For a single-level loop this is `[CostTree { k_max, iter_len, inner: [] }]`
+    /// and reproduces the exact old `B`.
+    pub loop_terms: Vec<CostTree>,
 }
 
 impl Lowered {
-    /// Compositional WCET: `|instrs| + Σ (k_max - 1) · iter_len`.
-    /// The first iteration is already counted in `|instrs|` (the ROM
-    /// length); additional iterations add `(k_max - 1) · iter_len`.
+    /// Compositional WCET: `|instrs| + Σ_top extra(node)` over the cost tree.
+    /// The first (straight-line) pass of every loop body is already counted in
+    /// `|instrs|` (the ROM length); [`CostTree::extra`] adds the additional
+    /// iterations, multiplying an inner loop's extra cost through the enclosing
+    /// `k_max` so nested loops are counted correctly (`B_fold ≥ true_B`).
+    ///
+    /// For a flat program (single-level loops, `inner` empty) this collapses to
+    /// the old `|instrs| + Σ (k_max − 1) · iter_len` — byte-identical `B`.
     pub fn wcet(&self) -> usize {
         let base = self.instrs.len();
-        let loop_contribution: usize = self
-            .loop_terms
-            .iter()
-            .map(|&(k_max, iter_len)| (k_max - 1) * iter_len)
-            .sum();
+        let loop_contribution: usize = self.loop_terms.iter().map(CostTree::extra).sum();
         base + loop_contribution
     }
 
@@ -2724,7 +2781,10 @@ pub fn compile(iso: &Iso) -> Result<Vec<Instr>, CompileError> {
 #[derive(Clone, Debug, Default)]
 struct LowerMeta {
     forward_skip_total: usize,
-    loop_terms: Vec<(usize, usize)>,
+    /// Cost-tree nodes for the Trace loops lowered at this level. A nested
+    /// Trace merges its body's `loop_terms` into the outer node's `inner`
+    /// (see `lower_trace`), so the top-level `LowerMeta` carries the full tree.
+    loop_terms: Vec<CostTree>,
 }
 
 /// Right-associate a left-nested `Seq` chain so that idiom recognizers
@@ -3187,12 +3247,32 @@ fn lower_trace(
 
     // Body must not use Swapbr (no forward skip-blocks inside loops
     // for v1 — the safe Swapbr-free-body policy, design §4/F6).
+    // A-3: lower the body into its OWN meta, then merge (see below). The old
+    // code discarded `body_meta` entirely (defect (a), BLOCKER-2) — so an inner
+    // loop's cost tree never reached the top-level `Lowered` and `wcet()` could
+    // not multiply it through this loop's `k_max`.
     let mut body_meta = LowerMeta::default();
     let (body_instrs, body_ctx_out) = lower(body, &body_ctx, &mut body_meta)?;
+
+    // A-3: does this body contain its own loop(s)? Inner loops leave nodes in
+    // `body_meta.loop_terms`; inner forward skip-blocks (Iter/Plus) show up as
+    // Swapbrs in `body_instrs` / `forward_skip_total`. Either way the exact-k_max
+    // walk below runs `body_instrs` STRAIGHT-LINE through `exec_instr` (which has
+    // no PC / no back-edge), so it would simulate an inner back-edge only ONCE
+    // per outer iteration (defect (b), BLOCKER-2). When the body contains inner
+    // control we therefore do NOT trust the trajectory walk for the OUTER
+    // `k_max` and fall back to the cardinality bound `|u|+1` — the sound
+    // over-estimate. The inner loops' *extra* cost is folded in structurally via
+    // the cost tree (`k_max · Σ extra(child)`), not via the straight-line walk.
+    let body_has_inner_control =
+        !body_meta.loop_terms.is_empty() || has_inner_control(&body_instrs);
 
     // Guard: reject body containing Swapbr (forward skip-blocks inside
     // a loop body would require compositional S_max accounting under
     // nesting, deferred per design §4/F6 safe policy).
+    // NOTE (A-3): this reject is what keeps real nested programs out TODAY; it
+    // is A-4's job to delete it. The A-3 cost-tree merge + walk fallback below
+    // are dormant until then and are exercised white-box by the A-3 tests.
     if has_inner_control(&body_instrs) {
         return Err(CompileError::Deferred(
             "Trace body contains Swapbr (skip-block) — deferred (M-D.d F6 safe policy)".into(),
@@ -3220,8 +3300,15 @@ fn lower_trace(
     let k_max = {
         let k_fallback = u_inhabitants + 1;
         let mut max_t: usize = 0;
-        let mut use_fallback = false;
+        // A-3 (defect (b)): the walk simulates the body straight-line, so an
+        // inner back-edge would run once, not k_inner×. If the body has inner
+        // control, the walk's outer trajectory is untrustworthy → force the
+        // sound cardinality-bound fallback for the OUTER k_max.
+        let mut use_fallback = body_has_inner_control;
         for a_val in enumerate_values(&a_ty) {
+            if use_fallback {
+                break;
+            }
             // Set up carrier state: Right(a) = tag 1, payload = a's leaf bytes.
             // marshal(a, a_ty) places a's leaves in Reg(0..n_input-1) — exactly
             // where body_homes[1..1+n_input] maps them. Set tag register to 1.
@@ -3271,13 +3358,27 @@ fn lower_trace(
         }
     };
 
+    // A-3: assemble this loop's cost-tree node. The inner children come from
+    // the body's own meta (defect (a) fix: previously discarded). `iter_len`
+    // counts each inner body straight-line ONCE (the ROM does); the inner
+    // loops' extra iterations are folded via `k_max · Σ extra(child)` in
+    // `CostTree::extra`, so nesting is multiplied through this loop's k_max.
+    let cost_node = CostTree {
+        k_max,
+        iter_len,
+        inner: body_meta.loop_terms.clone(),
+    };
+
     // Guard: P2 — wcet + S_max must fit in 256.
     // prologue(2) + iter_len + epilogue(2) = 4 + iter_len = rom_len for the Trace.
     // But the Trace might be composed with other code; P2 is checked at
     // the top level in run_on_cpu. Here we check the Trace's own
     // contribution is feasible.
+    // A-3: the feasibility bound is the FULL tree cost (ROM footprint of one
+    // straight-line pass + all extra iterations, inner loops multiplied through
+    // k_max), not just `spine + k_max·iter_len` which ignored nested cost.
     let spine = 4; // prologue(2) + epilogue(2)
-    let this_wcet = spine + k_max * iter_len;
+    let this_wcet = spine + iter_len + cost_node.extra();
     if this_wcet > 256 {
         return Err(CompileError::Deferred(format!(
             "Trace WCET {} exceeds 256 (k_max={}, iter_len={}, spine={}) (M-D.d §5)",
@@ -3394,8 +3495,15 @@ fn lower_trace(
 
     // ── Record metadata ────────────────────────────────────────────
     // The loop's backward bracket contributes 0 to forward skip distance.
-    // Body's forward skips are 0 (Swapbr-free body policy).
-    meta.loop_terms.push((k_max, iter_len));
+    // A-3: merge the body's forward-skip distance into the parent. Today the
+    // body is Swapbr-free (the reject above), so this is 0; it becomes
+    // load-bearing when A-4 admits Iter/Plus-under-Trace (MAJOR-5: s_max stays
+    // a Σ-fold — a parked PC can land in ANY forward-skip region regardless of
+    // which arm ran, so we sum, never max).
+    meta.forward_skip_total += body_meta.forward_skip_total;
+    // A-3: push the cost-tree node (with its inner children merged) so the
+    // top-level `Lowered` carries the full nesting structure.
+    meta.loop_terms.push(cost_node);
 
     // Verify emitted instruction count.
     debug_assert_eq!(

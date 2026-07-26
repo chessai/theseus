@@ -100,7 +100,8 @@ fn f1_large_u_fast_exit_compiles() {
     // Now it compiles with exact-k_max.
     let lowered = compile_with_metadata(&iso)
         .expect("Flat(5) Id-body Trace must compile under exact-k_max (k_exact=2, WCET=24)");
-    let (k_max, iter_len) = lowered.loop_terms[0];
+    let (k_max, iter_len) = (lowered.loop_terms[0].k_max, lowered.loop_terms[0].iter_len);
+    assert!(lowered.loop_terms[0].inner.is_empty(), "single-level: no nesting");
     assert_eq!(k_max, 2, "k_exact = max(T=1) + 1 = 2");
     assert_eq!(
         iter_len, 10,
@@ -151,7 +152,7 @@ fn f2_k_exact_never_looser() {
     for (name, iso, u_ty) in &cases {
         let lowered =
             compile_with_metadata(iso).unwrap_or_else(|e| panic!("{name}: compile failed: {e}"));
-        let (k_max, _) = lowered.loop_terms[0];
+        let k_max = lowered.loop_terms[0].k_max;
         let u_card = enumerate_values(u_ty).len();
         let k_fallback = u_card + 1;
         assert!(
@@ -175,7 +176,7 @@ fn f3_mde_walk_soundness() {
     let iso = Iso::trace(u_ty, body);
 
     let lowered = compile_with_metadata(&iso).expect("mde_walk compiles");
-    let (k_max, _iter_len) = lowered.loop_terms[0];
+    let k_max = lowered.loop_terms[0].k_max;
     // max(T) = 6. k_exact = 6+1 = 7. k_fallback = 5+1 = 6. min(7,6) = 6.
     assert_eq!(k_max, 6, "mde_walk: saturated, k_max = |u|+1 = 6");
 
@@ -207,7 +208,7 @@ fn f3_large_u_id_body_soundness() {
     assert_eq!(u_card, 32);
 
     let lowered = compile_with_metadata(&iso).expect("Flat(5) Id-body compiles");
-    let (k_max, _) = lowered.loop_terms[0];
+    let k_max = lowered.loop_terms[0].k_max;
     assert_eq!(k_max, 2, "Id body: T=1 for all inputs, k_exact=2");
 
     // Whole-domain: all 32 inputs.
