@@ -29,11 +29,23 @@
 >   synthesis = documented NEGATIVE RESULT** (control-heavy prims explode: gcd2 778k instrs — filed,
 >   not production). Efficiency of a given prim (BDD gcd2 = 5,408 gates, ~the general floor) is a
 >   **Phase-B / provisioning** concern, NOT a coverage gap.
-> - **NEXT (this is the critical path to the goal): (1) INTEGRATE** the BDD synthesizer into
->   `recognize_prim` as the general lowering fall-through + retire the vacuity guard + validate
->   end-to-end on a SMALL prim (no widen); **(2) COMPOSITIONAL CONTROL A-3 → A-5 → A-4** (nested
->   `Trace` / loop-under-`⊗` / branch-in-branch) = the deepest *remaining* gap; then A-7 wide words
->   + per-program provisioning. gcd2-scale bodies run only once provisioning (A-2/B-2) lands, sized
+> - **STEP 1 DONE — general synthesizer INTEGRATED** (branch `a3-wcet`, `3e46244` + loose-Sum/panic
+>   fix `1515b93`): `general_synthesize_prim` is the `recognize_prim` fall-through; any admitted
+>   bijection prim lowers (or clean `NeedsProvisioning`); correct on loose-Sum/option types;
+>   fail-closed (canonical whole-domain exec + differential). Fable-reviewed (`3a2a333`) → 2 MAJOR
+>   found + FIXED. **Coverage gap (2) is now real in the compiler.**
+> - **STEP 2 (COMPOSITIONAL CONTROL) — NESTED PROGRAMS COMPILE + RUN** (branch `a3-wcet`): A-3 tree-
+>   WCET fold (`39a6911`, `B_fold ≥ true_B`, single-level byte-identical) → A-5 occ-aware nested
+>   come-from frame stack (`fc9a664`, disjoint per-depth frames, δu net-zero, single-level byte-
+>   identical) → A-4 delete the 6 nesting rejects (`3f849e9`). **branch-in-branch / Iter-in-Iter /
+>   nested-skip / Swapbr-in-Trace-body / loop-under-product all `run_on_cpu_fast==eval`.** Depth-2
+>   nested `Trace` rejects GRACEFULLY (register-bound, fail-closed) pending **A-5b** (frames-in-
+>   scratch — using A-0's operand-addressable s2–s7). The non-compositional-control gap (1) is
+>   substantially closed. Trio Fable review + real-`system_step` authority (the fast oracle shares
+>   `exec_instr` with the k_max walk → NOT independent) pending before merge `a3-wcet`→v2.
+> - **NEXT: A-5b** (deep loop-nesting via scratch frames) → **A-7** (wide `Flat n>8`) →
+>   **provisioning** (per-program widen-PC A-2/B-2 so larger bodies + deeper nests run). gcd2-scale
+>   bodies run only once provisioning lands, sized
 >   per-program so simple programs stay cheap.
 
 ## Why (the mandate)
