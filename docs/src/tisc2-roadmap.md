@@ -49,10 +49,19 @@
 >   so the real-`system_step` heavy tier was the gate. **Both deepest coverage gaps closed on the
 >   main branch.** Deep loop-nesting rejects gracefully pending A-5b. Lessons: run heavy tier
 >   `--test-threads=1`; test vectors must be non-degenerate.
-> - **NEXT: A-5b** (deep loop-nesting via scratch aux frames — A-0's operand-addressable s2–s7) →
->   **A-7** (wide `Flat n>8`) → **provisioning** (per-program widen-PC A-2/B-2; lean-`lower_iso` for
->   the me_a3 memory borderline). gcd2-scale bodies run only once provisioning lands, sized
->   per-program so simple programs stay cheap.
+> - **✅ A-5b MERGED (`b774b05`, 2026-07-26): deep loop-nesting via aux REUSE.** A nested `Trace`
+>   reuses the outer level's aux frame (the come-from token is a compile-time δu immediate, so the
+>   4 aux are dead across the inner-loop region) — zero standing tax. Fable-reviewed (liveness
+>   premise holds across 6 probes) + real-`system_step` authority (`run_on_cpu==eval` on a depth-2
+>   nest). **Honest scope:** the aux frame is O(1) in depth, but each nesting level needs a
+>   `Plus`/`Seq` tag-wrapper that costs 2 non-reusable aux, so effective depth is bounded by the
+>   register file (deep nests reject *gracefully*); Option A (aux-in-scratch via A-0's crossbar,
+>   blocked only by a conservative `SwapbrRegOutOfRange` encoder guard) is the later generalization
+>   for wide carriers / deeper nests. MINOR follow-ups: depth-limit reject diagnostic message; fold
+>   per-copy occ-mark fragility note.
+> - **NEXT: A-7** (wide `Flat n>8` data words) → **provisioning** (per-program widen-PC A-2/B-2;
+>   lean-`lower_iso` for the me_a3 memory borderline; run heavy tier `--test-threads=1`). gcd2-scale
+>   bodies run only once provisioning lands, sized per-program so simple programs stay cheap.
 
 ## Why (the mandate)
 Run **any well-formed theseus program** — the closed 22-combinator Iso algebra over finite
