@@ -40,6 +40,20 @@ pub enum CompileError {
     /// enumeration accepted — a real emission bug (transposed operands,
     /// wrong arm). Carries a human-readable description of the failure.
     EmissionVerificationFailed(String),
+    /// The general BDD synthesizer (the prim-lowering fall-through) could lower
+    /// this prim in principle, but the machine does not have enough free operand
+    /// words for the ancilla + BDD node-lines it needs. This is a GRACEFUL
+    /// fall-through (widen-state / provisioning lands later — A-6.4), NOT a
+    /// verification failure. Carries the required vs. available word counts.
+    NeedsProvisioning {
+        /// Human-readable prim name (for diagnostics).
+        prim: String,
+        /// Total working operand words the synthesis requires
+        /// (carriers + ancilla + temp + node-lines).
+        required: usize,
+        /// Legal operand words available on the current machine.
+        available: usize,
+    },
 }
 
 impl fmt::Display for CompileError {
@@ -59,6 +73,15 @@ impl fmt::Display for CompileError {
             CompileError::EmissionVerificationFailed(msg) => {
                 write!(f, "emission verification failed: {msg}")
             }
+            CompileError::NeedsProvisioning {
+                prim,
+                required,
+                available,
+            } => write!(
+                f,
+                "prim '{prim}' needs general-synth provisioning: requires {required} operand \
+                 words but only {available} are free (widen-state / A-6.4)"
+            ),
         }
     }
 }
@@ -438,6 +461,12 @@ impl Ctx {
     /// placement function (I-3 / design §8(1)).
     fn new(n_leaves: usize) -> Self {
         Self::new_resident(n_leaves, 0)
+    }
+
+    /// Public canonical-layout constructor (for tests / external drivers that
+    /// need to call `recognize_prim` directly with a fresh `n`-leaf context).
+    pub fn new_canonical(n_leaves: usize) -> Self {
+        Self::new(n_leaves)
     }
 
     /// Resident-aware home layout: trailing `resident` leaves map to Mem,
@@ -1390,10 +1419,452 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
         }
     }
 
-    Err(CompileError::UnrecognizedPrim(format!(
-        "prim '{}' not recognized as a TISC-1 pattern",
-        def.forward_name
-    )))
+    // ── GENERAL FALL-THROUGH (A-6 STEP 1): no finite arm matched. ──────
+    // Deterministically synthesize the prim's whole byte-map via the BDD
+    // path (table → RegTransfer → Bennett). This retires the finite-arm
+    // limitation: ANY admitted bijection prim that FITS the machine's free
+    // operand budget lowers here. Prims too large fail gracefully with
+    // `NeedsProvisioning` (widen-state lands later). The general synth carries
+    // its OWN (whole-domain exec + ANF-differential) verification, so it does
+    // NOT go through the `bveq_verify_emission` vacuity guard.
+    general_synthesize_prim(def, ctx)
+}
+
+// ── General BDD prim-lowering fall-through (A-6 STEP 1) ─────────────────
+//
+// The reusable, prim-agnostic lowering that closes coverage gap (2): any
+// admitted bijection `PrimDef` that fits the machine's free operand budget is
+// lowered by DETERMINISTIC wiring + transcription (table → per-output-bit ANF →
+// ROBDD → Bennett), NOT search. Large prims (e.g. gcd2, whose BDD needs 35 node
+// lines) fall through gracefully with `NeedsProvisioning` — widen-state (A-6.4)
+// funds them later.
+
+/// Per-leaf meaningful bit-width for a type, in canonical leaf order — the
+/// widths `table_to_regtransfer` needs. A `Sum` tag leaf is 1 bit; payload leaves
+/// take the position-wise MAX of the two branches' widths (matching the
+/// zero-padded tag+payload marshaling of `value_to_leaf_bytes`). `Flat(n)` is `n`
+/// bits; `One`/`Zero` contribute no leaves.
+fn leaf_widths(ty: &Type) -> Result<Vec<u8>, CompileError> {
+    match ty {
+        Type::Zero | Type::One => Ok(vec![]),
+        Type::Flat(n) => {
+            if (1..=8).contains(n) {
+                Ok(vec![*n])
+            } else {
+                Err(CompileError::Deferred(format!(
+                    "Flat({n}): width must be 1..=8"
+                )))
+            }
+        }
+        Type::Prod(a, b) => {
+            let mut w = leaf_widths(a)?;
+            w.extend(leaf_widths(b)?);
+            Ok(w)
+        }
+        Type::Sum(a, b) => {
+            let wa = leaf_widths(a)?;
+            let wb = leaf_widths(b)?;
+            // Tag leaf = 1 bit; payload leaves = position-wise max of the two
+            // branches' widths (the shorter branch zero-pads).
+            let payload = wa.len().max(wb.len());
+            let mut w = Vec::with_capacity(1 + payload);
+            w.push(1u8);
+            for i in 0..payload {
+                let ma = wa.get(i).copied().unwrap_or(0);
+                let mb = wb.get(i).copied().unwrap_or(0);
+                w.push(ma.max(mb));
+            }
+            Ok(w)
+        }
+    }
+}
+
+/// Build a byte-map closure `[u8;n_leaves] -> [u8;n_leaves]` from a prim table,
+/// by round-tripping through the leaf-byte marshaling: reconstruct the input
+/// `Value` from the carrier bytes, look it up in `table`, marshal the output back
+/// to `n_leaves` bytes. Returns `None` (as a per-call closure result) when the
+/// table has no entry — the caller guarantees the table is total over the domain
+/// it enumerates (a cross-checked, admitted bijection), so a miss is a bug we
+/// surface, not silently accept.
+fn table_byte_map<'a>(
+    table: &'a std::collections::BTreeMap<Value, Value>,
+    in_ty: &'a Type,
+    out_ty: &'a Type,
+    n_leaves: usize,
+) -> impl Fn(&[u8]) -> Vec<u8> + 'a {
+    move |in_bytes: &[u8]| {
+        let (v_in, _) = value_from_leaf_bytes(in_bytes, in_ty);
+        let v_out = table
+            .get(&v_in)
+            .unwrap_or_else(|| panic!("table_byte_map: no entry for input {v_in:?}"));
+        let mut out = value_to_leaf_bytes(v_out, out_ty);
+        out.resize(n_leaves, 0);
+        out
+    }
+}
+
+/// The general prim-lowering fall-through: synthesize a reversible body for ANY
+/// admitted bijection prim that fits the machine's free operand budget.
+///
+/// Contract (called from `recognize_prim` AFTER every finite arm misses, BEFORE
+/// the `UnrecognizedPrim` reject):
+///   1. Build leaf-space `fwd`/`bwd` `RegTransfer`s from `def.forward`/`backward`
+///      via `table_to_regtransfer` (per-leaf widths from the types). CROSS-CHECK
+///      `bwd∘fwd == id` over the domain (guards the Bennett `bwd = fwd⁻¹`
+///      assumption).
+///   2. Allocate register-resident carriers + free ancilla/temp/node-line words
+///      from the machine's free operand budget (occupancy-aware).
+///   3. If the budget is EXCEEDED → `NeedsProvisioning` (graceful fall-through).
+///   4. Synthesize via `transcribe_bdd_bennett`.
+///   5. VERIFY the emitted body (whole-domain `exec_instr`: carriers land at the
+///      rule AND every ancilla/temp/node word is net-zero) AND differentially vs
+///      the ANF path (`transcribe_bennett_general`). Fail-closed → `CompileError`.
+fn general_synthesize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileError> {
+    use crate::synth::{
+        table_to_regtransfer, transcribe_bdd_bennett, transcribe_bennett_general, BddHelpers,
+        HelperBank,
+    };
+
+    let n_in = num_leaves(&def.input_ty)?;
+    let n_out = num_leaves(&def.output_ty)?;
+
+    // The general path handles same-shape byte-permutation prims (n carriers in,
+    // n carriers out). Differing leaf counts are a shape the Bennett wrapper
+    // cannot carry; leave them to `UnrecognizedPrim`.
+    if n_in == 0 || n_in != n_out {
+        return Err(CompileError::UnrecognizedPrim(format!(
+            "prim '{}' not recognized as a TISC-1 pattern (general synth: \
+             requires n_in == n_out ≥ 1, got n_in={n_in} n_out={n_out})",
+            def.forward_name
+        )));
+    }
+    let n = n_in;
+
+    // The table must be TOTAL over the input domain (a full-table bijection). A
+    // symbolic-only / partial-table prim is handled by selection_by_equiv above;
+    // reaching here with a partial table would make the byte-map closure panic.
+    let card = theseus_core::enumerate::cardinality_u64(&def.input_ty);
+    if def.forward.len() as u64 != card || def.backward.len() as u64 != card {
+        return Err(CompileError::UnrecognizedPrim(format!(
+            "prim '{}' not recognized as a TISC-1 pattern (general synth: \
+             forward/backward tables must cover the full domain; have fwd={} bwd={} of {card})",
+            def.forward_name,
+            def.forward.len(),
+            def.backward.len()
+        )));
+    }
+
+    // Per-leaf widths from the TYPE (never from the table — N5 obligation).
+    let widths = leaf_widths(&def.input_ty)?;
+    if widths.len() != n {
+        return Err(CompileError::UnrecognizedPrim(format!(
+            "prim '{}' general synth: {} leaf widths for {n} leaves",
+            def.forward_name,
+            widths.len()
+        )));
+    }
+    let total_bits: usize = widths.iter().map(|&w| w as usize).sum();
+    // `table_to_regtransfer` enumerates 2^total_bits rows. Cap defensively (it
+    // asserts ≤ 24 internally); a wide prim is a provisioning problem, not a
+    // panic. Anything above the ANF budget belongs to a later slice.
+    if total_bits > 20 {
+        return Err(CompileError::NeedsProvisioning {
+            prim: def.forward_name.clone(),
+            required: 1usize << total_bits.min(63),
+            available: 1usize << 20,
+        });
+    }
+
+    // ── Step 1: leaf-space fwd/bwd RegTransfers + bwd∘fwd == id cross-check ──
+    // Spec is built in LEAF SPACE (leaf i occupies symbolic register i); the
+    // Bennett wrapper remaps leaf → physical carrier via `carrier_ops`.
+    let spec_leaves: Vec<u8> = (0..n as u8).collect();
+    let fwd_map = table_byte_map(&def.forward, &def.input_ty, &def.output_ty, n);
+    let bwd_map = table_byte_map(&def.backward, &def.output_ty, &def.input_ty, n);
+
+    // CROSS-CHECK bwd∘fwd == id over the WHOLE enumerated domain (guards the
+    // Bennett `bwd = fwd⁻¹` assumption at construction time). Enumerate the same
+    // 2^total_bits carrier-bit assignments `table_to_regtransfer` will.
+    {
+        let n_rows = 1usize << total_bits;
+        // Flattened meaningful input bits, in carrier order (leaf, bit).
+        let mut vars: Vec<(usize, usize)> = Vec::new();
+        for (leaf, &w) in widths.iter().enumerate() {
+            for bit in 0..w as usize {
+                vars.push((leaf, bit));
+            }
+        }
+        for x in 0..n_rows {
+            let mut in_bytes = vec![0u8; n];
+            for (k, &(leaf, bit)) in vars.iter().enumerate() {
+                if (x >> k) & 1 == 1 {
+                    in_bytes[leaf] |= 1 << bit;
+                }
+            }
+            let out = fwd_map(&in_bytes);
+            let back = bwd_map(&out);
+            if back != in_bytes {
+                return Err(CompileError::EmissionVerificationFailed(format!(
+                    "general synth '{}': bwd∘fwd ≠ id on carrier bytes {in_bytes:?} \
+                     (fwd→{out:?}, bwd→{back:?}); the backward table is not the inverse",
+                    def.forward_name
+                )));
+            }
+        }
+    }
+
+    let fwd = table_to_regtransfer(&fwd_map, &spec_leaves, &widths);
+    let bwd = table_to_regtransfer(&bwd_map, &spec_leaves, &widths);
+
+    // ── Node-line budget: max single-output-bit ROBDD node count over fwd+bwd ──
+    let map = bveq::VarMap::new(NUM_REGS).map_err(|e| {
+        CompileError::EmissionVerificationFailed(format!(
+            "general synth '{}': VarMap: {e}",
+            def.forward_name
+        ))
+    })?;
+    let mut node_lines = 0usize;
+    for t in [&fwd, &bwd] {
+        for row in &t.regs {
+            for e in row {
+                let bdd = bveq::expr_to_bdd(e, &map).map_err(|e| {
+                    CompileError::EmissionVerificationFailed(format!(
+                        "general synth '{}': expr_to_bdd: {e}",
+                        def.forward_name
+                    ))
+                })?;
+                let root = bdd.root_pointer();
+                let nodes = if root.is_zero() || root.is_one() {
+                    0
+                } else {
+                    bdd.size() - 2
+                };
+                node_lines = node_lines.max(nodes);
+            }
+        }
+    }
+
+    // ── Step 2: allocate carriers (register-resident) + free operand words ──
+    // Carriers must be register-home for the general path (small prims); a
+    // scratch/mem-home carrier means the prim is too big to sit in registers →
+    // provisioning. Collect carrier register indices from `ctx.homes`.
+    let mut carrier_ops: Vec<u8> = Vec::with_capacity(n);
+    for leaf in 0..n {
+        match ctx.homes.get(leaf) {
+            Some(Location::Reg(r)) => carrier_ops.push(*r),
+            _ => {
+                // A non-register carrier home → out of the general path's small
+                // fast fit; report as provisioning (needs widen/paging support).
+                return Err(CompileError::NeedsProvisioning {
+                    prim: def.forward_name.clone(),
+                    required: n + n + 1 + node_lines,
+                    available: free_operand_words(ctx),
+                });
+            }
+        }
+    }
+
+    // Free operand words: registers NOT holding carriers/live data, plus legal
+    // scratch (s2..s7 = operands 10..15; s0/s1 are decoder-reserved). Use
+    // whole-machine occupancy so we never place a helper on a live word.
+    let carrier_set: std::collections::BTreeSet<u8> = carrier_ops.iter().copied().collect();
+    let mut free: Vec<u8> = Vec::new();
+    for r in 0..NUM_REGS as u8 {
+        if !carrier_set.contains(&r) && ctx.occ.is_free(Location::Reg(r)) {
+            free.push(r);
+        }
+    }
+    for s in SCRATCH_SPILL_BASE..NUM_SCRATCH as u8 {
+        if ctx.occ.is_free(Location::Scratch(s)) {
+            // Operand index of scratch word s is NUM_REGS + s.
+            free.push(NUM_REGS as u8 + s);
+        }
+    }
+
+    // Working words needed beyond carriers: n ancilla + 1 temp + node_lines.
+    let need_aux = n + 1 + node_lines;
+    if free.len() < need_aux {
+        return Err(CompileError::NeedsProvisioning {
+            prim: def.forward_name.clone(),
+            required: n + need_aux, // carriers + aux
+            available: n + free.len(),
+        });
+    }
+    let ancilla: Vec<u8> = free[..n].to_vec();
+    let temp: u8 = free[n];
+    let nodes: Vec<u8> = free[n + 1..n + 1 + node_lines].to_vec();
+
+    // ── Step 4: synthesize the reversible Bennett body via the BDD path. ──
+    let helpers = BddHelpers {
+        temp,
+        nodes: &nodes,
+    };
+    let body = transcribe_bdd_bennett(&fwd, &bwd, &carrier_ops, &ancilla, helpers).map_err(|e| {
+        CompileError::EmissionVerificationFailed(format!(
+            "general synth '{}': transcribe_bdd_bennett: {e}",
+            def.forward_name
+        ))
+    })?;
+
+    // ── Step 5: VERIFY before returning. Fail-closed. ──
+    // Working words that MUST be net-zero after the body: ancilla, temp, nodes.
+    let mut aux_words: Vec<u8> = ancilla.clone();
+    aux_words.push(temp);
+    aux_words.extend_from_slice(&nodes);
+
+    // (a) Whole-domain exec: carriers land at fwd(x) AND every aux word is 0.
+    verify_general_body_exec(&body, def, &carrier_ops, &widths, &aux_words).map_err(|msg| {
+        CompileError::EmissionVerificationFailed(format!(
+            "general synth '{}': BDD body exec-verify failed: {msg}",
+            def.forward_name
+        ))
+    })?;
+
+    // (b) Differential vs the ANF path: synthesize the SAME prim through the ANF
+    // transcriber and assert both bodies agree on the whole domain (carriers +
+    // net-zero). This is an independent second synthesis mechanism, so an
+    // agreement is strong evidence neither path is wrong the same way.
+    {
+        // ANF needs its own helper bank (mask + AND-tree temps). Reuse the free
+        // pool: mask + temps from the words not used as ancilla. If the ANF
+        // helper bank does not fit the free budget, SKIP the differential (the
+        // primary exec-verify already certified the BDD body); this only happens
+        // for prims whose ANF is much wider than the BDD, which is exactly the
+        // case the BDD path exists to handle.
+        let anf_free: Vec<u8> = free[n..].to_vec(); // all non-ancilla free words
+        if let Some((mask, temps)) = anf_helper_bank(&anf_free) {
+            let anf_helpers = HelperBank {
+                mask,
+                temps: &temps,
+            };
+            match transcribe_bennett_general(&fwd, &bwd, &carrier_ops, &ancilla, anf_helpers) {
+                Ok(anf_body) => {
+                    let mut anf_aux: Vec<u8> = ancilla.clone();
+                    anf_aux.push(mask);
+                    anf_aux.extend_from_slice(&temps);
+                    verify_general_body_exec(&anf_body, def, &carrier_ops, &widths, &anf_aux)
+                        .map_err(|msg| {
+                            CompileError::EmissionVerificationFailed(format!(
+                                "general synth '{}': ANF differential body failed exec-verify: \
+                                 {msg}",
+                                def.forward_name
+                            ))
+                        })?;
+                    // Both bodies exec-verified against the SAME table over the
+                    // full domain → they agree. (Comparing carrier outputs
+                    // instr-by-instr is unnecessary: both were checked === table.)
+                }
+                Err(_) => {
+                    // ANF path could not be wired within the free bank — the BDD
+                    // exec-verify stands alone.
+                }
+            }
+        }
+    }
+
+    Ok(body)
+}
+
+/// Count legal free operand words on the machine for `ctx` (free registers +
+/// legal scratch s2..s7). Used only for `NeedsProvisioning` diagnostics.
+fn free_operand_words(ctx: &Ctx) -> usize {
+    let mut n = 0usize;
+    for r in 0..NUM_REGS as u8 {
+        if ctx.occ.is_free(Location::Reg(r)) {
+            n += 1;
+        }
+    }
+    for s in SCRATCH_SPILL_BASE..NUM_SCRATCH as u8 {
+        if ctx.occ.is_free(Location::Scratch(s)) {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Split a free-word pool into an ANF helper bank `(mask, temps)` — needs ≥ 2
+/// words (1 mask + ≥1 temp). Returns `None` if too few words remain.
+fn anf_helper_bank(free: &[u8]) -> Option<(u8, Vec<u8>)> {
+    if free.len() < 2 {
+        return None;
+    }
+    Some((free[0], free[1..].to_vec()))
+}
+
+/// Whole-domain exec-verify of a synthesized reversible body: for every input in
+/// `def.forward`, load carriers, run the body through `exec_instr`, then assert
+/// (a) each carrier register holds the rule's output byte, and (b) every aux word
+/// (ancilla + helpers + node lines) is restored to 0 (Bennett net-zero).
+///
+/// Complete for the small prims the general path fits: it enumerates the whole
+/// table, so a wrong emission is caught on some input. `widths` bound the
+/// meaningful output bits per carrier (Flat(w) zero-extension).
+fn verify_general_body_exec(
+    body: &[Instr],
+    def: &PrimDef,
+    carrier_ops: &[u8],
+    widths: &[u8],
+    aux_words: &[u8],
+) -> Result<(), String> {
+    let n = carrier_ops.len();
+    for (in_val, out_val) in &def.forward {
+        let in_bytes = value_to_leaf_bytes(in_val, &def.input_ty);
+        let out_bytes = value_to_leaf_bytes(out_val, &def.output_ty);
+
+        let mut st = StateVals {
+            regs: [0u8; NUM_REGS],
+            pc: 0,
+            br: 0,
+            ir: 0,
+            scratch: [0u8; NUM_SCRATCH],
+            mem: [0u8; MEM_WORDS],
+        };
+        for i in 0..n {
+            let b = in_bytes.get(i).copied().unwrap_or(0);
+            st.operand_set(carrier_ops[i], b);
+        }
+        // Aux words must start at 0.
+        for &w in aux_words {
+            if st.operand_get(w) != 0 {
+                return Err(format!("aux word {w} not zero at entry"));
+            }
+        }
+        for &ins in body {
+            exec_instr(ins, &mut st);
+        }
+        // Carriers land at the rule's output (compare only meaningful bits).
+        for i in 0..n {
+            let want = out_bytes.get(i).copied().unwrap_or(0);
+            let got = st.operand_get(carrier_ops[i]);
+            let w = widths.get(i).copied().unwrap_or(8) as u32;
+            let mask: u8 = if w >= 8 { 0xFF } else { (1u8 << w) - 1 };
+            if (got & mask) != (want & mask) {
+                return Err(format!(
+                    "carrier {i} (op {}) mismatch on input {in_bytes:?}: got {got:#04x} \
+                     want {want:#04x} (mask {mask:#04x})",
+                    carrier_ops[i]
+                ));
+            }
+            // Above-width bits must be zero (Flat(w) zero-extension).
+            if (got & !mask) != 0 {
+                return Err(format!(
+                    "carrier {i} (op {}) has spurious high bits {:#04x} on input {in_bytes:?}",
+                    carrier_ops[i],
+                    got & !mask
+                ));
+            }
+        }
+        // Bennett net-zero: every aux word restored to 0.
+        for &w in aux_words {
+            let v = st.operand_get(w);
+            if v != 0 {
+                return Err(format!(
+                    "aux word {w} not net-zero (={v:#04x}) after body on input {in_bytes:?}"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 // ── Selection-by-equiv (3b: symbolic prim recognition) ─────────────────
