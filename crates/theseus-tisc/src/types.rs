@@ -23,8 +23,37 @@
 use theseus_core::{Type, Value};
 use theseus_netlist::{bits_of, value_from_bits};
 
-/// Number of bits per general register / scratch word / PC / BR.
+/// Number of bits per general register / scratch word / memory word.
 pub const W: usize = 8;
+
+/// PC value width (A-6.4 / A-2 widen-PC). Widened from `W` (8) to 16 so
+/// program bodies with `B > 256` can run: the end-of-step update
+/// `PC += BR + 1` is arithmetic mod `2^W_PC`, so the reachable step index
+/// (∝ B) must fit in `W_PC` bits. PC occupies `⌈W_PC / W⌉ = 2` Word8
+/// fields (PC_lo at `PC_FIELD`, PC_hi at `PC_HI_FIELD`).
+pub const W_PC: usize = 16;
+
+/// BR (branch-register / come-from-offset) width. **Stays 8** (minimal
+/// widening, resolves design open-Q #2): the end-of-step update adds BR
+/// into the 16-bit PC as a **sign-extended** 8-bit 2's-complement offset
+/// (`pc_add_br`, step.rs). A backward jump is minted exactly as before —
+/// `δu = (256 − iter_len) mod 256` (an 8-bit register value swapped into
+/// BR) — and its top bit (set whenever `iter_len ≤ 128`) sign-extends to
+/// `0xFF..` so `PC += BR + 1` walks *backward* across the full 16-bit PC.
+/// So the entire come-from / SWAPBR / δu-mint machinery is byte-identical
+/// to the 8-bit-PC design; only the *adder* changes (it sign-extends).
+/// This is why "W_BR = 8 suffices" (design §5/§6): an 8-bit BR expresses
+/// every backward offset up to −128 and every forward offset up to +127.
+pub const W_BR: usize = 8;
+
+/// Number of Word8 fields PC occupies (`⌈W_PC / W⌉`).
+pub const PC_FIELDS: usize = W_PC / W;
+/// Number of Word8 fields BR occupies (`⌈W_BR / W⌉` = 1).
+pub const BR_FIELDS: usize = W_BR / W;
+
+/// PC address space = `2^W_PC` (was 256). Every wrap / cap / dead-zone
+/// bound routes through this single constant — no scattered `256`s.
+pub const PC_ADDR_SPACE: usize = 1 << W_PC;
 
 /// Number of general registers.
 pub const NUM_REGS: usize = 8;
@@ -94,8 +123,17 @@ impl TryFrom<usize> for MemWidth {
 }
 
 /// Number of Word8-sized fields in CpuState:
-/// 8 regs + PC + BR + IR_b0..IR_b3 (32-bit IR) + 8 scratch = 22.
-pub const NUM_CPU_FIELDS: usize = 22;
+/// 8 regs + PC_lo + BR_lo + IR_b0..IR_b3 (32-bit IR) + 8 scratch
+/// + PC_hi + BR_hi = 22 + (PC_FIELDS-1) + (BR_FIELDS-1) = 24.
+///
+/// A-6.4 widen-PC **appends** the extra PC byte (PC_hi at index 22)
+/// rather than inserting it, so every reg / IR / scratch field index
+/// stays stable and no `bits_of` consumer that slices a contiguous PC
+/// byte is disturbed (the fetch and PC arithmetic address bytes by
+/// *field index*, never by bit-adjacency — see `pc_add_br` / `pc_inc` /
+/// `fetch` in step.rs). BR stays a single byte (W_BR = 8, sign-extended
+/// into PC by the adder), so no BR_hi field is added.
+pub const NUM_CPU_FIELDS: usize = 22 + (PC_FIELDS - 1) + (BR_FIELDS - 1);
 
 /// Total number of Word8-sized fields in CpuState (= `NUM_CPU_FIELDS`).
 /// The ring step and all non-MEXCH instructions operate on this carrier.
@@ -163,14 +201,15 @@ fn right_nested(types: &[Type]) -> Type {
     }
 }
 
-/// CpuState type: right-nested product of 22 Word8 fields.
+/// CpuState type: right-nested product of `NUM_CPU_FIELDS` (=24) Word8 fields.
 ///
 /// Field order (index):
 ///   0..8   = r0..r7    (general registers)
-///   8      = PC
-///   9      = BR
+///   8      = PC_lo     (bits 0..8 of the 16-bit PC)
+///   9      = BR        (8-bit branch offset, sign-extended into PC)
 ///   10..14 = IR_b0..IR_b3 (four bytes of the 32-bit IR, LSB byte first)
 ///   14..22 = s0..s7    (scratch words)
+///   22     = PC_hi     (bits 8..16 of the 16-bit PC) — appended (A-6.4)
 ///
 /// The ring step and all non-MEXCH instructions operate on this carrier.
 pub fn state_ty() -> Type {
@@ -216,11 +255,24 @@ pub fn reg_field(i: usize) -> usize {
     i
 }
 
-/// Field index of PC.
+/// Field index of PC low byte (bits 0..8 of the `W_PC`-bit PC).
 pub const PC_FIELD: usize = 8;
 
-/// Field index of BR.
+/// Field index of BR low byte (bits 0..8 of the `W_BR`-bit BR).
 pub const BR_FIELD: usize = 9;
+
+/// Field index of PC high byte (bits 8..16). Appended after the scratch
+/// words so the low-index layout is unchanged (A-6.4 widen-PC).
+pub const PC_HI_FIELD: usize = 22;
+
+/// The Word8 field index of PC byte `k` (`k=0` → low, `k=1` → high).
+pub const fn pc_byte_field(k: usize) -> usize {
+    match k {
+        0 => PC_FIELD,
+        1 => PC_HI_FIELD,
+        _ => panic!("pc_byte_field: k out of range for W_PC=16"),
+    }
+}
 
 /// Field index of IR byte 0 (bits 0..8 of the 32-bit IR).
 pub const IR_B0_FIELD: usize = 10;
@@ -254,7 +306,11 @@ pub fn mem_field(i: usize) -> usize {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateVals {
     pub regs: [u8; NUM_REGS],
-    pub pc: u8,
+    /// Program counter — 16-bit (A-6.4 widen-PC). Low byte at `PC_FIELD`,
+    /// high byte at `PC_HI_FIELD`.
+    pub pc: u16,
+    /// Branch register / come-from offset — 8-bit (W_BR=8), sign-extended
+    /// into the 16-bit PC by the end-of-step adder (`pc_add_br`).
     pub br: u8,
     pub ir: u32,
     pub scratch: [u8; NUM_SCRATCH],
@@ -286,16 +342,17 @@ impl StateVals {
     pub fn encode(&self) -> Value {
         let ty = state_ty();
         let mut all_bits: Vec<bool> = Vec::with_capacity(STATE_BITS);
-        // Fields in order: r0..r7, PC, BR, IR_lo, IR_hi, s0..s7
+        // Fields in order: r0..r7, PC_lo, BR, IR_b0..b3, s0..s7, PC_hi.
         for &r in &self.regs {
             push_u8_bits(&mut all_bits, r);
         }
-        push_u8_bits(&mut all_bits, self.pc);
-        push_u8_bits(&mut all_bits, self.br);
+        push_u8_bits(&mut all_bits, self.pc as u8); // PC_lo
+        push_u8_bits(&mut all_bits, self.br); // BR (8-bit)
         push_ir_bits(&mut all_bits, self.ir); // IR_b0..IR_b3 (32-bit)
         for &s in &self.scratch {
             push_u8_bits(&mut all_bits, s);
         }
+        push_u8_bits(&mut all_bits, (self.pc >> 8) as u8); // PC_hi (appended)
         value_from_bits(&ty, &all_bits).expect("StateVals::encode")
     }
 
@@ -311,8 +368,8 @@ impl StateVals {
         for (i, r) in regs.iter_mut().enumerate() {
             *r = read_u8_bits(&all_bits, i * W);
         }
-        let pc = read_u8_bits(&all_bits, 8 * W);
-        let br = read_u8_bits(&all_bits, 9 * W);
+        let pc = read_pc_bits(&all_bits);
+        let br = read_u8_bits(&all_bits, BR_FIELD * W);
         let ir = read_ir_bits(&all_bits, 10 * W);
         let mut scratch = [0u8; NUM_SCRATCH];
         for (i, s) in scratch.iter_mut().enumerate() {
@@ -378,12 +435,13 @@ pub fn encode_composite(s: &StateVals) -> Value {
     for &r in &s.regs {
         push_u8_bits(&mut cpu_bits, r);
     }
-    push_u8_bits(&mut cpu_bits, s.pc);
-    push_u8_bits(&mut cpu_bits, s.br);
+    push_u8_bits(&mut cpu_bits, s.pc as u8); // PC_lo
+    push_u8_bits(&mut cpu_bits, s.br); // BR (8-bit)
     push_ir_bits(&mut cpu_bits, s.ir);
     for &sc in &s.scratch {
         push_u8_bits(&mut cpu_bits, sc);
     }
+    push_u8_bits(&mut cpu_bits, (s.pc >> 8) as u8); // PC_hi (appended)
     let cpu_val = value_from_bits(&cpu_ty, &cpu_bits).expect("encode_composite: cpu");
 
     let mut mem_bits: Vec<bool> = Vec::with_capacity(MEM_WORDS * W);
@@ -411,8 +469,8 @@ pub fn decode_composite(val: &Value) -> StateVals {
     for (i, r) in regs.iter_mut().enumerate() {
         *r = read_u8_bits(&cpu_bits, i * W);
     }
-    let pc = read_u8_bits(&cpu_bits, 8 * W);
-    let br = read_u8_bits(&cpu_bits, 9 * W);
+    let pc = read_pc_bits(&cpu_bits);
+    let br = read_u8_bits(&cpu_bits, BR_FIELD * W);
     let ir = read_ir_bits(&cpu_bits, 10 * W);
     let mut scratch = [0u8; NUM_SCRATCH];
     for (i, s) in scratch.iter_mut().enumerate() {
@@ -484,6 +542,15 @@ fn push_u8_bits(bits: &mut Vec<bool>, val: u8) {
         bits.push((val >> i) & 1 == 1);
     }
 }
+
+/// Read a `W_PC`-bit PC value split across `PC_FIELD` (low byte) and
+/// `PC_HI_FIELD` (high byte) from a full CpuState bit vector.
+fn read_pc_bits(bits: &[bool]) -> u16 {
+    let lo = read_u8_bits(bits, PC_FIELD * W);
+    let hi = read_u8_bits(bits, PC_HI_FIELD * W);
+    u16::from(lo) | (u16::from(hi) << 8)
+}
+
 
 fn read_u8_bits(bits: &[bool], offset: usize) -> u8 {
     let mut val = 0u8;

@@ -138,7 +138,8 @@ fn mixed_ctx() -> &'static MixedCtx {
 
 // ── Sample states ─────────────────────────────────────────────────
 
-fn sample_state(pc: u8) -> StateVals {
+fn sample_state(pc_in: impl Into<u16>) -> StateVals {
+    let pc: u16 = pc_in.into();
     let mut mem = [0u8; MEM_WORDS];
     for (i, m) in mem.iter_mut().enumerate() {
         *m = 0x42u8.wrapping_add((i as u8).wrapping_mul(0x31));
@@ -271,7 +272,7 @@ fn mexchr_oracle_basic() {
     // Step 1: MEXCHR r1, r2 → addr = 0xAC % 4 = 0, reg[1] ↔ mem[0], pc→2
     // Step 2: SUBI r6, 0x11, pc→3
 
-    let start = sample_state(0);
+    let start = sample_state(0u8);
     // Run 3 steps via eval oracle
     let s1 = eval_system_state("step0", &c.iso, &start);
     let s2 = eval_system_state("step1", &c.iso, &s1);
@@ -297,7 +298,7 @@ fn mexchr_oracle_wrap() {
     // ROM: [ADDI r3,7 ; MEXCHR r0,r3 ; MEXCH r4,1]
     // Start at pc=0 with r3=0x55, r0=0x00, mem[0]=0x42
 
-    let start = sample_state(0);
+    let start = sample_state(0u8);
     let s1 = eval_system_state("wrap_step0", &c.iso, &start);
     let s2 = eval_system_state("wrap_step1", &c.iso, &s1);
     let result = eval_system_state("wrap_step2", &c.iso, &s2);

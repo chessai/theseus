@@ -104,8 +104,8 @@ fn ref_step(rom: &[u32], s: &StateVals) -> StateVals {
     let mut out = s.clone();
     let word = rom.get(s.pc as usize).copied().unwrap_or(0);
     ref_instr(word, &mut out);
-    // ADR-0034 D2: PC += BR + 1 (using post-execute BR value)
-    out.pc = s.pc.wrapping_add(out.br).wrapping_add(1);
+    // ADR-0034 D2 / A-6.4: PC += sext(BR) + 1 (mod 2^W_PC), post-execute BR.
+    out.pc = theseus_tisc::compile::pc_update(s.pc, out.br);
     out
 }
 
@@ -139,7 +139,8 @@ fn rom2() -> Vec<u32> {
 
 // ── Sample states (ir = 0, s0 = s1 = 0, BR = 0 for straight-line) ─
 
-fn st(regs: [u8; 8], pc: u8) -> StateVals {
+fn st(regs: [u8; 8], pc_in: impl Into<u16>) -> StateVals {
+    let pc: u16 = pc_in.into();
     StateVals {
         regs,
         pc,
@@ -196,7 +197,7 @@ fn fetch_isolated() {
 
     // Involution: fetch ; fetch == identity (unfetch is the same iso).
     let twice = Iso::seq(iso.clone(), iso);
-    let s = st(regs_b(), 3);
+    let s = st(regs_b(), 3u16);
     assert_eq!(eval_state("fetch twice", &twice, &s), s);
 }
 
@@ -215,25 +216,30 @@ fn pc_add_br_isolated() {
         "pc_add_br: max kind {max_kind:?} exceeds the admitted K0..K2 + R1 vocabulary"
     );
 
-    // Sample: PC += BR for various (pc, br) pairs.
+    // Sample: PC += sext(BR) for various (pc, br) pairs, including the
+    // backward-jump case (br top-bit set ⇒ negative sext ⇒ PC walks back
+    // across the 16-bit boundary) and 16-bit PC values.
+    let sext = |br: u8| br as i8 as i16 as u16;
     for (pc, br) in [
-        (0u8, 0u8),
+        (0u16, 0u8),
         (10, 5),
-        (0xFF, 1),
-        (0x80, 0x80),
-        (0, 0xFF),
-        (42, 200),
+        (0x00FF, 1),
+        (0x0100, 0xF6), // br = -10 (backward), PC 256 → 246
+        (0x0000, 0xFF), // br = -1, PC 0 → 0xFFFF (wrap back)
+        (0x1234, 200),
+        (0xFFFF, 1),
+        (0x0140, 246), // 320 + (-10) = 310
     ] {
         let mut s = st(regs_a(), pc);
         s.br = br;
         let got = eval_state("pc_add_br", &iso, &s);
         let mut expected = s.clone();
-        expected.pc = pc.wrapping_add(br);
-        assert_eq!(got, expected, "pc_add_br: pc={pc}, br={br}");
+        expected.pc = pc.wrapping_add(sext(br));
+        assert_eq!(got, expected, "pc_add_br: pc={pc:#06x}, br={br:#04x}");
 
-        // Adjoint = subtract.
+        // Adjoint = subtract sext(BR).
         let back = eval_state("pc_sub_br", &Iso::sym(iso.clone()), &got);
-        assert_eq!(back, s, "pc_add_br adjoint: pc={pc}, br={br}");
+        assert_eq!(back, s, "pc_add_br adjoint: pc={pc:#06x}, br={br:#04x}");
     }
 }
 
@@ -271,48 +277,119 @@ fn pc_inc_isolated() {
     eprintln!("pc_inc: {total} cells, max kind {max_kind:?}, counts {counts:?}");
     assert!((max_kind <= CellKind::K3 || max_kind == CellKind::R1));
 
-    for pc in [0u8, 1, 2, 7, 8, 0x0F, 0x7F, 0x80, 0xFE, 0xFF] {
+    // 16-bit increment: include the inter-byte carry (0x00FF → 0x0100)
+    // and the full wrap (0xFFFF → 0x0000).
+    for pc in [
+        0u16, 1, 2, 7, 8, 0x0F, 0x7F, 0x80, 0xFE, 0xFF, 0x00FF, 0x0100, 0x01FF, 0x1234, 0xFFFE,
+        0xFFFF,
+    ] {
         let s = st(regs_a(), pc);
         let got = eval_state("pc_inc", &iso, &s);
         let mut expected = s.clone();
         expected.pc = pc.wrapping_add(1);
-        assert_eq!(got, expected, "pc_inc: pc={pc}");
+        assert_eq!(got, expected, "pc_inc: pc={pc:#06x}");
 
         // Adjoint = decrement.
         let back = eval_state("pc_dec", &Iso::sym(iso.clone()), &got);
-        assert_eq!(back, s, "pc_inc adjoint: pc={pc}");
+        assert_eq!(back, s, "pc_inc adjoint: pc={pc:#06x}");
     }
 }
 
 #[test]
 fn pc_inc_sampled() {
-    // Sampled at carry boundaries.
+    // Sampled at 8-bit and inter-byte carry boundaries.
     let iso = pc_inc();
-    for pc in [0u8, 1, 7, 8, 0x7F, 0x80, 0xFE, 0xFF] {
+    for pc in [
+        0u16, 1, 7, 8, 0x7F, 0x80, 0xFE, 0xFF, 0x00FF, 0x0100, 0x7FFF, 0x8000, 0xFFFF,
+    ] {
         let s = st(regs_b(), pc);
         let got = eval_state("pc_inc/sampled", &iso, &s);
         let mut expected = s.clone();
         expected.pc = pc.wrapping_add(1);
         assert_eq!(
             got, expected,
-            "pc_inc: pc={pc} (carry scratch must restore)"
+            "pc_inc: pc={pc:#06x} (carry scratch must restore)"
         );
     }
 }
 
 #[test]
-#[ignore = "authoritative exhaustive pc_inc; run via --ignored"]
-fn pc_inc_exhaustive_all_256() {
+#[ignore = "authoritative exhaustive pc_inc over all 2^16 PC values; run via --ignored"]
+fn pc_inc_exhaustive_all_16bit() {
+    // ADR-0034 A-6.4: pc_inc computes (PC+1) mod 2^W_PC for EVERY 16-bit
+    // PC, with the carry crossing the PC_lo→PC_hi field boundary and s1
+    // scratch restored. The mechanized re-proof of the +1 half.
     let iso = pc_inc();
-    for pc in 0..=255u8 {
+    for pc in 0..=u16::MAX {
         let s = st(regs_b(), pc);
         let got = eval_state("pc_inc/all", &iso, &s);
         let mut expected = s.clone();
         expected.pc = pc.wrapping_add(1);
         assert_eq!(
             got, expected,
-            "pc_inc: pc={pc} (carry scratch must restore)"
+            "pc_inc: pc={pc:#06x} (carry scratch must restore)"
         );
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 1b. ADR-0034 A-6.4 re-proof: the split-field PC update is exactly
+//     (PC + sext(BR) + 1) mod 2^W_PC — the mechanized injectivity witness
+//     for the `A : (PC,BR,rest) ↦ (PC+BR+1, BR, rest)` bijection at the
+//     widened width. See docs/src/adr/0034 D2/D4 (A-6.4 amendment).
+// ══════════════════════════════════════════════════════════════════════
+
+/// The end-of-step PC update as the hardware computes it: pc_add_br ; pc_inc.
+fn pc_update_iso() -> Iso {
+    Iso::seq(pc_add_br(), pc_inc())
+}
+
+#[test]
+fn adr0034_split_add_sampled() {
+    // Fast sampled cover of the split-field update over carry boundaries
+    // and the backward-jump (sext-negative BR) case.
+    let iso = pc_update_iso();
+    let expect = |pc: u16, br: u8| theseus_tisc::compile::pc_update(pc, br);
+    for pc in [
+        0u16, 1, 0x00FF, 0x0100, 0x7FFF, 0x8000, 0xFFFE, 0xFFFF, 0x1234,
+    ] {
+        for br in [0u8, 1, 5, 0x7F, 0x80, 0xF6, 0xFF] {
+            let mut s = st(regs_a(), pc);
+            s.br = br;
+            let got = eval_state("split_add", &iso, &s);
+            assert_eq!(
+                got.pc,
+                expect(pc, br),
+                "split (pc_add_br;pc_inc) != (PC+sext(BR)+1) mod 2^16: pc={pc:#06x} br={br:#04x}"
+            );
+            assert_eq!(got.br, br, "BR preserved by the PC update");
+            assert_eq!(got.scratch[1], 0, "s1 restored by the PC update");
+        }
+    }
+}
+
+#[test]
+#[ignore = "authoritative EXHAUSTIVE ADR-0034 split-add re-proof (2^16 PC × 2^8 BR = 16.7M); run via --ignored"]
+fn adr0034_split_add_exhaustive() {
+    // The full mechanized ADR-0034 re-proof at W_PC=16, W_BR=8:
+    //   (pc_add_br ; pc_inc)(PC,BR) == (PC + sext(BR) + 1) mod 2^W_PC
+    // for ALL PC ∈ [0,2^16), BR ∈ [0,2^8). The carry crosses the byte
+    // boundary and never leaks above bit 15; BR is preserved; s1 restored.
+    // Bijectivity of x ↦ x + c (mod 2^k) is translation on Z/2^k, so the
+    // A-map is a bijection at any width — this test is the WITNESS that the
+    // split-field implementation realizes exactly that map.
+    let iso = pc_update_iso();
+    for br in 0..=u8::MAX {
+        for pc in 0..=u16::MAX {
+            let mut s = st(regs_b(), pc);
+            s.br = br;
+            let got = eval_state("split_add/all", &iso, &s);
+            let expected = theseus_tisc::compile::pc_update(pc, br);
+            assert_eq!(
+                got.pc, expected,
+                "split-add mismatch: pc={pc:#06x} br={br:#04x}"
+            );
+        }
     }
 }
 
@@ -395,9 +472,9 @@ fn step_semantics() {
         check_semantics(&format!("rom1/pc={pc}/a"), &st(regs_a(), pc));
     }
     // Second register file on one representative PC.
-    check_semantics("rom1/pc=3/b", &st(regs_b(), 3));
+    check_semantics("rom1/pc=3/b", &st(regs_b(), 3u16));
     // Out-of-ROM pc: no-op + PC advance (word 0, s0 = 0).
-    check_semantics("rom1/pc=200", &st(regs_a(), 200));
+    check_semantics("rom1/pc=200", &st(regs_a(), 200u16));
 }
 
 #[test]
@@ -477,7 +554,7 @@ fn forward_then_backward_run() {
     let back = Iso::sym(iso.clone());
     const T: usize = 4;
 
-    let start = st(regs_b(), 0);
+    let start = st(regs_b(), 0u16);
     let mut cur = start.clone();
     let mut refs = vec![start.clone()];
     for t in 0..T {
@@ -490,7 +567,7 @@ fn forward_then_backward_run() {
         refs.push(next.clone());
         cur = next;
     }
-    assert_eq!(cur.pc, T as u8, "PC must have advanced T times");
+    assert_eq!(cur.pc, T as u16, "PC must have advanced T times");
 
     for t in (0..T).rev() {
         cur = eval_state(&format!("run/back[{t}]"), &back, &cur);
@@ -516,7 +593,7 @@ fn swapbr_step_swaps_br_and_rd() {
 
     // r2 = 0x05, BR = 0: after SWAPBR r2, r2 = 0, BR = 0x05.
     // PC update: PC = 0 + 0x05 + 1 = 6.
-    let s = st(regs_a(), 0);
+    let s = st(regs_a(), 0u16);
     // regs_a() = [0x00, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3]
     // s.br = 0 from st()
     let got = eval_state("swapbr/r2", &iso, &s);
@@ -524,10 +601,12 @@ fn swapbr_step_swaps_br_and_rd() {
     assert_eq!(got, expected, "SWAPBR r2 step semantics mismatch");
     assert_eq!(got.regs[2], 0, "r2 should get old BR value (0)");
     assert_eq!(got.br, 0xAA, "BR should get old r2 value (0xAA)");
+    // A-6.4: BR=0xAA has its top bit set, so it sign-extends to a NEGATIVE
+    // 16-bit offset: PC = 0 + sext(0xAA) + 1 = 0 + (-86) + 1 = 0xFFAB.
     assert_eq!(
         got.pc,
-        0u8.wrapping_add(0xAA).wrapping_add(1),
-        "PC = 0 + 0xAA + 1"
+        theseus_tisc::compile::pc_update(0, 0xAA),
+        "PC = 0 + sext(0xAA) + 1 (mod 2^16)"
     );
     assert_eq!(got.ir, 0, "P4: IR must re-zero after SWAPBR");
     assert_eq!(got.scratch[1], 0, "s1 must be restored");
@@ -537,7 +616,7 @@ fn swapbr_step_swaps_br_and_rd() {
     assert_eq!(rec, s, "SWAPBR step must stay reversible");
 
     // The non-SWAPBR instruction in the same ROM still works (at pc=1).
-    let s2 = st(regs_b(), 1);
+    let s2 = st(regs_b(), 1u16);
     assert_eq!(eval_state("swapbr-rom/add", &iso, &s2), ref_step(&rom, &s2));
 }
 
@@ -595,9 +674,11 @@ fn v1_counterexample_distinct_post_states() {
         "v1 counterexample pair MUST map to distinct post-states under v2 (ADR-0034 D4)"
     );
 
-    // Verify the predecessor PCs are distinct (the key insight).
-    let pred_a = a_out.pc.wrapping_sub(a_out.br).wrapping_sub(1);
-    let pred_b = b_out.pc.wrapping_sub(b_out.br).wrapping_sub(1);
+    // Verify the predecessor PCs are distinct (the key insight). A-6.4:
+    // the predecessor PC is PC' − sext(BR') − 1 (mod 2^W_PC).
+    let sext = |br: u8| br as i8 as i16 as u16;
+    let pred_a = a_out.pc.wrapping_sub(sext(a_out.br)).wrapping_sub(1);
+    let pred_b = b_out.pc.wrapping_sub(sext(b_out.br)).wrapping_sub(1);
     assert_eq!(pred_a, 5, "predecessor PC of A must be 5");
     assert_eq!(pred_b, 9, "predecessor PC of B must be 9");
     assert_ne!(pred_a, pred_b, "predecessor PCs must be distinct");

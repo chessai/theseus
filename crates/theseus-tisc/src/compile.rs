@@ -17,7 +17,9 @@ use theseus_core::{adjoint, Iso, Type, Value};
 
 use crate::asm::{assemble, Instr};
 use crate::bveq;
-use crate::types::{decode_system, encode_system, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use crate::types::{
+    decode_system, encode_system, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH, PC_ADDR_SPACE, W_BR,
+};
 
 // ── Errors ────────────────────────────────────────────────────────────
 
@@ -3757,17 +3759,41 @@ fn lower_trace(
     // k_max), not just `spine + k_max·iter_len` which ignored nested cost.
     let spine = 4; // prologue(2) + epilogue(2)
     let this_wcet = spine + iter_len + cost_node.extra();
-    if this_wcet > 256 {
+    // A-6.4 widen-PC: the per-Trace step budget now fits the 16-bit PC
+    // (PC_ADDR_SPACE = 2^W_PC), not 256 — this is the cap the widen lifts.
+    if this_wcet > PC_ADDR_SPACE {
         return Err(CompileError::Deferred(format!(
-            "Trace WCET {} exceeds 256 (k_max={}, iter_len={}, spine={}) (M-D.d §5)",
-            this_wcet, k_max, iter_len, spine
+            "Trace WCET {} exceeds PC address space {} (k_max={}, iter_len={}, spine={}) (M-D.d §5)",
+            this_wcet, PC_ADDR_SPACE, k_max, iter_len, spine
+        )));
+    }
+    // A-6.4 come-from constraint: the backward-jump offset δu = 256 −
+    // iter_len is minted into an 8-bit register and SIGN-EXTENDED into the
+    // 16-bit PC (W_BR = 8, design §5). Sign-extension makes δu *negative*
+    // (a genuine backward jump) only when its top bit is set, i.e.
+    // iter_len ≤ 128. A loop body with iter_len > 128 would sign-extend to
+    // a forward offset and diverge — reject it (a wider BR / two-byte δu
+    // mint is the follow-up, design §3.4). k_max·iter_len (= B) is NOT
+    // bounded by this — only a single loop's *ROM span* is.
+    if iter_len > (1 << (W_BR - 1)) {
+        return Err(CompileError::Deferred(format!(
+            "Trace iter_len {} exceeds the sign-extended BR back-jump reach {} \
+             (W_BR={}); loop ROM span too large for an 8-bit come-from offset (A-6.4 §3.4)",
+            iter_len,
+            1 << (W_BR - 1),
+            W_BR
         )));
     }
 
     // ── Compute δu ─────────────────────────────────────────────────
     // After Lend (SWAPBR rb at offset iter_len-1 from Ltop):
-    //   PC = Ltop + (iter_len - 1) + δu + 1 = Ltop + iter_len + δu
-    // Want PC = Ltop → δu = 256 - iter_len (mod 256).
+    //   PC += sext(δu) + 1  (A-6.4: BR is sign-extended into the 16-bit PC).
+    // Want PC = Ltop again ⇒ sext(δu) + 1 = −(iter_len − 1), i.e.
+    //   sext(δu) = −iter_len (a backward jump). With δu = 256 − iter_len
+    //   (8-bit, top bit set since iter_len ≤ 128 per the guard above),
+    //   sext(δu) = −iter_len exactly (mod 2^W_PC). So δu is COMPUTED and
+    //   minted BYTE-IDENTICALLY to the 8-bit-PC design — only the adder's
+    //   sign-extension makes it reach across the wider PC.
     let delta_u: u8 = (256usize.wrapping_sub(iter_len) & 0xFF) as u8;
 
     // ── Register assignment (§3, A-5 occ-aware frame) ──────────────────
@@ -4310,11 +4336,14 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
     let rom =
         assemble(instrs).map_err(|e| CompileError::Deferred(format!("assemble failed: {e}")))?;
 
-    // PARK-SAFETY GUARD (P2): parked PC must not wrap.
-    if budget + s_max_val > 256 {
+    // PARK-SAFETY GUARD (P2): parked PC must not wrap. A-6.4 widen-PC:
+    // the bound is now the 16-bit PC address space (PC_ADDR_SPACE), not
+    // 256 — the whole point of the widen (B + S_max may exceed 256).
+    if budget + s_max_val > PC_ADDR_SPACE {
         return Err(CompileError::Deferred(format!(
-            "parked PC B+S_max={} exceeds PC address space 256; program cannot park by idle (M-D.w)",
-            budget + s_max_val
+            "parked PC B+S_max={} exceeds PC address space {}; program cannot park by idle (M-D.w)",
+            budget + s_max_val,
+            PC_ADDR_SPACE
         )));
     }
 
@@ -4378,6 +4407,20 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
 // matching the step iso's semantics without going through the core-iso
 // evaluator. This makes the differential oracle practical for M-B
 // programs with larger ROMs (e.g. guarded-unroll iter).
+
+/// The end-of-step PC update, replicating the hardware `pc_add_br ; pc_inc`
+/// (ADR-0034 D2) at the widened `W_PC`: `PC += sext(BR) + 1 (mod 2^W_PC)`.
+///
+/// A-6.4 widen-PC: BR is an 8-bit 2's-complement offset **sign-extended**
+/// into the 16-bit PC (see `step::pc_add_br`), so a backward-jump come-from
+/// token `δu = 256 − iter_len` (top bit set) walks PC *backward* across the
+/// full 16-bit space, while forward offsets ≤ 127 advance normally. This
+/// MUST match the datapath exactly or the fast-sim oracle diverges.
+#[inline]
+pub fn pc_update(pc: u16, br: u8) -> u16 {
+    let sext = br as i8 as i16 as u16; // sign-extend BR (i8) into 16 bits
+    pc.wrapping_add(sext).wrapping_add(1)
+}
 
 /// Execute one TISC-1 instruction on the machine state (direct simulation).
 pub fn exec_instr(instr: Instr, state: &mut StateVals) {
@@ -4496,7 +4539,7 @@ pub fn run_on_cpu_fast(iso: &Iso, input: &Value) -> Result<Value, CompileError> 
             exec_instr(instr, &mut state);
         }
         // PC update: PC += BR + 1
-        state.pc = state.pc.wrapping_add(state.br).wrapping_add(1);
+        state.pc = pc_update(state.pc, state.br);
     }
 
     Ok(unmarshal(&state, &out_ty))
@@ -4563,7 +4606,7 @@ pub fn run_on_cpu_fast_resident(
         if let Some(instr) = crate::asm::decode(word) {
             exec_instr(instr, &mut state);
         }
-        state.pc = state.pc.wrapping_add(state.br).wrapping_add(1);
+        state.pc = pc_update(state.pc, state.br);
     }
 
     Ok(unmarshal_resident(&state, &out_ty, resident))
@@ -4578,7 +4621,7 @@ pub fn run_rom_fast(rom: &[u32], mut state: StateVals, steps: usize) -> StateVal
         if let Some(instr) = crate::asm::decode(word) {
             exec_instr(instr, &mut state);
         }
-        state.pc = state.pc.wrapping_add(state.br).wrapping_add(1);
+        state.pc = pc_update(state.pc, state.br);
     }
     state
 }

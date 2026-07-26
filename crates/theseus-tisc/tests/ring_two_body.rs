@@ -178,7 +178,7 @@ fn wide_ctx() -> &'static Ctx {
 fn f5_sample_states() -> Vec<StateVals> {
     let mut states = Vec::new();
     // Strided across PCs that exercise all ROM entries + one out-of-ROM
-    for &pc in &[0u8, 1, 2, 3, 4, 5, 6, 7] {
+    for &pc in &[0u16, 1, 2, 3, 4, 5, 6, 7] {
         let mut mem = [0u8; MEM_WORDS];
         for (i, m) in mem.iter_mut().enumerate() {
             *m = 0x42u8.wrapping_add((i as u8).wrapping_mul(0x31));
@@ -265,7 +265,7 @@ fn wide_strided_sample_states() -> Vec<StateVals> {
     ];
 
     // All 18 ROM PCs + 2 out-of-ROM PCs
-    let pcs: Vec<u8> = (0..=17).chain([19u8, 23]).collect();
+    let pcs: Vec<u16> = (0..=17).chain([19u16, 23]).collect();
 
     // Cross: each PC × first reg pattern × first mem pattern (20 states)
     for &pc in &pcs {
@@ -281,7 +281,7 @@ fn wide_strided_sample_states() -> Vec<StateVals> {
 
     // Cross: MEXCH PCs (9,10,11,12) × all 4 reg patterns × all 5 mem patterns
     // = 4×4×5 = 80 states (some overlap with above, but ≤256 total is fine)
-    for &pc in &[9u8, 10, 11, 12] {
+    for &pc in &[9u16, 10, 11, 12] {
         for rp in &reg_patterns {
             for mp in &mem_patterns {
                 states.push(StateVals {
@@ -297,7 +297,7 @@ fn wide_strided_sample_states() -> Vec<StateVals> {
     }
 
     // Non-MEXCH PCs with varied regs/mem (enable on: pc<9; enable off: pc≥13)
-    for &pc in &[0u8, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16, 17] {
+    for &pc in &[0u16, 1, 2, 3, 4, 5, 6, 7, 13, 14, 15, 16, 17] {
         for (ri, rp) in reg_patterns[1..].iter().enumerate() {
             states.push(StateVals {
                 regs: *rp,
@@ -323,7 +323,7 @@ fn wide_strided_sample_states() -> Vec<StateVals> {
     }
 
     // BR != 0 at non-SWAPBR PCs: exercises pc_add_br with BR preserved
-    for &pc in &[0u8, 5, 13] {
+    for &pc in &[0u16, 5, 13] {
         states.push(StateVals {
             regs: reg_patterns[0],
             pc,

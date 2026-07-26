@@ -32,7 +32,7 @@
 
 use std::fmt;
 
-use crate::types::{MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use crate::types::{MEM_WORDS, NUM_REGS, NUM_SCRATCH, PC_ADDR_SPACE};
 
 // ── A-0 32-bit instruction-word layout ─────────────────────────────
 //
@@ -92,7 +92,7 @@ pub enum AsmError {
     MexchAddrAliasesData { rd: u8, ra: u8 },
     /// SWAPBR register index out of range (must be < NUM_REGS).
     SwapbrRegOutOfRange { rd: u8 },
-    /// Program exceeds the 8-bit PC address space (> 256 instructions).
+    /// Program exceeds the PC address space (A-6.4: > 2^W_PC instructions).
     ProgramTooLong { len: usize },
 }
 
@@ -151,7 +151,7 @@ impl fmt::Display for AsmError {
                 write!(f, "SWAPBR r{rd}: register index out of range")
             }
             AsmError::ProgramTooLong { len } => {
-                write!(f, "program exceeds the 8-bit PC address space: {len} > 256")
+                write!(f, "program exceeds the PC address space: {len} > {PC_ADDR_SPACE}")
             }
         }
     }
@@ -405,12 +405,16 @@ pub fn decode(word: u32) -> Option<Instr> {
 
 /// Assemble a program into its ROM image: `rom[p] = encode(prog[p])`.
 ///
-/// The ROM must fit the 8-bit PC address space (≤ 256 words).
+/// The ROM must fit the PC address space (A-6.4 widen-PC: ≤ 2^W_PC = 65536
+/// words). (The narrow-fetch predicate additionally bounds the *live*
+/// address bits it can distinguish in one Word8 of scratch — see
+/// `step::fetch_addr_bits` — but that is a per-ROM structural limit
+/// checked at fetch-build time, not an assembler cap.)
 ///
-/// Returns `Err(AsmError)` if the program exceeds 256 instructions or
+/// Returns `Err(AsmError)` if the program exceeds the address space or
 /// any instruction fails [`encode`]'s legality checks.
 pub fn assemble(prog: &[Instr]) -> Result<Vec<u32>, AsmError> {
-    if prog.len() > 256 {
+    if prog.len() > PC_ADDR_SPACE {
         return Err(AsmError::ProgramTooLong { len: prog.len() });
     }
     prog.iter().map(|&i| encode(i)).collect()

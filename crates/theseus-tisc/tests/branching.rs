@@ -73,7 +73,7 @@ fn ref_step(rom: &[u32], s: &StateVals) -> StateVals {
     let mut out = s.clone();
     let word = rom.get(s.pc as usize).copied().unwrap_or(0);
     ref_instr(word, &mut out);
-    out.pc = s.pc.wrapping_add(out.br).wrapping_add(1);
+    out.pc = theseus_tisc::compile::pc_update(s.pc, out.br);
     out
 }
 
@@ -153,7 +153,7 @@ fn taken_branch_with_come_from() {
     assert_eq!(trace[2].regs[0], 0, "after SWAPBR: r0 = old BR = 0");
     assert_eq!(trace[2].br, delta, "after SWAPBR: BR = δ");
     assert_eq!(
-        trace[2].pc, target as u8,
+        trace[2].pc, target as u16,
         "after SWAPBR: PC = target (branch taken!)"
     );
 
@@ -211,7 +211,7 @@ fn ir_zero_and_scratch_after_branch() {
     let iso = step(&rom);
 
     for (pc, br, r0, r1) in [
-        (0u8, 0u8, 0x00u8, 0x00u8),
+        (0u16, 0u8, 0x00u8, 0x00u8),
         (0, 0, 0x05, 0x10),
         (0, 0x99, 0x00, 0x42),
         (1, 0, 0x33, 0x00),
@@ -252,7 +252,7 @@ fn br_zero_fall_through_is_pc_plus_one() {
     ];
     let iso = step(&rom);
 
-    for pc in 0u8..3 {
+    for pc in 0u16..3 {
         let s = StateVals {
             regs: [0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87],
             pc,

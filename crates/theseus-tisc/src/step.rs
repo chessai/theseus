@@ -72,160 +72,359 @@
 
 use theseus_core::Iso;
 
-use crate::decoder::{self, cnot_prim, on_fields, toffoli_prim, Op, AUX_PRED_FIELD};
+use crate::decoder::{
+    self, cccnot_prim, cnot_prim, on_fields, toffoli_prim, Op, AUX_OPERAND_FIELD, AUX_PRED_FIELD,
+};
 use crate::plumbing::{at_wire, gate_at, not_iso, seq_balanced};
 use crate::types::{
-    state_ty, BR_FIELD, IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, PC_FIELD, W,
+    state_ty, BR_FIELD, IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, PC_FIELD, PC_HI_FIELD,
+    W, W_PC,
 };
 
-// ── Fetch ──────────────────────────────────────────────────────────
+// ── Fetch (narrow-A, A-6.4) ────────────────────────────────────────
 //
-// Wire layout of the fetch core [PC, IR_b0, IR_b1, IR_b2, IR_b3, s1]
-// (A-0, 32-bit IR; n = 48):
-// PC bit i = wire i; IR bit b (0..32) = wire 8 + b; s1 bit j = wire 40 + j.
+// Wire layout of the fetch core [PC_lo, PC_hi, IR_b0..IR_b3, s1]
+// (A-0 32-bit IR + A-6.4 16-bit PC; n = 7*W = 56):
+//   PC bit i (0..W_PC=16) = wire i ;
+//   IR bit b (0..32) = wire 16 + b ;
+//   s1 bit j (0..8) = wire 48 + j.
+//
+// **Narrow-A fetch** (design §3.3): a correct program's PC only ever
+// takes values in `[0, B + S_max)`, so `A_fetch = ⌈log₂(B + S_max)⌉` low
+// PC bits already distinguish every reachable PC. Each ROM entry's
+// address compare is therefore over only `A_fetch` bits, gated by a
+// SINGLE shared "high bits all zero" bit (`hz`, computed once per step)
+// — so the `W_PC`-dependent cost (the 16-A_fetch high-zero AND) is paid
+// once, not once per entry, and the per-entry predicate cost is ∝ log₂ B,
+// independent of W_PC. This is the ADR-0034 fetch-injectivity witness:
+// `2^A_fetch ≥ B + S_max > every reachable PC`, so all reachable PCs are
+// distinct in `A_fetch` bits, and the shared `hz` gate makes any
+// unreachable high PC PARK (no false match) rather than corrupt.
 
-const FETCH_N: usize = 6 * W;
-/// Predicate (PC == p) lands in s1 bit 0.
-const FETCH_PRED_WIRE: usize = 5 * W;
-/// Toffoli-chain intermediates in s1 bits 1..=6.
-const FETCH_CHAIN0: usize = 5 * W + 1;
+// The fetch core lifts over 8 fields [PC_lo, PC_hi, IR_b0..b3, s0, s1]
+// (n = 8*W = 64). PC bit i (0..16) = wire i; IR bit b = wire 16+b; s0 bit
+// j = wire 48+j; s1 bit j = wire 56+j. BOTH scratch bytes are used as AND-
+// chain space: fetch runs first in the step (and the unfetch after decode
+// restores s0=0), so s0 and s1 are both 0 at fetch/unfetch time. This
+// gives 14 usable chain-intermediate bits, enough for the up-to-15-input
+// high-zero AND under a 16-bit PC — a single s1 byte (the 8-bit-PC design)
+// is too narrow for the wider high-zero gate.
+const FETCH_N: usize = 8 * W;
+/// IR bit 0 wire.
+const FETCH_IR0: usize = W_PC; // IR bit 0 = wire 16
+/// s0 base wire (chain scratch).
+const FETCH_S0: usize = 6 * W; // s0 bit 0 = wire 48
+/// s1 base wire.
+const FETCH_S1: usize = 7 * W; // s1 bit 0 = wire 56
+/// Shared "high bits all zero" gate (`hz`) lands in s1 bit 7.
+const FETCH_HZ_WIRE: usize = FETCH_S1 + 7;
+/// Per-entry predicate `PC == addr` lands in s1 bit 0.
+const FETCH_PRED_WIRE: usize = FETCH_S1;
 
-/// The fields the fetch core lifts over: PC, the four IR bytes, and s1.
-fn fetch_fields() -> [usize; 6] {
+/// AND-chain intermediate wire `k` (k = 0, 1, 2, …): s0 bits 0..8, then
+/// s1 bits 1..7 (skips s1 bit 0 = pred and s1 bit 7 = hz). Up to 14 slots.
+const fn fetch_chain(k: usize) -> usize {
+    if k < W {
+        FETCH_S0 + k // s0 bits 0..8
+    } else {
+        FETCH_S1 + 1 + (k - W) // s1 bits 1..7
+    }
+}
+
+/// The fields the fetch core lifts over: PC_lo, PC_hi, the four IR
+/// bytes, s0, s1.
+fn fetch_fields() -> [usize; 8] {
     [
         PC_FIELD,
+        PC_HI_FIELD,
         IR_B0_FIELD,
         IR_B1_FIELD,
         IR_B2_FIELD,
         IR_B3_FIELD,
+        AUX_OPERAND_FIELD,
         AUX_PRED_FIELD,
     ]
 }
 
-/// Compute the predicate `PC == addr` into s1 bit 0 (8-literal AND:
-/// NOTs on the zero literals, 7-Toffoli chain through s1 bits 1..=6,
-/// NOTs undone). `Iso::sym` uncomputes it.
-fn pc_pred(addr: u8) -> Iso {
-    let nots: Vec<Iso> = (0..W)
+/// Bits needed to hold every reachable PC (= every ROM address plus the
+/// parked/forward-skip zone). `A_fetch = ⌈log₂(rom.len())⌉`, ≥ 1. Since
+/// the assembler caps `rom.len() ≤ 2^A_addr` and every reachable PC is
+/// `< rom.len()` on a live entry (higher PCs are parked, word 0, no
+/// entry), `A_fetch` low bits distinguish every entry, and the shared
+/// high-zero gate rejects PC ≥ 2^A_fetch. Clamped to `W_PC`.
+pub fn fetch_addr_bits(rom_len: usize) -> usize {
+    if rom_len <= 1 {
+        1
+    } else {
+        let a = (usize::BITS - (rom_len - 1).leading_zeros()) as usize;
+        a.clamp(1, W_PC)
+    }
+}
+
+/// Compute the shared "high bits all zero" gate `hz = AND(¬PC[a..W_PC])`
+/// into `FETCH_HZ_WIRE` (7-input-max AND via NOTs + a Toffoli chain in
+/// s1 bits 1..6). When `a == W_PC` there are no high bits: `hz = 1`
+/// (a plain NOT sets s1 bit 7). `Iso::sym` uncomputes it. Only fetch
+/// entries whose address is ≥ 0 need it; it is threaded as an extra
+/// control into every per-entry predicate.
+fn pc_high_zero(a: usize) -> Iso {
+    if a >= W_PC {
+        // No high bits: hz ≡ 1. Set s1 bit 7.
+        return on_fields(&fetch_fields(), vec![at_wire(FETCH_N, FETCH_HZ_WIRE, not_iso())]);
+    }
+    let hi: Vec<usize> = (a..W_PC).collect();
+    // NOT every high bit so "all zero" ⇒ "all negated = 1".
+    let nots: Vec<Iso> = hi
+        .iter()
+        .map(|&i| at_wire(FETCH_N, i, not_iso()))
+        .collect();
+    let mut gates = nots.clone();
+    if hi.len() == 1 {
+        // Single high bit: hz ^= ¬PC[a].
+        gates.push(gate_at(FETCH_N, &[hi[0], FETCH_HZ_WIRE], cnot_prim()));
+    } else {
+        // Compute the AND chain into intermediate scratch (NOT hz), CNOT
+        // the final AND onto hz, then UNCOMPUTE the chain — so hz alone is
+        // set and every fetch_chain scratch bit is restored to 0 before
+        // the per-entry predicates reuse them.
+        let mut chain: Vec<Iso> = Vec::new();
+        let mut acc = hi[0];
+        let mut last = acc;
+        for (t, &i) in hi[1..].iter().enumerate() {
+            let tgt = fetch_chain(t);
+            chain.push(gate_at(FETCH_N, &[acc, i, tgt], toffoli_prim()));
+            acc = tgt;
+            last = tgt;
+        }
+        gates.extend(chain.clone());
+        gates.push(gate_at(FETCH_N, &[last, FETCH_HZ_WIRE], cnot_prim())); // hz ^= AND
+        chain.reverse();
+        gates.extend(chain); // uncompute the AND chain (restore scratch)
+    }
+    gates.extend(nots); // restore the negated PC bits
+    on_fields(&fetch_fields(), gates)
+}
+
+/// Compute `pred = hz ∧ (PC[0..a] == addr)` into `FETCH_PRED_WIRE`
+/// (s1 bit 0): NOTs on the zero low-literals, an `(a+1)`-input AND
+/// (the `a` low PC literals plus the shared `hz` control) via a Toffoli
+/// chain through s1 bits 1..a, NOTs undone. `Iso::sym` uncomputes it.
+fn pc_pred(addr: usize, a: usize) -> Iso {
+    // Low literals (bits 0..a) NOT-ed where addr bit is 0.
+    let nots: Vec<Iso> = (0..a)
         .filter(|i| (addr >> i) & 1 == 0)
         .map(|i| at_wire(FETCH_N, i, not_iso()))
         .collect();
     let mut gates = nots.clone();
-    let mut acc = 0usize;
-    for j in 1..W {
-        let tgt = if j == W - 1 {
-            FETCH_PRED_WIRE
-        } else {
-            FETCH_CHAIN0 + (j - 1)
-        };
-        gates.push(gate_at(FETCH_N, &[acc, j, tgt], toffoli_prim()));
-        acc = tgt;
+    // AND chain over controls [hz, PC0, PC1, ..., PC_{a-1}] → pred.
+    let controls: Vec<usize> = std::iter::once(FETCH_HZ_WIRE).chain(0..a).collect();
+    if controls.len() == 1 {
+        // a == 0 (impossible, a≥1) — pred = hz.
+        gates.push(gate_at(FETCH_N, &[controls[0], FETCH_PRED_WIRE], cnot_prim()));
+    } else {
+        let mut acc = controls[0];
+        for (t, &c) in controls[1..].iter().enumerate() {
+            let tgt = if t == controls.len() - 2 {
+                FETCH_PRED_WIRE
+            } else {
+                fetch_chain(t)
+            };
+            gates.push(gate_at(FETCH_N, &[acc, c, tgt], toffoli_prim()));
+            acc = tgt;
+        }
     }
     gates.extend(nots);
     on_fields(&fetch_fields(), gates)
 }
 
-/// One ROM entry: iff PC == addr, XOR the constant 32-bit `word` into IR.
-fn fetch_entry(addr: u8, word: u32) -> Iso {
-    let pred = pc_pred(addr);
+/// One ROM entry: iff `hz ∧ PC[0..a] == addr`, XOR the constant 32-bit
+/// `word` into IR.
+fn fetch_entry(addr: usize, word: u32, a: usize) -> Iso {
+    let pred = pc_pred(addr, a);
     let cnots: Vec<Iso> = (0..32usize)
         .filter(|&b| (word >> b) & 1 == 1)
-        .map(|b| gate_at(FETCH_N, &[FETCH_PRED_WIRE, W + b], cnot_prim()))
+        .map(|b| gate_at(FETCH_N, &[FETCH_PRED_WIRE, FETCH_IR0 + b], cnot_prim()))
         .collect();
     let body = on_fields(&fetch_fields(), cnots);
     Iso::seq(pred.clone(), Iso::seq(body, Iso::sym(pred)))
 }
 
 /// Fetch phase: `IR ^= rom[PC]` (IR ← rom[PC] when IR = 0 on entry,
-/// per P4). Addresses ≥ `rom.len()` and zero words leave IR unchanged.
-/// Self-inverse for a fixed PC, so it doubles as the unfetch.
-/// Requires s1 = 0 on entry (restored on exit).
+/// per P4). Addresses ≥ `rom.len()` and zero words leave IR unchanged;
+/// PCs with any bit ≥ A_fetch set are parked (the shared high-zero gate
+/// matches nothing). Self-inverse for a fixed PC, so it doubles as the
+/// unfetch. Requires s1 = 0 on entry (restored on exit).
 pub fn fetch(rom: &[u32]) -> Iso {
     assert!(
-        rom.len() <= 1 << W,
-        "ROM exceeds the 8-bit PC address space"
+        rom.len() <= 1 << W_PC,
+        "ROM exceeds the {W_PC}-bit PC address space"
     );
+    let a = fetch_addr_bits(rom.len());
     let entries: Vec<Iso> = rom
         .iter()
         .enumerate()
         .filter(|&(_, &w)| w != 0)
-        .map(|(p, &w)| fetch_entry(p as u8, w))
+        .map(|(p, &w)| fetch_entry(p, w, a))
         .collect();
     if entries.is_empty() {
         Iso::Id(state_ty())
     } else {
-        seq_balanced(entries)
+        // Shared high-zero gate computed once, wrapping all entries.
+        let hz = pc_high_zero(a);
+        Iso::seq(
+            hz.clone(),
+            Iso::seq(seq_balanced(entries), Iso::sym(hz)),
+        )
     }
 }
 
-// ── PC += BR (offset add) ─────────────────────────────────────────
+// ── PC += sext(BR)  (sign-extended offset add) ─────────────────────
+//
+// A-6.4 widen-PC: PC is `W_PC` (=16) bits over two Word8 fields
+// [PC_lo = PC_FIELD, PC_hi = PC_HI_FIELD]; BR is an 8-bit 2's-complement
+// offset **sign-extended** into the 16-bit PC. The come-from token for a
+// backward jump, `δu = 256 − iter_len`, has its top bit (bit 7) set
+// whenever `iter_len ≤ 128`, so `sext(δu)` is negative (`0xFF..`) and
+// `PC += sext(BR) + 1` walks PC *backward* across the full 16-bit space;
+// forward offsets ≤ 127 sign-extend to themselves. This is why an 8-bit
+// BR "suffices" (design §5) under a 16-bit PC.
+//
+// Adder: an in-place ripple-carry (Cuccaro MAJ/UMA, RC 2004) `PC += op`
+// with ONE ancilla carry (s1 bit 0, restored to 0), where the operand
+// bit for PC position i is `sext(BR)[i] = BR[min(i, 7)]` — the sign bit
+// BR[7] is fanned out (read-only control) into PC bits 8..15. BR itself
+// is preserved (it is only a control). Wire layout over the 4 fields
+// [PC_lo, PC_hi, BR, s1] (n = 32): PC bit i (0..16) = wire i; BR bit j
+// (0..8) = wire 16+j; the ancilla carry = wire 24 (s1 bit 0).
 
-/// `PC += BR (mod 256)` via the Takahashi–Kunihiro zero-ancilla
-/// in-place ripple adder (≤ K2 cells). BR is the operand (preserved);
-/// PC is the target (modified). No scratch needed — TK is zero-ancilla.
+/// `PC += sext(BR) (mod 2^W_PC)`. BR (operand) is preserved; PC (target,
+/// 16-bit) is modified.
 ///
-/// With BR = 0 this is the identity (fall-through).
-/// `Iso::sym(pc_add_br())` subtracts BR from PC.
+/// Approach (reuses the PROVEN zero-ancilla Takahashi–Kunihiro in-place
+/// adder that shipped at 8-bit): materialize the 16-bit sign-extended
+/// operand `op = sext(BR)` in scratch — low byte in s0 (copied from BR),
+/// high byte in s1 (all eight bits = BR[7]) — run the `W_PC`-bit TK adder
+/// `PC += op`, then uncompute `op`. BR is only ever a CNOT *control*, so
+/// it is preserved. Requires s0 = 0 and s1 = 0 on entry (the standing
+/// decoder scratch conventions; asserted by the step tests), restored on
+/// exit. With BR = 0 this is the identity (fall-through).
+/// `Iso::sym(pc_add_br())` subtracts sext(BR) from PC.
+///
+/// Wire layout over [PC_lo, PC_hi, BR, s0, s1] (n = 5*W = 40):
+///   PC bit i (0..16) = wire i ; BR bit j (0..8) = wire 16+j ;
+///   s0 bit j = wire 24+j (operand low) ; s1 bit j = wire 32+j (operand high).
 pub fn pc_add_br() -> Iso {
-    let n = 2 * W; // [PC, BR]: PC bit i = wire i, BR bit j = wire 8 + j
-    let a = |i: usize| -> usize { W + i }; // BR (operand, preserved)
-    let b = |i: usize| -> usize { i }; // PC (target, modified: PC += BR)
-    let mut gates: Vec<Iso> = Vec::new();
-    // TK zero-ancilla in-place adder: b += a (mod 2^W), a preserved.
-    for i in 1..W - 1 {
-        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+    let n = 5 * W;
+    let pc = |i: usize| i; // PC target bit i (0..16) — wires 0..16
+    let br = |j: usize| 2 * W + j; // BR bit j — wires 16..24
+    let op = |i: usize| 3 * W + i; // 16-bit operand op[i] — wires 24..40 (s0‖s1)
+    let np = W_PC;
+
+    let mut build: Vec<Iso> = Vec::new();
+    // ── Materialize op = sext(BR): op[i] = BR[i] (i<8), op[i]=BR[7] (i≥8) ──
+    for i in 0..np {
+        let src = if i < W { br(i) } else { br(W - 1) };
+        build.push(gate_at(n, &[src, op(i)], cnot_prim()));
     }
-    for i in (1..W - 1).rev() {
-        gates.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
+
+    // ── PROVEN TK zero-ancilla in-place adder: PC += op (mod 2^np) ──────
+    // (the shipped 8-bit adder, generalized from W to np bits; operand a =
+    // op, target b = PC.)
+    let a = op;
+    let b = pc;
+    let mut add: Vec<Iso> = Vec::new();
+    for i in 1..np - 1 {
+        add.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
     }
-    for i in 0..W - 1 {
-        gates.push(gate_at(n, &[a(i), b(i), a(i + 1)], toffoli_prim()));
+    for i in (1..np - 1).rev() {
+        add.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
     }
-    gates.push(gate_at(n, &[a(W - 1), b(W - 1)], cnot_prim()));
-    gates.push(gate_at(n, &[a(W - 2), b(W - 2), a(W - 1)], toffoli_prim()));
-    for i in (1..W - 1).rev() {
-        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
-        gates.push(gate_at(n, &[a(i - 1), b(i - 1), a(i)], toffoli_prim()));
+    for i in 0..np - 1 {
+        add.push(gate_at(n, &[a(i), b(i), a(i + 1)], toffoli_prim()));
     }
-    for i in 1..W - 1 {
-        gates.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
+    add.push(gate_at(n, &[a(np - 1), b(np - 1)], cnot_prim()));
+    add.push(gate_at(n, &[a(np - 2), b(np - 2), a(np - 1)], toffoli_prim()));
+    for i in (1..np - 1).rev() {
+        add.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+        add.push(gate_at(n, &[a(i - 1), b(i - 1), a(i)], toffoli_prim()));
     }
-    for i in 0..W - 1 {
-        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+    for i in 1..np - 1 {
+        add.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
     }
-    on_fields(&[PC_FIELD, BR_FIELD], gates)
+    for i in 0..np - 1 {
+        add.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+    }
+
+    // ── Uncompute op (sym of the materialization) ──────────────────────
+    let mut unbuild = build.clone();
+    unbuild.reverse();
+
+    let mut gates = build;
+    gates.extend(add);
+    gates.extend(unbuild);
+    on_fields(
+        &[PC_FIELD, PC_HI_FIELD, BR_FIELD, AUX_OPERAND_FIELD, AUX_PRED_FIELD],
+        gates,
+    )
 }
 
 // ── PC increment ───────────────────────────────────────────────────
 
-/// PC += 1 mod 256. Ripple increment: bit k flips iff bits 0..k are
-/// all 1. The prefix-AND carries c_k = AND(PC[0..k]) for k = 2..=7 are
-/// computed into s1 bits 0..=5 (12 Toffolis total: 6 compute + 6
-/// uncompute, interleaved MSB-down with the 6 carry CNOT flips so each
-/// uncompute reads not-yet-flipped PC bits), then PC1 ^= PC0 and PC0
-/// flips unconditionally. Requires s1 = 0 on entry (restored).
-/// `Iso::sym(pc_inc())` is the decrement.
+/// PC += 1 mod 2^W_PC (A-6.4: 16-bit increment across the PC_lo → PC_hi
+/// field boundary).
+///
+/// Implemented, like `pc_add_br`, by reusing the PROVEN zero-ancilla TK
+/// in-place adder to add a **constant 1** materialized in scratch: set
+/// `op = 1` (s0 bit 0), run the `W_PC`-bit TK adder `PC += op`, clear op.
+/// s0 = 0 on entry required (decoder convention), restored on exit; the
+/// carry crosses the byte boundary inside the adder. `Iso::sym(pc_inc())`
+/// is the decrement.
+///
+/// Wire layout over [PC_lo, PC_hi, s0, s1] (n = 4*W = 32):
+///   PC bit i (0..16) = wire i ; operand op[i] (0..16) = wire 16+i
+///   (op low byte in s0, high byte in s1; only op[0] = 1 is set).
 pub fn pc_inc() -> Iso {
-    let n = 2 * W; // [PC, s1]: PC bit i = wire i, s1 bit j = wire 8 + j
-    let c = |k: usize| W + (k - 2); // carry c_k lives at s1 bit k-2
+    let n = 4 * W;
+    let pc = |i: usize| i; // PC target bit (0..16)
+    let op = |i: usize| 2 * W + i; // 16-bit operand op[i] in s0‖s1 (only op[0]=1)
+    let np = W_PC;
+
     let mut gates: Vec<Iso> = Vec::new();
-    // Compute carries c_2..c_7.
-    gates.push(gate_at(n, &[0, 1, c(2)], toffoli_prim()));
-    for k in 3..W {
-        gates.push(gate_at(n, &[c(k - 1), k - 1, c(k)], toffoli_prim()));
+    // Materialize the constant 1: op[0] = 1 (NOT s0 bit 0). op[1..np] = 0.
+    gates.push(at_wire(n, op(0), not_iso()));
+
+    // PROVEN TK zero-ancilla in-place adder: PC += op (mod 2^np).
+    let a = op;
+    let b = pc;
+    for i in 1..np - 1 {
+        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
     }
-    // Flip PC[k] ^= c_k and uncompute c_k, MSB down.
-    for k in (2..W).rev() {
-        gates.push(gate_at(n, &[c(k), k], cnot_prim()));
-        if k == 2 {
-            gates.push(gate_at(n, &[0, 1, c(2)], toffoli_prim()));
-        } else {
-            gates.push(gate_at(n, &[c(k - 1), k - 1, c(k)], toffoli_prim()));
-        }
+    for i in (1..np - 1).rev() {
+        gates.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
     }
-    gates.push(gate_at(n, &[0, 1], cnot_prim())); // PC1 ^= PC0
-    gates.push(at_wire(n, 0, not_iso())); // PC0 ^= 1
-    on_fields(&[PC_FIELD, AUX_PRED_FIELD], gates)
+    for i in 0..np - 1 {
+        gates.push(gate_at(n, &[a(i), b(i), a(i + 1)], toffoli_prim()));
+    }
+    gates.push(gate_at(n, &[a(np - 1), b(np - 1)], cnot_prim()));
+    gates.push(gate_at(n, &[a(np - 2), b(np - 2), a(np - 1)], toffoli_prim()));
+    for i in (1..np - 1).rev() {
+        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+        gates.push(gate_at(n, &[a(i - 1), b(i - 1), a(i)], toffoli_prim()));
+    }
+    for i in 1..np - 1 {
+        gates.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
+    }
+    for i in 0..np - 1 {
+        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+    }
+
+    // Clear op[0] (sym of the NOT).
+    gates.push(at_wire(n, op(0), not_iso()));
+
+    on_fields(
+        &[PC_FIELD, PC_HI_FIELD, AUX_OPERAND_FIELD, AUX_PRED_FIELD],
+        gates,
+    )
 }
 
 // ── The step iso ───────────────────────────────────────────────────

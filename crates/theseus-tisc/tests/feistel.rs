@@ -214,7 +214,7 @@ fn feistel_forward() {
             );
             assert_eq!(
                 cur.pc,
-                (ROUND_LEN * (round + 1)) as u8,
+                (ROUND_LEN * (round + 1)) as u16,
                 "PC must track the cycle count"
             );
             assert_eq!(cur.ir, 0, "P4: IR must be zero between steps");
@@ -257,7 +257,7 @@ fn feistel_forward_and_backward() {
     );
     assert_eq!(fwd.regs[3], key);
     assert_eq!(fwd.regs[4], 0, "no garbage left in the temp register");
-    assert_eq!(fwd.pc, t as u8);
+    assert_eq!(fwd.pc, t as u16);
     assert_eq!(fwd.ir, 0);
     assert_eq!(fwd.scratch, [0; 8]);
 

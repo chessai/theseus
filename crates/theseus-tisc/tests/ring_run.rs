@@ -77,7 +77,8 @@ fn closed_ctx() -> &'static ClosedStepRing {
 
 // ── Sample states (IR = 0, s0 = s1 = 0, BR = 0) ──────────────────
 
-fn sample_state(pc: u8) -> StateVals {
+fn sample_state(pc_in: impl Into<u16>) -> StateVals {
+    let pc: u16 = pc_in.into();
     StateVals {
         regs: [0x00, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3],
         pc,
@@ -158,7 +159,7 @@ fn ring_area_independent_of_revolutions() {
     // The body is the same struct regardless of R — run a few and
     // re-check (proving the ring reuses one body, not R copies).
     for r in [1u32, 4, 16] {
-        let s = sample_state(0);
+        let s = sample_state(0u8);
         let _ = c.ring.run(&s, r);
         assert_eq!(
             c.ring.compact().cell_counts(),

@@ -527,17 +527,22 @@ pub fn build_system_init(map: &VarMap, pin_s0_zero: bool) -> SV {
 /// Used by the T2 bootstrap test to compare walk output against
 /// `run_rom_on_cpu` at concrete points.
 pub fn build_concrete_system_sv(s: &crate::types::StateVals, vs: &BddVariableSet) -> SV {
+    // CpuState field order (state_ty()): r0..r7, PC_lo, BR, IR_b0..b3,
+    // s0..s7, PC_hi (A-6.4 widen-PC appended PC_hi; A-0 32-bit IR = 4 bytes).
     let mut cpu_fields = Vec::with_capacity(NUM_CPU_FIELDS);
     for &r in &s.regs {
         cpu_fields.push(sv_word8_const(r, vs));
     }
-    cpu_fields.push(sv_word8_const(s.pc, vs));
-    cpu_fields.push(sv_word8_const(s.br, vs));
-    cpu_fields.push(sv_word8_const(s.ir as u8, vs));
-    cpu_fields.push(sv_word8_const((s.ir >> 8) as u8, vs));
+    cpu_fields.push(sv_word8_const(s.pc as u8, vs)); // PC_lo
+    cpu_fields.push(sv_word8_const(s.br, vs)); // BR (8-bit)
+    cpu_fields.push(sv_word8_const(s.ir as u8, vs)); // IR_b0
+    cpu_fields.push(sv_word8_const((s.ir >> 8) as u8, vs)); // IR_b1
+    cpu_fields.push(sv_word8_const((s.ir >> 16) as u8, vs)); // IR_b2
+    cpu_fields.push(sv_word8_const((s.ir >> 24) as u8, vs)); // IR_b3
     for &sc in &s.scratch {
         cpu_fields.push(sv_word8_const(sc, vs));
     }
+    cpu_fields.push(sv_word8_const((s.pc >> 8) as u8, vs)); // PC_hi (appended)
     let cpu_sv = sv_right_nested(&cpu_fields);
 
     let mut mem_fields = Vec::with_capacity(MEM_WORDS);

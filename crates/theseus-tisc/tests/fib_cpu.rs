@@ -242,7 +242,7 @@ fn fib_forward() {
             pairs[k + 1],
             "pair {k}: CPU diverged from the reference Fibonacci sequence"
         );
-        assert_eq!(cur.pc, (2 * (k + 1)) as u8, "PC must track the cycle count");
+        assert_eq!(cur.pc, (2 * (k + 1)) as u16, "PC must track the cycle count");
         assert_eq!(cur.ir, 0, "P4: IR must be zero between steps");
         assert_eq!(cur.scratch, [0; 8], "scratch must stay zero");
         computed.push(cur.regs[1]);
@@ -285,7 +285,7 @@ fn fib_forward_and_backward() {
 
     // Forward endpoint: the CPU computed fib(N), fib(N+1) in T cycles.
     assert_eq!((fwd.regs[1], fwd.regs[2]), (89, 144));
-    assert_eq!(fwd.pc, t as u8);
+    assert_eq!(fwd.pc, t as u16);
     assert_eq!(fwd.ir, 0);
     assert_eq!(fwd.scratch, [0; 8]);
 

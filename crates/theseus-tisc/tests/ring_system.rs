@@ -103,7 +103,8 @@ fn ctx() -> &'static Ctx {
 
 // ── Sample states (IR = 0, s0 = s1 = 0, BR = 0, nonzero mem) ────
 
-fn sample_state(pc: u8) -> StateVals {
+fn sample_state(pc_in: impl Into<u16>) -> StateVals {
+    let pc: u16 = pc_in.into();
     let mut mem = [0u8; MEM_WORDS];
     for (i, m) in mem.iter_mut().enumerate() {
         *m = 0x42u8.wrapping_add((i as u8).wrapping_mul(0x31));

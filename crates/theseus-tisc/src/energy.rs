@@ -29,7 +29,7 @@ use theseus_spice::annotate::{compiled_energy, KindEnergy};
 use theseus_spice::chardb::{CharDb, QueryError};
 
 use crate::compile::run_rom_fast;
-use crate::types::StateVals;
+use crate::types::{StateVals, PC_ADDR_SPACE};
 
 /// Per-cell-kind energy breakdown for a balanced netlist, computed
 /// analytically (without materializing the balanced netlist).
@@ -348,7 +348,9 @@ pub fn rom_trace(rom: &[u32], init: StateVals, budget: usize) -> RomTrace {
         // dead zone at the start of step `step_idx`, the first T steps (indices 0..T)
         // were productive.
         let pc = state.pc as usize;
-        if pc >= rom_len && pc < 256 {
+        // A-6.4 widen-PC: dead zone is [rom.len(), 2^W_PC); PC is 16-bit
+        // so `pc < PC_ADDR_SPACE` always holds (kept for documentation).
+        if pc >= rom_len && pc < PC_ADDR_SPACE {
             steps_t = step_idx;
             break;
         }

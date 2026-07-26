@@ -162,7 +162,7 @@ pub(crate) fn toffoli_prim() -> Iso {
 }
 
 /// CCC-NOT `(c1, c2, c3, t)`: t ^= c1∧c2∧c3.
-fn cccnot_prim() -> Iso {
+pub(crate) fn cccnot_prim() -> Iso {
     let t4 = flat(4);
     Iso::Prim(Box::new(
         prim_from_bits("dec_ccctof", t4.clone(), t4, |b| {
