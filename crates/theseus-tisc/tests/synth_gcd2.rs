@@ -12,6 +12,7 @@
 //! `exec_instr` over all 256 states), which is the authority the symbolic oracle
 //! cannot provide for scratch ancilla.
 
+use theseus_tisc::asm::{encode, AsmError, Instr};
 use theseus_tisc::bveq::{equiv, symbolic_exec, BvExpr, RegTransfer, BITS};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{
@@ -453,4 +454,67 @@ fn gcd2_bennett_exec_verify_256_and_report() {
     }
     assert_eq!(pass, 256, "all 256 states must pass carrier + net-zero");
     eprintln!("exec-verify: {pass}/256 states — carriers correct AND ancilla net-zero");
+}
+
+/// True iff an encode failure is SOLELY due to the borrowed decoder-reserved
+/// scratch s0/s1 (operand 8/9) — the KNOWN, documented budget wall the gcd2
+/// synthesis hits (MAJOR-3 / A-6.4 widen-state). Any OTHER encode failure
+/// (non-distinct Ccnot, out-of-range, aliased regs) is a real bug.
+fn is_reserved_scratch_only(e: &AsmError) -> bool {
+    matches!(
+        e,
+        AsmError::OperandReservedScratch { .. } | AsmError::XchgScratchReserved { .. }
+    )
+}
+
+/// MAJOR-3(1): run `asm::encode` on EVERY emitted instruction of the gcd2
+/// Bennett body. The permissive `exec_instr` (used by the 256-state authority)
+/// silently runs ISA-illegal gates; encode is the assemblability gate. This body
+/// is EXPECTED to have encode failures — but ONLY the documented reserved-s0
+/// borrow (operand 8, the 7th helper the operand budget cannot fit). Assert
+/// every failure is that known wall and NOTHING else (no non-distinct Ccnot, no
+/// out-of-range, no aliased operands slipping through).
+#[test]
+fn gcd2_body_encode_only_reserved_scratch_wall() {
+    let fwd = table_to_regtransfer(gcd2_fwd, &SPEC_LEAVES, &WIDTHS);
+    let inv = build_inverse();
+    let bwd = table_to_regtransfer(inv, &SPEC_LEAVES, &WIDTHS);
+    let ancilla: [u8; 4] = [10, 11, 12, 13];
+    let temps = [5u8, 6u8, 7u8, 14u8, 15u8, 8u8]; // s0 (op 8) is the reserved borrow
+    let helpers = HelperBank { mask: 4, temps: &temps };
+    let body = transcribe_bennett_general(&fwd, &bwd, &PHYS, &ancilla, helpers)
+        .expect("transcribe_bennett_general");
+
+    let mut reserved = 0usize;
+    let mut ok = 0usize;
+    for (i, &ins) in body.iter().enumerate() {
+        match encode(ins) {
+            Ok(_) => ok += 1,
+            Err(ref e) if is_reserved_scratch_only(e) => reserved += 1,
+            Err(e) => panic!(
+                "gcd2 body instr {i} ({ins:?}) fails encode for a NON-budget reason: {e}"
+            ),
+        }
+    }
+    // The borrow is real: at least one reserved-s0 failure must exist (else the
+    // budget wall the test documents has silently vanished).
+    assert!(
+        reserved > 0,
+        "expected the documented reserved-s0 borrow to appear in the body"
+    );
+    eprintln!(
+        "gcd2 encode-check: {ok} assemblable, {reserved} reserved-s0 (the A-6.4 widen-state wall)"
+    );
+}
+
+/// MAJOR-3(1) teeth: `assert_all_encode` (all-clean expectation) is meaningful —
+/// a body with a non-distinct Ccnot is rejected by encode (proving the check has
+/// teeth for the register/Bennett path where NO reserved borrow is allowed).
+#[test]
+fn encode_check_rejects_nondistinct_ccnot() {
+    let bad = Instr::Ccnot { rd: 0, rs: 0, rt: 2 }; // non-distinct → ISA-illegal
+    assert!(
+        encode(bad).is_err(),
+        "encode must reject a non-distinct Ccnot (MAJOR-3 encode-check teeth)"
+    );
 }
