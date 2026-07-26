@@ -2371,23 +2371,55 @@ pub fn emit_weqzero(
     temps: &[u8],
     out: &mut Vec<Instr>,
 ) -> Result<(), SynthError> {
+    emit_weqzero_width(dst_bit, src, BITS, temps, out)
+}
+
+/// Number of temp words [`emit_weqzero_width`] needs for a `width`-bit reduce:
+/// `width` partial-OR words + one `0x01` isolate word.
+pub const fn weqzero_ntemp(width: usize) -> usize {
+    width + 1
+}
+
+/// WIDTH-AWARE [`emit_weqzero`] (A-6 W.2): `dst_bit.bit0 ^= (src's low `width`
+/// bits == 0)`. Reduces ONLY bits `0..width` of `src`, so for a NARROW operand
+/// (gcd2's `a`/`b` = 2 bits, `h` = 3 bits) it emits far fewer gates and needs
+/// only [`weqzero_ntemp`]`(width) = width+1` temps instead of the full-8-bit 9.
+///
+/// The gadget is identical to the full-width construction (see [`emit_weqzero`]),
+/// merely stopping the OR-chain at bit `width-1`. `src`'s bits ≥ `width` are
+/// IGNORED — the caller guarantees they are 0 on the operand's meaningful domain
+/// (true for gcd2's bit-packed carriers), which the whole-domain exec confirms.
+///
+/// `width` must be in `1..=BITS`. `src` is PRESERVED; every temp is NET-ZERO.
+pub fn emit_weqzero_width(
+    dst_bit: u8,
+    src: u8,
+    width: usize,
+    temps: &[u8],
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
     check_operand_legal("dst_bit", dst_bit)?;
     check_operand_legal("src", src)?;
-    const NTEMP: usize = BITS + 1; // 8 partial-OR words + 1 `one` word
-    if temps.len() < NTEMP {
+    if width == 0 || width > BITS {
         return Err(SynthError::MalformedSpec {
-            detail: format!("WEqZero needs ≥ {NTEMP} temp words, have {}", temps.len()),
+            detail: format!("WEqZero width {width} must be in 1..={BITS}"),
         });
     }
-    let p = &temps[..BITS]; // p[0..8): running-OR partial words
-    let one = temps[BITS]; // holds 0x01 to isolate a single bit under Ccnot
-    for (i, &t) in temps[..NTEMP].iter().enumerate() {
+    let ntemp = weqzero_ntemp(width); // `width` partial-OR words + 1 `one` word
+    if temps.len() < ntemp {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("WEqZero(width={width}) needs ≥ {ntemp} temp words, have {}", temps.len()),
+        });
+    }
+    let p = &temps[..width]; // p[0..width): running-OR partial words
+    let one = temps[width]; // holds 0x01 to isolate a single bit under Ccnot
+    for (i, &t) in temps[..ntemp].iter().enumerate() {
         check_operand_legal(&format!("temp{i}"), t)?;
     }
     // dst_bit, src, and every temp must be pairwise distinct (fresh temps +
     // distinct Ccnot operands throughout).
     let mut all: Vec<u8> = vec![dst_bit, src];
-    all.extend_from_slice(&temps[..NTEMP]);
+    all.extend_from_slice(&temps[..ntemp]);
     for i in 0..all.len() {
         for j in (i + 1)..all.len() {
             if all[i] == all[j] {
@@ -2395,7 +2427,7 @@ pub fn emit_weqzero(
                     detail: format!(
                         "WEqZero operands not distinct (dst_bit={dst_bit}, src={src}, \
                          temps={:?})",
-                        &temps[..NTEMP]
+                        &temps[..ntemp]
                     ),
                 });
             }
@@ -2424,17 +2456,17 @@ pub fn emit_weqzero(
 
     // setup
     out.push(Instr::Xori { rd: one, imm: 1 });
-    // forward chain: p[0] = src.bit0 ; p[k] = p[k-1] | src.bit_k  (k = 1..BITS).
+    // forward chain: p[0] = src.bit0 ; p[k] = p[k-1] | src.bit_k  (k = 1..width).
     emit_or_node(out, p[0], None, 0);
-    for k in 1..BITS {
+    for k in 1..width {
         emit_or_node(out, p[k], Some(p[k - 1]), k);
     }
-    // p[BITS-1] = OR of all 8 src bits; is-zero = ¬p[BITS-1].bit0.
-    let last = p[BITS - 1];
+    // p[width-1] = OR of all `width` src bits; is-zero = ¬p[width-1].bit0.
+    let last = p[width - 1];
     out.push(Instr::Xori { rd: dst_bit, imm: 1 }); // dst.bit0 ^= 1
     out.push(Instr::Ccnot { rd: dst_bit, rs: last, rt: one }); // dst.bit0 ^= p_last
-    // reverse chain: uncompute p[k] for k = BITS-1 .. 1, then p[0].
-    for k in (1..BITS).rev() {
+    // reverse chain: uncompute p[k] for k = width-1 .. 1, then p[0].
+    for k in (1..width).rev() {
         emit_or_node(out, p[k], Some(p[k - 1]), k);
     }
     emit_or_node(out, p[0], None, 0);
@@ -2490,25 +2522,58 @@ pub fn emit_wlt(
     temps: &[u8],
     out: &mut Vec<Instr>,
 ) -> Result<(), SynthError> {
+    emit_wlt_width(dst_bit, a, b, BITS, temps, out)
+}
+
+/// Number of temp words [`emit_wlt_width`] / [`emit_wgt_width`] need for a
+/// `width`-bit compare: `width-1` intermediate borrow words + `na` + `one`.
+pub const fn wlt_ntemp(width: usize) -> usize {
+    (width - 1) + 2
+}
+
+/// WIDTH-AWARE [`emit_wlt`] (A-6 W.2): `dst_bit.bit0 ^= (a < b)` over the low
+/// `width` bits (unsigned). Runs the borrow chain over ONLY bits `0..width`, so a
+/// NARROW compare (gcd2's `a`/`b` = 2 bits) needs only [`wlt_ntemp`]`(width) =
+/// width+1` temps instead of the full-8-bit 9, and emits far fewer gates.
+///
+/// The gadget is the full-width construction (see [`emit_wlt`]) truncated to
+/// `width` bits: `a < b` is the borrow-out of bit `width-1` of the `width`-bit
+/// subtract. Bits ≥ `width` of `a`/`b` are IGNORED (0 on the meaningful domain).
+///
+/// `width` must be in `1..=BITS`. `a`/`b` are PRESERVED; every temp is NET-ZERO.
+pub fn emit_wlt_width(
+    dst_bit: u8,
+    a: u8,
+    b: u8,
+    width: usize,
+    temps: &[u8],
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
     check_operand_legal("dst_bit", dst_bit)?;
     check_operand_legal("a", a)?;
     check_operand_legal("b", b)?;
-    if temps.len() < WLT_NTEMP {
+    if width == 0 || width > BITS {
         return Err(SynthError::MalformedSpec {
-            detail: format!("WLt needs ≥ {WLT_NTEMP} temp words, have {}", temps.len()),
+            detail: format!("WLt width {width} must be in 1..={BITS}"),
         });
     }
-    for (i, &t) in temps[..WLT_NTEMP].iter().enumerate() {
+    let ntemp = wlt_ntemp(width);
+    if temps.len() < ntemp {
+        return Err(SynthError::MalformedSpec {
+            detail: format!("WLt(width={width}) needs ≥ {ntemp} temp words, have {}", temps.len()),
+        });
+    }
+    for (i, &t) in temps[..ntemp].iter().enumerate() {
         check_operand_legal(&format!("temp{i}"), t)?;
     }
-    const NBOR: usize = BITS - 1; // intermediate borrow words (bits 0..BITS-1)
-    let bor = &temps[..NBOR]; // bor[k] = borrow-out of bit k (k < BITS-1), clean
-    let na = temps[NBOR]; // holds ¬a_k at bit 0 (clean, uncomputed per node)
-    let one = temps[NBOR + 1]; // holds 0x01 to isolate a single bit under Ccnot
+    let nbor: usize = width - 1; // intermediate borrow words (bits 0..width-1)
+    let bor = &temps[..nbor]; // bor[k] = borrow-out of bit k (k < width-1), clean
+    let na = temps[nbor]; // holds ¬a_k at bit 0 (clean, uncomputed per node)
+    let one = temps[nbor + 1]; // holds 0x01 to isolate a single bit under Ccnot
 
     // All of dst_bit, a, b, and the temps must be pairwise distinct.
     let mut all: Vec<u8> = vec![dst_bit, a, b];
-    all.extend_from_slice(&temps[..WLT_NTEMP]);
+    all.extend_from_slice(&temps[..ntemp]);
     for i in 0..all.len() {
         for j in (i + 1)..all.len() {
             if all[i] == all[j] {
@@ -2516,7 +2581,7 @@ pub fn emit_wlt(
                     detail: format!(
                         "WLt operands not distinct (dst_bit={dst_bit}, a={a}, b={b}, \
                          temps={:?})",
-                        &temps[..WLT_NTEMP]
+                        &temps[..ntemp]
                     ),
                 });
             }
@@ -2556,19 +2621,26 @@ pub fn emit_wlt(
     // setup
     out.push(Instr::Xori { rd: one, imm: 1 });
     // forward chain: bor[0] = ¬a_0 ∧ b_0 (seed bin=0); bor[k] from bor[k-1] for
-    // bits 1..BITS-1. These are the INTERMEDIATE borrows (clean chain words).
-    emit_borrow_node(out, 0, None, bor[0]);
-    for k in 1..NBOR {
-        emit_borrow_node(out, k, Some(bor[k - 1]), bor[k]);
+    // bits 1..width-1. These are the INTERMEDIATE borrows (clean chain words).
+    // For width == 1 there are NO intermediate borrows (nbor == 0): the sole bit's
+    // borrow-out IS the answer, computed directly into dst_bit with seed bin=None.
+    if nbor > 0 {
+        emit_borrow_node(out, 0, None, bor[0]);
+        for k in 1..nbor {
+            emit_borrow_node(out, k, Some(bor[k - 1]), bor[k]);
+        }
     }
-    // final bit (BITS-1): borrow-out = (a<b). XOR it straight into dst_bit, using
-    // the last intermediate borrow bor[BITS-2] as borrow-in. Not reversed.
-    emit_borrow_node(out, BITS - 1, Some(bor[NBOR - 1]), dst_bit);
-    // reverse chain: uncompute bor[k] for k = NBOR-1 .. 1, then bor[0].
-    for k in (1..NBOR).rev() {
-        emit_borrow_node(out, k, Some(bor[k - 1]), bor[k]);
+    // final bit (width-1): borrow-out = (a<b). XOR it straight into dst_bit, using
+    // the last intermediate borrow bor[width-2] (if any) as borrow-in. Not reversed.
+    let final_bin = if nbor > 0 { Some(bor[nbor - 1]) } else { None };
+    emit_borrow_node(out, width - 1, final_bin, dst_bit);
+    // reverse chain: uncompute bor[k] for k = nbor-1 .. 1, then bor[0].
+    if nbor > 0 {
+        for k in (1..nbor).rev() {
+            emit_borrow_node(out, k, Some(bor[k - 1]), bor[k]);
+        }
+        emit_borrow_node(out, 0, None, bor[0]);
     }
-    emit_borrow_node(out, 0, None, bor[0]);
     // teardown
     out.push(Instr::Xori { rd: one, imm: 1 });
     Ok(())
@@ -2585,6 +2657,20 @@ pub fn emit_wgt(
     out: &mut Vec<Instr>,
 ) -> Result<(), SynthError> {
     emit_wlt(dst_bit, b, a, temps, out)
+}
+
+/// WIDTH-AWARE [`emit_wgt`] (A-6 W.2): `dst_bit.bit0 ^= (a > b)` over the low
+/// `width` bits, by `a > b ⇔ b < a`. Same temp budget ([`wlt_ntemp`]) and
+/// net-zero / preserve contract as [`emit_wlt_width`].
+pub fn emit_wgt_width(
+    dst_bit: u8,
+    a: u8,
+    b: u8,
+    width: usize,
+    temps: &[u8],
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
+    emit_wlt_width(dst_bit, b, a, width, temps, out)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2630,6 +2716,26 @@ pub enum WValue {
     Lt(Box<WValue>, Box<WValue>),
     /// A bit-0 predicate word `(x > y)` (unsigned); higher bits 0.
     Gt(Box<WValue>, Box<WValue>),
+    /// WIDTH-AWARE `(x < y)` over the low `width` bits (A-6 W.2). A bit-0
+    /// predicate; uses [`emit_wlt_width`] → [`wlt_ntemp`]`(width)` temps.
+    LtW { x: Box<WValue>, y: Box<WValue>, width: usize },
+    /// WIDTH-AWARE `(x > y)` over the low `width` bits (A-6 W.2).
+    GtW { x: Box<WValue>, y: Box<WValue>, width: usize },
+    /// WIDTH-AWARE `(x == 0)` over the low `width` bits (A-6 W.2). A bit-0
+    /// predicate; uses [`emit_weqzero_width`] → [`weqzero_ntemp`]`(width)` temps.
+    EqZeroW { x: Box<WValue>, width: usize },
+    /// Bit-0 boolean AND of two bit-0 predicates (A-6 W.2): `dst.bit0 =
+    /// x.bit0 ∧ y.bit0`. Realized by one `Ccnot` into the clean destination — far
+    /// cheaper than the `Select(x, y, 0)` idiom (no mask/one, no else-temp), which
+    /// is the compactness key for gcd2's multi-predicate arm guards (`d`, etc.).
+    /// Pure-XOR-top: composes into the clean ancilla without a value-temp.
+    AndBit { x: Box<WValue>, y: Box<WValue> },
+    /// `guard.bit0 ? val : 0` (A-6 W.2) — a byte MASK-and-copy: broadcast `guard`'s
+    /// bit 0 to a `0x00/0xFF` mask, then `dst ^= val & mask`. Cheaper than
+    /// `Select(guard, val, 0)` (needs only ONE scratch mask word — no `one`, no
+    /// else-temp), so a FLAT XOR of disjoint `Masked` arm-corrections keeps the
+    /// concurrent-work peak low. Pure-XOR-top.
+    Masked { guard: Box<WValue>, val: Box<WValue> },
     /// `guard.bit0 ? then : else` (guard is any WValue; its bit 0 selects).
     Select {
         guard: Box<WValue>,
@@ -2666,6 +2772,26 @@ impl WValue {
     }
     pub fn gt(x: WValue, y: WValue) -> Self {
         WValue::Gt(Box::new(x), Box::new(y))
+    }
+    /// Width-aware `x < y` over the low `width` bits.
+    pub fn ltw(x: WValue, y: WValue, width: usize) -> Self {
+        WValue::LtW { x: Box::new(x), y: Box::new(y), width }
+    }
+    /// Width-aware `x > y` over the low `width` bits.
+    pub fn gtw(x: WValue, y: WValue, width: usize) -> Self {
+        WValue::GtW { x: Box::new(x), y: Box::new(y), width }
+    }
+    /// Width-aware `x == 0` over the low `width` bits.
+    pub fn eqzerow(x: WValue, width: usize) -> Self {
+        WValue::EqZeroW { x: Box::new(x), width }
+    }
+    /// Bit-0 boolean AND of two bit-0 predicates (one `Ccnot`).
+    pub fn andbit(x: WValue, y: WValue) -> Self {
+        WValue::AndBit { x: Box::new(x), y: Box::new(y) }
+    }
+    /// `guard.bit0 ? val : 0` via a broadcast byte mask (one scratch word).
+    pub fn masked(guard: WValue, val: WValue) -> Self {
+        WValue::Masked { guard: Box::new(guard), val: Box::new(val) }
     }
     pub fn select(guard: WValue, then_: WValue, else_: WValue) -> Self {
         WValue::Select {
@@ -2761,6 +2887,66 @@ fn realize_wvalue(
             *next -= WLT_NTEMP; // cmp_temps are net-zero → free them
             free_temp(&y_body, ymark, next, out);
             free_temp(&x_body, xmark, next, out);
+        }
+        WValue::LtW { x, y, width } | WValue::GtW { x, y, width } => {
+            // Width-aware compare: same shape as Lt/Gt but only `wlt_ntemp(width)`
+            // scratch words (the compactness key for gcd2's narrow operands).
+            let n = wlt_ntemp(*width);
+            let (xop, x_body, xmark) = operand_or_temp(x, carriers, work, next, peak, out)?;
+            let (yop, y_body, ymark) = operand_or_temp(y, carriers, work, next, peak, out)?;
+            let cmp_temps = alloc_work_n(work, next, peak, n)?;
+            match val {
+                WValue::LtW { .. } => emit_wlt_width(dst, xop, yop, *width, &cmp_temps, out)?,
+                WValue::GtW { .. } => emit_wgt_width(dst, xop, yop, *width, &cmp_temps, out)?,
+                _ => unreachable!(),
+            }
+            *next -= n; // cmp_temps are net-zero → free them
+            free_temp(&y_body, ymark, next, out);
+            free_temp(&x_body, xmark, next, out);
+        }
+        WValue::EqZeroW { x, width } => {
+            // Width-aware is-zero: realize x into an operand, reduce its low
+            // `width` bits into dst.bit0, then uncompute + free.
+            let n = weqzero_ntemp(*width);
+            let (xop, x_body, xmark) = operand_or_temp(x, carriers, work, next, peak, out)?;
+            let eq_temps = alloc_work_n(work, next, peak, n)?;
+            emit_weqzero_width(dst, xop, *width, &eq_temps, out)?;
+            *next -= n; // eq_temps are net-zero → free them
+            free_temp(&x_body, xmark, next, out);
+        }
+        WValue::AndBit { x, y } => {
+            // dst.bit0 = x.bit0 ∧ y.bit0 via ONE Ccnot into the clean dst. Realize
+            // x,y into (carrier or freed temp) operands, both distinct from dst;
+            // then uncompute + free. No mask/one/else-temp (the Select-AND cost).
+            let (xop, x_body, xmark) = operand_or_temp(x, carriers, work, next, peak, out)?;
+            let (yop, y_body, ymark) = operand_or_temp(y, carriers, work, next, peak, out)?;
+            check_three_distinct("AndBit Ccnot", dst, xop, yop)?;
+            out.push(Instr::Ccnot { rd: dst, rs: xop, rt: yop });
+            free_temp(&y_body, ymark, next, out);
+            free_temp(&x_body, xmark, next, out);
+        }
+        WValue::Masked { guard, val } => {
+            // dst ^= val & broadcast(guard.bit0). Realize guard into a FRESH temp
+            // (it is broadcast in place to a 0x00/0xFF byte mask), realize val into a
+            // carrier/freed temp, then `dst ^= val & mask` (one Ccnot). Uncompute the
+            // broadcast + free. Only ONE scratch mask word beyond val — cheaper than
+            // Select(guard,val,0). `guard` must be bit-0-only (a predicate); the
+            // broadcast `~m; m+1` = `0 - guard.bit0` assumes higher bits are 0.
+            let gmark = *next;
+            let mask = alloc_work(work, next, peak)?; // fresh mask word (clean 0)
+            let g_body = realize_wvalue(guard, mask, carriers, work, next, peak, out)?;
+            // broadcast mask.bit0 → 0x00/0xFF
+            out.push(Instr::Xori { rd: mask, imm: 0xFF });
+            out.push(Instr::Addi { rd: mask, imm: 1 });
+            let (vop, v_body, vmark) = operand_or_temp(val, carriers, work, next, peak, out)?;
+            check_three_distinct("Masked Ccnot", dst, vop, mask)?;
+            out.push(Instr::Ccnot { rd: dst, rs: vop, rt: mask }); // dst ^= val & mask
+            free_temp(&v_body, vmark, next, out);
+            // unbroadcast mask, then uncompute the guard, then free the mask word.
+            out.push(Instr::Subi { rd: mask, imm: 1 });
+            out.push(Instr::Xori { rd: mask, imm: 0xFF });
+            out.extend(invert_body(&g_body));
+            *next = gmark;
         }
         WValue::Select { guard, then_, else_ } => {
             // WSelect needs dst ∉ {then_w, else_w}; a bare-carrier then/else is
@@ -2905,7 +3091,16 @@ fn invert_body(body: &[Instr]) -> Vec<Instr> {
 fn is_pure_xor_top(val: &WValue) -> bool {
     matches!(
         val,
-        WValue::Var(_) | WValue::Const(_) | WValue::Lt(..) | WValue::Gt(..) | WValue::Select { .. }
+        WValue::Var(_)
+            | WValue::Const(_)
+            | WValue::Lt(..)
+            | WValue::Gt(..)
+            | WValue::LtW { .. }
+            | WValue::GtW { .. }
+            | WValue::EqZeroW { .. }
+            | WValue::AndBit { .. }
+            | WValue::Masked { .. }
+            | WValue::Select { .. }
     )
 }
 
@@ -3099,6 +3294,19 @@ fn check_wvalue_vars(val: &WValue, n: usize, which: &str) -> Result<(), SynthErr
         | WValue::Gt(x, y) => {
             check_wvalue_vars(x, n, which)?;
             check_wvalue_vars(y, n, which)
+        }
+        WValue::LtW { x, y, .. } | WValue::GtW { x, y, .. } => {
+            check_wvalue_vars(x, n, which)?;
+            check_wvalue_vars(y, n, which)
+        }
+        WValue::EqZeroW { x, .. } => check_wvalue_vars(x, n, which),
+        WValue::AndBit { x, y } => {
+            check_wvalue_vars(x, n, which)?;
+            check_wvalue_vars(y, n, which)
+        }
+        WValue::Masked { guard, val } => {
+            check_wvalue_vars(guard, n, which)?;
+            check_wvalue_vars(val, n, which)
         }
         WValue::Select { guard, then_, else_ } => {
             check_wvalue_vars(guard, n, which)?;
