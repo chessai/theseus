@@ -12,11 +12,73 @@
 //! operands ≥ 8), so scratch ancilla is exercised only by the exec path — which
 //! is exactly where net-zero must be proven anyway.
 
-use theseus_tisc::asm::Instr;
+use theseus_tisc::asm::{encode, Instr};
 use theseus_tisc::bveq::{equiv, symbolic_exec, BvExpr, RegTransfer, BITS};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{transcribe_bennett, transcribe_into};
 use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+
+// ── MAJOR-3 reusable verification helpers ────────────────────────────
+//
+// The exec tier (`exec_instr`) is PERMISSIVE: it silently runs ISA-illegal
+// instructions (non-distinct Ccnot, decoder-reserved s0/s1 operands, out-of-
+// range indices). Passing it does NOT imply a body can be assembled or run on
+// the real CPU. These helpers close that gap and make the scratch path sound.
+
+/// MAJOR-3(1): assert EVERY emitted instruction of a body assembles cleanly via
+/// `asm::encode`. Catches ISA-illegal gates (non-distinct Ccnot, reserved
+/// operands, out-of-range) that `exec_instr` executes without complaint.
+fn assert_all_encode(body: &[Instr]) {
+    for (i, &ins) in body.iter().enumerate() {
+        encode(ins).unwrap_or_else(|e| {
+            panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} — body is not assemblable")
+        });
+    }
+}
+
+/// MAJOR-3(2): register-ancilla SYMBOLIC dry-run of a Bennett body. When
+/// carriers + ancilla are all REGISTERS and total ≤ NUM_REGS, verify the body
+/// SYMBOLICALLY (`symbolic_exec` + `equiv`) over the WHOLE domain:
+///   * carriers ≡ `fwd` spec, AND
+///   * every ancilla row ≡ Const(false) (net-zero).
+///
+/// WHY THIS IS COMPLETE: requiring the ancilla output rows ≡ 0 under BDD (with
+/// the ancilla INPUT vars substituted by Const(false) via `zero_out`) is exactly
+/// `∀x. x ⊕ bwd(fwd(x)) = 0` ⇔ `bwd ∘ fwd = id`, which also forces `fwd`
+/// injective — a COMPLETE `bwd = fwd⁻¹` proof, not a sample. It is the sound
+/// mirror the sample-only exec scratch path lacks: the scratch body is the same
+/// gate skeleton modulo operand renaming + Exch→Xchg, so verifying the register
+/// layout whole-domain discharges the wiring/inverse risk the scratch samples
+/// cannot. Carriers = regs 0..n, ancilla = regs n..2n.
+fn bennett_register_symbolic_dryrun(fwd: &RegTransfer, bwd: &RegTransfer, n: usize) {
+    assert!(2 * n <= NUM_REGS, "register dry-run needs 2n ≤ NUM_REGS regs");
+    let carrier_ops: Vec<u8> = (0..n as u8).collect();
+    let ancilla_ops: Vec<u8> = (n as u8..2 * n as u8).collect();
+    let body =
+        transcribe_bennett(fwd, bwd, &carrier_ops, &ancilla_ops).expect("transcribe_bennett");
+    // Every emitted instr must assemble (register ancilla → all-register body).
+    assert_all_encode(&body);
+
+    let got = symbolic_exec(&body).expect("symbolic_exec of Bennett body");
+    let ancilla_regs: Vec<usize> = (n..2 * n).collect();
+    let got0 = transfer_zero_out(&got, &ancilla_regs);
+    let expected = RegTransfer {
+        regs: (0..NUM_REGS)
+            .map(|r| {
+                if r < n {
+                    fwd.regs[r].clone()
+                } else if (n..2 * n).contains(&r) {
+                    vec![BvExpr::Const(false); BITS]
+                } else {
+                    (0..BITS).map(|b| v(r, b)).collect()
+                }
+            })
+            .collect(),
+    };
+    let touched: Vec<usize> = (0..2 * n).collect();
+    equiv(&got0, &expected, BITS, &touched)
+        .expect("register-symbolic dry-run: carriers = fwd, ancilla ≡ 0 (complete bwd=fwd⁻¹)");
+}
 
 /// A fully zero-init machine state (all regs, scratch, mem = 0).
 fn zero_state() -> StateVals {
@@ -200,6 +262,9 @@ fn bennett_exec_netzero(
     let n = carrier_ops.len();
     let body = transcribe_bennett(fwd, bwd, carrier_ops, ancilla_ops)
         .expect("transcribe_bennett");
+    // MAJOR-3(1): every emitted instruction must assemble (catches ISA-illegal
+    // gates the permissive exec_instr would run silently).
+    assert_all_encode(&body);
 
     for sample in samples {
         assert_eq!(sample.len(), n, "sample must set every carrier");
@@ -383,4 +448,123 @@ fn bennett_spec_outside_carriers_errs() {
         res.is_err(),
         "a spec touching a non-carrier reg must return Err, got {res:?}"
     );
+}
+
+// ── Regression tests for the adversarial-review findings (L20) ────────
+
+/// MAJOR-1 CE: `fwd = bwd` = CNOT r2→r0 (`row0 = v0 ⊕ v2`, else identity),
+/// carriers `[0,1]`, ancilla `[3,4]`. Carrier row 0 READS reg 2, which is
+/// OUTSIDE the 2 carriers. Before the fix the wrapper returned Ok with a wrong
+/// body (both Var(0) and Var(2) wired to operand 0, cancelling) and a DIRTY
+/// ancilla. Now it must return Err (a permutation spec must read only carriers).
+#[test]
+fn bennett_carrier_reads_noncarrier_errs() {
+    let cnot = spec(|r, b| match r {
+        0 => v(0, b).xor(v(2, b)), // reads reg 2 (non-carrier when n=2)
+        _ => v(r, b),
+    });
+    let res = transcribe_bennett(&cnot, &cnot, &[0, 1], &[3, 4]);
+    assert!(
+        matches!(res, Err(_)),
+        "a carrier row reading a non-carrier register must return Err (MAJOR-1), got {res:?}"
+    );
+}
+
+/// MAJOR-2 CE: swap spec, carriers `[0,1]`, ancilla `[3,3]` (DUPLICATED). Before
+/// the fix the wrapper returned Ok with a wrong body while net-zero HELD (both
+/// ancilla writes hit the same word), defeating "ancilla dirtied" teeth. Now the
+/// duplicate ancilla must be rejected.
+#[test]
+fn bennett_duplicate_ancilla_errs() {
+    let res = transcribe_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[3, 3]);
+    assert!(
+        matches!(res, Err(_)),
+        "duplicate ancilla operands must return Err (MAJOR-2), got {res:?}"
+    );
+}
+
+/// MAJOR-2: a carrier aliasing an ancilla word must be rejected (Bennett needs
+/// fresh scratch). Carriers `[0,1]`, ancilla `[1,3]` — carrier 1 == ancilla 0.
+#[test]
+fn bennett_carrier_aliases_ancilla_errs() {
+    let res = transcribe_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[1, 3]);
+    assert!(
+        matches!(res, Err(_)),
+        "a carrier aliasing an ancilla word must return Err (MAJOR-2), got {res:?}"
+    );
+}
+
+/// MAJOR-2: `transcribe_into` with DUPLICATE dst_ops must return Err (two rows
+/// writing the same fresh target clobber each other). Two non-identity copy
+/// rows both targeting operand 3.
+#[test]
+fn transcribe_into_duplicate_dst_errs() {
+    // row0 = v1 (copy of reg1), row1 = v0 (copy of reg0) — both non-identity.
+    let spec_t = spec(|r, b| match r {
+        0 => v(1, b),
+        1 => v(0, b),
+        _ => v(r, b),
+    });
+    // dst maps rows 0 AND 1 both to operand 3 (duplicate). src = identity.
+    let dst_ops: Vec<u8> = vec![3, 3, 2, 3, 4, 5, 6, 7];
+    let src_ops: Vec<u8> = (0..NUM_REGS as u8).collect();
+    let res = transcribe_into(&spec_t, &dst_ops, &src_ops);
+    assert!(
+        matches!(res, Err(_)),
+        "duplicate dst_ops must return Err (MAJOR-2), got {res:?}"
+    );
+}
+
+/// MINOR-3: `transcribe_bennett` accepting decoder-reserved s0/s1 (operand 8/9)
+/// as ancilla — before the fix Ok, exec passed, but every instr fails encode.
+/// Now reserved ancilla must return Err.
+#[test]
+fn bennett_reserved_ancilla_errs() {
+    // carriers regs 0,1 ; ancilla operand 8 (s0, reserved) and 9 (s1, reserved).
+    let res = transcribe_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[8, 9]);
+    assert!(
+        matches!(res, Err(_)),
+        "reserved-scratch ancilla (s0/s1 = 8/9) must return Err (MINOR-3), got {res:?}"
+    );
+}
+
+/// MINOR-3: an out-of-range operand (≥16) must return Err, not panic
+/// `operand_get`. carriers `[0,1]`, ancilla `[16,17]`.
+#[test]
+fn bennett_out_of_range_ancilla_errs() {
+    let res = transcribe_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[16, 17]);
+    assert!(
+        matches!(res, Err(_)),
+        "out-of-range ancilla (≥16) must return Err not panic (MINOR-3), got {res:?}"
+    );
+}
+
+/// MINOR-4 CE: `transcribe_into` with a NON-identity row (`row0 = v0 ⊕ v1`) whose
+/// dst aliases a source (`dst[0] = 1`, i.e. dst == src_ops[1]). Before the fix
+/// the dst==src copy-skip silently dropped the `v1` self-copy, emitting only
+/// `[Xor{1,0}]`. Now the aliasing non-identity row must return Err (the skip is
+/// restricted to genuine identity self-maps).
+#[test]
+fn transcribe_into_nonidentity_dst_aliases_src_errs() {
+    let spec_t = spec(|r, b| match r {
+        0 => v(0, b).xor(v(1, b)), // reads reg0 AND reg1
+        _ => v(r, b),
+    });
+    // dst[0] = 1 == src_ops[1] (an aliasing map on a NON-identity row).
+    let dst_ops: Vec<u8> = vec![1, 4, 5, 3, 6, 7, 2, 0];
+    let src_ops: Vec<u8> = (0..NUM_REGS as u8).collect();
+    let res = transcribe_into(&spec_t, &dst_ops, &src_ops);
+    assert!(
+        matches!(res, Err(_)),
+        "a non-identity row whose dst aliases a source must return Err (MINOR-4), got {res:?}"
+    );
+}
+
+/// MAJOR-3(2): the register-ancilla symbolic dry-run helper is a COMPLETE
+/// whole-domain proof (carriers = fwd, ancilla ≡ 0). Exercise it on the swap
+/// (n=2, regs 0,1 carriers + 2,3 ancilla) and the Toffoli (n=3).
+#[test]
+fn bennett_register_symbolic_dryrun_swap_and_toffoli() {
+    bennett_register_symbolic_dryrun(&swap_fwd(), &swap_fwd(), 2);
+    bennett_register_symbolic_dryrun(&toffoli_fwd(), &toffoli_fwd(), 3);
 }
