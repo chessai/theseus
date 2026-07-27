@@ -391,32 +391,23 @@ fn me_a2_b_vs_t() {
 // ── me_a3: golden (F-teeth) ─────────────────────────────────────────
 
 #[test]
-#[ignore = "A-6.4 widen-PC: pending lean-lower_iso. The 16-bit PC appends the \
-PC_hi CpuState field, which inflates the fib step-net lower_iso intermediates \
-past host RAM — me_a3 OOMs (SIGABRT, 'memory allocation failed') even run \
-ALONE with a 40 GB cap (it needed ~84 GB at A-0, and the wider state is \
-larger). step_j shifts with the widened pc_add_br/pc_inc + narrow fetch, so \
-the old golden (6.4930e-8 / 2.7054e-9) is stale and must be RE-MEASURED once a \
-streaming/low-intermediate-memory lower_iso lands (roadmap backlog, design §8 \
-risk #5). Deferred, not blocking (advisor decision-default): the widen's \
-correctness is proved by run_on_cpu==eval (step/branching/lfsr/payoff), and \
-me_a1/a5/a6 still assert the total_j = B·step_j RELATIONS unpinned."]
 fn me_a3_golden() {
     let pe = fib_program_energy();
 
     // Pinned golden values (deterministic: committed char-DB fits + fixed
     // lowering of fib's own 24-word ROM step net at T_RAMP=1e-7).
-    // RE-PINNED for TISC-2 A-0 (32-bit instruction word + shared, scratch-
-    // addressable operand crossbar): sharing the operand crossbar collapses the
-    // ~40 replicated per-op crossbars to ~3, and the leaner scratch-rd routing
-    // (level-3 swap 2..8) shortens the crossbar critical paths — both reduce the
-    // balance-buffer count that dominates step energy. Net: step_j DROPS below
-    // the pre-A-0 baseline (a genuine energy WIN, not a cost) despite the wider
-    // IR: step_j 3.0697567543e-9 → 2.7054170445e-9 (−11.9%), total_j = 24·step_j.
-    // fib B=24/T=20 codegen unchanged. Behavior verified (t2 real-CPU all-8 +
-    // scratch_rd shared≡replicated≡ISA). Deterministic (per-cell cost sum).
-    const GOLDEN_TOTAL_J: f64 = 6.4930009067e-8;
-    const GOLDEN_STEP_J: f64 = 2.7054170445e-9;
+    // RE-PINNED for A-6.4 widen-PC (16-bit PC: appends the PC_hi CpuState field,
+    // widening the state to STATE_BITS=184 / NUM_FIELDS=23). Measured under the
+    // lean-lower_iso Arc<Type> repr (slice-1) which makes this wide-state
+    // lowering fit host RAM (peak ~7 GB, was ~86 GB → OOM). The widened
+    // pc_add_br/pc_inc + narrow fetch shift step energy DOWN relative to the
+    // pre-widen A-0 baseline: step_j 2.7054170445e-9 → 2.5259595646e-9 (−6.6%),
+    // total_j 6.4930009067e-8 → 6.0623029551e-8, total_j = 24·step_j. B=24/T=20
+    // codegen unchanged. The NET is bit-identical across the repr change (POC
+    // poc_step_net_bit_identical_across_type_repr), so this golden reflects ONLY
+    // the widen-PC state change, never the repr. Deterministic (per-cell sum).
+    const GOLDEN_TOTAL_J: f64 = 6.0623029551e-8;
+    const GOLDEN_STEP_J: f64 = 2.5259595646e-9;
     const GOLDEN_B: usize = 24;
     const GOLDEN_T: usize = 20;
 
