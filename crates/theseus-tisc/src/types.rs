@@ -81,6 +81,45 @@ impl Layout {
         }
     }
 
+    /// Derive the minimal per-program layout (B-2.0b) from two facts about
+    /// a compiled program: whether it emits ANY memory op, and the highest
+    /// general-register operand index it names.
+    ///
+    /// - `mem_words = 0` for a CPU-only program (no Mexch/MexchReg) — it runs
+    ///   on the CPU-only `step(rom)` ring, dropping the composite + bus
+    ///   machinery entirely; otherwise the default bank size.
+    /// - `num_regs = next_pow2(max_named_reg + 1)`, clamped to `[1, 8]` (the
+    ///   operand select tree is binary, so the register count rounds up to a
+    ///   power of two — design DF-3).
+    ///
+    /// `w_data`, `w_ctl`, `w_pc`, `w_br`, and `num_scratch` are kept at their
+    /// default values — data-word narrowing is B-2.1, PC narrowing is B-2.2.
+    pub const fn for_program_facts(uses_mem: bool, max_named_reg: Option<usize>) -> Self {
+        let d = Layout::default();
+        let mem_words = if uses_mem { d.mem_words } else { 0 };
+        let num_regs = match max_named_reg {
+            None => 1,
+            Some(m) => {
+                let want = m + 1;
+                // next_pow2(want), clamped to [1, d.num_regs].
+                let mut p = 1;
+                while p < want {
+                    p <<= 1;
+                }
+                if p > d.num_regs {
+                    d.num_regs
+                } else {
+                    p
+                }
+            }
+        };
+        Layout {
+            num_regs,
+            mem_words,
+            ..d
+        }
+    }
+
     /// Number of Word-sized fields PC occupies (`⌈w_pc / w_ctl⌉`).
     pub const fn pc_fields(&self) -> usize {
         self.w_pc / self.w_ctl

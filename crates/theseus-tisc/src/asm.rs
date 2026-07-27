@@ -211,6 +211,47 @@ pub enum Instr {
     Rotri { rd: u8, imm: u8 },
 }
 
+impl Instr {
+    /// Does this instruction touch the memory bank (Mexch / MexchReg)?
+    ///
+    /// Used by the per-program layout derivation (B-2.0b): a program that
+    /// emits no memory op needs `mem_words = 0` and can run on the CPU-only
+    /// `step(rom)` ring (no composite/bus machinery).
+    pub fn uses_mem(&self) -> bool {
+        matches!(self, Instr::Mexch { .. } | Instr::MexchReg { .. })
+    }
+
+    /// The operand indices this instruction NAMES over the `reg ∪ scratch`
+    /// crossbar (`0..8 → r0..r7`, `8..16 → s0..s7`). `sx` (a raw scratch
+    /// index) and `addr`/`imm` are NOT crossbar operands and are excluded.
+    ///
+    /// Used by the per-program layout derivation (B-2.0b) to find the
+    /// highest named register (`< NUM_REGS`), which bounds `num_regs`.
+    pub fn operand_locs(&self) -> Vec<u8> {
+        match *self {
+            Instr::Add { rd, rs }
+            | Instr::Sub { rd, rs }
+            | Instr::Xor { rd, rs }
+            | Instr::Exch { rd, rs }
+            | Instr::Rotl { rd, rs }
+            | Instr::Rotr { rd, rs } => vec![rd, rs],
+            Instr::Cswap { rd, rs, rt } | Instr::Ccnot { rd, rs, rt } => vec![rd, rs, rt],
+            // Xchg names a register operand (rd) + a raw scratch slot (sx,
+            // NOT a crossbar operand — excluded here; it bounds num_scratch).
+            Instr::Xchg { rd, .. } => vec![rd],
+            Instr::Swapbr { rd } => vec![rd],
+            // Mexch: rd is a register operand; addr is a mem index.
+            Instr::Mexch { rd, .. } => vec![rd],
+            Instr::MexchReg { rd, ra } => vec![rd, ra],
+            Instr::Addi { rd, .. }
+            | Instr::Subi { rd, .. }
+            | Instr::Xori { rd, .. }
+            | Instr::Rotli { rd, .. }
+            | Instr::Rotri { rd, .. } => vec![rd],
+        }
+    }
+}
+
 /// Validate one 5-bit operand index against the *legal* operand space
 /// (A-0, MAJOR-4). Legal operands are:
 ///   - `0..8`   → r0..r7 (general registers), and

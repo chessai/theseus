@@ -3001,6 +3001,46 @@ pub fn compile(iso: &Iso) -> Result<Vec<Instr>, CompileError> {
     compile_with_metadata(iso).map(|l| l.instrs)
 }
 
+// ── B-2.0b: per-program minimal layout derivation ────────────────────
+
+use crate::types::Layout;
+
+/// Derive the minimal per-program [`Layout`] (B-2.0b) from a compiled
+/// instruction stream.
+///
+/// Scans the program for the two facts the shrink depends on:
+///  - **memory**: does any instruction emit a Mexch/MexchReg? If not, the
+///    program is CPU-only and `mem_words = 0` (it runs on the CPU-only
+///    `step(rom)` ring — no composite carrier, no bus).
+///  - **registers**: the highest general-register operand index named
+///    (`< NUM_REGS`; scratch operands `8..16` are excluded — the scratch
+///    region is not shrunk in this slice). `num_regs` rounds this up to a
+///    power of two.
+///
+/// `w_data`/`w_ctl`/`w_pc` are unchanged (B-2.1/B-2.2 own those). At the
+/// default program shape this returns a layout equal to `Layout::default()`
+/// EXCEPT `mem_words`/`num_regs` when the program genuinely uses fewer.
+pub fn derive_layout(instrs: &[Instr]) -> Layout {
+    let uses_mem = instrs.iter().any(Instr::uses_mem);
+    let mut max_named_reg: Option<usize> = None;
+    for instr in instrs {
+        for loc in instr.operand_locs() {
+            let l = loc as usize;
+            if l < NUM_REGS {
+                max_named_reg = Some(max_named_reg.map_or(l, |m| m.max(l)));
+            }
+        }
+    }
+    Layout::for_program_facts(uses_mem, max_named_reg)
+}
+
+/// True iff the program is CPU-only (emits no memory op), so it can run on
+/// the CPU-only `step(rom)` ring rather than the composite `system_step`
+/// (dropping the MemState + BusMsg tensor). B-2.0b MEM-drop predicate.
+pub fn is_cpu_only(instrs: &[Instr]) -> bool {
+    !instrs.iter().any(Instr::uses_mem)
+}
+
 /// Metadata accumulated during lowering (M-D.d §4).
 ///
 /// Threaded through all `lower` calls via `&mut LowerMeta` to
@@ -4370,14 +4410,33 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
         fuel = 8_000_000_000;
     }
 
-    // Run exactly B steps of system_step.
-    let step_iso = crate::step::system_step(&rom);
-    let mut cur = encode_system(&init);
-    for _ in 0..budget {
-        cur = eval_fn(&step_iso, cur, &mut fuel)
-            .map_err(|e| CompileError::Deferred(format!("CPU eval failed: {e:?}")))?;
-    }
-    let final_state = decode_system(&cur);
+    // B-2.0b MEM-drop: a CPU-only program (no Mexch/MexchReg) with no live
+    // initial memory runs on the CPU-only `step(rom)` ring over the bare
+    // `state_ty()` carrier, dropping the MemState + BusMsg tensor entirely. A
+    // program that touches memory — or a resident-marshalled state with live
+    // mem words — still runs on the composite `system_step`. Both paths agree
+    // on the CPU fields for a CPU-only, mem-quiescent program (mem/bus stay
+    // zero under system_step), so this is a pure machinery-drop, not a
+    // semantic change. The `init.mem == 0` guard keeps a resident program
+    // whose (partial) instr slice happens to emit no Mexch off this path.
+    let mem_quiescent = init.mem.iter().all(|&m| m == 0);
+    let final_state = if is_cpu_only(instrs) && mem_quiescent {
+        let step_iso = crate::step::step(&rom);
+        let mut cur = init.encode();
+        for _ in 0..budget {
+            cur = eval_fn(&step_iso, cur, &mut fuel)
+                .map_err(|e| CompileError::Deferred(format!("CPU eval failed: {e:?}")))?;
+        }
+        StateVals::decode(&cur)
+    } else {
+        let step_iso = crate::step::system_step(&rom);
+        let mut cur = encode_system(&init);
+        for _ in 0..budget {
+            cur = eval_fn(&step_iso, cur, &mut fuel)
+                .map_err(|e| CompileError::Deferred(format!("CPU eval failed: {e:?}")))?;
+        }
+        decode_system(&cur)
+    };
 
     // DYNAMIC TERMINAL CHECK (P1, P3): BR=0, s0=0, s1=0.
     if final_state.br != 0 || final_state.scratch[0] != 0 || final_state.scratch[1] != 0 {
