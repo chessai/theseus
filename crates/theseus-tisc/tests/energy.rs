@@ -633,6 +633,31 @@ fn poc_b11_shared_alu_measure() {
     );
 }
 
+// B-1 re-sequencing measurement: per-block BALANCED cell mass of the
+// top-level blocks of decode_execute (with B1.1's Group-A fold applied).
+// Grounds where the un-shared *routing* mass lives — the controlled ops
+// (Ccnot/Cswap/Xchg/Swapbr) each carry a PRIVATE crossbar (design §1.3),
+// whereas Group A/B were already route-shared by A-0. This tells us which
+// blocks the universal 3-operand shared bracket must absorb to capture the
+// design's 12→3 routing collapse (the real B-1 win).
+#[test]
+fn poc_b1_perblock_measure() {
+    let blocks = theseus_tisc::decoder::decode_blocks_for_measurement();
+    let _guard = LOWER_GATE.lock().unwrap();
+    let mut total = 0usize;
+    for (name, iso) in &blocks {
+        let bd = instruction_energy(iso, char_db(), T_RAMP)
+            .unwrap_or_else(|e| panic!("energy for block {name}: {e:?}"));
+        let cells: usize = bd.by_kind.values().map(|k| k.count).sum();
+        total += cells;
+        eprintln!(
+            "B1 block {:>8}: balanced cells={:>8}  active_j={:.4e} buffer_j={:.4e} total_j={:.4e}",
+            name, cells, bd.active_j, bd.buffer_j, bd.total_j
+        );
+    }
+    eprintln!("B1 blocks SUM balanced cells = {total} (vs whole decode_execute 834940 post-B1.1; remainder = shared fetch/pc/park plumbing)");
+}
+
 // ── me_a5: range (negative) ─────────────────────────────────────────
 
 #[test]

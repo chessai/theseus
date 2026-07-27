@@ -364,6 +364,26 @@ reuses an existing sub-block does NOT change step_j (proves the growth tax is de
 
 ---
 
+## 6. B1.1 RESULT (measured) + RE-SEQUENCING
+
+**B1.1 shipped as a POC (`07e784a`, Group-A fold) and answered open-Q1 empirically:**
+
+| quantity | baseline | B1.1 | delta |
+|---|---|---|---|
+| decode_execute (balanced) | 874 510 | 834 940 | −39 570 (1.047×) |
+| Group-A portion (balanced) | 164 846 | 148 414 | −16 432 (**1.111×**) |
+| step_j (fib) | 2.5259595646e-9 | **2.4672491693e-9** | **−2.324%** |
+| B / T | 24 / 20 | 24 / 20 | unchanged |
+
+**Q1 verdict: the shared single netlist SHRINKS — no balance-buffer skew catastrophe (the feared failure mode did NOT happen).** But the Group-A shrink is only **1.111×**, below the ~1.3× bar. **Why:** the design's 2–3× premise rests on collapsing replicated *routing crossbar* (§1.3/§3.1). **A-0 already shared Group A's route** (`with_two_regs` = one `fetch_rs` + one `sel_rd` across all 6 ops — decoder.rs `group_a_shared`). So B1.1 only removed the *predicate-chain* replication (6 opcode AND-chains → 1 shared `alu_config_decode`) + shared the Add/Sub adder & Rotl/Rotr rotator. There was **no routing left to capture inside Group A.** The pattern (config-decode + one gated configurable core + single fixed netlist) is PROVEN correct (6 eval-level semantics teeth pass: full_decoder_{arithmetic,logic,rotates,moves}, reserved-opcodes-identity, dispatch_exclusivity) and measurable — but its cell win is marginal because Group A was already near-optimal post-A-0.
+
+**RE-SEQUENCING (data-grounded, holistic):** the real routing collapse lives OUTSIDE Group A — the 4 controlled ops (Ccnot 3 + Cswap 3 + Xchg 2 + Swapbr 1 = **9 of the 12 traversals**, §1.3) each carry a *private* crossbar; Group B carries 1. Non-Group-A balanced mass = 874 510 − 164 846 = **709 664 cells (81% of decode)**, all still un-shared. The design's incremental slice order (B1.1 Group-A → B1.2 immediates → B1.3 controlled) puts the biggest win LAST; the empirical finding says invert the emphasis:
+
+- **B1.1's infra is KEPT** (config-decode + gated configurable ALU + `*_core_at(cfg)` config-wired cores) — it is the FOUNDATION the universal bracket + core-sharing reuse; a real −2.3% step_j; but NOT merged alone (a full highest-bar review cycle isn't justified by −2.3%).
+- **NEXT = the UNIVERSAL 3-operand shared bracket (§2.4):** fetch rd→D / rs→A / rt→B ONCE for the whole step, route the controlled ops (Ccnot, Cswap — the 6-of-12 routing consumers) + Group A/B through it. This collapses ~12 traversals → ~3 = where the design's 2–3× decode reduction (→ ~1.6–1.9× step_j) actually comes from. Xchg (scratch crossbar) / Swapbr (rs=0 aliases rd) may stay separate small blocks if folding costs more proof than they save.
+- **Merge as ONE reviewed unit** (B1.1 infra + universal bracket) with the full highest-bar cycle — Fable adversarial review (aliasing/co-fire/off-opcode-identity across the universal bracket) + real system_step authority (run_on_cpu==eval + whole-domain per-op equiv + ring closure) + energy re-pin — amortizing the expensive review over the real win.
+- **Gating measurement (this doc's `poc_b1_perblock_measure`):** confirm per-block balanced mass before the big build, so the universal-bracket scope targets the heaviest blocks.
+
 ## Appendix — measurement provenance
 
 - `step_j`/`total_j`/B/T: `me_a3_golden` (energy.rs), committed golden, re-verified as

@@ -1211,6 +1211,21 @@ pub fn group_a_shared_for_measurement() -> Iso {
     group_a_shared()
 }
 
+/// B1 measurement hook: the top-level blocks of `decode_execute_shared`, so
+/// each block's BALANCED cell mass can be measured individually. This
+/// grounds the B-1 re-sequencing decision — where the un-shared *routing*
+/// mass actually lives (the controlled ops each carry a PRIVATE crossbar).
+pub fn decode_blocks_for_measurement() -> Vec<(&'static str, Iso)> {
+    vec![
+        ("group_a", group_a_shared()),
+        ("ccnot", ccnot_instr()),
+        ("cswap", cswap_instr()),
+        ("xchg", xchg_instr()),
+        ("swapbr", swapbr_instr()),
+        ("group_b", group_b_shared()),
+    ]
+}
+
 // ── B1.1 shared configurable ALU (Group A) ─────────────────────────────
 //
 // Config-line layout inside s1 (`AUX_PRED_FIELD`, decoder-reserved — never
