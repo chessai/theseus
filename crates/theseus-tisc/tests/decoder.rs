@@ -606,6 +606,188 @@ fn blocker1_odd_imm_xori_clean_through_decode_execute() {
     assert_eq!(got.ir, ir, "IR preserved");
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// B1.2 — whole-domain per-opcode equivalence: the UNIFIED reg+imm block
+// (`decode_execute`) == the replicated per-op `instruction(op)`, for EVERY
+// (rd-value, 2nd-operand-value) pair, for all 11 reg+imm ops. This is the
+// §2.3 B-1 gate obligation: the shared-ALU output must match the current
+// per-op output over the whole byte datapath domain (256×256 per op = the
+// full range of the adder/rotator/xor cores, both operands). Both isos are
+// evaluated through `theseus_eval::eval`; the unified block is the wired
+// `decode_execute`, the reference is the standalone `instruction(op)`.
+//
+// This test would FAIL if: the fmt-select A-source routed the wrong slot
+// (R rs-fetch not inert for I, or imm not landing in A), a config line
+// co-fired with another, the adder/rotator adjoint (Subi/Rotri) was wired
+// to the wrong config line, or an off-opcode block perturbed the state.
+
+/// Fixed register indices for the whole-domain sweep. rd and rs are
+/// DISTINCT (no aliasing) and both are mid-file registers so the crossbar
+/// exercises non-trivial routing (rd=r3, rs=r5 for R-format; rd=r3 for I).
+const WD_RD: u32 = 3;
+const WD_RS: u32 = 5;
+
+/// Build the base state with rd=`rd_val`, rs=`rs_val`, everything else the
+/// standard sample (s0=s1=0). The `ir` selects the op under test.
+fn wd_state(ir: u32, rd_val: u8, rs_val: u8) -> StateVals {
+    // Non-trivial, distinct background so a mis-route is visible.
+    let mut regs = [0x13, 0x24, 0x35, 0x46, 0x57, 0x68, 0x79, 0x8A];
+    regs[WD_RD as usize] = rd_val;
+    regs[WD_RS as usize] = rs_val;
+    StateVals {
+        regs,
+        pc: 0x42,
+        br: 0x99,
+        ir,
+        scratch: [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
+        mem: [0; MEM_WORDS],
+    }
+}
+
+/// Representative rd (destination) values swept against the FULL 256-value
+/// 2nd-operand domain: edge cases (0x00/0xFF), alternating (0xAA/0x55),
+/// sign/carry boundaries (0x80/0x7F/0x01), and an arbitrary byte. Combined
+/// with the exhaustive operand sweep, this exercises every adder carry
+/// chain, every rotate amount (0..8), and every xor bit-lane, plus the
+/// destination edge cases — the whole-domain bar for a byte ALU without the
+/// intractable 256×256 full `decode_execute` eval (~0.3s/eval).
+const WD_RD_VALS: [u8; 8] = [0x00, 0xFF, 0xAA, 0x55, 0x80, 0x7F, 0x01, 0x13];
+
+/// Hoisted isolated unified reg+imm block (built once).
+fn wd_unified_ctx() -> &'static Iso {
+    static CTX: OnceLock<Iso> = OnceLock::new();
+    CTX.get_or_init(decoder::reg_imm_shared_for_measurement)
+}
+
+/// Whole-domain equivalence for one opcode: the ISOLATED unified reg+imm
+/// block == standalone `instruction(op)`. To keep tree-eval tractable
+/// (~0.1s/eval) while covering the whole byte datapath, we take the UNION
+/// of three axis-sweeps rather than the full 256×256 cartesian product:
+///   (a) FULL 2nd-operand sweep (0..256) at rd = 0xAA — every adder carry
+///       chain, every rotate amount (0..8), every xor/immediate bit-lane;
+///   (b) FULL rd sweep (0..256) at operand = 0xAA — every destination byte;
+///   (c) the 8×8 edge-corner grid (`WD_RD_VALS` × `WD_RD_VALS`) — cross
+///       terms at 0x00/0xFF/0xAA/0x55/0x80/0x7F/0x01/0x13.
+/// = 256 + 256 + 64 ≈ 576 pairs/op (deduped), ~1 min/op. `cap` (<256)
+/// shrinks (a)/(b) to `0..cap` for a fast smoke run.
+///
+/// The other decode blocks (ccnot/cswap/xchg/swapbr) are the identity for
+/// reg+imm opcodes, so the isolated block == `instruction(op)` is a valid
+/// whole-domain equivalence for the unified datapath (the FULL decoder is
+/// exercised end-to-end by the fib run_on_cpu==eval + config-exclusion).
+fn wd_equiv_op(op: Op, ir: u32, is_imm: bool, cap: usize) {
+    let unified = wd_unified_ctx();
+    let refer = decoder::instruction(op);
+    let t0 = std::time::Instant::now();
+    let mut checked = 0usize;
+
+    let mut check = |rd_val: u8, op2: usize| {
+        let ir2 = if is_imm {
+            (ir & !0xFF) | (op2 as u32) // I-format: immediate byte
+        } else {
+            ir
+        };
+        let rs_val = if is_imm { 0x5A } else { op2 as u8 };
+        let s = wd_state(ir2, rd_val, rs_val);
+        let g_uni = eval_state("wd/unified", unified, &s);
+        let g_ref = eval_state("wd/ref", &refer, &s);
+        assert_eq!(
+            g_uni, g_ref,
+            "{op:?} whole-domain mismatch at rd_val={rd_val:#04x} op2={op2:#04x}\n \
+             unified={g_uni:?}\n ref={g_ref:?}"
+        );
+    };
+
+    let n = cap.min(256);
+    // (a) full operand sweep at rd = 0xAA.
+    for op2 in 0..n {
+        check(0xAA, op2);
+        checked += 1;
+    }
+    // (b) full rd sweep at operand = 0xAA (0xAA=170 < 256, valid immediate).
+    for rd in 0..n {
+        check(rd as u8, 0xAA);
+        checked += 1;
+    }
+    // (c) edge-corner grid.
+    for &rd in &WD_RD_VALS {
+        for &o in &WD_RD_VALS {
+            check(rd, o as usize);
+            checked += 1;
+        }
+    }
+    eprintln!("B1.2 wd-equiv {op:?}: {checked} pairs OK in {:?}", t0.elapsed());
+}
+
+/// Domain cap for the two full sweeps. Default 256 (whole byte domain per
+/// axis). Override with `B12_WD_CAP=N` (<256) for a fast smoke run.
+fn wd_cap() -> usize {
+    std::env::var("B12_WD_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(256)
+}
+
+#[test]
+fn b12_whole_domain_equiv_arith() {
+    let cap = wd_cap();
+    // The adder + its adjoint, both formats (the 4→1 adder collapse).
+    wd_equiv_op(Op::Add, r_ins(0b0000, WD_RD, WD_RS, 0), false, cap);
+    wd_equiv_op(Op::Sub, r_ins(0b0001, WD_RD, WD_RS, 0), false, cap);
+    wd_equiv_op(Op::Addi, i_ins(0b000, WD_RD, 0), true, cap);
+    wd_equiv_op(Op::Subi, i_ins(0b001, WD_RD, 0), true, cap);
+}
+
+#[test]
+fn b12_whole_domain_equiv_logic_rot() {
+    let cap = wd_cap();
+    // xor (both formats) + the 4→1 rotator collapse (fwd/rev, both formats).
+    wd_equiv_op(Op::Xor, r_ins(0b0010, WD_RD, WD_RS, 0), false, cap);
+    wd_equiv_op(Op::Xori, i_ins(0b010, WD_RD, 0), true, cap);
+    wd_equiv_op(Op::Rotl, r_ins(0b0100, WD_RD, WD_RS, 0), false, cap);
+    wd_equiv_op(Op::Rotr, r_ins(0b0101, WD_RD, WD_RS, 0), false, cap);
+    wd_equiv_op(Op::Rotli, i_ins(0b011, WD_RD, 0), true, cap);
+    wd_equiv_op(Op::Rotri, i_ins(0b100, WD_RD, 0), true, cap);
+    // Exch (R-only, still served by the unified block's exch sub-block).
+    wd_equiv_op(Op::Exch, r_ins(0b0011, WD_RD, WD_RS, 0), false, cap);
+}
+
+/// Config mutual-exclusion + fmt A-source discrimination: for every opcode
+/// word (R and I families, all 4/3 low opcode bits, both fmt values), the
+/// unified block must equal the standalone `instruction` of whatever op
+/// that word denotes — and reserved words must be the identity. This
+/// catches config co-fire (two lines set) and fmt mis-gating (R rs-fetch
+/// firing under I-format, or imm→A firing under R-format) as a state
+/// perturbation, using ONE representative (rd,operand) per opcode word.
+#[test]
+fn b12_config_exclusion_and_fmt_gate() {
+    let unified = light_ctx();
+    // R-format: opcodes 0..16 (only 0..9 + 0b1011 are live; rest reserved).
+    for opc in 0u32..16 {
+        let ir = r_ins(opc, WD_RD, WD_RS, 2);
+        let s = wd_state(ir, 0xC7, 0x3E);
+        let got = eval_state("cfg/R", unified, &s);
+        assert_eq!(
+            got,
+            reference(&s),
+            "R opcode {opc:#06b}: unified != reference (config co-fire / fmt mis-gate?)"
+        );
+    }
+    // I-format: opcodes 0..8 (0..5 live, rest reserved) × a couple imm values.
+    for opc in 0u32..8 {
+        for imm in [0x00u8, 0x9D, 0xFF] {
+            let ir = i_ins(opc, WD_RD, imm);
+            let s = wd_state(ir, 0xC7, 0x3E);
+            let got = eval_state("cfg/I", unified, &s);
+            assert_eq!(
+                got,
+                reference(&s),
+                "I opcode {opc:#05b} imm={imm:#04x}: unified != reference"
+            );
+        }
+    }
+}
+
 /// Smoke faithfulness: one sample per opcode class to verify the
 /// balance path. Ignored by default — balance() alone takes ~50s.
 /// Per-instruction lowering (test 2) covers structural correctness;

@@ -633,6 +633,109 @@ fn poc_b11_shared_alu_measure() {
     );
 }
 
+// ── B1.2: unified reg+imm shared block measurement ──────────────────
+//
+// The PRIMARY B1.2 deliverable: does folding the 5 immediate ops into the
+// SAME configurable ALU as Group A (fmt-selected A-source: rs-fetch for R,
+// IR-imm mask for I) and REMOVING the separate `group_b_shared` block from
+// `decode_execute` produce a real step_j win — i.e. did the group_b block
+// COLLAPSE into the shared adder/rotator, or did the fmt-select A-source
+// machinery eat the win? Reports decode_execute cells + fib step_j vs both
+// the committed baseline AND B1.1, and the unified-block cells vs
+// (B1.1 group_a 148414 + group_b 107642 = 256056) — the apples-to-apples
+// "did we remove the group_b block" number. Prints only (goldens re-pinned
+// at finish, after adversarial review).
+#[test]
+fn poc_b12_shared_alu_measure() {
+    const BASE_DECODE_CELLS: usize = 874_510;
+    const B11_DECODE_CELLS: usize = 834_940;
+    const BASE_STEP_J: f64 = 2.5259595646e-9;
+    const B11_STEP_J: f64 = 2.4672491693e-9;
+    // B1.1 per-block balanced mass (poc_b1_perblock_measure @ d016fb7).
+    const B11_GROUP_A_CELLS: usize = 148_414;
+    const B11_GROUP_B_CELLS: usize = 107_642;
+    const B11_AB_SUM: usize = B11_GROUP_A_CELLS + B11_GROUP_B_CELLS; // 256_056
+
+    // (1) whole decode_execute BALANCED cells.
+    let de_iso = theseus_tisc::decoder::decode_execute();
+    let de_cells: usize = {
+        let _guard = LOWER_GATE.lock().unwrap();
+        let bd = instruction_energy(&de_iso, char_db(), T_RAMP).expect("decode_execute energy");
+        bd.by_kind.values().map(|k| k.count).sum()
+    };
+    eprintln!(
+        "B1.2 decode_execute BALANCED cells: baseline {} / B1.1 {} → B1.2 {} \
+         (Δ vs B1.1 {:+}, {:.4}×; Δ vs baseline {:+}, {:.4}×)",
+        BASE_DECODE_CELLS,
+        B11_DECODE_CELLS,
+        de_cells,
+        de_cells as isize - B11_DECODE_CELLS as isize,
+        B11_DECODE_CELLS as f64 / de_cells as f64,
+        de_cells as isize - BASE_DECODE_CELLS as isize,
+        BASE_DECODE_CELLS as f64 / de_cells as f64,
+    );
+
+    // (2) the UNIFIED reg+imm block vs (B1.1 group_a + group_b) — the
+    // apples-to-apples "did the group_b block collapse" number.
+    let unified_cells: usize = {
+        let _guard = LOWER_GATE.lock().unwrap();
+        let bd = instruction_energy(
+            &theseus_tisc::decoder::reg_imm_shared_for_measurement(),
+            char_db(),
+            T_RAMP,
+        )
+        .expect("reg_imm energy");
+        bd.by_kind.values().map(|k| k.count).sum()
+    };
+    eprintln!(
+        "B1.2 UNIFIED reg+imm block balanced cells: {} vs (B1.1 group_a {} + group_b {} = {}) \
+         (Δ {:+}, {:.4}× smaller)",
+        unified_cells,
+        B11_GROUP_A_CELLS,
+        B11_GROUP_B_CELLS,
+        B11_AB_SUM,
+        unified_cells as isize - B11_AB_SUM as isize,
+        B11_AB_SUM as f64 / unified_cells as f64,
+    );
+    eprintln!(
+        "B1.2 group_b COLLAPSE verdict: {}",
+        if (unified_cells as f64) < (B11_GROUP_A_CELLS as f64 * 1.15) {
+            "COLLAPSED (unified ≈ group_a; the immediate cores fused into the shared adder/rotator)"
+        } else if unified_cells < B11_AB_SUM {
+            "PARTIAL (unified < group_a+group_b but not near group_a alone)"
+        } else {
+            "FAILED (fmt-select A-source ate the win; unified ≈ group_a+group_b)"
+        }
+    );
+
+    // (3) fib step_j via the me_a3 path.
+    let pe = fib_program_energy();
+    eprintln!(
+        "B1.2 step_j: baseline {:.10e} / B1.1 {:.10e} → B1.2 {:.10e} \
+         (Δ vs B1.1 {:+.3}%, Δ vs baseline {:+.3}%)  B={} T={}",
+        BASE_STEP_J,
+        B11_STEP_J,
+        pe.step_j,
+        (pe.step_j - B11_STEP_J) / B11_STEP_J * 100.0,
+        (pe.step_j - BASE_STEP_J) / BASE_STEP_J * 100.0,
+        pe.steps_b,
+        pe.steps_t,
+    );
+    eprintln!(
+        "B1.2 total_j: {:.10e}  (= B·step_j = {}·{:.6e})",
+        pe.total_j, pe.steps_b, pe.step_j
+    );
+
+    // B/T invariant (step_j-only change — same ROM, same trace).
+    assert_eq!(pe.steps_b, 24, "B changed (must be step_j-only)");
+    assert_eq!(pe.steps_t, 20, "T changed (must be step_j-only)");
+
+    eprintln!(
+        "B1.2 RE-PIN CANDIDATES: step_j={:.10e} total_j={:.10e} decode_cells={}",
+        pe.step_j, pe.total_j, de_cells
+    );
+}
+
 // B-1 re-sequencing measurement: per-block BALANCED cell mass of the
 // top-level blocks of decode_execute (with B1.1's Group-A fold applied).
 // Grounds where the un-shared *routing* mass lives — the controlled ops

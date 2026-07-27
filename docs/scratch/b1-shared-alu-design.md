@@ -384,6 +384,54 @@ reuses an existing sub-block does NOT change step_j (proves the growth tax is de
 - **Merge as ONE reviewed unit** (B1.1 infra + universal bracket) with the full highest-bar cycle — Fable adversarial review (aliasing/co-fire/off-opcode-identity across the universal bracket) + real system_step authority (run_on_cpu==eval + whole-domain per-op equiv + ring closure) + energy re-pin — amortizing the expensive review over the real win.
 - **Gating measurement (this doc's `poc_b1_perblock_measure`):** confirm per-block balanced mass before the big build, so the universal-bracket scope targets the heaviest blocks.
 
+## 7. B1.2 RESULT (measured) — unified reg+imm block, group_b REMOVED
+
+**B1.2 folds the 5 immediate ops into B1.1's shared configurable ALU and DELETES
+`group_b_shared`.** rd→D always; the A-slot source is fmt-selected — R-format
+swap-fetches rs into s0 (fmt-gated, INERT for I-format), I-format masks the IR
+immediate into s0 (¬fmt-gated). Addi/Subi reuse the adder (`CFG_ADD_FWD/REV`),
+Xori reuses the xor sub-block (`CFG_XOR`), Rotli/Rotri reuse the rotator
+(`CFG_ROT_FWD/REV`) — NO new arithmetic cores. `alu_config_decode` extended to
+land BOTH fmt families onto the SAME six config lines (register op and immediate
+op with the same low-3 bits fire different lines because the prefix — fmt —
+differs). Single fixed step-iso preserved (all sub-blocks instantiated + gated).
+
+| quantity | baseline | B1.1 | B1.2 | Δ vs B1.1 |
+|---|---|---|---|---|
+| decode_execute (balanced) | 874 510 | 834 940 | **441 015** | −393 925 (**1.893×**) |
+| step_j (fib me_a3) | 2.5259595646e-9 | 2.4672491693e-9 | **1.8664606459e-9** | **−24.35%** |
+| total_j | 6.0623e-8 | — | **4.4795055502e-8** | — |
+| B / T | 24 / 20 | 24 / 20 | 24 / 20 | unchanged |
+| unified reg+imm block | (ga 148 414 + gb 107 642 = 256 056) | — | **185 864** | −70 192 (1.378×) |
+
+**The group_b block COLLAPSED.** The unified block (185 864) is only ~25% larger
+than B1.1's Group-A block alone (148 414) yet serves ALL 11 reg+imm ops — the
+immediate cores fused into the shared adder/rotator (the 4→1 adder + 4→1 rotator
+collapse), no separate addi/xori/rotli cores remain. Its own mass dropped 1.38×
+vs group_a+group_b.
+
+**The decode-WIDE win (−394k cells, 1.89×) FAR exceeds the unified block's own
+−70k reduction — the buffer-balance super-linearity (§1.1).** Removing a whole
+top-level block from `decode_execute`'s 6→5 `seq_balanced` drops not just group_b's
+~107k cells but its share of the ~50% inter-block balance-buffer overhead across
+the sequence. This is the same mechanism the design predicted (§3.1: "removed
+crossbar cells drop their downstream balance buffers too"), here amplified by
+whole-block removal rather than in-block sharing. **step_j −24.35% vs B1.1 vastly
+exceeds the design's incremental-slice estimate (~6–8%)** because block removal —
+not just intra-block sharing — hits the balance super-linearity hard.
+
+**Correctness:** whole-domain per-op equivalence (unified block ==
+`instruction(op)` over the full 256-value 2nd-operand domain × representative rd
+set, all 11 ops: `b12_whole_domain_equiv_{arith,logic_rot}`); config
+mutual-exclusion + fmt A-source gating over all R/I opcode words incl. reserved
+(`b12_config_exclusion_and_fmt_gate`); the eval-level teeth
+(`full_decoder_{arithmetic,logic,rotates,moves}`, `dispatch_exclusivity`, the two
+BLOCKER regressions) through the unified `decode_execute`; and the fib real-CPU
+oracle (`fib_data_dependent_real_cpu`: compiled 24-instr ROM using Addi/Subi/Xor/
+Exch/Cswap/Swapbr on the real `step` iso == eval over all 16 inputs). NOT YET
+re-pinned: `me_a3_golden` (new step_j 1.8664606459e-9 / total_j 4.4795055502e-8) —
+bundled with B1.1 for one review.
+
 ## Appendix — measurement provenance
 
 - `step_j`/`total_j`/B/T: `me_a3_golden` (energy.rs), committed golden, re-verified as
