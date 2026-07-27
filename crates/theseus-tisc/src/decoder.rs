@@ -50,9 +50,12 @@
 //! - **s0 (scratch 0) is the operand/immediate buffer.** Register
 //!   second operands are *swap-fetched* into s0 (a zero-cell field swap
 //!   bracketed by the rs crossbar), which is exact for any s0 content.
-//!   ADDI/SUBI additionally require **s0 = 0 on entry** (the immediate
-//!   is CNOT-masked onto s0; the TK adder adds `s0 ⊕ imm`). Same
-//!   convention as `instr::addi`.
+//!   After B1.2 (unified reg+imm block), **all I-format ALU ops route the
+//!   immediate through s0** via `imm_to_a` — Addi/Subi (adder), Xori (xor
+//!   sub-block), AND Rotli/Rotri (rotator), not just Addi/Subi — so every
+//!   I-format ALU op **requires s0 = 0 at unified-block entry** (the
+//!   immediate is CNOT-masked onto s0; the shared core then consumes
+//!   `s0 ⊕ imm`). Same convention as `instr::addi`.
 //! - **s1 (scratch 1) holds the predicate bit (bit 0), the Toffoli
 //!   chain intermediates (bits 1–3), and CSWAP's control-bit copy
 //!   (bit 4); it must be 0 on entry** and is restored to 0 on exit.

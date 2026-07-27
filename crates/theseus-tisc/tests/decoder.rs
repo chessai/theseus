@@ -788,6 +788,107 @@ fn b12_config_exclusion_and_fmt_gate() {
     }
 }
 
+/// MAJOR-2 tooth (B1.2 new claim): the sel_rs crossbar is INERT for
+/// I-format even when the immediate's "steer" bits (IR bits 15..19, which
+/// under fmt=1 drive the R-format rs crossbar) are NONZERO. Under B1.2 the
+/// rs swap-fetch is fmt-gated (`fetch_rs_fmt_gated`): for I-format (fmt=0)
+/// the r0-slot↔s0 word swap carries fmt as a control, so it is the
+/// identity — the crossbar STILL permutes registers on the way in and back
+/// out (steered by whatever bits sit in the rs field, here the immediate's
+/// high bits), but the bracket is a pure self-inverse permutation and
+/// NOTHING is fetched. This test drives those steer bits to nonzero
+/// patterns against a nonzero register/scratch background so that any
+/// spurious (non-cancelling) crossbar action would corrupt an observable
+/// reg or scratch word. Expected: only r[rd] changes per the immediate op;
+/// every other reg, all scratch, BR, PC, IR bit-identical to entry.
+#[test]
+fn b12_iformat_nonzero_immediate_steer_inert() {
+    let unified = light_ctx();
+
+    // Distinct sentinels in every reg and in s2..s7 (s0=s1=0 per
+    // decoder convention) so any spurious crossbar swap is observable.
+    let bg = |ir: u32| StateVals {
+        regs: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+        pc: 0x42,
+        br: 0x99,
+        ir,
+        scratch: [0x00, 0x00, 0xC2, 0xD3, 0xE4, 0xF5, 0x1A, 0x2B],
+        mem: [0; MEM_WORDS],
+    };
+
+    // Case 1 (Fable's exact word): Addi rd=r3, imm low = 0x34, with the
+    // rs-field steer bits 15..18 = 0xF (all crossbar levels incl.
+    // reg↔scratch would fire if the fetch were not fmt-gated).
+    // fmt bit 31 = 0 (I-format); opcode 0b000 = ADDI.
+    let ir1: u32 = (0b000 << 25) | (3 << 20) | (0xF << 15) | 0x34;
+    let s1 = bg(ir1);
+    let got1 = eval_state("iformat-steer/addi", unified, &s1);
+    let mut exp1 = s1.clone();
+    exp1.regs[3] = exp1.regs[3].wrapping_add(0x34); // r3 += 0x34 (mod 256)
+    assert_eq!(
+        got1, exp1,
+        "I-format Addi with nonzero rs-steer bits (0xF<<15): only r3 += 0x34; \
+         all other regs / scratch / BR / PC / IR must be bit-identical\n \
+         got={got1:?}\n exp={exp1:?}"
+    );
+    // Belt-and-suspenders: the reference model agrees (imm = ir & 0xFF).
+    assert_eq!(got1, reference(&s1), "iformat-steer/addi: != reference model");
+
+    // Case 2: Xori rd=r3, imm low = 0x6C, different steer pattern
+    // bits 15..19 = 0b10101 (0x15<<15) to exercise the xor path with a
+    // distinct crossbar-steer bit pattern.
+    let ir2: u32 = (0b010 << 25) | (3 << 20) | (0b10101 << 15) | 0x6C;
+    let s2 = bg(ir2);
+    let got2 = eval_state("iformat-steer/xori", unified, &s2);
+    let mut exp2 = s2.clone();
+    exp2.regs[3] ^= 0x6C; // r3 ^= 0x6C
+    assert_eq!(
+        got2, exp2,
+        "I-format Xori with nonzero rs-steer bits (0b10101<<15): only r3 ^= 0x6C; \
+         everything else bit-identical\n got={got2:?}\n exp={exp2:?}"
+    );
+    assert_eq!(got2, reference(&s2), "iformat-steer/xori: != reference model");
+}
+
+/// MINOR-4 pin: op4/op5 (the two HIGH opcode bits) are DON'T-CARE at the
+/// datapath (the predicates test only the low 4 R / low 3 I opcode bits —
+/// see decoder.rs module header, "Reserved opcodes"). This pins that
+/// documented blind-spot behavior literal-for-literal against the OLD
+/// per-op decode (`instruction(op)`): an opcode with a high bit set aliases
+/// the live op with the same low bits, and must decode/execute identically.
+/// A future change (e.g. widening the predicate to test the high bits)
+/// cannot silently alter this without failing this pin.
+#[test]
+fn b12_high_opcode_bits_dontcare_matches_reference() {
+    let unified = light_ctx();
+
+    // R-family: opcode 0b110000 (high bits 5,4 set) low bits = 0b0000 = Add.
+    // Must execute exactly as instruction(Op::Add) on a nonzero state.
+    let ir_r = r_ins(0b110000, WD_RD, WD_RS, 0);
+    let s_r = wd_state(ir_r, 0xC7, 0x3E);
+    let got_r = eval_state("hi-opc/R-add-alias", unified, &s_r);
+    let ref_add = decoder::instruction(Op::Add);
+    let exp_r = eval_state("hi-opc/R-add-ref", &ref_add, &s_r);
+    assert_eq!(
+        got_r, exp_r,
+        "R opcode 0b110000 (high bits set, low=Add) must decode/execute as \
+         instruction(Op::Add) literal-for-literal"
+    );
+
+    // I-family: opcode 0b111000 (high bits set) low 3 bits = 0b000 = Addi.
+    // fmt=0 (I-format); i_ins sets fmt=0 and shifts opc<<25.
+    let ir_i = i_ins(0b111000, WD_RD, 0x5B);
+    let s_i = wd_state(ir_i, 0xC7, 0x3E);
+    let got_i = eval_state("hi-opc/I-addi-alias", unified, &s_i);
+    let ref_addi = decoder::instruction(Op::Addi);
+    let exp_i = eval_state("hi-opc/I-addi-ref", &ref_addi, &s_i);
+    assert_eq!(
+        got_i, exp_i,
+        "I opcode 0b111000 (high bits set, low=Addi) must decode/execute as \
+         instruction(Op::Addi) literal-for-literal"
+    );
+}
+
 /// Smoke faithfulness: one sample per opcode class to verify the
 /// balance path. Ignored by default — balance() alone takes ~50s.
 /// Per-instruction lowering (test 2) covers structural correctness;

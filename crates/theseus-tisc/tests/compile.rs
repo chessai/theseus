@@ -1067,13 +1067,18 @@ fn mdw_t2b_park_liveness_skip_tightness() {
         );
     }
 
-    // Tightness: one more step (total = 257) wraps PC to 1, hitting ROM[1].
-    // ROM[1] is Swapbr{r1} which swaps r1=0 with BR=0 = still nop for data,
-    // but PC advances. At total 258 steps, PC=2, ROM[2]=Addi{r0,1}, r0 becomes 3.
+    // WIDEN-PC: the old "tightness" premise is DEAD. Under an 8-bit PC the
+    // step at total = rom_len + dead_zone + 2 = 257 wrapped PC to 1 and
+    // re-entered the ROM, corrupting r0. Under the 16-bit PC there is NO wrap
+    // at 256 — at that step the CPU is STILL PARKED (PC has advanced past the
+    // ROM into the high, all-zero PARK region, executing no live ROM word), so
+    // r0 stays at the baseline. Park-liveness now extends well past 256 — a
+    // POSITIVE widen-PC property (the park bound is the 16-bit PC space, not
+    // 256). So the assertion INVERTS: r0 must equal the baseline.
     let over = run_rom_fast(&rom, init.clone(), rom_len + dead_zone + 2);
-    assert_ne!(
+    assert_eq!(
         over.regs[0], baseline.regs[0],
-        "bound should be tight: re-entering ROM corrupts r0"
+        "widen-PC: PC no longer wraps at 256; still parked within 16-bit PC space"
     );
 }
 
@@ -1114,24 +1119,22 @@ fn mdw_t4_two_direction_bound() {
 
 #[test]
 fn mdw_t5_p2_park_safety_overflow() {
-    // Hand-built ROM whose B + S_max > 256: ~135 instrs containing a ~130-instr skip block.
-    let mut instrs = Vec::new();
-    // Open Swapbr
-    instrs.push(Instr::Swapbr { rd: 1 });
-    // 130 NOP-equivalent instructions as skip body
-    for _ in 0..130 {
-        instrs.push(Instr::Addi { rd: 0, imm: 0 });
-    }
-    // Close Swapbr
-    instrs.push(Instr::Swapbr { rd: 1 });
-    // Pad to 135 total
-    while instrs.len() < 135 {
-        instrs.push(Instr::Addi { rd: 0, imm: 0 });
-    }
-    // S_max = 130, B = 135, B + S_max = 265 > 256.
-    assert_eq!(max_skip_distance(&instrs), 130);
-    assert_eq!(instrs.len(), 135);
-
+    // WIDEN-PC: the OLD premise (B + S_max = 265 > 256 ⇒ P2 rejects) is DEAD.
+    // The widen lifted the P2 parked-PC cap from 256 to PC_ADDR_SPACE = 2^16
+    // = 65536, so a 135-instr / S_max=130 ROM (B+S_max=265) no longer
+    // overflows — it parks fine within the 16-bit PC space. Triggering the
+    // real cap with an actual ROM needs B + S_max > 65536, i.e. a >65k-instr
+    // ROM, which is infeasible as a unit test (assemble + a 65k-step run).
+    //
+    // The P2 guard logic itself is UNCHANGED — it is the inline check
+    // `budget + s_max_val > PC_ADDR_SPACE` at the top of `run_rom_on_cpu`,
+    // evaluated on the passed compositional budget / forward-skip distance
+    // BEFORE the run loop. Because those are explicit parameters, we can pin
+    // the 2^16 boundary DIRECTLY with a tiny valid ROM and synthetic
+    // budget/s_max arguments — no 65k-instr ROM, no 65k-step run (the guard
+    // returns Err before the loop). This exercises the real guard at the
+    // widen-PC boundary.
+    let nop = vec![Instr::Addi { rd: 0, imm: 0 }];
     let init = StateVals {
         regs: [0; NUM_REGS],
         pc: 0,
@@ -1140,18 +1143,33 @@ fn mdw_t5_p2_park_safety_overflow() {
         scratch: [0; NUM_SCRATCH],
         mem: [0; MEM_WORDS],
     };
-    let result = run_rom_on_cpu(
-        &instrs,
-        init,
-        instrs.len(),
-        max_skip_distance(&instrs),
-        theseus_eval::eval,
-    );
-    assert!(result.is_err(), "P2 guard must reject");
-    let err_msg = format!("{}", result.unwrap_err());
+
+    // (a) B + S_max = 265 (the OLD trigger) is now WELL under 2^16 — accepted.
+    //     Use budget=1 (run the 1-instr NOP) with s_max=264 so B+S_max=265 but
+    //     the run loop only steps once.
+    let ok = run_rom_on_cpu(&nop, init.clone(), 1, 264, theseus_eval::eval);
     assert!(
-        err_msg.contains("parked PC"),
-        "expected P2 error, got: {err_msg}"
+        ok.is_ok(),
+        "widen-PC: B+S_max=265 no longer overflows the 2^16 park cap: {ok:?}"
+    );
+
+    // (b) Just OVER the 2^16 boundary: budget + s_max = 65537 > 65536. The P2
+    //     guard fires BEFORE the run loop (budget large ⇒ no real 65k-step run).
+    let over = run_rom_on_cpu(&nop, init.clone(), 65_537, 0, theseus_eval::eval);
+    assert!(over.is_err(), "P2 guard must reject B+S_max > 2^16");
+    let msg = format!("{}", over.unwrap_err());
+    assert!(
+        msg.contains("parked PC"),
+        "expected the P2 parked-PC guard, got: {msg}"
+    );
+
+    // (c) Exactly AT the boundary (B + S_max = 65536) must be accepted (the
+    //     cap is strictly-greater-than). Split across budget + s_max so the
+    //     run loop stays tiny (budget=1, s_max=65535).
+    let at = run_rom_on_cpu(&nop, init, 1, 65_535, theseus_eval::eval);
+    assert!(
+        at.is_ok(),
+        "widen-PC: B+S_max == 2^16 is at the cap, not over it: {at:?}"
     );
 }
 
@@ -1641,9 +1659,19 @@ fn mdd_reject_wcet_overflow() {
         "Trace with large carrier must be rejected (payload or register limit)"
     );
 
-    // Also test WCET overflow: u = Bit, body = 126 NOPs (Seq of SwapSum pairs).
-    // exact-k_max: body ≡ Id ⇒ T=1, k_exact=2, k_max=min(2,3)=2.
-    // iter_len = 126 + 10 = 136, spine = 4. wcet = 4 + 2*136 = 276 > 256.
+    // Also test the "loop too big" reject: u = Bit, body = 126 NOPs (Seq of
+    // SwapSum pairs). exact-k_max: body ≡ Id ⇒ T=1, k_exact=2, k_max=min(2,3)=2.
+    // iter_len = 126 + 10 = 136, spine = 4. wcet = 4 + 2*136 = 276.
+    //
+    // WIDEN-PC: the binding guard here is NO LONGER "WCET > 256". Widen-PC
+    // lifted the per-Trace step budget to PC_ADDR_SPACE = 2^16 (lower_trace),
+    // so wcet=276 is well under the ceiling — a DEAD premise. The Trace is
+    // still correctly rejected, but by the 8-bit BR back-jump reach guard:
+    // the backward-jump offset δu = 256 − iter_len is minted into an 8-bit
+    // BR (W_BR=8) and sign-extended into the 16-bit PC, so it reaches a
+    // genuine backward jump only when iter_len ≤ 128. iter_len=136 > 128
+    // sign-extends to a forward offset and diverges → rejected. (A wider
+    // two-byte δu mint is the follow-up; design §3.4.)
     let bit = Type::sum(Type::One, Type::One);
     let carrier_b = Type::sum(bit.clone(), Type::One);
     // Build body = 63 × Seq(SwapSum(Bit, One), SwapSum(One, Bit)) = 126 NOPs.
@@ -1661,13 +1689,13 @@ fn mdd_reject_wcet_overflow() {
     let result_b = compile(&iso_b);
     assert!(
         result_b.is_err(),
-        "Trace with wcet=276 > 256 must be rejected"
+        "Trace with iter_len=136 > 128 must be rejected (BR back-jump reach)"
     );
     let err_b = result_b.unwrap_err();
     let msg_b = format!("{err_b}");
     assert!(
-        msg_b.contains("WCET") || msg_b.contains("256"),
-        "expected WCET overflow error, got: {msg_b}"
+        msg_b.contains("reach") || msg_b.contains("iter_len") || msg_b.contains("BR"),
+        "expected the BR back-jump reach / iter_len guard, got: {msg_b}"
     );
 }
 
