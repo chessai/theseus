@@ -218,7 +218,29 @@ impl Instr {
     /// emits no memory op needs `mem_words = 0` and can run on the CPU-only
     /// `step(rom)` ring (no composite/bus machinery).
     pub fn uses_mem(&self) -> bool {
-        matches!(self, Instr::Mexch { .. } | Instr::MexchReg { .. })
+        // EXHAUSTIVE match (Fable B-2.0b review F1): a non-exhaustive `matches!`
+        // would silently classify a FUTURE mem-touching Instr variant as
+        // CPU-only, routing it onto the mem-free `step` ring where its opcode
+        // is a reserved identity → silent no-op divergence, no error. Listing
+        // every arm forces any new variant to make a compile-time decision here.
+        match self {
+            Instr::Mexch { .. } | Instr::MexchReg { .. } => true,
+            Instr::Add { .. }
+            | Instr::Sub { .. }
+            | Instr::Xor { .. }
+            | Instr::Exch { .. }
+            | Instr::Rotl { .. }
+            | Instr::Rotr { .. }
+            | Instr::Cswap { .. }
+            | Instr::Ccnot { .. }
+            | Instr::Xchg { .. }
+            | Instr::Swapbr { .. }
+            | Instr::Addi { .. }
+            | Instr::Subi { .. }
+            | Instr::Xori { .. }
+            | Instr::Rotli { .. }
+            | Instr::Rotri { .. } => false,
+        }
     }
 
     /// The operand indices this instruction NAMES over the `reg ∪ scratch`

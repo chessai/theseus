@@ -1328,6 +1328,63 @@ fn mdw_t5_p1_terminal_br_nonzero() {
     );
 }
 
+/// B-2.0b (Fable review F2): keep `system_step`'s non-mem inertness under
+/// differential coverage. The MEM-drop routing sends CPU-only + mem-quiescent
+/// programs to the mem-free `step` ring, so the `system_step` emit/mem/absorb
+/// bracketing (net-identity for non-mem opcodes) otherwise loses coverage. A
+/// CPU-only ROM run with NONZERO `init.mem` defeats the guard → routes to
+/// `system_step`; assert (a) it leaves mem INERT (untouched — the program
+/// never emits a mem op) and (b) its CpuState EQUALS the mem-free `step` run
+/// of the same ROM (the two carriers agree — a pure machinery drop).
+#[test]
+fn mdw_b2_cpu_only_nonzero_mem_routes_system_step_inert() {
+    // CPU-only straight-line ROM (no Mexch/MexchReg): Addi r0,#1 ; Xori r1,#0xFF.
+    let instrs = vec![
+        Instr::Addi { rd: 0, imm: 1 },
+        Instr::Xori { rd: 1, imm: 0xFF },
+    ];
+    let s_max = max_skip_distance(&instrs);
+    let mk = |mem: [u8; MEM_WORDS]| StateVals {
+        regs: [0x10, 0x20, 0, 0, 0, 0, 0, 0],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: [0; NUM_SCRATCH],
+        mem,
+    };
+    // mem all-zero → mem-free `step` path; nonzero sentinels → `system_step`.
+    let step_run = run_rom_on_cpu(
+        &instrs,
+        mk([0; MEM_WORDS]),
+        instrs.len(),
+        s_max,
+        theseus_eval::eval,
+    )
+    .expect("CPU-only step path");
+    let mut sentinels = [0u8; MEM_WORDS];
+    for (i, m) in sentinels.iter_mut().enumerate() {
+        *m = 0xA0 + i as u8;
+    }
+    let sys_run = run_rom_on_cpu(&instrs, mk(sentinels), instrs.len(), s_max, theseus_eval::eval)
+        .expect("CPU-only system_step path (nonzero mem)");
+    // (a) system_step left mem INERT for the CPU-only program.
+    assert_eq!(
+        sys_run.mem, sentinels,
+        "system_step path corrupted mem for a CPU-only (no-Mexch) program"
+    );
+    // (b) The two carriers agree on the whole CpuState.
+    assert_eq!(sys_run.regs, step_run.regs, "step vs system_step regs differ");
+    assert_eq!(sys_run.pc, step_run.pc, "step vs system_step pc differ");
+    assert_eq!(sys_run.br, step_run.br, "step vs system_step br differ");
+    assert_eq!(
+        sys_run.scratch, step_run.scratch,
+        "step vs system_step scratch differ"
+    );
+    // Sanity: the program actually executed (r0=0x10+1, r1=0x20^0xFF).
+    assert_eq!(step_run.regs[0], 0x11, "Addi did not run");
+    assert_eq!(step_run.regs[1], 0x20 ^ 0xFF, "Xori did not run");
+}
+
 // ── T6: real-CPU spot-checks (AUTHORITATIVE, #[ignore]) ────────────
 
 #[test]
