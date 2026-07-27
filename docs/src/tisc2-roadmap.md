@@ -16,7 +16,7 @@
 > **A-0 (shared, scratch-addressable operand crossbar + instruction-word reformat)** is inserted
 > before the frame slice; with it, the GCD body returns to ~28 (B=194) exactly as first estimated.
 
-> **⇒⇒ CURRENT STATUS (2026-07-27) — COVERAGE COMPLETE; Phase B efficiency underway (B-1 Unit-1 merged, step_j −26.1%):**
+> **⇒⇒ CURRENT STATUS (2026-07-27) — COVERAGE COMPLETE; Phase B B-1 shared ALU COMPLETE (Unit-1+Unit-2 merged, step_j −39.4%, decode 2.59× smaller):**
 > - **A-0 MERGED** to `chessai/theseus-v2` (`5f11e6b`): 32-bit word + shared scratch-addressable
 >   operand crossbar; net energy WIN −11.9%.
 > - **A-1 (hand-walk GCD) ABANDONED** — a correct reversible in-place gcd2 walk to ≤40 is
@@ -101,11 +101,19 @@
 >   (no BLOCKER, `docs/reviews/b1-unit1-shared-alu-review.md`) + real `system_step` authority + ring
 >   closure + whole-domain per-op equiv + inert-crossbar tooth; goldens re-pinned; **heavy suite 561/0**
 >   (also fixed 3 pre-existing widen-PC-stale compile tests → heavy tier genuinely green again).
-> - **NEXT: Phase B B-1.3** — universal 3-operand bracket (add rt→B) folds **Ccnot (75520) + Cswap
->   (63770)** = the remaining PRIVATE-crossbar routing collapse (per-block measurement). Aliasing-heavy
->   (design §2.4) → own Fable review + real authority. Leave xchg/swapbr (small/awkward) separate. Then
->   B1.4 growth-tax-dead regression → B-2 per-program widths → B-3 active-only microcode. Also: A-5b
->   Option A (aux-in-scratch, wider carriers) + MINOR cleanups.
+> - **✅ Phase B B-1 Unit-2 (B1.3 universal 3-operand bracket) MERGED (`7b97227`, 2026-07-27):** the
+>   universal bracket (rd→D, rs→A, **rt→B fetched once**) folds **Ccnot + Cswap** into the shared block
+>   (5→3 top-level blocks). Config-scratch wall (s1's 8 bits) resolved by moving the 2 transient decode
+>   bits to **s0** (also decoder-reserved + position-stable + clean at decode time), freeing s1 for the
+>   Ccnot/Cswap one-hots — **zero coverage/tax cost** (compile-time discipline, not state growth).
+>   **decode_execute 441015→337459 (2.59× vs baseline), step_j 1.8664606459e-9→1.5314006103e-9 (−18.0%;
+>   cumulative B-1 −39.4% vs baseline), B/T=24/20 invariant.** Fable review no-BLOCKER (s0-restoration
+>   proven structurally exact; `docs/reviews/b1-unit2-shared-alu-review.md`) + real authority (whole-domain
+>   equiv 11 reg+imm + Ccnot + Cswap + s0-restore + run_on_cpu==eval) + ring closure + goldens re-pinned;
+>   heavy suite green. Xchg/Swapbr stay separate (small/awkward).
+> - **NEXT: B1.4** (growth-tax-dead regression: a new op reusing an existing ALU sub-block = O(1) config
+>   line, step_j unchanged — demonstrates the ISA-growth-tax kill) → **B-2 per-program widths** → B-3
+>   active-only microcode. Also: A-5b Option A (aux-in-scratch, wider carriers) + MINOR cleanups.
 > - **(prior) lean-`lower_iso`** (stream the `lower_iso`/balance netlist so wide-state programs don't
 >   OOM → un-defers the me_a3 energy + ring-closure tests AND enables joules measurement at scale —
 >   the prerequisite for Phase-B efficiency) → A-5b Option A (aux-in-scratch, wider carriers) →
