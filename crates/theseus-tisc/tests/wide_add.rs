@@ -457,9 +457,11 @@ fn wide_add_ancilla_profile_matches_pc_add_br() {
     // scratch bits the 1-byte reference `pc_add_br` uses. NET-ZERO (they return
     // to their init) is proven by the balanced-simulate test below, not here.
     //
-    // Calibration: wide_add(1) must have the EXACT same ancilla count as the
-    // reference pc_add_br (both are the 1-byte TK adder), and every extra byte
-    // adds a fixed increment (16). All ancilla inits are false.
+    // Calibration: A-6.4 widen-PC made `pc_add_br` a **16-bit = 2-byte** TK
+    // adder (materialize sext(BR) then a W_PC-bit add; the sext materialization
+    // is CNOT-only = no extra ancillas), so its ancilla profile matches
+    // `wide_add(2)`, not `wide_add(1)`. Every extra byte adds a fixed increment
+    // (16). All ancilla inits are false.
     let (_pn, pc_anc) =
         lower_iso_with_ancillas(&theseus_tisc::step::pc_add_br()).expect("lower pc_add_br");
     assert!(
@@ -477,12 +479,12 @@ fn wide_add_ancilla_profile_matches_pc_add_br() {
         );
         counts.push((k, ancilla.len()));
     }
-    // wide_add(1) == pc_add_br profile.
+    // wide_add(2) == pc_add_br profile (both the 2-byte / 16-bit TK adder).
     assert_eq!(
-        counts[0].1,
+        counts[1].1,
         pc_anc.len(),
-        "wide_add(1) ancilla count must equal pc_add_br ({} vs {})",
-        counts[0].1,
+        "wide_add(2) ancilla count must equal the 16-bit pc_add_br ({} vs {})",
+        counts[1].1,
         pc_anc.len()
     );
     // Fixed per-byte increment (structural, parametric).
@@ -493,7 +495,7 @@ fn wide_add_ancilla_profile_matches_pc_add_br() {
         "k=2→4 ancilla increment (2 bytes)"
     );
     eprintln!(
-        "ancilla: wide_add(1)={} (== pc_add_br), (2)={}, (4)={}; all inits false; \
+        "ancilla: wide_add(1)={}, (2)={} (== 16-bit pc_add_br), (4)={}; all inits false; \
          net-zero restoration proven by balanced simulate",
         counts[0].1, counts[1].1, counts[2].1
     );

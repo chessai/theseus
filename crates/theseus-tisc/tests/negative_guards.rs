@@ -360,10 +360,20 @@ fn encode_swapbr_reg_out_of_range() {
 
 #[test]
 fn assemble_program_too_long() {
-    let prog = vec![Instr::Addi { rd: 0, imm: 0 }; 257];
+    // A-6.4 widen-PC: the assembler cap is the PC address space (2^W_PC =
+    // 65536), not the old 8-bit 256. A 257-word program (which the 8-bit PC
+    // rejected) now assembles fine — the widen-PC payoff at the assembler.
+    use theseus_tisc::types::PC_ADDR_SPACE;
+    assert!(
+        assemble(&vec![Instr::Addi { rd: 0, imm: 0 }; 257]).is_ok(),
+        "257-word program must assemble under the 16-bit PC (was rejected at 8-bit)"
+    );
+    // The cap is enforced one past the PC address space.
+    let too_long = PC_ADDR_SPACE + 1;
+    let prog = vec![Instr::Addi { rd: 0, imm: 0 }; too_long];
     assert!(matches!(
         assemble(&prog),
-        Err(AsmError::ProgramTooLong { len: 257 })
+        Err(AsmError::ProgramTooLong { len }) if len == too_long
     ));
 }
 
