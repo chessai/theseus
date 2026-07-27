@@ -339,7 +339,7 @@ fn prim_from_byte_fn(
 // The 3-cycle: Right(0) → Right(1) → Right(2) → Right(0); Left(Unit) and Right(3)
 // fixed. A genuine permutation of the 5 inhabitants.
 fn loose_sum_ty() -> Type {
-    Type::Sum(Box::new(Type::One), Box::new(Type::Flat(2)))
+    Type::sum(Type::One, Type::Flat(2))
 }
 fn loose_sum_cycle_def() -> PrimDef {
     let ty = loose_sum_ty();
@@ -398,7 +398,7 @@ fn loose_sum_3cycle_run_on_cpu_fast_eq_eval() {
 //
 // A 6-cycle over the inhabitants (index order: Left(0),Left(1),Right(0..3)).
 fn unequal_sum_ty() -> Type {
-    Type::Sum(Box::new(Type::Flat(1)), Box::new(Type::Flat(2)))
+    Type::sum(Type::Flat(1), Type::Flat(2))
 }
 fn unequal_sum_cycle_def() -> PrimDef {
     let ty = unequal_sum_ty();

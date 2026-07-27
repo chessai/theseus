@@ -2,10 +2,24 @@
 //! (ADR-0006); sizes are exact and drive exhaustive-mode testing.
 
 use core::fmt;
+use std::sync::Arc;
 
 /// Core Π type: the finite type algebra.
 ///
 /// `0` (empty), `1` (unit), `a + b` (sum / coproduct), `a × b` (product).
+///
+/// The recursive payloads are held behind `Arc` (not `Box`) so `.clone()` is an
+/// O(1) refcount bump rather than an O(width) deep copy. `Type` is an immutable
+/// value type — it is only ever *read* (shape / dispatch / typing / lowering),
+/// never mutated in place — so sharing a subtree behind an `Arc` is
+/// observationally identical to owning it: `Arc` forwards `Clone`/`Debug`/`Eq`/
+/// `Hash` (its `Eq`/`Hash` deref to the pointee), and the type algebra is a DAG
+/// (no cycles), so no reference cycle can leak. `Arc` (not `Rc`) preserves the
+/// `Send`/`Sync` that `Box<Type>` gave — some downstream types (e.g.
+/// `SystemRing` cached in a `static OnceLock`) require `Type: Sync`. The atomic
+/// refcount is a trivial constant cost next to the O(width) deep copy removed.
+/// This is a pure representation change: the produced netlist is bit-identical
+/// (see the wide-state OOM fix, `docs/scratch/lean-lower-iso-design.md`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     /// The empty type (`0`). Has no inhabitants.
@@ -13,9 +27,9 @@ pub enum Type {
     /// The unit type (`1`). Has exactly one inhabitant.
     One,
     /// Sum (coproduct) type: `a + b`.
-    Sum(Box<Type>, Box<Type>),
+    Sum(Arc<Type>, Arc<Type>),
     /// Product type: `a × b`.
-    Prod(Box<Type>, Box<Type>),
+    Prod(Arc<Type>, Arc<Type>),
     /// Width-parameterized single-leaf word: cardinality `2^n`, `num_leaves = 1`.
     /// Values reuse the existing thermometer encoding `Right^k(Left(Unit))`.
     Flat(u8),
@@ -24,12 +38,12 @@ pub enum Type {
 impl Type {
     /// Convenience constructor for `a + b`.
     pub fn sum(a: Type, b: Type) -> Self {
-        Type::Sum(Box::new(a), Box::new(b))
+        Type::Sum(Arc::new(a), Arc::new(b))
     }
 
     /// Convenience constructor for `a × b`.
     pub fn prod(a: Type, b: Type) -> Self {
-        Type::Prod(Box::new(a), Box::new(b))
+        Type::Prod(Arc::new(a), Arc::new(b))
     }
 
     /// Convenience constructor for `Flat(n)` — a single-leaf word of width

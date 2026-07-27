@@ -64,6 +64,80 @@ fn step_net() -> &'static PhasedCellNetlist {
     })
 }
 
+// ── POC: bit-identical netlist across the Type repr change ───────────
+//
+// The `Box<Type>` → `Arc<Type>` repr change (lean-lower_iso) MUST produce a
+// bit-identical `PhasedCellNetlist`: it changes only how `Type` subtrees are
+// held in memory (deep copy vs O(1) shared refcount), never the produced net.
+// This POC lowers `step(test_rom)` and asserts the net matches a fingerprint
+// captured from the pre-change (Box) code on base `9b12f7e`. The fingerprint is
+// a full-net digest: `Debug` of the whole `PhasedCellNetlist` (every cell's
+// kind/depth/phase/rails, both boundary Types, num_lines) hashed — it changes
+// if ANY produced bit changes. Reproduces the finding: identical old-vs-new.
+//
+// How the golden was captured: check out base `9b12f7e` (Box<Type>), copy this
+// test in, run it printing (cells.len, num_lines, fp); the printed values ARE
+// the golden below.
+//
+// NOTE (gate tier): this whole file is `#![cfg(feature = "heavy-tests")]`, so
+// this POC runs in the HEAVY tier (`--features heavy-tests`), not the fast gate
+// — it must lower a full step net (seconds + GBs), which is heavy by nature.
+// The advisor's pre-merge heavy run is the gate; a fast-only run won't exercise
+// it.
+fn net_fingerprint(net: &PhasedCellNetlist) -> u64 {
+    // Debug is a deterministic, total serialization of every field of the net
+    // (both boundary Types, all cells with kind/depth/phase/inputs/outputs,
+    // output_depths, num_lines). Any produced-bit change perturbs this string.
+    //
+    // Hashed with FNV-1a (inline, dependency-free) rather than the stdlib
+    // `DefaultHasher`: `DefaultHasher`'s algorithm is explicitly NOT guaranteed
+    // stable across Rust versions, so its output could drift on a toolchain bump
+    // and spuriously fail this golden even on a bit-identical net. FNV-1a is a
+    // fixed, version-stable algorithm, so `GOLDEN_FP` stays meaningful.
+    let s = format!("{net:?}");
+    let mut hash: u64 = 0xcbf29ce484222325; // FNV offset basis
+    for b in s.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x100000001b3); // FNV prime
+    }
+    hash
+}
+
+#[test]
+fn poc_step_net_bit_identical_across_type_repr() {
+    let net = step_net();
+    let cells = net.cells.len();
+    let num_lines = net.num_lines;
+    let fp = net_fingerprint(net);
+    eprintln!(
+        "POC step(test_rom) net: cells={cells}, num_lines={num_lines}, fingerprint={fp:#018x}"
+    );
+
+    // Golden captured from base `9b12f7e` (Box<Type> repr) — the pre-change net.
+    // A pure representation change MUST reproduce these exactly.
+    // Captured from base `9b12f7e` (Box<Type>) by running the identical
+    // FNV-1a-over-Debug fingerprint on the pre-change net: cells=5406,
+    // num_lines=32612, fingerprint=0xf155e931576a44b7, peak RSS 57.4 GB (vs
+    // Arc: identical net, ~4 GB peak). Byte-for-byte identical ⇒ pure repr
+    // change, net bit-for-bit equal old-vs-new.
+    const GOLDEN_CELLS: usize = 5406;
+    const GOLDEN_NUM_LINES: u32 = 32612;
+    const GOLDEN_FP: u64 = 0xf155_e931_576a_44b7;
+
+    assert_eq!(
+        cells, GOLDEN_CELLS,
+        "cell count changed under the Type repr change — NOT bit-identical"
+    );
+    assert_eq!(
+        num_lines, GOLDEN_NUM_LINES,
+        "num_lines changed under the Type repr change — NOT bit-identical"
+    );
+    assert_eq!(
+        fp, GOLDEN_FP,
+        "net fingerprint changed under the Type repr change — NOT bit-identical"
+    );
+}
+
 // ── (a) analytic_buffer_count matches balance() ──────────────────────
 
 fn lower_and_check_buffer_count(iso: &theseus_core::Iso, label: &str) {

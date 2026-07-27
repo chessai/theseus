@@ -104,7 +104,7 @@ fn check_side_extended(
     let boundary_core = env.lower(surf_ty);
     let carrier_core = env::label_carrier(labels, env);
     // Extended type: U + boundary (carrier left, boundary right).
-    let extended = CoreType::Sum(Box::new(carrier_core), Box::new(boundary_core));
+    let extended = CoreType::sum(carrier_core, boundary_core);
     let values = enumerate_values(&extended);
 
     let mut found_t0301 = false;

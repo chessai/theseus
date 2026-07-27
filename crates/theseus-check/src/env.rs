@@ -271,14 +271,12 @@ impl Env {
             SurfType::Unit(_) => CoreType::One,
             SurfType::Var(_) => CoreType::Zero,
             SurfType::Paren(inner, _) => self.lower_with(inner, fuel),
-            SurfType::Prod(a, b, _) => CoreType::Prod(
-                Box::new(self.lower_with(a, fuel)),
-                Box::new(self.lower_with(b, fuel)),
-            ),
-            SurfType::Sum(a, b, _) => CoreType::Sum(
-                Box::new(self.lower_with(a, fuel)),
-                Box::new(self.lower_with(b, fuel)),
-            ),
+            SurfType::Prod(a, b, _) => {
+                CoreType::prod(self.lower_with(a, fuel), self.lower_with(b, fuel))
+            }
+            SurfType::Sum(a, b, _) => {
+                CoreType::sum(self.lower_with(a, fuel), self.lower_with(b, fuel))
+            }
             SurfType::Name(n) => {
                 if let Some(&depth) = self.depth_overrides.get(&n.span.start) {
                     let old = fuel.insert(n.text.clone(), depth);
@@ -339,7 +337,7 @@ pub(crate) fn right_nested_sum(summands: &[CoreType]) -> CoreType {
         [] => CoreType::Zero,
         [last] => last.clone(),
         [head, rest @ ..] => {
-            CoreType::Sum(Box::new(head.clone()), Box::new(right_nested_sum(rest)))
+            CoreType::sum(head.clone(), right_nested_sum(rest))
         }
     }
 }
@@ -417,11 +415,11 @@ fn lower_un(name: &str) -> Option<CoreType> {
 fn lower_un_bits(n: u32) -> CoreType {
     if n == 1 {
         // U1 = 1 + 1
-        CoreType::Sum(Box::new(CoreType::One), Box::new(CoreType::One))
+        CoreType::sum(CoreType::One, CoreType::One)
     } else {
         // U<n> = U<n/2> × U<n/2>
         let half = lower_un_bits(n / 2);
-        CoreType::Prod(Box::new(half.clone()), Box::new(half))
+        CoreType::prod(half.clone(), half)
     }
 }
 

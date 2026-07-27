@@ -630,7 +630,7 @@ fn r2_f5_sum_type_decompose_agreement() {
     // zero-padding arm that R2 identified as untested.
     let w = 4u8;
     let f = Type::Flat(w);
-    let ty = Type::Sum(Box::new(f.clone()), Box::new(f));
+    let ty = Type::sum(f.clone(), f);
     let domain = enumerate_values(&ty);
     // Sum(Flat(4), Flat(4)) has 16 + 16 = 32 values.
     assert_eq!(domain.len(), 32);

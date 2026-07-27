@@ -696,8 +696,8 @@ fn elab_clauses_label(
     // 2. Build extended types: ext = Sum(u, boundary).
     let boundary_lhs = env.lower(lhs_ty);
     let boundary_rhs = env.lower(rhs_ty);
-    let ext_lhs = CoreType::Sum(Box::new(carrier.clone()), Box::new(boundary_lhs));
-    let ext_rhs = CoreType::Sum(Box::new(carrier.clone()), Box::new(boundary_rhs));
+    let ext_lhs = CoreType::sum(carrier.clone(), boundary_lhs);
+    let ext_rhs = CoreType::sum(carrier.clone(), boundary_rhs);
 
     // 3. Only handle ext_lhs == ext_rhs (A == B) for now.
     if ext_lhs != ext_rhs {
@@ -1056,10 +1056,10 @@ mod tests {
         let iso = result.as_ref().expect("spin was not elaborated");
 
         // Carrier: lower((Bit, (Bit, Bit))) = Prod(Sum(1,1), Prod(Sum(1,1), Sum(1,1)))
-        let bit = CoreType::Sum(Box::new(CoreType::One), Box::new(CoreType::One));
-        let expected_u = CoreType::Prod(
-            Box::new(bit.clone()),
-            Box::new(CoreType::Prod(Box::new(bit.clone()), Box::new(bit.clone()))),
+        let bit = CoreType::sum(CoreType::One, CoreType::One);
+        let expected_u = CoreType::prod(
+            bit.clone(),
+            CoreType::prod(bit.clone(), bit.clone()),
         );
 
         match iso {
