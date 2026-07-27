@@ -432,7 +432,15 @@ Exch/Cswap/Swapbr on the real `step` iso == eval over all 16 inputs). NOT YET
 re-pinned: `me_a3_golden` (new step_j 1.8664606459e-9 / total_j 4.4795055502e-8) —
 bundled with B1.1 for one review.
 
-## 8. B1.3 STOP — the universal 3-operand bracket is CLEAN; the config-scratch is the wall
+## 8. B1.3 STOP (superseded by §9) — universal bracket CLEAN; config-scratch wall RESOLVED
+
+> **RESOLVED in §9.** The wall below ("10 config-scratch bits needed, s1 holds 8")
+> assumed s1 was the only usable position-stable config word. It is not: **s0 is
+> also decoder-reserved and position-stable** (`select_operand` excludes positions
+> 0/1 = s0/s1 from the level-3 crossbar) AND is guaranteed 0 at config-decode time.
+> Relocating the 2 TRANSIENT decode-workspace bits (prefix+chain) from s1 into s0
+> frees the 2 s1 bits needed for CFG_CCNOT + CFG_CSWAP. §9 records the built B1.3.
+> The analysis below is kept for the historical record.
 
 **Attempted:** fold Ccnot (R 0b1011) + Cswap (R 0b0110) into the reg+imm shared
 block via a universal bracket that fetches **rd→D(r0-slot), rs→A(s0), rt→B(BR)**
@@ -515,6 +523,119 @@ of the inter-block `seq_balanced` balance overhead — the same whole-block-remo
 super-linearity that made B1.2's decode-wide win (−394k) far exceed the block's
 own −70k. Expected to clear a real further step_j win, but **NOT measured** —
 the fold cannot be built until the config-scratch wall (above) is resolved.
+
+## 9. B1.3 BUILT — s0-workspace resolution + universal bracket (Ccnot + Cswap folded)
+
+**The escape the §8 STOP missed: s0 as transient decode workspace.** The §8 wall
+("10 config bits, s1 holds 8") assumed the 2 transient decode bits (prefix+chain)
+had to live in s1 alongside the held one-hots. But **s0 (`AUX_OPERAND_FIELD`) is a
+SECOND decoder-reserved, position-stable word** — `select_operand` excludes
+positions 0/1 (= s0/s1) from its level-3 crossbar, so s0 is never displaced by a
+scratch operand — AND s0 is guaranteed **0 at config-decode time**: it only
+receives the A-operand LATER, when `fetch_rs`/`imm_to_a` run *inside* the decode
+bracket. So:
+
+1. **Relocated CFG_PREFIX + CFG_CHAIN into s0** (`CFG_PREFIX_S0`/`CFG_CHAIN_S0`,
+   s0 bits 0/1). The config-decode carrier grew from `pred_fields()` = [IR_b0..b3,
+   s1] (5 fields) to `config_decode_fields()` = [IR_b0..b3, s1, **s0**] (6 fields);
+   the prefix/chain `cfg_wire`s now point at s0. The existing compute/uncompute
+   logic restores prefix+chain to 0 on the decode FORWARD pass, so **s0 returns to
+   0 before `fetch_rs`/`imm_to_a` write it** (the L15 imm_to_a precondition). This
+   required reordering the bracket so `decode_config` is OUTERMOST (runs with
+   s0 = 0), around the A-operand deposit.
+2. **Freed 2 s1 bits → CFG_CCNOT + CFG_CSWAP.** s1 now holds 8 HELD one-hot lines
+   (add_fwd/rev, xor, exch, rot_fwd/rev, ccnot, cswap) and **no transient bits**.
+   Ccnot (R 0b1011, op3=1) decodes via a new `fmt ∧ op3` prefix branch; Cswap
+   (R 0b0110, op3=0, low3=110) joins the existing `fmt ∧ ¬op3` branch (its low-3
+   pattern is distinct from the six Group-A ops). Only Ccnot/Cswap fire their
+   lines; no reg-op or reserved word mis-fires (config-exclusion tooth).
+3. **Universal 3-operand bracket built.** `shared_alu_block`: decode_config
+   (outermost) ; fetch_rt_br_gated ; fetch_rs_fmt ; sel_rd ; imm_to_a ; ALU ; …⁻¹.
+   All cores (reg+imm + `ccnot_core_at` + `cswap_core_at`) gate on the [D, A=s0,
+   B=BR, s1] slots. **Ccnot**: `D[i] ^= cfg_ccnot ∧ A[i] ∧ B[i]` (verbatim CCC-NOT).
+   **Cswap**: swap A[i]↔B[i] gated `cfg_cswap ∧ D[0]` (control read DIRECTLY from
+   D[0], K3 = 3-ctrl swap, no rd[0] copy — cleaner than the old `cswap_instr`).
+   `ccnot_instr`/`cswap_instr` REMOVED from `decode_execute_shared`; block count
+   **5 → 3** (shared_alu, xchg, swapbr).
+
+**The one NEW subtlety (found + fixed, not the §8 capacity wall): the rt→B fetch
+must be CONFIG-GATED.** For reg+imm ops the rt field is 0 (don't-care). An UNGATED
+rt→BR fetch would route r[0]↔BR — and when rd names r0 this collides with the rd
+routing and corrupts r[0]/BR (caught by `full_decoder_arithmetic`: Add r0,r1 gave
+r0=0/BR−1 instead of r0=0xFF/BR unchanged). Fix: `shared_fetch_rt_br_gated` swaps
+r0-slot↔BR only under `CFG_CCNOT ∨ CFG_CSWAP` (two mutually-exclusive gated
+Fredkins), so it is the EXACT identity for every reg+imm word (and Swapbr) while
+delivering rt→B for Ccnot/Cswap. Regression: `b13_rt_field_inert_for_reg_imm`.
+
+### Measured result (`poc_b13_shared_alu_measure`, this session)
+
+| quantity | baseline | B1.2 | **B1.3** | Δ vs B1.2 |
+|---|---|---|---|---|
+| decode_execute (balanced) | 874 510 | 441 015 | **337 459** | −103 556 (**1.307×**) |
+| step_j (fib me_a3) | 2.5259595646e-9 | 1.8664606459e-9 | **1.5314006103e-9** | **−17.95%** |
+| total_j | 6.0623e-8 | 4.4795055502e-8 | **3.6753614647e-8** | — |
+| B / T | 24 / 20 | 24 / 20 | 24 / 20 | unchanged |
+| top-level block count | 5 | 5 | **3** | −2 |
+| merged universal block | (reg_imm 185864 + ccnot 75520 + cswap 63770 = 325 154) | — | **289 496** | −35 658 (1.123×) |
+
+**decode_execute is now 2.59× smaller than the pre-B-1 baseline (874 510 →
+337 459) and step_j −39.37% (2.526e-9 → 1.531e-9).** The decode-WIDE win
+(−103 556 cells) again FAR exceeds the merged block's own −35 658 shrink — the
+same whole-block-removal buffer-balance super-linearity B1.2 saw: dropping the two
+private ccnot/cswap top-level blocks (5→3 `seq_balanced`) sheds their share of the
+inter-block balance overhead, not just their own routing. The two PRIVATE crossbars
+COLLAPSED into the single universal (rd→D, rs→A, rt→B) route (the ccnot/cswap
+routing that was ~139k private cells is now one shared bracket). step_j −17.95% vs
+B1.2 — a real further win, exactly the "biggest routing collapse lives in the
+controlled ops" prediction of §6/§7.
+
+**Correctness (heavy tier, run to completion this session — all PASS):**
+- **Ccnot** whole-domain vs `instruction(Op::Ccnot)`: `b13_whole_domain_equiv_ccnot`
+  (25 rd/rs/rt index+value cases) + `b13_ccnot_full_rs_sweep` (full 256 rs-values ×
+  4 rd × 4 rt = 4096 lanes) PASS. **Cswap** both polarities:
+  `b13_whole_domain_equiv_cswap` (25 cases incl. rd even/odd) PASS.
+- **All 11 reg+imm ops** re-verified through the re-bracketed + s0-workspace route:
+  `b12_whole_domain_equiv_{arith,logic_rot}` at cap 256 (the full byte datapath
+  domain, now evaluated through `shared_alu_block`) PASS.
+- s0-restoration tooth `b13_s0_restored_to_zero` (s0=s1=0 after decode for all 10 op
+  classes) PASS. rt→B inert-for-reg+imm `b13_rt_field_inert_for_reg_imm` PASS.
+- Config mutual-exclusion + fmt-gate + off-opcode identity
+  `b12_config_exclusion_and_fmt_gate`, `full_decoder_reserved_opcodes_are_identity`,
+  `dispatch_exclusivity`, `full_decoder_{arithmetic,logic,rotates,moves}` PASS.
+- **`run_on_cpu == eval`** on a real Ccnot+Cswap+reg+imm ROM via full `system_step`
+  (`b13_shared_bracket_ccnot_cswap_real_cpu`, 4 register-file cases, both Cswap
+  polarities) PASS — terminal s0=s1=BR=0 enforced. **fib re-confirm**
+  (`fib_data_dependent_real_cpu`, 24-instr ROM × 16 inputs) PASS.
+
+**NOT re-pinned** (report-only, per task): `me_a3_golden` (new step_j
+**1.5314006103e-9** / total_j **3.6753614647e-8**), the clause table decode cells
+**337 459**. These move because the win landed; the re-pin is a follow-up after
+adversarial review.
+
+### Risks a reviewer should attack
+
+1. **s0-restoration exactness (L15).** The whole scheme hinges on `decode_config`
+   restoring s0 bits 0/1 (prefix/chain) to 0 on its FORWARD pass, before
+   `fetch_rs`/`imm_to_a` write s0. `b13_s0_restored_to_zero` + the `run_rom_on_cpu`
+   terminal check (s0=0) pin it, but a reviewer should re-derive that prefix+chain
+   are 0 at end-of-decode-forward for EVERY IR word incl. reserved (both prefix
+   branches uncompute; chain uncomputes per land_op).
+2. **rt→B config-gating vs the reg+imm rt-field=0 aliasing.** The gated fetch is the
+   one non-obvious fix; a reviewer should confirm the swap is EXACTLY identity for
+   every non-controlled word (rt→B off) and that the two mutually-exclusive gated
+   swaps compose to OR without double-firing.
+3. **Ccnot/Cswap decode not mis-firing for reg-ops/reserved.** The op3 split
+   (Ccnot `fmt∧op3`, Cswap `fmt∧¬op3` low3=110) must be the ONLY firing path; the
+   config-exclusion tooth covers R 0..16 + I 0..8 but a reviewer should check the
+   high-opcode-bit don't-cares don't alias a controlled line.
+4. **Cswap-via-D[0] semantics + BR restoration.** The control reads D[0] directly;
+   swap A↔B = s0↔BR; the fetch brackets must write back to r[rs]/r[rt] and restore
+   BR (not-taken must be fully inert). `b13_whole_domain_equiv_cswap` (both
+   polarities) + real-CPU pin it.
+5. **Config co-fire / off-opcode identity / block-count-3 ring closure.** Not yet
+   ring-closed via `validate()` in this session (report-only); the merged block is
+   a single fixed iso (all sub-blocks gated), so the ADR-0034 structural bijection
+   argument carries, but a reviewer should re-run ring closure before merge.
 
 ## Appendix — measurement provenance
 

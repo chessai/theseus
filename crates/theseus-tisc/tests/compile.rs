@@ -245,6 +245,102 @@ fn fib_data_dependent_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// B1.3 — universal 3-operand shared bracket: run_on_cpu == eval on a REAL
+// program exercising Ccnot + Cswap (+ reg+imm) through the full system_step.
+// The ROM is straight-line (BR stays 0), so running exactly B = rom.len()
+// steps naturally parks (PC past end, BR=s0=s1=0) — `run_rom_on_cpu`'s
+// terminal check (BR=0, s0=0, s1=0) is the CPU-level s0/s1-restoration
+// assertion. The real system_step result is compared to the byte-level
+// reference interpreter `run_rom_fast` (itself pinned to eval by the ISA
+// tests) AND to a hand-computed final register file.
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+#[ignore = "authoritative real-CPU system_step; run via `cargo test -p theseus-tisc --test compile -- --ignored`"]
+fn b13_shared_bracket_ccnot_cswap_real_cpu() {
+    use theseus_tisc::asm::Instr;
+    use theseus_tisc::types::StateVals;
+
+    // A straight-line program mixing the universal-bracket op classes:
+    //   0: Addi  r0, #0x0F      ; r0 = 0x0F
+    //   1: Xor   r1, r0         ; r1 ^= r0
+    //   2: Ccnot r2, r0, r1     ; r2 ^= r0 & r1   (byte-parallel AND)
+    //   3: Cswap r3, r4, r5     ; swap r4,r5 iff r3[0]   (r3 odd → taken)
+    //   4: Ccnot r6, r4, r5     ; r6 ^= r4 & r5   (after the swap)
+    //   5: Sub   r7, r0         ; r7 -= r0
+    let prog = [
+        Instr::Addi { rd: 0, imm: 0x0F },
+        Instr::Xor { rd: 1, rs: 0 },
+        Instr::Ccnot { rd: 2, rs: 0, rt: 1 },
+        Instr::Cswap { rd: 3, rs: 4, rt: 5 },
+        Instr::Ccnot { rd: 6, rs: 4, rt: 5 },
+        Instr::Sub { rd: 7, rs: 0 },
+    ];
+    let budget = prog.len();
+
+    // Sweep several initial register files, incl. r3 even/odd (Cswap both
+    // polarities) and dense/edge bytes for the AND lanes.
+    let inits: [[u8; 8]; 4] = [
+        [0x00, 0xF0, 0xAA, 0x01, 0x12, 0x34, 0x55, 0x80], // r3=0x01 odd → swap taken
+        [0x00, 0xF0, 0xAA, 0x02, 0x12, 0x34, 0x55, 0x80], // r3=0x02 even → not taken
+        [0xFF, 0x0F, 0xFF, 0x03, 0xFF, 0xFF, 0x00, 0x7F], // dense
+        [0x5A, 0xA5, 0x3C, 0x00, 0xC3, 0x1E, 0xE1, 0x81], // r3=0x00 even
+    ];
+
+    for (ci, regs0) in inits.iter().enumerate() {
+        let init = StateVals {
+            regs: *regs0,
+            pc: 0,
+            br: 0,
+            ir: 0,
+            scratch: [0; 8],
+            mem: [0; MEM_WORDS],
+        };
+
+        // Byte-level reference interpreter (pinned to eval by the ISA tests).
+        let fast = run_rom_fast(
+            &theseus_tisc::asm::assemble(&prog).expect("assemble"),
+            init.clone(),
+            budget,
+        );
+
+        // Hand-computed expected register file (independent of both engines).
+        let mut r = *regs0;
+        r[0] = r[0].wrapping_add(0x0F);
+        r[1] ^= r[0];
+        r[2] ^= r[0] & r[1];
+        if r[3] & 1 == 1 {
+            r.swap(4, 5);
+        }
+        r[6] ^= r[4] & r[5];
+        r[7] = r[7].wrapping_sub(r[0]);
+        assert_eq!(
+            fast.regs, r,
+            "case {ci}: run_rom_fast disagrees with hand-computed reference"
+        );
+
+        // The AUTHORITATIVE oracle: run the ROM on the REAL system_step iso.
+        let real = run_rom_on_cpu(&prog, init, budget, 0, |iso, v, fuel| {
+            theseus_eval::eval(iso, v, fuel)
+        })
+        .unwrap_or_else(|e| panic!("case {ci}: real-CPU run_rom_on_cpu failed: {e}"));
+
+        // real system_step == reference (and thus == eval on these inputs).
+        // run_rom_on_cpu already enforced the terminal s0=s1=BR=0 check.
+        assert_eq!(
+            real.regs, r,
+            "case {ci}: REAL system_step register file disagrees with reference\n \
+             real={:?}\n ref={:?}",
+            real.regs, r
+        );
+        assert_eq!(real.scratch[0], 0, "case {ci}: s0 must terminate at 0");
+        assert_eq!(real.scratch[1], 0, "case {ci}: s1 must terminate at 0");
+        assert_eq!(real.br, 0, "case {ci}: BR must terminate at 0");
+        eprintln!("B1.3 real-CPU case {ci}: system_step == reference ✓ (regs={:?})", real.regs);
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // M-B (b): general controlled op — multi-instruction arm
 // ══════════════════════════════════════════════════════════════════════
 

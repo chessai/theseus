@@ -817,6 +817,39 @@ fn ccnot_fetch_rt_br() -> Iso {
     Iso::seq(sel_rt.clone(), Iso::seq(swap_br, Iso::sym(sel_rt)))
 }
 
+/// B1.3 — CONFIG-GATED rt→B(BR) fetch for the universal shared bracket.
+/// Routes rt to the r0-slot (content-agnostic, always), swaps r0-slot↔BR
+/// ONLY when a controlled op (Ccnot or Cswap) is decoded — gated on the
+/// held config one-hots `CFG_CCNOT ∨ CFG_CSWAP`, then routes back.
+///
+/// This gating is the fix for the reg+imm rt-field-aliasing hazard: for
+/// reg+imm ops the rt field is 0 (don't-care), so an UNGATED rt→BR fetch
+/// would move r[0]↔BR and — when rd names r0 — collide with the rd routing
+/// and corrupt r[0]/BR. Gating the swap on the controlled-op lines makes it
+/// the exact identity for every reg+imm word (and Swapbr) while delivering
+/// rt→B for Ccnot/Cswap. Since the two config lines are mutually exclusive,
+/// the two gated swaps compose to `swap iff (ccnot ∨ cswap)`.
+///
+/// The config one-hots live in s1; this fetch must therefore run INSIDE the
+/// `decode_config` bracket (one-hots computed) but OUTSIDE fetch_rs/sel_rd
+/// (it fetches over the un-permuted file). The swap targets are r0-slot and
+/// BR, both position-stable at this nesting depth. Wire layout of the gated
+/// swap core [r0-slot, BR, s1]: r0-slot = 0..W, BR = W..2W, s1 = 2W..3W.
+fn shared_fetch_rt_br_gated() -> Iso {
+    let sel_rt = select_operand(R_RT, operand_field);
+    let gated_swap = |cfg: usize| {
+        on_fields(
+            &[reg_field(0), BR_FIELD, AUX_PRED_FIELD],
+            (0..W)
+                .map(|i| gate_at(3 * W, &[2 * W + cfg, i, W + i], fredkin_prim()))
+                .collect(),
+        )
+    };
+    // swap iff CFG_CCNOT, then swap iff CFG_CSWAP (mutually exclusive ⇒ OR).
+    let swap = Iso::seq(gated_swap(CFG_CCNOT), gated_swap(CFG_CSWAP));
+    Iso::seq(sel_rt.clone(), Iso::seq(swap, Iso::sym(sel_rt)))
+}
+
 /// CCNOT's state-changing core on the 4 fixed slots
 /// [r0-slot(rd), s0(rs), BR(rt-value), s1(pred)] — gated on the pred bit.
 /// Wire layout: r0-slot = 0..W, s0 = W..2W, BR = 2W..3W, s1 = 3W..4W.
@@ -1179,6 +1212,72 @@ fn reg_imm_shared() -> Iso {
     Iso::seq(fetch_rs.clone(), Iso::seq(inner, Iso::sym(fetch_rs)))
 }
 
+/// B1.3 — the UNIVERSAL 3-operand shared block. Extends `reg_imm_shared`
+/// to also serve Ccnot (R 0b1011) and Cswap (R 0b0110) via ONE bracket
+/// that fetches rd→D(r0-slot), rs→A(s0), rt→B(BR) once, then config-gates
+/// EVERY core (reg+imm + ccnot + cswap) on the fixed [D, A, B, s1] slots.
+///
+/// The config decode moved its 2 transient workspace bits (prefix/chain)
+/// out of s1 into **s0** (`config_decode_fields` / `CFG_*_S0`), freeing 2
+/// s1 bits for CFG_CCNOT + CFG_CSWAP one-hot lines. This is the s0-workspace
+/// resolution of the B1.3 config-scratch wall (design §8/§9): s0 is 0 at
+/// config-decode time and is restored to 0 by the decode forward pass
+/// BEFORE the A-operand deposit (fetch_rs/imm_to_a) writes it.
+///
+/// Bracket nesting (all self-inverse):
+///   decode_config             -- opcode → one-hots (s1); s0=0 workspace
+///     fetch_rt_br_gated       -- rt → BR iff (cfg_ccnot ∨ cfg_cswap)
+///       fetch_rs_fmt          -- rs → s0 iff fmt (OUTSIDE sel_rd)
+///         sel_rd              -- rd → r0-slot(D)
+///           imm_to_a          -- IR imm → s0 iff ¬fmt
+///             ALU cores       -- all config-gated on [D, A=s0, B=BR, s1]
+///           imm_to_a⁻¹
+///         sel_rd⁻¹
+///       fetch_rs_fmt⁻¹
+///     fetch_rt_br_gated⁻¹
+///   decode_config⁻¹
+///
+/// `decode_config` is OUTERMOST so it runs with s0 = 0 (its transient
+/// prefix/chain workspace lives in s0). It writes the held one-hots into s1
+/// and restores s0 to 0 on its forward pass, BEFORE fetch_rs/imm_to_a
+/// deposit the A-operand into s0. The rt→BR fetch is CONFIG-GATED (fires
+/// only for Ccnot/Cswap) so it is the exact identity for reg+imm ops — this
+/// avoids the rt-field=0 aliasing corruption of r[0]/BR when rd names r0.
+/// Cswap reads its control D[0] directly (no rd[0] copy). Swapbr/Xchg keep
+/// their own separate blocks (their brackets differ).
+fn shared_alu_block() -> Iso {
+    let fetch_rt_br = shared_fetch_rt_br_gated();
+    let fetch_rs = fetch_rs_fmt_gated();
+    let decode = alu_config_decode();
+    let imm = imm_to_a();
+
+    // The gated ALU core (reg+imm + ccnot + cswap), all on [D, A, B, s1].
+    let alu = seq_balanced(vec![
+        add_core_at(CFG_ADD_FWD),            // Add / Addi
+        Iso::sym(add_core_at(CFG_ADD_REV)),  // Sub / Subi  = adder adjoint
+        xor_core_at(CFG_XOR),                // Xor / Xori
+        exch_core_at(CFG_EXCH),              // Exch (R-only)
+        rotl_core_at(CFG_ROT_FWD),           // Rotl / Rotli
+        Iso::sym(rotl_core_at(CFG_ROT_REV)), // Rotr / Rotri = rotator adjoint
+        ccnot_core_at(CFG_CCNOT),            // Ccnot (R-only)
+        cswap_core_at(CFG_CSWAP),            // Cswap (R-only)
+    ]);
+
+    // Innermost: imm_to_a ; ALU ; imm_to_a⁻¹ on the routed slots.
+    let with_imm = Iso::seq(imm.clone(), Iso::seq(alu, Iso::sym(imm)));
+    // sel_rd routes rd → r0-slot around the imm+ALU.
+    let with_rd = with_target(R_RD, with_imm);
+    // fetch_rs deposits rs → s0 (fmt-gated) around sel_rd.
+    let with_rs = Iso::seq(fetch_rs.clone(), Iso::seq(with_rd, Iso::sym(fetch_rs)));
+    // fetch_rt_br delivers rt → BR (config-gated) around the A-deposit.
+    let with_rt = Iso::seq(
+        fetch_rt_br.clone(),
+        Iso::seq(with_rs, Iso::sym(fetch_rt_br)),
+    );
+    // decode_config computes the one-hots (s0=0 here) around everything.
+    Iso::seq(decode.clone(), Iso::seq(with_rt, Iso::sym(decode)))
+}
+
 /// fmt-gated swap-fetch of `r[rs]` into s0: `sel_rs ; (swap iff fmt) ;
 /// sel_rs⁻¹`. Identical to `fetch_operand(R_RS)` EXCEPT the r0-slot↔s0
 /// word swap carries fmt (IR bit 31) as an additional control, so for
@@ -1249,6 +1348,16 @@ pub fn reg_imm_shared_for_measurement() -> Iso {
     reg_imm_shared()
 }
 
+/// B1.3 measurement/equiv hook: the UNIVERSAL 3-operand shared block
+/// (reg+imm + Ccnot + Cswap). Its balanced mass vs the pre-B1.3 (reg_imm
+/// 185864 + ccnot 75520 + cswap 63770) is the "did the two private
+/// crossbars collapse" number; it is also the isolated block the B1.3
+/// whole-domain equiv test evaluates (all other blocks — xchg/swapbr — are
+/// the identity for reg+imm/ccnot/cswap opcodes).
+pub fn shared_alu_block_for_measurement() -> Iso {
+    shared_alu_block()
+}
+
 /// B1.2 measurement hook: the pre-B1.2 group_b (5 per-op predicated
 /// immediate cores under one shared sel_rd), so its balanced mass can be
 /// summed with B1.1's group_a for the removal comparison. NOT wired.
@@ -1270,33 +1379,68 @@ pub fn group_b_pre_b12_for_measurement() -> Iso {
 /// mass actually lives (the controlled ops each carry a PRIVATE crossbar).
 pub fn decode_blocks_for_measurement() -> Vec<(&'static str, Iso)> {
     vec![
-        ("reg_imm", reg_imm_shared()), // B1.2: unified (was group_a + group_b)
-        ("ccnot", ccnot_instr()),
-        ("cswap", cswap_instr()),
+        // B1.3: the universal block absorbs reg+imm + ccnot + cswap.
+        ("shared_alu", shared_alu_block()),
         ("xchg", xchg_instr()),
         ("swapbr", swapbr_instr()),
     ]
 }
 
-// ── B1.1 shared configurable ALU (Group A) ─────────────────────────────
+// ── B1.1/B1.3 shared configurable ALU config layout ─────────────────────
 //
-// Config-line layout inside s1 (`AUX_PRED_FIELD`, decoder-reserved — never
-// a legal operand, so safe to use as config scratch). Six one-hot lines +
-// a shared prefix + one transient chain bit = 8 bits, exactly s1's width.
+// The HELD one-hot config lines live in s1 (`AUX_PRED_FIELD`, decoder-
+// reserved — never a legal operand, so safe as config scratch, and
+// position-stable: `select_operand` excludes s0/s1 from the level-3
+// crossbar). B1.3 fills all 8 s1 bits with HELD one-hot lines (add_fwd/rev,
+// xor, exch, rot_fwd/rev, ccnot, cswap) — NO transient decode-workspace
+// bits remain in s1.
+//
+// The 2 TRANSIENT decode-workspace bits (prefix + chain) live in **s0**
+// (`AUX_OPERAND_FIELD`), the OTHER decoder-reserved, position-stable word.
+// s0 is guaranteed 0 at config-decode time (the A-operand deposit —
+// fetch_rs/imm_to_a — runs INSIDE the decode bracket, AFTER decode's
+// forward pass restores its s0 workspace to 0; see `reg_imm_alu`). The
+// compute/uncompute of prefix+chain restores s0 to 0 by the end of the
+// decode forward pass — the L15-critical invariant `imm_to_a` requires.
 const CFG_ADD_FWD: usize = 0; // Add  (R 0b0000): forward adder
 const CFG_ADD_REV: usize = 1; // Sub  (R 0b0001): adjoint adder
 const CFG_XOR: usize = 2; //     Xor  (R 0b0010)
 const CFG_EXCH: usize = 3; //    Exch (R 0b0011)
 const CFG_ROT_FWD: usize = 4; // Rotl (R 0b0100): forward rotator
 const CFG_ROT_REV: usize = 5; // Rotr (R 0b0101): adjoint rotator
-const CFG_PREFIX: usize = 6; //  g = fmt ∧ ¬op3 (shared by all six)
-const CFG_CHAIN: usize = 7; //   transient: one op-body AND at a time
+const CFG_CCNOT: usize = 6; //   Ccnot (R 0b1011): byte-parallel rd^=rs&rt
+const CFG_CSWAP: usize = 7; //   Cswap (R 0b0110): conditional swap rd[0]
 
-/// s1 wire for config bit `k` within the config-decode core, which lifts
-/// over `pred_fields()` = [IR_b0..b3, s1]; IR bits are wires 0..31, s1 bit
-/// `k` is wire 32+`k`.
+// Transient decode-workspace bits, relocated into s0 (B1.3). Addressed
+// relative to the s0 field-slot in the extended config-decode carrier.
+const CFG_PREFIX_S0: usize = 0; // s0 bit 0: prefix `g` (fmt ∧ ¬op3, ¬fmt, …)
+const CFG_CHAIN_S0: usize = 1; //  s0 bit 1: transient op-body AND
+
+/// s1 wire for a HELD config one-hot bit `k` within the config-decode core,
+/// which lifts over `config_decode_fields()` = [IR_b0..b3, s1, s0]; IR bits
+/// are wires 0..31, s1 bit `k` is wire 32+`k`, s0 bit `k` is wire 40+`k`.
 const fn cfg_wire(k: usize) -> usize {
     32 + k
+}
+
+/// s0 wire for a TRANSIENT decode-workspace bit `k` (prefix/chain).
+const fn cfg_ws_wire(k: usize) -> usize {
+    5 * W + k // s0 is field-slot 5 in config_decode_fields()
+}
+
+/// The six fields the config decode lifts over: four IR bytes + s1 (held
+/// one-hots) + s0 (transient prefix/chain workspace). Extends the old
+/// `pred_fields()` [IR_b0..b3, s1] with s0 as the transient workspace so
+/// s1's 8 bits can all hold one-hot lines (B1.3).
+fn config_decode_fields() -> [usize; 6] {
+    [
+        IR_B0_FIELD,
+        IR_B1_FIELD,
+        IR_B2_FIELD,
+        IR_B3_FIELD,
+        AUX_PRED_FIELD,   // s1 (slot 4): held one-hots
+        AUX_OPERAND_FIELD, // s0 (slot 5): transient workspace
+    ]
 }
 
 /// Decode BOTH the R-format Group-A opcode AND the I-format immediate
@@ -1335,16 +1479,24 @@ fn alu_config_decode() -> Iso {
     alu_config_decode_families(true)
 }
 
+/// R-format opcode literal bits `[op2, op1, op0]` for `op` (the low three
+/// opcode bits). The prefix (fmt / op3) is landed separately per family.
+const fn low3(op: u8) -> [bool; 3] {
+    [(op >> 2) & 1 == 1, (op >> 1) & 1 == 1, op & 1 == 1]
+}
+
 /// Config decode over the R family (`include_i = false`) or BOTH families
 /// (`include_i = true`, the wired form). The R-only form reproduces the
 /// exact B1.1 decode for the `group_a_shared_for_measurement` hook.
 fn alu_config_decode_families(include_i: bool) -> Iso {
-    let n = 5 * W; // pred_fields core: 4 IR bytes + s1
+    let n = 6 * W; // config_decode core: 4 IR bytes + s1 + s0
     let op = |k: usize| opcode_bit(k); // global IR wire of opcode bit k
+    let prefix = cfg_ws_wire(CFG_PREFIX_S0); // s0 bit 0 (transient)
+    let chain = cfg_ws_wire(CFG_CHAIN_S0); //  s0 bit 1 (transient)
     let mut gates: Vec<Iso> = Vec::new();
 
     // Land one op: `final ^= g ∧ (op2==l2 ∧ op1==l1 ∧ op0==l0)`, with the
-    // prefix `g` already in CFG_PREFIX; CFG_CHAIN is the transient AND.
+    // prefix `g` already in CFG_PREFIX_S0; CFG_CHAIN_S0 is the transient AND.
     let land_op = |final_bit: usize, lits: [bool; 3]| -> Vec<Iso> {
         let lit_wires = [op(2), op(1), op(0)];
         let nots: Vec<Iso> = (0..3)
@@ -1356,55 +1508,66 @@ fn alu_config_decode_families(include_i: bool) -> Iso {
         g.extend(nots.clone());
         g.push(gate_at(
             n,
-            &[lit_wires[0], lit_wires[1], lit_wires[2], cfg_wire(CFG_CHAIN)],
+            &[lit_wires[0], lit_wires[1], lit_wires[2], chain],
             cccnot_prim(),
         ));
         g.extend(nots.clone()); // un-NOT the literals (restore IR)
         // final ^= g ∧ chain
         g.push(gate_at(
             n,
-            &[cfg_wire(CFG_PREFIX), cfg_wire(CFG_CHAIN), cfg_wire(final_bit)],
+            &[prefix, chain, cfg_wire(final_bit)],
             toffoli_prim(),
         ));
         // uncompute chain (re-NOT, CCC-NOT, un-NOT) — restores chain to 0.
         g.extend(nots.clone());
         g.push(gate_at(
             n,
-            &[lit_wires[0], lit_wires[1], lit_wires[2], cfg_wire(CFG_CHAIN)],
+            &[lit_wires[0], lit_wires[1], lit_wires[2], chain],
             cccnot_prim(),
         ));
         g.extend(nots);
         g
     };
 
-    // ── R-format family: prefix g_r = fmt ∧ ¬op3 → CFG_PREFIX ──────────
+    // ── R-format family, ¬op3 branch: prefix g_r = fmt ∧ ¬op3 → prefix ──
+    // Serves the six Group-A/B register ops (op3=0) AND Cswap (op3=0,
+    // low3=110). All seven fire their DISTINCT low-3 pattern; each pattern
+    // is unique so no two config lines co-fire.
     gates.push(at_wire(n, op(3), not_iso()));
-    gates.push(gate_at(n, &[FMT_BIT, op(3), cfg_wire(CFG_PREFIX)], toffoli_prim()));
+    gates.push(gate_at(n, &[FMT_BIT, op(3), prefix], toffoli_prim()));
     gates.push(at_wire(n, op(3), not_iso()));
     // (final_bit, [op2,op1,op0] literal). Bit b = 1 → literal true.
     for (final_bit, lits) in [
-        (CFG_ADD_FWD, [false, false, false]), // Add  R 0b_000
-        (CFG_ADD_REV, [false, false, true]),  // Sub  R 0b_001
-        (CFG_XOR, [false, true, false]),      // Xor  R 0b_010
-        (CFG_EXCH, [false, true, true]),      // Exch R 0b_011
-        (CFG_ROT_FWD, [true, false, false]),  // Rotl R 0b_100
-        (CFG_ROT_REV, [true, false, true]),   // Rotr R 0b_101
+        (CFG_ADD_FWD, [false, false, false]), // Add   R 0b_000
+        (CFG_ADD_REV, [false, false, true]),  // Sub   R 0b_001
+        (CFG_XOR, [false, true, false]),      // Xor   R 0b_010
+        (CFG_EXCH, [false, true, true]),      // Exch  R 0b_011
+        (CFG_ROT_FWD, [true, false, false]),  // Rotl  R 0b_100
+        (CFG_ROT_REV, [true, false, true]),   // Rotr  R 0b_101
+        (CFG_CSWAP, low3(0b0110)),            // Cswap R 0b_110
     ] {
         gates.extend(land_op(final_bit, lits));
     }
+    // Uncompute g_r (¬op3 branch) → prefix returns to 0.
+    gates.push(at_wire(n, op(3), not_iso()));
+    gates.push(gate_at(n, &[FMT_BIT, op(3), prefix], toffoli_prim()));
+    gates.push(at_wire(n, op(3), not_iso()));
+
+    // ── R-format family, op3 branch: prefix g_c = fmt ∧ op3 → prefix ────
+    // Serves Ccnot (R 0b1011: op3=1, low3=011). The op3=1 prefix isolates
+    // it from every ¬op3 op (Group A/B + Cswap), and low3=011 is landed on
+    // CFG_CCNOT. No other architected op has op3=1 with fmt=1, so ONLY
+    // Ccnot's low-3 pattern can fire this line.
+    gates.push(gate_at(n, &[FMT_BIT, op(3), prefix], toffoli_prim()));
+    gates.extend(land_op(CFG_CCNOT, low3(0b1011)));
+    gates.push(gate_at(n, &[FMT_BIT, op(3), prefix], toffoli_prim()));
 
     if include_i {
-        // Uncompute g_r → CFG_PREFIX returns to 0 (mirror of the compute)
-        // so the I family can reuse CFG_PREFIX for its own prefix.
-        gates.push(at_wire(n, op(3), not_iso()));
-        gates.push(gate_at(n, &[FMT_BIT, op(3), cfg_wire(CFG_PREFIX)], toffoli_prim()));
-        gates.push(at_wire(n, op(3), not_iso()));
-
-        // ── I-format family: prefix g_i = ¬fmt → CFG_PREFIX ───────────
+        // ── I-format family: prefix g_i = ¬fmt → prefix ───────────────
         // i_pred tests fmt=0 + the three low opcode bits ONLY; op3 is a
         // don't-care, so the prefix is a single negated-fmt CNOT.
         gates.push(at_wire(n, FMT_BIT, not_iso()));
-        gates.push(gate_at(n, &[FMT_BIT, cfg_wire(CFG_PREFIX)], cnot_prim()));
+        gates.push(gate_at(n, &[FMT_BIT, prefix], cnot_prim()));
         gates.push(at_wire(n, FMT_BIT, not_iso()));
         for (final_bit, lits) in [
             (CFG_ADD_FWD, [false, false, false]), // Addi  I 0b_000
@@ -1415,14 +1578,14 @@ fn alu_config_decode_families(include_i: bool) -> Iso {
         ] {
             gates.extend(land_op(final_bit, lits));
         }
-        // Uncompute g_i (leave CFG_PREFIX = 0; the caller's decode⁻¹ is a
-        // full mirror so all config bits return to 0).
+        // Uncompute g_i (leave prefix = 0; the caller's decode⁻¹ is a
+        // full mirror so all config bits — held + workspace — return to 0).
         gates.push(at_wire(n, FMT_BIT, not_iso()));
-        gates.push(gate_at(n, &[FMT_BIT, cfg_wire(CFG_PREFIX)], cnot_prim()));
+        gates.push(gate_at(n, &[FMT_BIT, prefix], cnot_prim()));
         gates.push(at_wire(n, FMT_BIT, not_iso()));
     }
 
-    on_fields(&pred_fields(), gates)
+    on_fields(&config_decode_fields(), gates)
 }
 
 /// The UNIFIED reg+imm configurable ALU core (B1.2), run on the shared
@@ -1458,6 +1621,44 @@ fn reg_imm_alu() -> Iso {
     Iso::seq(imm.clone(), Iso::seq(alu, Iso::sym(imm)))
 }
 
+// ── B1.3: config-wired controlled cores on the 4-slot [D, A, B, s1] ─────
+//
+// Slot layout: D = r0-slot(rd) = wires 0..W, A = s0(rs) = W..2W,
+// B = BR(rt) = 2W..3W, s1 = 3W..4W (config one-hot k at wire 3W+k).
+
+/// Ccnot core: `D[i] ^= cfg_ccnot ∧ A[i] ∧ B[i]` per bit (byte-parallel
+/// `rd ^= rs & rt`, config-gated). Verbatim `ccnot_core`'s CCC-NOT pattern
+/// but the 4th control is the CFG_CCNOT one-hot instead of the raw pred bit.
+fn ccnot_core_at(cfg: usize) -> Iso {
+    let gates = (0..W)
+        .map(|i| gate_at(4 * W, &[3 * W + cfg, W + i, 2 * W + i, i], cccnot_prim()))
+        .collect();
+    on_fields(
+        &[reg_field(0), AUX_OPERAND_FIELD, BR_FIELD, AUX_PRED_FIELD],
+        gates,
+    )
+}
+
+/// Cswap core: swap `A[i] ↔ B[i]` (= s0 ↔ BR) gated on `cfg_cswap ∧ D[0]`
+/// per bit. The control reads D[0] (rd[0]) directly from the r0-slot — no
+/// s1-bit-4 copy (cleaner than the pre-B1.3 `cswap_instr`, which routed rt
+/// and copied rd[0] into s1). 3 controls + 2 swap = K3 (in vocabulary).
+///
+/// Reproduces `r[rs] ↔ r[rt] iff r[rd][0]`: with rd→D, rs→A(s0), rt→B(BR),
+/// swapping A↔B under D[0] and unwinding the fetch brackets writes the
+/// swapped values back into r[rs]/r[rt]; D (rd) itself is never modified.
+fn cswap_core_at(cfg: usize) -> Iso {
+    // Wires: D[0] = 0, A[i] = W+i, B[i] = 2W+i, cfg one-hot = 3W+cfg.
+    // Gated Fredkin control pair (cfg_cswap, D[0]) swaps A[i], B[i].
+    let gates = (0..W)
+        .map(|i| gate_at(4 * W, &[3 * W + cfg, 0, W + i, 2 * W + i], gated_fredkin_prim()))
+        .collect();
+    on_fields(
+        &[reg_field(0), AUX_OPERAND_FIELD, BR_FIELD, AUX_PRED_FIELD],
+        gates,
+    )
+}
+
 /// B1.1 Group-A-only ALU view (R-format decode + six R cores, NO imm
 /// A-source) — reproduces the exact pre-B1.2 `group_a_alu` so the B1.1
 /// Group-A-portion measurement remains comparable. Not wired into the
@@ -1478,18 +1679,17 @@ fn group_a_alu_view() -> Iso {
 /// `decode_execute_shared : CpuState <-> CpuState` — the SHARED-crossbar
 /// form of the full ring decoder. Semantically identical to
 /// `decode_execute_ops(&Op::ALL)` (every op is the identity off its
-/// opcode; opcodes mutually exclusive) but collapses ~40 replicated
-/// crossbar instances down: Group A (Add/Sub/Xor/Exch/Rotl/Rotr) shares
-/// ONE fetch_rs + ONE sel_rd; Group B (the 5 immediates) shares ONE
-/// sel_rd; plus the un-shared ops Ccnot (rt→BR), Cswap (rt→r0-slot +
-/// rd[0] copy), Xchg (2nd scratch crossbar), and Swapbr (rs=0 aliases rd
-/// so it cannot use Group A's fetch_rs) — these do not fit the shared
-/// (rd→D, rs→A) pattern.
+/// opcode; opcodes mutually exclusive) but collapses the replicated
+/// crossbar instances down.
+///
+/// B1.3: the UNIVERSAL 3-operand `shared_alu_block` now serves reg+imm
+/// (11 ops) PLUS Ccnot and Cswap through ONE bracket (rd→D, rs→A, rt→B),
+/// so their two private crossbars are gone and the top-level block count
+/// drops 5→3. Only Xchg (2nd scratch crossbar) and Swapbr (rs=0 aliases
+/// rd) keep their own separate small blocks — their brackets differ.
 fn decode_execute_shared() -> Iso {
     seq_balanced(vec![
-        reg_imm_shared(), // B1.2: unified reg+imm block (was group_a + group_b)
-        ccnot_instr(),
-        cswap_instr(),
+        shared_alu_block(), // B1.3: reg+imm + Ccnot + Cswap (universal bracket)
         xchg_instr(),
         swapbr_instr(),
     ])

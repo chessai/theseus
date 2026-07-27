@@ -742,6 +742,108 @@ fn poc_b12_shared_alu_measure() {
     );
 }
 
+// ── B1.3: universal 3-operand shared block measurement ──────────────
+//
+// The PRIMARY B1.3 deliverable: does folding Ccnot + Cswap into the shared
+// block via the universal (rd→D, rs→A, rt→B) bracket — removing their two
+// PRIVATE crossbars and dropping the top-level block count 5→3 — produce a
+// real further step_j win? Reports decode_execute cells + fib step_j vs the
+// committed baseline / B1.1 / B1.2, and the merged universal-block cells vs
+// the pre-B1.3 (reg_imm 185864 + ccnot 75520 + cswap 63770 = 325154) — the
+// "did the two private crossbars collapse" number. Prints only (goldens
+// re-pinned at finish after adversarial review).
+#[test]
+fn poc_b13_shared_alu_measure() {
+    const BASE_DECODE_CELLS: usize = 874_510;
+    const B11_DECODE_CELLS: usize = 834_940;
+    const B12_DECODE_CELLS: usize = 441_015;
+    const BASE_STEP_J: f64 = 2.5259595646e-9;
+    const B12_STEP_J: f64 = 1.8664606459e-9;
+    // Pre-B1.3 per-block balanced mass (poc_b1_perblock_measure @ fad8fa2).
+    const PRE_REG_IMM: usize = 185_864;
+    const PRE_CCNOT: usize = 75_520;
+    const PRE_CSWAP: usize = 63_770;
+    const PRE_SUM: usize = PRE_REG_IMM + PRE_CCNOT + PRE_CSWAP; // 325_154
+
+    // (1) whole decode_execute BALANCED cells.
+    let de_iso = theseus_tisc::decoder::decode_execute();
+    let de_cells: usize = {
+        let _guard = LOWER_GATE.lock().unwrap();
+        let bd = instruction_energy(&de_iso, char_db(), T_RAMP).expect("decode_execute energy");
+        bd.by_kind.values().map(|k| k.count).sum()
+    };
+    eprintln!(
+        "B1.3 decode_execute BALANCED cells: baseline {} / B1.1 {} / B1.2 {} → B1.3 {} \
+         (Δ vs B1.2 {:+}, {:.4}×; Δ vs baseline {:+}, {:.4}×)",
+        BASE_DECODE_CELLS,
+        B11_DECODE_CELLS,
+        B12_DECODE_CELLS,
+        de_cells,
+        de_cells as isize - B12_DECODE_CELLS as isize,
+        B12_DECODE_CELLS as f64 / de_cells as f64,
+        de_cells as isize - BASE_DECODE_CELLS as isize,
+        BASE_DECODE_CELLS as f64 / de_cells as f64,
+    );
+
+    // (2) the merged universal block vs (pre-B1.3 reg_imm + ccnot + cswap).
+    let merged_cells: usize = {
+        let _guard = LOWER_GATE.lock().unwrap();
+        let bd = instruction_energy(
+            &theseus_tisc::decoder::shared_alu_block_for_measurement(),
+            char_db(),
+            T_RAMP,
+        )
+        .expect("shared_alu_block energy");
+        bd.by_kind.values().map(|k| k.count).sum()
+    };
+    eprintln!(
+        "B1.3 MERGED universal block balanced cells: {} vs (reg_imm {} + ccnot {} + cswap {} = {}) \
+         (Δ {:+}, {:.4}× smaller)",
+        merged_cells,
+        PRE_REG_IMM,
+        PRE_CCNOT,
+        PRE_CSWAP,
+        PRE_SUM,
+        merged_cells as isize - PRE_SUM as isize,
+        PRE_SUM as f64 / merged_cells as f64,
+    );
+    eprintln!(
+        "B1.3 private-crossbar COLLAPSE verdict: {}",
+        if merged_cells < PRE_SUM {
+            "COLLAPSED (ccnot+cswap private crossbars folded into the one universal route)"
+        } else {
+            "FAILED (merged ≥ reg_imm+ccnot+cswap; the universal bracket ate the win)"
+        }
+    );
+
+    // (3) fib step_j via the me_a3 path.
+    let pe = fib_program_energy();
+    eprintln!(
+        "B1.3 step_j: baseline {:.10e} / B1.2 {:.10e} → B1.3 {:.10e} \
+         (Δ vs B1.2 {:+.3}%, Δ vs baseline {:+.3}%)  B={} T={}",
+        BASE_STEP_J,
+        B12_STEP_J,
+        pe.step_j,
+        (pe.step_j - B12_STEP_J) / B12_STEP_J * 100.0,
+        (pe.step_j - BASE_STEP_J) / BASE_STEP_J * 100.0,
+        pe.steps_b,
+        pe.steps_t,
+    );
+    eprintln!(
+        "B1.3 total_j: {:.10e}  (= B·step_j = {}·{:.6e})",
+        pe.total_j, pe.steps_b, pe.step_j
+    );
+
+    // B/T invariant (step_j-only change — same ROM, same trace).
+    assert_eq!(pe.steps_b, 24, "B changed (must be step_j-only)");
+    assert_eq!(pe.steps_t, 20, "T changed (must be step_j-only)");
+
+    eprintln!(
+        "B1.3 RE-PIN CANDIDATES: step_j={:.10e} total_j={:.10e} decode_cells={}",
+        pe.step_j, pe.total_j, de_cells
+    );
+}
+
 // B-1 re-sequencing measurement: per-block BALANCED cell mass of the
 // top-level blocks of decode_execute (with B1.1's Group-A fold applied).
 // Grounds where the un-shared *routing* mass lives — the controlled ops

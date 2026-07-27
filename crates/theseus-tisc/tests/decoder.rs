@@ -653,10 +653,13 @@ fn wd_state(ir: u32, rd_val: u8, rs_val: u8) -> StateVals {
 /// intractable 256×256 full `decode_execute` eval (~0.3s/eval).
 const WD_RD_VALS: [u8; 8] = [0x00, 0xFF, 0xAA, 0x55, 0x80, 0x7F, 0x01, 0x13];
 
-/// Hoisted isolated unified reg+imm block (built once).
+/// Hoisted isolated UNIVERSAL shared block (built once). B1.3: this is the
+/// `shared_alu_block` (reg+imm + Ccnot + Cswap); the other decode blocks
+/// (xchg/swapbr) are the identity for these opcodes, so the isolated block
+/// == `instruction(op)` is a valid whole-domain equivalence.
 fn wd_unified_ctx() -> &'static Iso {
     static CTX: OnceLock<Iso> = OnceLock::new();
-    CTX.get_or_init(decoder::reg_imm_shared_for_measurement)
+    CTX.get_or_init(decoder::shared_alu_block_for_measurement)
 }
 
 /// Whole-domain equivalence for one opcode: the ISOLATED unified reg+imm
@@ -848,6 +851,213 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
          everything else bit-identical\n got={got2:?}\n exp={exp2:?}"
     );
     assert_eq!(got2, reference(&s2), "iformat-steer/xori: != reference model");
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// B1.3 — the universal 3-operand bracket folds Ccnot + Cswap into the
+// shared block. These teeth prove: (a) the re-bracketed reg+imm route is
+// still exact (covered by the b12 whole-domain equiv above, now evaluated
+// through `shared_alu_block`); (b) Ccnot (byte-parallel rd^=rs&rt) and
+// Cswap (conditional swap gated rd[0], both polarities) match the reference
+// `instruction(op)` over the operand domain via the SAME bracket; (c) s0 is
+// restored to 0 after decode (the L15 imm_to_a precondition); (d) the rt→B
+// fetch is inert for reg+imm ops (config-gated off).
+// ══════════════════════════════════════════════════════════════════════
+
+/// Whole-domain equivalence for a 3-operand op (Ccnot/Cswap): the isolated
+/// universal `shared_alu_block` == standalone `instruction(op)`. Sweeps a
+/// grid of (rd, rs, rt) *register indices* (distinct, per encode's P1) and,
+/// for each index triple, a set of value assignments covering edge/dense
+/// bytes and — for Cswap — both control polarities (rd[0]=0/1).
+fn wd_equiv_3op(op: Op, opcode: u32) {
+    let unified = wd_unified_ctx();
+    let refer = decoder::instruction(op);
+    let t0 = std::time::Instant::now();
+    let mut checked = 0usize;
+
+    // Distinct (rd, rs, rt) register-index triples exercising non-trivial
+    // crossbar routing (low/mid/high, reg∪scratch not needed for op equiv).
+    let triples: [(u32, u32, u32); 5] = [
+        (0, 1, 2),
+        (4, 1, 2), // rd=r4 (bit0 varies with value); mid regs
+        (1, 3, 5),
+        (7, 2, 6), // high rd
+        (3, 6, 0), // rt=r0 (the reg+imm "unused rt" slot as a real operand)
+    ];
+    // Value assignments per (rd,rs,rt): pick values so Cswap sees both
+    // polarities (rd even/odd) and Ccnot sees dense AND products.
+    let vals: [(u8, u8, u8); 8] = [
+        (0x00, 0xFF, 0xAA),
+        (0x01, 0xFF, 0xAA), // rd[0]=1 → Cswap taken
+        (0x02, 0x55, 0x0F), // rd[0]=0 → Cswap not-taken
+        (0x03, 0xAA, 0x55),
+        (0xFF, 0x12, 0x34),
+        (0x80, 0xFF, 0xFF),
+        (0x7F, 0xC3, 0x3C),
+        (0xAB, 0x0F, 0xF0),
+    ];
+
+    for &(rd, rs, rt) in &triples {
+        let ir = r_ins(opcode, rd, rs, rt);
+        for &(dv, sv, tv) in &vals {
+            let mut regs = [0x13, 0x24, 0x35, 0x46, 0x57, 0x68, 0x79, 0x8A];
+            regs[rd as usize] = dv;
+            regs[rs as usize] = sv;
+            regs[rt as usize] = tv;
+            let s = StateVals {
+                regs,
+                pc: 0x42,
+                br: 0x99,
+                ir,
+                scratch: [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
+                mem: [0; MEM_WORDS],
+            };
+            let g_uni = eval_state("wd3/unified", unified, &s);
+            let g_ref = eval_state("wd3/ref", &refer, &s);
+            assert_eq!(
+                g_uni, g_ref,
+                "{op:?} 3-op mismatch: rd=r{rd}({dv:#04x}) rs=r{rs}({sv:#04x}) \
+                 rt=r{rt}({tv:#04x})\n unified={g_uni:?}\n ref={g_ref:?}"
+            );
+            checked += 1;
+        }
+    }
+    eprintln!("B1.3 wd-equiv-3op {op:?}: {checked} cases OK in {:?}", t0.elapsed());
+}
+
+/// B1.3: Ccnot (R 0b1011, byte-parallel rd^=rs&rt) through the universal
+/// bracket == `instruction(Op::Ccnot)`, sweeping rd/rs/rt indices+values.
+#[test]
+fn b13_whole_domain_equiv_ccnot() {
+    wd_equiv_3op(Op::Ccnot, 0b1011);
+}
+
+/// B1.3: Cswap (R 0b0110, conditional swap rs↔rt gated rd[0]) through the
+/// universal bracket == `instruction(Op::Cswap)`, both polarities.
+#[test]
+fn b13_whole_domain_equiv_cswap() {
+    wd_equiv_3op(Op::Cswap, 0b0110);
+}
+
+/// B1.3 EXHAUSTIVE Ccnot lane check: fix distinct rd/rs/rt indices and
+/// sweep the FULL 256 rs-values × a few rd/rt so every AND lane + xor
+/// target combination is exercised against the reference.
+#[test]
+fn b13_ccnot_full_rs_sweep() {
+    let unified = wd_unified_ctx();
+    let refer = decoder::instruction(Op::Ccnot);
+    let ir = r_ins(0b1011, 3, 5, 1); // rd=r3, rs=r5, rt=r1
+    for rd_val in [0x00u8, 0xFF, 0xAA, 0x5A] {
+        for rt_val in [0x00u8, 0xFF, 0xAA, 0x3C] {
+            for rs in 0..256usize {
+                let mut regs = [0x13, 0x24, 0x35, 0x46, 0x57, 0x68, 0x79, 0x8A];
+                regs[3] = rd_val;
+                regs[5] = rs as u8;
+                regs[1] = rt_val;
+                let s = StateVals {
+                    regs,
+                    pc: 0x42,
+                    br: 0x99,
+                    ir,
+                    scratch: [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
+                    mem: [0; MEM_WORDS],
+                };
+                let g_uni = eval_state("ccnot-sweep/uni", unified, &s);
+                let g_ref = eval_state("ccnot-sweep/ref", &refer, &s);
+                assert_eq!(
+                    g_uni, g_ref,
+                    "Ccnot lane mismatch rd={rd_val:#04x} rs={rs:#04x} rt={rt_val:#04x}"
+                );
+            }
+        }
+    }
+}
+
+/// B1.3 s0-restoration tooth: after a full decode+execute of an op that
+/// uses the s0-workspace decode, s0 (the decoder-reserved operand buffer)
+/// must be exactly 0 — the L15-critical invariant `imm_to_a` requires
+/// (a dirty s0 would corrupt the NEXT instruction's immediate). Checked for
+/// every op class (reg+imm + Ccnot + Cswap) through the wired decoder.
+#[test]
+fn b13_s0_restored_to_zero() {
+    let dec = light_ctx();
+    // (name, IR word) — one per op class, all through the universal bracket.
+    let cases: &[(&str, u32)] = &[
+        ("Add", r_ins(0b0000, 3, 5, 0)),
+        ("Sub", r_ins(0b0001, 2, 4, 0)),
+        ("Xor", r_ins(0b0010, 1, 6, 0)),
+        ("Exch", r_ins(0b0011, 0, 7, 0)),
+        ("Rotl", r_ins(0b0100, 3, 1, 0)),
+        ("Cswap", r_ins(0b0110, 4, 1, 2)),
+        ("Ccnot", r_ins(0b1011, 4, 1, 2)),
+        ("Addi", i_ins(0b000, 3, 0x9D)),
+        ("Xori", i_ins(0b010, 2, 0xAA)),
+        ("Rotli", i_ins(0b011, 5, 0x03)),
+    ];
+    for &(name, ir) in cases {
+        // Nonzero background everywhere EXCEPT s0/s1 (=0 per convention).
+        let s = StateVals {
+            regs: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+            pc: 0x42,
+            br: 0x99,
+            ir,
+            scratch: [0x00, 0x00, 0xC2, 0xD3, 0xE4, 0xF5, 0x1A, 0x2B],
+            mem: [0; MEM_WORDS],
+        };
+        let got = eval_state(&format!("s0-restore/{name}"), dec, &s);
+        assert_eq!(
+            got.scratch[0], 0,
+            "{name}: s0 must be restored to 0 after decode (L15 imm_to_a precondition); got {:#04x}",
+            got.scratch[0]
+        );
+        assert_eq!(got.scratch[1], 0, "{name}: s1 must be restored to 0");
+        // The whole state must also match the reference (belt-and-suspenders).
+        assert_eq!(got, reference(&s), "{name}: != reference model");
+    }
+}
+
+/// B1.3 rt→B inert-for-reg+imm tooth (extends the b12 inert-crossbar tooth
+/// to the rt→B fetch): an Addi / Ccnot word with a NONZERO rt-field must be
+/// bit-identical to the same word with rt-field zeroed EXCEPT the intended
+/// target. For reg+imm the rt→B fetch is config-gated OFF, so a nonzero rt
+/// field must not perturb any register/BR (the classic "rt-field=0 aliases
+/// r0 into BR" corruption this gating fixes).
+#[test]
+fn b13_rt_field_inert_for_reg_imm() {
+    let dec = light_ctx();
+    // Addi rd=r3, imm=0x34, with the rt operand field (bits 10..14) = 0x1F
+    // (all ones) — under an ungated rt→B fetch this would route r7-ish into
+    // BR and corrupt state. Config-gated OFF for Addi ⇒ must be inert.
+    let ir_rt: u32 = (0b000 << 25) | (3 << 20) | (0x1F << 10) | 0x34; // I-format (fmt=0)
+    let s = StateVals {
+        regs: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+        pc: 0x42,
+        br: 0x99,
+        ir: ir_rt,
+        scratch: [0x00, 0x00, 0xC2, 0xD3, 0xE4, 0xF5, 0x1A, 0x2B],
+        mem: [0; MEM_WORDS],
+    };
+    let got = eval_state("rt-inert/addi", dec, &s);
+    let mut exp = s.clone();
+    exp.regs[3] = exp.regs[3].wrapping_add(0x34);
+    assert_eq!(
+        got, exp,
+        "Addi with nonzero rt-field must be inert on BR/regs (rt→B config-gated off): \
+         only r3 += 0x34; BR/other regs/scratch unchanged\n got={got:?}\n exp={exp:?}"
+    );
+
+    // R-format Add rd=r2, rs=r4, with nonzero rt-field = 0x1F. Add's rt→B is
+    // gated off; BR must be untouched.
+    let ir_r: u32 = (1 << 31) | (0b0000 << 25) | (2 << 20) | (4 << 15) | (0x1F << 10);
+    let s2 = StateVals { ir: ir_r, ..s.clone() };
+    let got2 = eval_state("rt-inert/add", dec, &s2);
+    let mut exp2 = s2.clone();
+    exp2.regs[2] = exp2.regs[2].wrapping_add(exp2.regs[4]);
+    assert_eq!(
+        got2, exp2,
+        "Add with nonzero rt-field must leave BR/other regs untouched (rt→B gated off)"
+    );
+    assert_eq!(got2.br, 0x99, "BR must be untouched by an Add with nonzero rt-field");
 }
 
 /// MINOR-4 pin: op4/op5 (the two HIGH opcode bits) are DON'T-CARE at the
