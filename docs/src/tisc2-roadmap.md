@@ -74,7 +74,23 @@
 >   fingerprint). **⇒ FULL COVERAGE for "compile arbitrary well-formed programs" is now on v2:** any
 >   prim lowers + control composes to arbitrary depth + wide bitwise & arithmetic data. 3 MINOR
 >   follow-ups (byte-order pin test, netlist-vs-term comment, un-ignore fast k=4 BDD).
-> - **NEXT (reordered to ship the goal-proof first): CAPSTONE** — a small end-to-end *arbitrary*
+> - **✅ CAPSTONE (`0a7613e`) + ✅ WIDEN-PC MERGED (`35f596c`, 12 commits).** Capstone: small
+>   end-to-end arbitrary programs (synth-prim + nested control + wide words) compile + `run_on_cpu==
+>   eval` (9/0). Widen-PC: W_PC 8→16 + narrow-fetch + sext-δu (W_BR=8) → **B>256 bodies RUN** (payoff
+>   crosses PC 256 on the real CPU); ~0.5%/bit tax; ADR-0034 re-proved. Fable review caught 3 bugs
+>   (unwidened bveq_netlist state builders; forward-skip-dist 128..255 sext-backward; A_fetch=16
+>   aliasing) — all FIXED + regression-tested. **me_a3 energy + several ring_run oracles #[ignore]d
+>   — the wider 184-bit state OOMs their `lower_iso`/balance even alone (>91 GB, CONFIRMED
+>   fundamental) → pending lean-`lower_iso`.**
+> - **⇒ THE COVERAGE GOAL IS ESSENTIALLY COMPLETE ON `chessai/theseus-v2` (57 commits since A-0):**
+>   any admitted prim lowers + control composes to arbitrary depth + wide bitwise & arithmetic data
+>   + large (B>256) bodies run. Remaining = infra/polish/efficiency.
+> - **NEXT: lean-`lower_iso`** (stream the `lower_iso`/balance netlist so wide-state programs don't
+>   OOM → un-defers the me_a3 energy + ring-closure tests AND enables joules measurement at scale —
+>   the prerequisite for Phase-B efficiency) → A-5b Option A (aux-in-scratch, wider carriers) →
+>   MINOR cleanups → **Phase B efficiency** (shared ALU → `step_j`, gated on the lean-`lower_iso`
+>   measurement).
+> - **(prior) CAPSTONE** — a small end-to-end *arbitrary*
 >   program (synthesized prim + nested control + wide words, B≤256 so no widen-PC) compiled +
 >   `run_on_cpu==eval` — the holistic proof. THEN **provisioning** (widen-PC A-2/B-2) so LARGE bodies
 >   run (handle me_a3 energy-repin OOM per decision-default: behavior-validate + defer energy repin,
