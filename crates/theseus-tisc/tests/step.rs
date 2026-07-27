@@ -201,6 +201,65 @@ fn fetch_isolated() {
     assert_eq!(eval_state("fetch twice", &twice, &s), s);
 }
 
+// ── A-6.4 widen-PC F-2 regression: narrow-fetch A_fetch=16 aliasing guard ──
+//
+// At A_fetch = 16 (rom_len > 32768) the per-entry predicate's AND-chain
+// intermediate `fetch_chain(14)` lands on `FETCH_HZ_WIRE`, inverting the
+// predicate: review probe B saw rom_len=32770 with a word at 0x8000 NOT
+// fetched and 0x8001 FALSELY fetched (aliasing). The fix caps the narrow
+// fetch to A_fetch ≤ 15 (rom_len ≤ MAX_FETCH_ROM_LEN = 32768) and REJECTS
+// beyond it (fetch asserts) rather than corrupting.
+
+#[test]
+fn fetch_a15_boundary_no_aliasing() {
+    use theseus_tisc::step::{fetch_addr_bits, MAX_FETCH_ROM_LEN};
+    // The largest ACCEPTED rom_len (a=15). A sparse ROM: one non-idle word at
+    // the top live address 0x7FFF; every other slot is idle (word 0). fetch
+    // filters idle words, so this builds exactly ONE entry at a=15 (cheap to
+    // eval) while exercising the full-a-15 predicate + high-zero gate.
+    assert_eq!(MAX_FETCH_ROM_LEN, 32768);
+    assert_eq!(fetch_addr_bits(MAX_FETCH_ROM_LEN), 15, "boundary must be a=15");
+    let top = MAX_FETCH_ROM_LEN - 1; // 0x7FFF
+    let word = 0x0EADBEEFu32; // legal 32-bit IR pattern (top nibble 0)
+    let mut rom = vec![0u32; MAX_FETCH_ROM_LEN];
+    rom[top] = word;
+    let iso = fetch(&rom);
+
+    // Exact match at 0x7FFF fetches the word; neighbor 0x7FFE (idle) and the
+    // just-out-of-range 0x8000 (bit 15 set → high-zero gate parks it, the
+    // exact address the a=16 bug FALSELY matched) both leave IR untouched.
+    for (pc, want_ir) in [
+        (0x7FFFu16, word),
+        (0x7FFEu16, 0u32),
+        (0x8000u16, 0u32), // probe B's aliasing target — MUST park
+        (0x8001u16, 0u32),
+        (0xFFFFu16, 0u32),
+    ] {
+        let s = st(regs_a(), pc);
+        let got = eval_state("fetch a=15", &iso, &s);
+        let mut expected = s.clone();
+        expected.ir = want_ir;
+        assert_eq!(
+            got, expected,
+            "fetch a=15: pc=0x{pc:04X} expected IR 0x{want_ir:08X} (no aliasing)"
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "narrow-fetch predicate limit")]
+fn fetch_rom_len_over_32768_rejects_gracefully() {
+    use theseus_tisc::step::MAX_FETCH_ROM_LEN;
+    // Probe B: rom_len = 32770 (> 32768) forces A_fetch = 16 → chain/hz-wire
+    // collision → predicate inversion. fetch must REJECT (assert), not silently
+    // build a corrupt fetch. BEFORE the fix fetch built the aliasing iso (no
+    // panic); AFTER the fix it panics with the narrow-fetch limit message.
+    let rom_len = MAX_FETCH_ROM_LEN + 2; // 32770 = probe B
+    let mut rom = vec![0u32; rom_len];
+    rom[0x8000] = 0x0EADBEEF; // probe B's word at 0x8000
+    let _ = fetch(&rom); // must panic BEFORE returning a corrupt fetch iso
+}
+
 #[test]
 fn pc_add_br_isolated() {
     let iso = pc_add_br();

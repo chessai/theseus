@@ -407,9 +407,10 @@ pub fn decode(word: u32) -> Option<Instr> {
 ///
 /// The ROM must fit the PC address space (A-6.4 widen-PC: ≤ 2^W_PC = 65536
 /// words). (The narrow-fetch predicate additionally bounds the *live*
-/// address bits it can distinguish in one Word8 of scratch — see
-/// `step::fetch_addr_bits` — but that is a per-ROM structural limit
-/// checked at fetch-build time, not an assembler cap.)
+/// address bits it can distinguish in one Word8 of scratch to `A_fetch ≤ 15`
+/// — see `step::MAX_FETCH_ROM_LEN` / `step::fetch_addr_bits` — a per-ROM
+/// structural limit ENFORCED at fetch-build time (`step::fetch` asserts
+/// `rom.len() ≤ MAX_FETCH_ROM_LEN = 32768`; F-2), not an assembler cap.)
 ///
 /// Returns `Err(AsmError)` if the program exceeds the address space or
 /// any instruction fails [`encode`]'s legality checks.

@@ -131,6 +131,22 @@ const fn fetch_chain(k: usize) -> usize {
     }
 }
 
+/// A-6.4 widen-PC (F-2): the per-entry predicate `pc_pred(addr, a)` runs an
+/// `(a+1)`-input AND (the `hz` control + `a` low PC bits) whose chain needs
+/// `a-1` intermediate scratch slots `fetch_chain(0..a-1)` — the highest is
+/// `fetch_chain(a-2)`. There are only 14 usable slots (s0 bits 0..8 + s1 bits
+/// 1..7): `fetch_chain(13) = 62` (s1 bit 6) is safe, but `fetch_chain(14) =
+/// 63 = FETCH_HZ_WIRE` — the chain intermediate lands ON the shared high-zero
+/// bit and INVERTS the predicate (review probe B: rom_len 32770, a=16, word at
+/// 0x8000 not fetched, 0x8001 falsely fetched). No collision requires
+/// `a-2 ≤ 13`, i.e. `A_fetch ≤ 15`, i.e. `rom_len ≤ 2^15 = 32768`. Beyond
+/// that, fetch REJECTS (see `fetch`), it does NOT corrupt. A wider chain
+/// space (2-byte scratch) is the follow-up for ROMs > 32768 words.
+pub const MAX_FETCH_A: usize = W_PC - 1; // 15
+/// Largest ROM length the narrow-fetch predicate can distinguish without the
+/// F-2 chain/hz-wire collision (`2^MAX_FETCH_A = 32768`).
+pub const MAX_FETCH_ROM_LEN: usize = 1 << MAX_FETCH_A;
+
 /// The fields the fetch core lifts over: PC_lo, PC_hi, the four IR
 /// bytes, s0, s1.
 fn fetch_fields() -> [usize; 8] {
@@ -258,6 +274,21 @@ pub fn fetch(rom: &[u32]) -> Iso {
     assert!(
         rom.len() <= 1 << W_PC,
         "ROM exceeds the {W_PC}-bit PC address space"
+    );
+    // A-6.4 F-2: at A_fetch = 16 (rom_len > 32768) the per-entry predicate's
+    // AND-chain intermediate collides with the shared high-zero wire and
+    // INVERTS the predicate (aliasing, review probe B). Reject rom_len beyond
+    // the narrow-fetch chain budget rather than silently corrupt (this makes
+    // the structural limit the asm.rs doc-comment claims actually exist). A
+    // 2-byte-scratch chain is the follow-up for larger ROMs.
+    assert!(
+        rom.len() <= MAX_FETCH_ROM_LEN,
+        "ROM length {} exceeds the narrow-fetch predicate limit {} \
+         (A_fetch would be {}, colliding the AND-chain with the high-zero wire; \
+         A-6.4 F-2). A wider (2-byte) fetch-chain scratch is the follow-up.",
+        rom.len(),
+        MAX_FETCH_ROM_LEN,
+        W_PC,
     );
     let a = fetch_addr_bits(rom.len());
     let entries: Vec<Iso> = rom
