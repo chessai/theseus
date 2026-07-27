@@ -72,16 +72,18 @@ fn golden_pin_mexch_rom() {
     // TUPLE printed by two_body_timing_certificate); validate()==Ok (physical
     // lockstep intact — a re-pin from the netlist size change, not a
     // regression). Behavior verified separately (step/branching real-CPU).
-    // RE-PINNED (B-1 Unit-1, B1.1+B1.2 shared configurable reg+imm ALU): folding
-    // the reg+imm ops into ONE bracket + ALU and removing the group_b block nearly
-    // halves decode_execute → shorter cpu_pre/system_step timing: d_pre 2931→2349,
-    // d_locked/period 3544→2964 (SHRINK). d_post=573, d_mem=35, delta2=1 unchanged;
-    // delta1 1→3, delta_hold 37→39. validate()==Ok (physical lockstep intact) +
-    // ring_run closure oracles green (ring_matches_eval_oracle_fast, ancillas
-    // restored, zero-boundary) ⇒ a re-pin from the leaner netlist, not a regression.
+    // RE-PINNED (B-1 Unit-1, B1.1+B1.2): folding reg+imm into ONE bracket + ALU
+    // and removing group_b → d_pre 2931→2349, d_locked/period 3544→2964.
+    // RE-PINNED AGAIN (B-1 Unit-2, B1.3 universal 3-op bracket): folding
+    // Ccnot+Cswap into the shared block (5→3 top-level blocks) shortens the
+    // cpu_pre/system_step timing FURTHER: d_pre 2349→1605, d_locked/period
+    // 2964→2220 (SHRINK). d_post=573, d_mem=35, delta1=3, delta2=1, delta_hold=39
+    // ALL unchanged from Unit-1. validate()==Ok (physical lockstep intact) +
+    // ring_run closure oracles green ⇒ a re-pin from the leaner netlist, not a
+    // regression.
     assert_eq!(
-        t.d_pre, 2349,
-        "GOLDEN PIN: d_pre={} (expected 2349)",
+        t.d_pre, 1605,
+        "GOLDEN PIN: d_pre={} (expected 1605)",
         t.d_pre
     );
     assert_eq!(t.d_mem, 35, "GOLDEN PIN: d_mem={} (expected 35)", t.d_mem);
@@ -98,13 +100,13 @@ fn golden_pin_mexch_rom() {
         t.delta_hold
     );
     assert_eq!(
-        t.d_locked, 2964,
-        "GOLDEN PIN: d_locked={} (expected 2964)",
+        t.d_locked, 2220,
+        "GOLDEN PIN: d_locked={} (expected 2220)",
         t.d_locked
     );
     assert_eq!(
-        t.period, 2964,
-        "GOLDEN PIN: period={} (expected 2964)",
+        t.period, 2220,
+        "GOLDEN PIN: period={} (expected 2220)",
         t.period
     );
 

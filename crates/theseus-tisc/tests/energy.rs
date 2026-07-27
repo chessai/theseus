@@ -117,15 +117,16 @@ fn poc_step_net_bit_identical_across_type_repr() {
     // the lean-lower_iso `Box<Type>`→`Arc<Type>` change is bit-identical (it was:
     // cells=5406, num_lines=32612, fp=0xf155e931576a44b7, peak 57.4 GB Box vs
     // ~4 GB Arc). That bit-identity is proven and historical.
-    // RE-PINNED (B-1 Unit-1, B1.1+B1.2 shared configurable reg+imm ALU): B1.2
-    // LEGITIMATELY changes the step net (folds reg+imm into one bracket+ALU,
-    // removes the group_b block) → the net shrinks 5406→4908 cells / 32612→29644
-    // lines. This golden now serves as a step-net regression guard at the B1.2
-    // decode structure (any unintended net change perturbs the fingerprint).
-    // Re-measured this session under Arc<Type> repr.
-    const GOLDEN_CELLS: usize = 4908;
-    const GOLDEN_NUM_LINES: u32 = 29644;
-    const GOLDEN_FP: u64 = 0x74cd_293e_3a18_1144;
+    // RE-PINNED (B-1 Unit-1, B1.1+B1.2): folding reg+imm into one bracket+ALU
+    // + removing group_b shrank the net 5406→4908 cells / 32612→29644 lines.
+    // RE-PINNED AGAIN (B-1 Unit-2, B1.3 universal 3-op bracket): folding
+    // Ccnot+Cswap into the shared block (5→3 top-level blocks) shrinks the net
+    // FURTHER → 4908→3290 cells / 29644→19956 lines. This golden is a step-net
+    // regression guard at the B1.3 decode structure (any unintended net change
+    // perturbs the fingerprint). Re-measured this session under Arc<Type> repr.
+    const GOLDEN_CELLS: usize = 3290;
+    const GOLDEN_NUM_LINES: u32 = 19956;
+    const GOLDEN_FP: u64 = 0x8249_a031_c2ff_5b6e;
 
     assert_eq!(
         cells, GOLDEN_CELLS,
@@ -412,8 +413,15 @@ fn me_a3_golden() {
     // (tests/decoder.rs) and the Fable adversarial review
     // (docs/reviews/b1-unit1-shared-alu-review.md, no BLOCKER).
     // (Prior widen-PC baseline was step_j 2.5259595646e-9 / total_j 6.0623029551e-8.)
-    const GOLDEN_TOTAL_J: f64 = 4.4795055502e-8;
-    const GOLDEN_STEP_J: f64 = 1.8664606459e-9;
+    // RE-PINNED AGAIN (B-1 Unit-2, B1.3): the universal 3-operand bracket folds
+    // Ccnot+Cswap into the shared block (5→3 top-level blocks), removing their two
+    // private crossbars + shedding those blocks' inter-block seq_balanced overhead:
+    // decode_execute 441015→337459 (2.59× vs baseline), step_j 1.8664606459e-9 →
+    // 1.5314006103e-9 (−17.95%), total_j 4.4795055502e-8 → 3.6753614647e-8 (=24·step_j).
+    // B/T=24/20 invariant. Behaviour: whole-domain per-op equiv (11 reg+imm + Ccnot +
+    // Cswap) + s0-restoration + run_on_cpu==eval + Fable review (Unit-2).
+    const GOLDEN_TOTAL_J: f64 = 3.6753614647e-8;
+    const GOLDEN_STEP_J: f64 = 1.5314006103e-9;
     const GOLDEN_B: usize = 24;
     const GOLDEN_T: usize = 20;
 

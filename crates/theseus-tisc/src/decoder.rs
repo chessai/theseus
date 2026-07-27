@@ -56,17 +56,28 @@
 //!   I-format ALU op **requires s0 = 0 at unified-block entry** (the
 //!   immediate is CNOT-masked onto s0; the shared core then consumes
 //!   `s0 ⊕ imm`). Same convention as `instr::addi`.
-//! - **s1 (scratch 1) holds the predicate bit (bit 0), the Toffoli
-//!   chain intermediates (bits 1–3), and CSWAP's control-bit copy
-//!   (bit 4); it must be 0 on entry** and is restored to 0 on exit.
-//! - **BR (field 9) is used by CCNOT as a 2nd operand buffer**
-//!   (convention B): r[rt] is swap-fetched into BR before the core
-//!   and restored afterwards. The swap is content-agnostic — BR's
-//!   entry value rides in r[rt]'s cell for the duration of the core
-//!   and is written back on exit (no BR=0 assumption). Aliased
-//!   CCNOT operand/BR/s0 residues vary by alias case (rd==rt exits
-//!   with BR corrupted; rd==rs leaves an s0 residue) — all bijective,
-//!   unspecified-semantics; `encode` rejects via CcnotNotDistinct.
+//! - **s1 (scratch 1) is the config word.** After B1.3 the shared
+//!   `shared_alu_block` holds in s1 the **8 one-hot ALU config lines**
+//!   (add_fwd/rev, xor, exch, rot_fwd/rev, ccnot, cswap — one per ALU
+//!   sub-function, computed once by the opcode decode); it must be 0 on
+//!   entry and is restored to 0 on exit. The 2 **transient** decode-scratch
+//!   bits (prefix, chain) that build the one-hots live in **s0** (which is
+//!   0 at decode time, before the operand fetch) and are uncomputed back to
+//!   0 before `imm_to_a`/`fetch_rs` deposits the A-operand — this is what
+//!   freed s1 to hold all 8 one-hots (see §8/§9 of the B-1 design doc).
+//!   (The pre-B1.3 layout — predicate bit 0, chain bits 1–3, CSWAP rd[0]
+//!   copy bit 4 — is retired for the shared block; CSWAP now reads D[0]
+//!   directly, see `cswap_core_at`.)
+//! - **BR (field 9) is the shared 3rd-operand (B-slot) buffer** for the
+//!   universal bracket: r[rt] is swap-fetched into BR before the core and
+//!   restored afterwards (convention B, content-agnostic — BR's entry value
+//!   rides in r[rt]'s cell, no BR=0 assumption). The fetch is **config-gated
+//!   on `cfg_ccnot ∨ cfg_cswap`** so it is fully inert for reg+imm ops
+//!   (which never read B). Aliased-operand residues vary by case and are all
+//!   bijective, unspecified-semantics (`encode` rejects non-distinct via
+//!   CcnotNotDistinct / CswapNotDistinct): CCNOT rd==rt exits BR-corrupted,
+//!   rd==rs leaves an s0 residue; CSWAP (reads D[0] AFTER the fetches)
+//!   rd==rt reads control from BR_entry[0], rd==rs reads control 0.
 //! - **XCHG** routes the scratch file through a second crossbar, which
 //!   scrambles s1's position, so its gate control is first copied onto
 //!   the (architecturally zero) R-format pad bit IR[0] and removed
@@ -1642,7 +1653,8 @@ fn ccnot_core_at(cfg: usize) -> Iso {
 /// Cswap core: swap `A[i] ↔ B[i]` (= s0 ↔ BR) gated on `cfg_cswap ∧ D[0]`
 /// per bit. The control reads D[0] (rd[0]) directly from the r0-slot — no
 /// s1-bit-4 copy (cleaner than the pre-B1.3 `cswap_instr`, which routed rt
-/// and copied rd[0] into s1). 3 controls + 2 swap = K3 (in vocabulary).
+/// and copied rd[0] into s1). 2 controls (cfg_cswap, D[0]) + 2 swap = K2
+/// (in vocabulary — one fewer control than the pre-B1.3 gated Fredkin).
 ///
 /// Reproduces `r[rs] ↔ r[rt] iff r[rd][0]`: with rd→D, rs→A(s0), rt→B(BR),
 /// swapping A↔B under D[0] and unwinding the fetch brackets writes the
@@ -1660,9 +1672,13 @@ fn cswap_core_at(cfg: usize) -> Iso {
 }
 
 /// B1.1 Group-A-only ALU view (R-format decode + six R cores, NO imm
-/// A-source) — reproduces the exact pre-B1.2 `group_a_alu` so the B1.1
-/// Group-A-portion measurement remains comparable. Not wired into the
-/// decoder (the wired path is `reg_imm_alu`).
+/// A-source) — an APPROXIMATE B1.1 Group-A-portion measurement reference.
+/// NOTE (B1.3 drift): `alu_config_decode_families(false)` now ALSO lands the
+/// CFG_CCNOT/CFG_CSWAP one-hots (Ccnot/Cswap are R-format), which this view's
+/// six cores don't consume (they're computed + uncomputed, unused here), so
+/// this is no longer bit-identical to the pre-B1.2 `group_a_alu` — treat the
+/// number as indicative, not exact. Measurement-only; NOT wired into the
+/// decoder (the wired path is `reg_imm_alu` inside `shared_alu_block`).
 fn group_a_alu_view() -> Iso {
     let decode = alu_config_decode_families(false);
     let core = seq_balanced(vec![

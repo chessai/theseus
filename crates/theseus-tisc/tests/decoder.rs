@@ -939,6 +939,44 @@ fn b13_whole_domain_equiv_cswap() {
     wd_equiv_3op(Op::Cswap, 0b0110);
 }
 
+/// B1.3 (Fable Unit-2 MINOR-3): Cswap with a SCRATCH operand (rt=s2, idx 10)
+/// through the universal bracket == `instruction(Op::Cswap)` — closes the
+/// coverage gap (Ccnot-scratch is covered by `blocker2_ccnot_uses_scratch_
+/// operand`, but Cswap routing an operand into the shared B-slot via the
+/// reg∪scratch crossbar had no direct tooth). Both control polarities.
+#[test]
+fn b13_cswap_scratch_operand_equiv() {
+    let unified = wd_unified_ctx();
+    let refer = decoder::instruction(Op::Cswap);
+    // Cswap rd=r3, rs=r5, rt=s2 (operand idx 10): swap r5 ↔ s2 iff r3[0].
+    let ir = r_ins(0b0110, 3, 5, 10);
+    for (rd_val, note) in [
+        (0x01u8, "taken"),
+        (0x00u8, "not-taken"),
+        (0xFFu8, "taken"),
+        (0x02u8, "not-taken"),
+    ] {
+        let mut regs = [0x13, 0x24, 0x35, 0x46, 0x57, 0x68, 0x79, 0x8A];
+        regs[3] = rd_val;
+        regs[5] = 0xC3; // rs value
+        let s = StateVals {
+            regs,
+            pc: 0x42,
+            br: 0x99,
+            ir,
+            // s0=s1=0 (decoder convention); s2=0x3C is the routed operand.
+            scratch: [0x00, 0x00, 0x3C, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
+            mem: [0; MEM_WORDS],
+        };
+        let g_uni = eval_state("cswap-s2/unified", unified, &s);
+        let g_ref = eval_state("cswap-s2/ref", &refer, &s);
+        assert_eq!(
+            g_uni, g_ref,
+            "Cswap rd=r3({rd_val:#04x} {note}) rs=r5 rt=s2 mismatch\n uni={g_uni:?}\n ref={g_ref:?}"
+        );
+    }
+}
+
 /// B1.3 EXHAUSTIVE Ccnot lane check: fix distinct rd/rs/rt indices and
 /// sweep the FULL 256 rs-values × a few rd/rt so every AND lane + xor
 /// target combination is exercised against the reference.
