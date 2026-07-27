@@ -970,10 +970,27 @@ fn emit_skip_block(
     temp: u8,
     skip_when_set: bool,
 ) -> Result<Vec<Instr>, CompileError> {
-    if body_instrs.len() > 255 {
-        return Err(CompileError::Deferred(
-            "skip-block body too long (>255 instructions)".into(),
-        ));
+    // A-6.4 widen-PC (F-1): the skip distance is minted into an 8-bit BR
+    // (`Addi rd, body_len`) and SIGN-EXTENDED into the 16-bit PC
+    // (`PC += sext(BR) + 1`). A *forward* skip only lands ahead of the body
+    // when `sext(body_len) ≥ 0`, i.e. body_len's top bit is clear, i.e.
+    // body_len ≤ 127. A body of 128..255 sign-extends to a NEGATIVE offset
+    // → the "skip" jumps BACKWARD into the park zone and the machine walks
+    // back into the ROM and executes garbage (this was correct under the
+    // 8-bit mod-256 PC; the sext into W_PC=16 broke it). Reject it gracefully,
+    // mirroring the iter_len ≤ 128 come-from guard (lower_trace). A wider BR /
+    // two-byte skip mint is the follow-up (design §3.4); this bounds a skip
+    // block body to ≤ 127 instructions.
+    if body_instrs.len() >= (1 << (W_BR - 1)) {
+        return Err(CompileError::Deferred(format!(
+            "skip-block body {} exceeds the sign-extended BR forward-skip reach {} \
+             (W_BR={}); a forward skip distance ≥ {} sign-extends to a BACKWARD jump \
+             (A-6.4 §3.4)",
+            body_instrs.len(),
+            (1 << (W_BR - 1)) - 1,
+            W_BR,
+            1 << (W_BR - 1),
+        )));
     }
     let body_len = body_instrs.len() as u8;
     if body_len == 0 {
@@ -4670,6 +4687,107 @@ mod tests {
         assert!(
             matches!(result, Err(CompileError::AliasedRegisters { .. })),
             "expected AliasedRegisters, got {result:?}"
+        );
+    }
+
+    // ── A-6.4 widen-PC F-1 regression: forward skip-block distance guard ──
+    //
+    // The skip distance is minted into an 8-bit BR (`Addi rb, body_len`) and
+    // SIGN-EXTENDED into the 16-bit PC (`PC += sext(BR) + 1`). A forward skip
+    // only lands ahead of its body when `sext(body_len) ≥ 0`, i.e. body_len ≤
+    // 127. The review's probe A (body 130) sign-extended to a NEGATIVE offset
+    // → the "skip" jumped BACKWARD into the park zone and the body was executed.
+    // These lengths were correct under the 8-bit mod-256 PC; the sext into
+    // W_PC=16 broke them silently. The guard must reject body_len ≥ 128.
+
+    /// A legal body instruction (register-pure, non-idle): `r1 += 1`.
+    fn body_incr() -> Instr {
+        Instr::Addi { rd: 1, imm: 1 }
+    }
+
+    #[test]
+    fn skip_block_forward_dist_over_127_rejected_gracefully() {
+        // Probe A's counterexample: a forward skip-block body of 130 (∈ 128..255)
+        // sign-extends to a BACKWARD jump. BEFORE the fix the guard was `> 255`,
+        // so `emit_skip_block` returned Ok(...) and the corrupt ROM was minted
+        // (this test failed). AFTER the fix it is rejected as Deferred.
+        let body: Vec<Instr> = (0..130).map(|_| body_incr()).collect();
+        // ctrl=r0, rb=r2, temp=r3 (pairwise distinct, legal registers).
+        let res = emit_skip_block(0, &body, 2, 3, true);
+        match res {
+            Err(CompileError::Deferred(msg)) => {
+                assert!(
+                    msg.contains("forward-skip") || msg.contains("BACKWARD"),
+                    "expected a forward-skip reach message, got: {msg}"
+                );
+            }
+            other => panic!(
+                "skip-block body 130 must be rejected GRACEFULLY (Deferred), got {other:?}"
+            ),
+        }
+        // The boundary: body 128 is the first rejected length; 127 is the last OK.
+        assert!(
+            matches!(
+                emit_skip_block(0, &vec![body_incr(); 128], 2, 3, true),
+                Err(CompileError::Deferred(_))
+            ),
+            "body 128 must reject (sext(128) = -128, backward)"
+        );
+        assert!(
+            emit_skip_block(0, &vec![body_incr(); 127], 2, 3, true).is_ok(),
+            "body 127 must be accepted (sext(127) = +127, forward)"
+        );
+    }
+
+    #[test]
+    fn skip_block_forward_dist_le_127_runs_correctly() {
+        // A dist ≤ 127 forward skip runs correctly on the fast-sim: with the
+        // control clear (skip_when_set=true, ctrl=0 → fall through = run body),
+        // and with the control set (ctrl=1 → skip the body forward). This
+        // proves the good case still compiles + executes past the guard.
+        const BODY: usize = 100; // ≤ 127
+        let body: Vec<Instr> = (0..BODY).map(|_| body_incr()).collect();
+
+        // Case 1: ctrl (r0) = 0 → fall through → body runs → r1 = BODY.
+        let block = emit_skip_block(0, &body, 2, 3, true).expect("emit dist=100");
+        let rom = crate::asm::assemble(&block).expect("assemble skip-block");
+        let mut init = StateVals {
+            regs: [0; 8],
+            pc: 0,
+            br: 0,
+            ir: 0,
+            scratch: [0; 8],
+            mem: [0; MEM_WORDS],
+        };
+        init.regs[0] = 0; // ctrl clear
+        let steps = rom.len() + 8; // run past the block, then park a few
+        let out = run_rom_fast(&rom, init.clone(), steps);
+        assert_eq!(
+            out.regs[1], BODY as u8,
+            "ctrl=0: body must run all {BODY} increments (fall-through)"
+        );
+        // PC must have walked FORWARD to the end of the block and parked there —
+        // NOT wandered backward (the F-1 corruption signature).
+        assert!(
+            out.pc as usize >= block.len(),
+            "ctrl=0: PC must park at/after end of block ({}), got {}",
+            block.len(),
+            out.pc
+        );
+
+        // Case 2: ctrl (r0) = 1 → skip forward → body does NOT run → r1 = 0.
+        init.regs[0] = 1; // ctrl set → skip
+        let out = run_rom_fast(&rom, init, steps);
+        assert_eq!(
+            out.regs[1], 0,
+            "ctrl=1: body must be SKIPPED (forward jump), r1 stays 0"
+        );
+        assert!(
+            out.pc as usize >= block.len(),
+            "ctrl=1: skip must land FORWARD at/after end of block ({}), got {} \
+             (a backward mis-jump would leave PC below the block)",
+            block.len(),
+            out.pc
         );
     }
 }
