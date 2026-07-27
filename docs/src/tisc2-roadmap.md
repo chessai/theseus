@@ -16,7 +16,7 @@
 > **A-0 (shared, scratch-addressable operand crossbar + instruction-word reformat)** is inserted
 > before the frame slice; with it, the GCD body returns to ~28 (B=194) exactly as first estimated.
 
-> **⇒⇒ CURRENT STATUS (2026-07-27) — COVERAGE COMPLETE; Phase B B-1 shared ALU COMPLETE (Unit-1+Unit-2 merged, step_j −39.4%, decode 2.59× smaller):**
+> **⇒⇒ CURRENT STATUS (2026-07-27) — COVERAGE COMPLETE; Phase B B-1 shared ALU COMPLETE (step_j −39.4%); B-2 per-program-widths infra merged, B-2.1 big win awaits USER (DF-2 fork):**
 > - **A-0 MERGED** to `chessai/theseus-v2` (`5f11e6b`): 32-bit word + shared scratch-addressable
 >   operand crossbar; net energy WIN −11.9%.
 > - **A-1 (hand-walk GCD) ABANDONED** — a correct reversible in-place gcd2 walk to ≤40 is
@@ -111,9 +111,24 @@
 >   proven structurally exact; `docs/reviews/b1-unit2-shared-alu-review.md`) + real authority (whole-domain
 >   equiv 11 reg+imm + Ccnot + Cswap + s0-restore + run_on_cpu==eval) + ring closure + goldens re-pinned;
 >   heavy suite green. Xchg/Swapbr stay separate (small/awkward).
-> - **NEXT: B1.4** (growth-tax-dead regression: a new op reusing an existing ALU sub-block = O(1) config
->   line, step_j unchanged — demonstrates the ISA-growth-tax kill) → **B-2 per-program widths** → B-3
->   active-only microcode. Also: A-5b Option A (aux-in-scratch, wider carriers) + MINOR cleanups.
+> - **B1.4** (growth-tax-dead): demonstrated-by-construction (the 3-block structure + per-block
+>   measurement prove no private crossbars remain except xchg/swapbr; s1 at 8/8 one-hots also caps new
+>   sub-functions) — not shipped as a standalone heavyweight demo.
+> - **✅ B-2 per-program widths — SCOPED + enabling infra MERGED (2026-07-27):** design doc
+>   `docs/scratch/b2-per-program-widths-design.md` (`0cbb43b`). **B-2.0a** (`0e1a1df`): a `Layout` struct
+>   is now the single source of truth for layout widths, `Layout::default()` byte-identical (fingerprint
+>   gate + 568/0). **B-2.0b** (`b8a485e`): per-program minimal `Layout` derivation (`derive_layout`/
+>   `is_cpu_only`) + **CPU-only MEM-drop routing** — a mem-quiescent CPU-only program runs on the
+>   mem-free `step(rom)` ring instead of `system_step` (~1/3 cheaper oracle lowering). This is oracle-
+>   CONSISTENCY (me_a3 already priced via `step(rom)`, mem-free) → **no priced-step_j change**. Fable
+>   SHIP (no blocker; `docs/reviews/b2-0b-mem-drop-review.md`) + heavy authority 574/0.
+> - **⇒ NEXT (needs USER input — decision-fork DF-2): B-2.1 = the REAL per-program step_j win.** It
+>   requires threading `Layout` into the step/decoder **gate builders** (~168 const refs — 0a only did
+>   the TYPE constructors) so a reduced-`num_regs` / narrower-`W_data` NETLIST is actually built. The
+>   data-word-W part rests on **DF-2** (fixed 8-bit control region [s0/s1] vs aggressive per-program
+>   config-minimization — see design §Q6). Est. ~30–40% additional step_j for a simple (4-bit / 3-reg /
+>   no-mem) program, stacking on B-1's −39.4%. → then B-3 active-only microcode. Also: A-5b Option A
+>   (aux-in-scratch) + MINOR cleanups.
 > - **(prior) lean-`lower_iso`** (stream the `lower_iso`/balance netlist so wide-state programs don't
 >   OOM → un-defers the me_a3 energy + ring-closure tests AND enables joules measurement at scale —
 >   the prerequisite for Phase-B efficiency) → A-5b Option A (aux-in-scratch, wider carriers) →
