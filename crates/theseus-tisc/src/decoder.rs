@@ -685,6 +685,34 @@ fn rotl_core() -> Iso {
     std_core(gated_rotl_gates(3 * W, PRED3, TGT0, |k| OPD0 + k))
 }
 
+// ── B1.1: config-wire-parameterized cores ──────────────────────────────
+//
+// Identical to the `*_core()` builders above, but each gate carries s1 bit
+// `cfg` (PRED3 + cfg) as its control instead of the fixed predicate bit 0.
+// This lets the shared ALU gate each sub-block on its own decoded config
+// line while all sub-blocks share ONE fixed netlist. `cfg == 0` reproduces
+// the original `*_core()` exactly.
+
+fn add_core_at(cfg: usize) -> Iso {
+    std_core(gated_tk_gates(3 * W, PRED3 + cfg, TGT0, OPD0))
+}
+
+fn xor_core_at(cfg: usize) -> Iso {
+    std_core(gated_xor_gates(3 * W, PRED3 + cfg, TGT0, OPD0))
+}
+
+fn rotl_core_at(cfg: usize) -> Iso {
+    std_core(gated_rotl_gates(3 * W, PRED3 + cfg, TGT0, |k| OPD0 + k))
+}
+
+fn exch_core_at(cfg: usize) -> Iso {
+    std_core(
+        (0..W)
+            .map(|i| gate_at(3 * W, &[PRED3 + cfg, TGT0 + i, OPD0 + i], fredkin_prim()))
+            .collect(),
+    )
+}
+
 fn add_instr() -> Iso {
     reg_reg(0b0000, add_core())
 }
@@ -1145,8 +1173,28 @@ fn group_a_shared() -> Iso {
     // permutes the register file for the rd route). ONE fetch_rs + ONE
     // sel_rd for the whole group instead of one pair per op.
 
-    // Execute phase: each core gated on its opcode predicate, run on the
-    // shared slots. Opcodes are mutually exclusive ⇒ at most one fires.
+    // B1.1 — the CONFIGURABLE shared ALU core. Instead of six independent
+    // `predicated(op)` blocks (six opcode AND-chains + six cores, each core
+    // gated on the shared s1-bit-0 predicate), the opcode is decoded ONCE
+    // into six mutually-exclusive one-hot config lines held in s1, and ONE
+    // configurable core runs all six sub-blocks, each gated on its own
+    // config line, then the config is uncomputed ONCE. This removes the
+    // per-op predicate-chain replication (§2.2) while keeping the single
+    // fixed step-iso: every sub-block is still instantiated + gated (§2.3).
+    //
+    //   route ; decode_config ; ALU(sub-blocks gated on config) ;
+    //           decode_config⁻¹ ; route⁻¹
+    //
+    // fetch_rs ; sel_rd ; core ; sel_rd⁻¹ ; fetch_rs⁻¹  ==  with_two_regs(...)
+    with_two_regs(R_RD, R_RS, group_a_alu())
+}
+
+/// B1.1 measurement hook: the PRE-B1.1 Group-A block (one shared route,
+/// six per-op `predicated(core)` blocks — six opcode AND-chains + six
+/// cores). Kept ONLY so `poc_b11_shared_alu_measure` can lower it and
+/// report the Group-A-portion delta vs the shared configurable ALU
+/// (`group_a_shared`). NOT wired into the decoder.
+pub fn group_a_pre_b11_for_measurement() -> Iso {
     let cores = seq_balanced(vec![
         predicated(&r_pred(0b0000), add_core()),            // Add
         predicated(&r_pred(0b0001), Iso::sym(add_core())),  // Sub
@@ -1155,9 +1203,124 @@ fn group_a_shared() -> Iso {
         predicated(&r_pred(0b0100), rotl_core()),           // Rotl
         predicated(&r_pred(0b0101), Iso::sym(rotl_core())), // Rotr
     ]);
-
-    // fetch_rs ; sel_rd ; cores ; sel_rd⁻¹ ; fetch_rs⁻¹  ==  with_two_regs(R_RD, R_RS, cores)
     with_two_regs(R_RD, R_RS, cores)
+}
+
+/// B1.1 measurement hook: the shared configurable ALU Group-A block.
+pub fn group_a_shared_for_measurement() -> Iso {
+    group_a_shared()
+}
+
+// ── B1.1 shared configurable ALU (Group A) ─────────────────────────────
+//
+// Config-line layout inside s1 (`AUX_PRED_FIELD`, decoder-reserved — never
+// a legal operand, so safe to use as config scratch). Six one-hot lines +
+// a shared prefix + one transient chain bit = 8 bits, exactly s1's width.
+const CFG_ADD_FWD: usize = 0; // Add  (R 0b0000): forward adder
+const CFG_ADD_REV: usize = 1; // Sub  (R 0b0001): adjoint adder
+const CFG_XOR: usize = 2; //     Xor  (R 0b0010)
+const CFG_EXCH: usize = 3; //    Exch (R 0b0011)
+const CFG_ROT_FWD: usize = 4; // Rotl (R 0b0100): forward rotator
+const CFG_ROT_REV: usize = 5; // Rotr (R 0b0101): adjoint rotator
+const CFG_PREFIX: usize = 6; //  g = fmt ∧ ¬op3 (shared by all six)
+const CFG_CHAIN: usize = 7; //   transient: one op-body AND at a time
+
+/// s1 wire for config bit `k` within the config-decode core, which lifts
+/// over `pred_fields()` = [IR_b0..b3, s1]; IR bits are wires 0..31, s1 bit
+/// `k` is wire 32+`k`.
+const fn cfg_wire(k: usize) -> usize {
+    32 + k
+}
+
+/// Decode the R-format Group-A opcode into the six one-hot config lines.
+///
+/// Each Group-A opcode shares the prefix `g = fmt ∧ ¬op3` (fmt=bit31,
+/// op3=opcode_bit(3)); the three low opcode bits (op2,op1,op0) then select
+/// exactly one of Add/Sub/Xor/Exch/Rotl/Rotr. We compute `g` once into
+/// `CFG_PREFIX`, then for each opcode land `final ^= g ∧ op2' ∧ op1' ∧ op0'`
+/// (primes = the opcode literal, NOT-adjusted for 0-bits) using `CFG_CHAIN`
+/// as a single transient: `chain ^= op2'∧op1'∧op0'` (CCC-NOT), then
+/// `final ^= g ∧ chain` (Toffoli), then uncompute `chain`. Only one chain
+/// bit is ever live, so all six one-hots + prefix fit s1's 8 bits.
+///
+/// Self-inverse-bracketed by the caller (`decode ; ALU ; decode⁻¹`): the
+/// config bits start and end at 0. Opcodes are mutually exclusive, so at
+/// most one one-hot fires — the mutual-exclusion the ALU Branch relies on.
+fn alu_config_decode() -> Iso {
+    let n = 5 * W; // pred_fields core: 4 IR bytes + s1
+    let op = |k: usize| opcode_bit(k); // global IR wire of opcode bit k
+    let mut gates: Vec<Iso> = Vec::new();
+
+    // g = fmt ∧ ¬op3  →  CFG_PREFIX.
+    gates.push(at_wire(n, op(3), not_iso()));
+    gates.push(gate_at(n, &[FMT_BIT, op(3), cfg_wire(CFG_PREFIX)], toffoli_prim()));
+    gates.push(at_wire(n, op(3), not_iso()));
+
+    // (final_bit, [op2,op1,op0] literal pattern) for each Group-A opcode.
+    // Bit b of the low-3 opcode = 1 → literal true, else negated.
+    let ops: [(usize, [bool; 3]); 6] = [
+        (CFG_ADD_FWD, [false, false, false]), // Add  0b_000
+        (CFG_ADD_REV, [false, false, true]),  // Sub  0b_001
+        (CFG_XOR, [false, true, false]),      // Xor  0b_010
+        (CFG_EXCH, [false, true, true]),      // Exch 0b_011
+        (CFG_ROT_FWD, [true, false, false]),  // Rotl 0b_100
+        (CFG_ROT_REV, [true, false, true]),   // Rotr 0b_101
+    ];
+    for (final_bit, lits) in ops {
+        // literal wires op2,op1,op0 with NOTs on the 0-bits.
+        let lit_wires = [op(2), op(1), op(0)];
+        let nots: Vec<Iso> = (0..3)
+            .filter(|&i| !lits[i])
+            .map(|i| at_wire(n, lit_wires[i], not_iso()))
+            .collect();
+        // chain ^= op2' ∧ op1' ∧ op0'  (CCC-NOT over the three literals)
+        gates.extend(nots.clone());
+        gates.push(gate_at(
+            n,
+            &[lit_wires[0], lit_wires[1], lit_wires[2], cfg_wire(CFG_CHAIN)],
+            cccnot_prim(),
+        ));
+        gates.extend(nots.clone()); // un-NOT the literals (restore IR)
+        // final ^= g ∧ chain
+        gates.push(gate_at(
+            n,
+            &[cfg_wire(CFG_PREFIX), cfg_wire(CFG_CHAIN), cfg_wire(final_bit)],
+            toffoli_prim(),
+        ));
+        // uncompute chain (re-NOT, CCC-NOT, un-NOT) — restores chain to 0.
+        gates.extend(nots.clone());
+        gates.push(gate_at(
+            n,
+            &[lit_wires[0], lit_wires[1], lit_wires[2], cfg_wire(CFG_CHAIN)],
+            cccnot_prim(),
+        ));
+        gates.extend(nots);
+    }
+
+    on_fields(&pred_fields(), gates)
+}
+
+/// The Group-A configurable ALU core, run on the shared slots
+/// [r0-slot, s0, s1] with the config lines already decoded into s1.
+///
+/// Every sub-block is instantiated and gated on its own config line
+/// (single fixed iso, §2.3). At most one config line is set (mutual
+/// exclusion, `alu_config_decode`), so at most one sub-block is
+/// non-identity — a value-level Branch. Sub = the adder's adjoint gated on
+/// `CFG_ADD_REV`; Rotr = the rotator's adjoint gated on `CFG_ROT_REV`
+/// (`Iso::sym` of the config-wired forward block, so the whole reverse
+/// block still carries the same config line as its per-gate control).
+fn group_a_alu() -> Iso {
+    let decode = alu_config_decode();
+    let core = seq_balanced(vec![
+        add_core_at(CFG_ADD_FWD),            // Add
+        Iso::sym(add_core_at(CFG_ADD_REV)),  // Sub  = adder adjoint
+        xor_core_at(CFG_XOR),                // Xor
+        exch_core_at(CFG_EXCH),              // Exch
+        rotl_core_at(CFG_ROT_FWD),           // Rotl
+        Iso::sym(rotl_core_at(CFG_ROT_REV)), // Rotr = rotator adjoint
+    ]);
+    Iso::seq(decode.clone(), Iso::seq(core, Iso::sym(decode)))
 }
 
 /// Group B — the immediate ops that share the `sel_rd` bracket (rd→r0-slot).

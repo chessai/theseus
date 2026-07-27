@@ -529,6 +529,110 @@ fn me_a4_honest_crossing() {
     );
 }
 
+// ── B1.1: shared configurable ALU measurement (design open-Q1) ──────
+//
+// The PRIMARY deliverable of B1.1: does folding Group-A's six per-op
+// predicated cores into ONE configurable ALU core (route once, decode the
+// opcode once into config lines, run one gated core) actually SHRINK the
+// lowered decode netlist, or does route fan-out create balance-buffer skew
+// that eats the win? Reports decode_execute cells + fib step_j vs the
+// committed baseline. Prints only — no golden assertion here (me_a3_golden
+// is re-pinned during finish, after adversarial review).
+//
+// Baseline (design doc §1.1, pre-B1.1): decode_execute = 874 510 cells;
+// step_j = 2.5259595646e-9 J; B=24 / T=20.
+#[test]
+fn poc_b11_shared_alu_measure() {
+    const BASE_DECODE_CELLS: usize = 874_510;
+    const BASE_STEP_J: f64 = 2.5259595646e-9;
+
+    // (1) decode_execute BALANCED cell count — the same metric as the
+    // design baseline (`clause_report` / `instruction_energy` = lower THEN
+    // balance, counting the K0 balance buffers). This is what step_j is
+    // built from, so it is the apples-to-apples Q1 number. (The raw
+    // `lower_iso` count is ~187× smaller but is a different, pre-balance
+    // metric — not comparable to 874 510.)
+    let de_iso = theseus_tisc::decoder::decode_execute();
+    let de_bd = {
+        let _guard = LOWER_GATE.lock().unwrap();
+        instruction_energy(&de_iso, char_db(), T_RAMP).expect("decode_execute energy")
+    };
+    let de_cells: usize = de_bd.by_kind.values().map(|k| k.count).sum();
+    let cell_ratio = BASE_DECODE_CELLS as f64 / de_cells as f64;
+    eprintln!(
+        "B1.1 decode_execute BALANCED cells: {} → {} (Δ {:+}, {:.3}× smaller); \
+         active_j={:.4e} buffer_j={:.4e} total_j={:.4e}",
+        BASE_DECODE_CELLS,
+        de_cells,
+        de_cells as isize - BASE_DECODE_CELLS as isize,
+        cell_ratio,
+        de_bd.active_j,
+        de_bd.buffer_j,
+        de_bd.total_j,
+    );
+
+    // (1b) Group-A PORTION shrink (the actual Q1 shrink-bar target): lower
+    // the pre-B1.1 Group-A block (6 per-op predicated cores) vs the shared
+    // configurable ALU, both BALANCED. Group A is the only part of decode
+    // B1.1 touched, so this isolates the fold's win from the untouched
+    // Ccnot/Cswap/Xchg/Swapbr/Group-B mass that dilutes the whole-decode Δ.
+    let (ga_pre_cells, ga_new_cells) = {
+        let _guard = LOWER_GATE.lock().unwrap();
+        let pre = instruction_energy(
+            &theseus_tisc::decoder::group_a_pre_b11_for_measurement(),
+            char_db(),
+            T_RAMP,
+        )
+        .expect("group_a pre energy");
+        let new = instruction_energy(
+            &theseus_tisc::decoder::group_a_shared_for_measurement(),
+            char_db(),
+            T_RAMP,
+        )
+        .expect("group_a new energy");
+        let pc: usize = pre.by_kind.values().map(|k| k.count).sum();
+        let nc: usize = new.by_kind.values().map(|k| k.count).sum();
+        (pc, nc)
+    };
+    let ga_ratio = ga_pre_cells as f64 / ga_new_cells as f64;
+    eprintln!(
+        "B1.1 Group-A PORTION balanced cells: {} → {} (Δ {:+}, {:.3}× smaller)",
+        ga_pre_cells,
+        ga_new_cells,
+        ga_new_cells as isize - ga_pre_cells as isize,
+        ga_ratio
+    );
+    eprintln!(
+        "B1.1 Q1 shrink bar (~1.3× on Group-A portion): {}",
+        if ga_ratio >= 1.3 { "CLEARED" } else { "NOT CLEARED" }
+    );
+
+    // (2) fib step_j via the me_a3 path (same ROM/trace/input).
+    let pe = fib_program_energy();
+    eprintln!(
+        "B1.1 step_j: {:.10e} → {:.10e} (Δ {:+.3}%)  B={} T={}",
+        BASE_STEP_J,
+        pe.step_j,
+        (pe.step_j - BASE_STEP_J) / BASE_STEP_J * 100.0,
+        pe.steps_b,
+        pe.steps_t
+    );
+    eprintln!(
+        "B1.1 total_j: {:.10e}  (= B·step_j = {}·{:.6e})",
+        pe.total_j, pe.steps_b, pe.step_j
+    );
+
+    // (3) B/T must be invariant (step_j-only change — same ROM, same trace).
+    assert_eq!(pe.steps_b, 24, "B changed (must be step_j-only)");
+    assert_eq!(pe.steps_t, 20, "T changed (must be step_j-only)");
+
+    // NEW golden values to re-pin during finish (report, do not assert):
+    eprintln!(
+        "B1.1 RE-PIN CANDIDATES: step_j={:.10e} total_j={:.10e} decode_cells={}",
+        pe.step_j, pe.total_j, de_cells
+    );
+}
+
 // ── me_a5: range (negative) ─────────────────────────────────────────
 
 #[test]
