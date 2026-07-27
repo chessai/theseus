@@ -85,7 +85,17 @@
 > - **⇒ THE COVERAGE GOAL IS ESSENTIALLY COMPLETE ON `chessai/theseus-v2` (57 commits since A-0):**
 >   any admitted prim lowers + control composes to arbitrary depth + wide bitwise & arithmetic data
 >   + large (B>256) bodies run. Remaining = infra/polish/efficiency.
-> - **NEXT: lean-`lower_iso`** (stream the `lower_iso`/balance netlist so wide-state programs don't
+> - **✅ lean-`lower_iso` MERGED (`f63c806`, 4 commits):** the wide-state OOM was 100% redundant
+>   `Type` deep-clone garbage → fixed with **`Arc<Type>` structural sharing** (bit-identical netlist,
+>   proven; me_a3 86 GB→7.2 GB, 12×; a workspace-wide lowering speedup). Energy/ring tier un-deferred
+>   + green at wide state; me_a3 golden re-pinned (step_j −6.6%). **⇒ COVERAGE GOAL COMPLETE +
+>   memory-infra fixed + JOULES MEASURABLE AT SCALE (62 commits since A-0).** No deferred tests
+>   remain from widen-PC.
+> - **NEXT: Phase B — EFFICIENCY (`step_j`), now unblocked by the joules measurement.** B-1 shared
+>   configurable ALU (replace the ×|ISA| per-op crossbars with ONE shared ALU → break the O(|ISA|)
+>   per-step decode tax — "the highest-leverage efficiency idea") → B-2 per-program widths → B-3
+>   active-only microcode. Also: A-5b Option A (aux-in-scratch, wider carriers) + MINOR cleanups.
+> - **(prior) lean-`lower_iso`** (stream the `lower_iso`/balance netlist so wide-state programs don't
 >   OOM → un-defers the me_a3 energy + ring-closure tests AND enables joules measurement at scale —
 >   the prerequisite for Phase-B efficiency) → A-5b Option A (aux-in-scratch, wider carriers) →
 >   MINOR cleanups → **Phase B efficiency** (shared ALU → `step_j`, gated on the lean-`lower_iso`
