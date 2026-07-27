@@ -464,11 +464,14 @@ pub fn build_cpu_init(map: &VarMap, ir_word: u32, pin_s0_zero: bool) -> SV {
     } else {
         fields.push(sv_word8_symbolic(map, OP_S0));
     }
-    // Fields 13-19: s1-s7 = 0
+    // Fields 15-21: s1-s7 = 0
     for _ in 1..crate::types::NUM_SCRATCH {
         fields.push(sv_word8_const(0, vs));
     }
+    // Field 22: PC_hi = 0 (A-6.4 widen-PC appended byte; PC = 0 above).
+    fields.push(sv_word8_const(0, vs));
 
+    debug_assert_eq!(fields.len(), NUM_CPU_FIELDS);
     sv_right_nested(&fields)
 }
 
@@ -482,7 +485,7 @@ pub fn build_cpu_init(map: &VarMap, ir_word: u32, pin_s0_zero: bool) -> SV {
 pub fn build_system_init(map: &VarMap, pin_s0_zero: bool) -> SV {
     let vs = map.bdd_vars();
 
-    // CpuState (NUM_CPU_FIELDS = 22 fields — A-0 32-bit IR)
+    // CpuState (NUM_CPU_FIELDS fields — A-0 32-bit IR, A-6.4 PC_hi appended)
     let mut cpu_fields = Vec::with_capacity(NUM_CPU_FIELDS);
     for i in 0..NUM_REGS {
         cpu_fields.push(sv_word8_symbolic(map, i));
@@ -502,6 +505,9 @@ pub fn build_system_init(map: &VarMap, pin_s0_zero: bool) -> SV {
     for _ in 1..crate::types::NUM_SCRATCH {
         cpu_fields.push(sv_word8_const(0, vs)); // s1-s7 = 0
     }
+    // PC_hi = 0 (A-6.4 widen-PC appended byte; PC = 0 above).
+    cpu_fields.push(sv_word8_const(0, vs));
+    debug_assert_eq!(cpu_fields.len(), NUM_CPU_FIELDS);
     let cpu_sv = sv_right_nested(&cpu_fields);
 
     // MemState (MEM_WORDS = 4 fields, symbolic)
