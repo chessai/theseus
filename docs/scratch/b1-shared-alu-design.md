@@ -432,6 +432,90 @@ Exch/Cswap/Swapbr on the real `step` iso == eval over all 16 inputs). NOT YET
 re-pinned: `me_a3_golden` (new step_j 1.8664606459e-9 / total_j 4.4795055502e-8) —
 bundled with B1.1 for one review.
 
+## 8. B1.3 STOP — the universal 3-operand bracket is CLEAN; the config-scratch is the wall
+
+**Attempted:** fold Ccnot (R 0b1011) + Cswap (R 0b0110) into the reg+imm shared
+block via a universal bracket that fetches **rd→D(r0-slot), rs→A(s0), rt→B(BR)**
+once, then config-gates all cores on the fixed [D,A,B] slots (design §2.4).
+
+### The datapath fold itself is SOUND (no aliasing hazard)
+
+Traced rigorously (both control polarities, BR round-trip):
+
+- **rt→B (BR) fetch is net-zero for reg+imm ops.** `ccnot_fetch_rt_br` is a
+  self-inverse bracket `sel_rt ; swap(r0-slot,BR) ; sel_rt⁻¹`, sequenced OUTSIDE
+  sel_rd/fetch_rs (over the un-permuted file). For reg+imm ops the cores never
+  touch BR, so `fetch_rt_br ; alu ; fetch_rt_br⁻¹ = id` on BR and on every reg —
+  content-agnostic, exactly the A-0 route-once lemma. (Extend the b12 inert-
+  crossbar tooth to the rt→B fetch to pin it.)
+- **Cswap-via-D[0] reproduces exact semantics AND restores BR** — it is CLEANER
+  than today's `copy_rd0`. With rd→D, rs→A(s0), rt→B(BR): the control is D[0]
+  read directly (no s1-bit-4 copy); the core swaps A↔B (= s0↔BR) gated by
+  `cfg_cswap ∧ D[0]`. Trace (taken): entry BR=br0,r[rs]=x,r[rt]=y →
+  fetch_rt_br: BR=y,r[rt]=br0 → fetch_rs: s0=x,r[rs]=0 → swap A↔B: s0=y,BR=x →
+  unfetch_rs: r[rs]=y ✓ → unfetch_rt_br: r[rt]=x ✓, **BR=br0 restored** ✓.
+  Not-taken: swap inert, all restored. Matches `r[rs]↔r[rt] iff r[rd][0]`.
+- **Ccnot** lands on the identical 4 slots the current `ccnot_core` already uses
+  ([r0-slot, s0, BR, s1]); `D[i]^=cfg_ccnot∧A[i]∧B[i]` is verbatim.
+
+So the STOP is **not** a §2.4 aliasing hazard — the universal bracket composes
+exactly.
+
+### The wall: 10 config-scratch bits needed, s1 holds 8
+
+The config lines live in **s1** (`AUX_PRED_FIELD`, the ONLY decoder-reserved word
+that is position-stable — `select_operand` excludes positions 0/1 from the level-3
+crossbar; s2..s7 are NOT excluded, so a scratch operand displaces them). B1.2
+already uses all 8 s1 bits: 6 held one-hot lines (add_fwd/rev, xor, exch,
+rot_fwd/rev) + CFG_PREFIX + CFG_CHAIN (transient decode scratch). Folding Ccnot +
+Cswap needs **8 held one-hot lines** (each core gates on its own held config bit —
+cswap on `cfg_cswap∧D[0]`, ccnot on `cfg_ccnot∧A∧B`; neither can be gated on raw
+opcode IR bits within the prim arity: see next para). The decode still needs ≥2
+transient bits (prefix+chain) held *simultaneously* with the reserved 8 one-hot
+slots → **8 + 2 = 10 > 8.** Confirmed by an independent fresh-context review.
+
+**Second, independent wall (arity).** The prim vocabulary tops out at **K3 =
+3-controlled swap = 5 wires; there is NO K4** (`ir/cell.rs` CellKind; `lower.rs`
+refuses "K4 not in vocabulary"). Cswap's core is a *swap* cell (gated_fredkin,
+already K2 = 2 ctrl + 2 swap). Gating it on a held `cfg_cswap ∧ D[0]` = 3 ctrl +
+2 swap = **K3 (OK, survivable)** — but any attempt to save a slot by adding a raw
+opcode bit (e.g. op3) as an extra per-gate control to *distinguish* ccnot/cswap
+on a shared line pushes cswap to 4 ctrl + 2 swap = **K4 → hard-refused.** So the
+"merge onto one is_controlled line + op3-discriminate" escape is unsound for the
+swap-cell (cswap); it would work only for ccnot (a role-swap that synthesizes).
+
+**A bit-recycling construction exists but is fragile.** By opcode mutual
+exclusion at most one one-hot is set at any instant, so ≥6 of the 8 slots are 0
+and could host the transient prefix/chain — but its correctness rests on that
+invariant holding at *every intermediate decode step for every IR word incl.
+reserved/aliased ones*, exactly the subtle datapath property that "passes unit
+tests but breaks on the first real word" (CLAUDE.md L15). Not shipped without a
+fresh-context adversarial review of the *actual* construction.
+
+### Recommended paths (a design fork — open-Q3 anticipated this)
+
+1. **Reserve a 3rd scratch word (s2) as position-stable config scratch** for the
+   2 transient decode bits: extend `select_operand`'s level-3 exclusion to
+   positions 0/1/2 and reject s2 as a legal operand in `asm` (legal scratch
+   operands shrink to s3..s7). Lower risk than a state widen; but it is an
+   addressing/ISA change with its own review surface (reduces user scratch).
+2. **Widen the config word (state-width change)** — cleanest for the config decode
+   but re-pins every energy/ring golden and changes fetch cost.
+3. **Scope B1.3 to Ccnot ONLY** (one held line, K3 CCC-NOT gate fits; needs 7
+   held + 2 transient = 9 > 8 — still over by 1). Even one controlled op overruns
+   s1 by one bit, so path 1 or 2 is required for *any* controlled-op fold.
+
+### Measured potential win (contingent on the config-scratch fix)
+
+Current per-block balanced mass (`poc_b1_perblock_measure`, this session):
+reg_imm 185864, **ccnot 75520**, **cswap 63770**, xchg 10859, swapbr 9886 (SUM
+345899). Folding ccnot+cswap removes their two private crossbars (~139k cells of
+private routing) AND drops the top-level block count **5→3**, shedding their share
+of the inter-block `seq_balanced` balance overhead — the same whole-block-removal
+super-linearity that made B1.2's decode-wide win (−394k) far exceed the block's
+own −70k. Expected to clear a real further step_j win, but **NOT measured** —
+the fold cannot be built until the config-scratch wall (above) is resolved.
+
 ## Appendix — measurement provenance
 
 - `step_j`/`total_j`/B/T: `me_a3_golden` (energy.rs), committed golden, re-verified as
