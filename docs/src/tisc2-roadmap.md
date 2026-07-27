@@ -16,7 +16,7 @@
 > **A-0 (shared, scratch-addressable operand crossbar + instruction-word reformat)** is inserted
 > before the frame slice; with it, the GCD body returns to ~28 (B=194) exactly as first estimated.
 
-> **⇒⇒ CURRENT STATUS (2026-07-26) — re-prioritized to the primary goal (arbitrary-programs compiler):**
+> **⇒⇒ CURRENT STATUS (2026-07-27) — COVERAGE COMPLETE; Phase B efficiency underway (B-1 Unit-1 merged, step_j −26.1%):**
 > - **A-0 MERGED** to `chessai/theseus-v2` (`5f11e6b`): 32-bit word + shared scratch-addressable
 >   operand crossbar; net energy WIN −11.9%.
 > - **A-1 (hand-walk GCD) ABANDONED** — a correct reversible in-place gcd2 walk to ≤40 is
@@ -91,10 +91,21 @@
 >   + green at wide state; me_a3 golden re-pinned (step_j −6.6%). **⇒ COVERAGE GOAL COMPLETE +
 >   memory-infra fixed + JOULES MEASURABLE AT SCALE (62 commits since A-0).** No deferred tests
 >   remain from widen-PC.
-> - **NEXT: Phase B — EFFICIENCY (`step_j`), now unblocked by the joules measurement.** B-1 shared
->   configurable ALU (replace the ×|ISA| per-op crossbars with ONE shared ALU → break the O(|ISA|)
->   per-step decode tax — "the highest-leverage efficiency idea") → B-2 per-program widths → B-3
->   active-only microcode. Also: A-5b Option A (aux-in-scratch, wider carriers) + MINOR cleanups.
+> - **✅ Phase B B-1 Unit-1 (B1.1+B1.2 shared configurable reg+imm ALU) MERGED (`df876e3`, 2026-07-27):**
+>   all 11 register+immediate ops fold into ONE bracket + ONE configurable ALU (Add/Sub/Addi/Subi→1
+>   adder, the 4 rotates→1 rotator; the `group_b` block removed). **step_j −26.1% (2.5259595646e-9 →
+>   1.8664606459e-9), `decode_execute` 874510→441015 balanced cells (nearly halved), B/T=24/20
+>   invariant.** Empirical finding (design §6): the win is REMOVING whole op-blocks — dropping their
+>   cells AND their share of the ~50% inter-block `seq_balanced` overhead — not incremental core-share
+>   (B1.1 Group-A-only was 1.111× because A-0 pre-shared Group A's route). Full discipline: Fable review
+>   (no BLOCKER, `docs/reviews/b1-unit1-shared-alu-review.md`) + real `system_step` authority + ring
+>   closure + whole-domain per-op equiv + inert-crossbar tooth; goldens re-pinned; **heavy suite 561/0**
+>   (also fixed 3 pre-existing widen-PC-stale compile tests → heavy tier genuinely green again).
+> - **NEXT: Phase B B-1.3** — universal 3-operand bracket (add rt→B) folds **Ccnot (75520) + Cswap
+>   (63770)** = the remaining PRIVATE-crossbar routing collapse (per-block measurement). Aliasing-heavy
+>   (design §2.4) → own Fable review + real authority. Leave xchg/swapbr (small/awkward) separate. Then
+>   B1.4 growth-tax-dead regression → B-2 per-program widths → B-3 active-only microcode. Also: A-5b
+>   Option A (aux-in-scratch, wider carriers) + MINOR cleanups.
 > - **(prior) lean-`lower_iso`** (stream the `lower_iso`/balance netlist so wide-state programs don't
 >   OOM → un-defers the me_a3 energy + ring-closure tests AND enables joules measurement at scale —
 >   the prerequisite for Phase-B efficiency) → A-5b Option A (aux-in-scratch, wider carriers) →
