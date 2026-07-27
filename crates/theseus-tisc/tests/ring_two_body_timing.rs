@@ -72,9 +72,16 @@ fn golden_pin_mexch_rom() {
     // TUPLE printed by two_body_timing_certificate); validate()==Ok (physical
     // lockstep intact — a re-pin from the netlist size change, not a
     // regression). Behavior verified separately (step/branching real-CPU).
+    // RE-PINNED (B-1 Unit-1, B1.1+B1.2 shared configurable reg+imm ALU): folding
+    // the reg+imm ops into ONE bracket + ALU and removing the group_b block nearly
+    // halves decode_execute → shorter cpu_pre/system_step timing: d_pre 2931→2349,
+    // d_locked/period 3544→2964 (SHRINK). d_post=573, d_mem=35, delta2=1 unchanged;
+    // delta1 1→3, delta_hold 37→39. validate()==Ok (physical lockstep intact) +
+    // ring_run closure oracles green (ring_matches_eval_oracle_fast, ancillas
+    // restored, zero-boundary) ⇒ a re-pin from the leaner netlist, not a regression.
     assert_eq!(
-        t.d_pre, 2931,
-        "GOLDEN PIN: d_pre={} (expected 2931)",
+        t.d_pre, 2349,
+        "GOLDEN PIN: d_pre={} (expected 2349)",
         t.d_pre
     );
     assert_eq!(t.d_mem, 35, "GOLDEN PIN: d_mem={} (expected 35)", t.d_mem);
@@ -83,21 +90,21 @@ fn golden_pin_mexch_rom() {
         "GOLDEN PIN: d_post={} (expected 573)",
         t.d_post
     );
-    assert_eq!(t.delta1, 1, "GOLDEN PIN: delta1={} (expected 1)", t.delta1);
+    assert_eq!(t.delta1, 3, "GOLDEN PIN: delta1={} (expected 3)", t.delta1);
     assert_eq!(t.delta2, 1, "GOLDEN PIN: delta2={} (expected 1)", t.delta2);
     assert_eq!(
-        t.delta_hold, 37,
-        "GOLDEN PIN: delta_hold={} (expected 37)",
+        t.delta_hold, 39,
+        "GOLDEN PIN: delta_hold={} (expected 39)",
         t.delta_hold
     );
     assert_eq!(
-        t.d_locked, 3544,
-        "GOLDEN PIN: d_locked={} (expected 3544)",
+        t.d_locked, 2964,
+        "GOLDEN PIN: d_locked={} (expected 2964)",
         t.d_locked
     );
     assert_eq!(
-        t.period, 3544,
-        "GOLDEN PIN: period={} (expected 3544)",
+        t.period, 2964,
+        "GOLDEN PIN: period={} (expected 2964)",
         t.period
     );
 

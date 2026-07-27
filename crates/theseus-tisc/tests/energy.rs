@@ -113,16 +113,19 @@ fn poc_step_net_bit_identical_across_type_repr() {
         "POC step(test_rom) net: cells={cells}, num_lines={num_lines}, fingerprint={fp:#018x}"
     );
 
-    // Golden captured from base `9b12f7e` (Box<Type> repr) — the pre-change net.
-    // A pure representation change MUST reproduce these exactly.
-    // Captured from base `9b12f7e` (Box<Type>) by running the identical
-    // FNV-1a-over-Debug fingerprint on the pre-change net: cells=5406,
-    // num_lines=32612, fingerprint=0xf155e931576a44b7, peak RSS 57.4 GB (vs
-    // Arc: identical net, ~4 GB peak). Byte-for-byte identical ⇒ pure repr
-    // change, net bit-for-bit equal old-vs-new.
-    const GOLDEN_CELLS: usize = 5406;
-    const GOLDEN_NUM_LINES: u32 = 32612;
-    const GOLDEN_FP: u64 = 0xf155_e931_576a_44b7;
+    // Golden ORIGINALLY captured from base `9b12f7e` (Box<Type> repr) to prove
+    // the lean-lower_iso `Box<Type>`→`Arc<Type>` change is bit-identical (it was:
+    // cells=5406, num_lines=32612, fp=0xf155e931576a44b7, peak 57.4 GB Box vs
+    // ~4 GB Arc). That bit-identity is proven and historical.
+    // RE-PINNED (B-1 Unit-1, B1.1+B1.2 shared configurable reg+imm ALU): B1.2
+    // LEGITIMATELY changes the step net (folds reg+imm into one bracket+ALU,
+    // removes the group_b block) → the net shrinks 5406→4908 cells / 32612→29644
+    // lines. This golden now serves as a step-net regression guard at the B1.2
+    // decode structure (any unintended net change perturbs the fingerprint).
+    // Re-measured this session under Arc<Type> repr.
+    const GOLDEN_CELLS: usize = 4908;
+    const GOLDEN_NUM_LINES: u32 = 29644;
+    const GOLDEN_FP: u64 = 0x74cd_293e_3a18_1144;
 
     assert_eq!(
         cells, GOLDEN_CELLS,
@@ -396,18 +399,21 @@ fn me_a3_golden() {
 
     // Pinned golden values (deterministic: committed char-DB fits + fixed
     // lowering of fib's own 24-word ROM step net at T_RAMP=1e-7).
-    // RE-PINNED for A-6.4 widen-PC (16-bit PC: appends the PC_hi CpuState field,
-    // widening the state to STATE_BITS=184 / NUM_FIELDS=23). Measured under the
-    // lean-lower_iso Arc<Type> repr (slice-1) which makes this wide-state
-    // lowering fit host RAM (peak ~7 GB, was ~86 GB → OOM). The widened
-    // pc_add_br/pc_inc + narrow fetch shift step energy DOWN relative to the
-    // pre-widen A-0 baseline: step_j 2.7054170445e-9 → 2.5259595646e-9 (−6.6%),
-    // total_j 6.4930009067e-8 → 6.0623029551e-8, total_j = 24·step_j. B=24/T=20
-    // codegen unchanged. The NET is bit-identical across the repr change (POC
-    // poc_step_net_bit_identical_across_type_repr), so this golden reflects ONLY
-    // the widen-PC state change, never the repr. Deterministic (per-cell sum).
-    const GOLDEN_TOTAL_J: f64 = 6.0623029551e-8;
-    const GOLDEN_STEP_J: f64 = 2.5259595646e-9;
+    // RE-PINNED for B-1 Unit-1 (B1.1+B1.2 shared configurable ALU): the reg+imm
+    // ops now share ONE bracket + ONE configurable ALU (Add/Sub/Addi/Subi → one
+    // adder, the 4 rotates → one rotator) and the group_b block is removed from
+    // decode_execute. This nearly halves decode_execute (874510 → 441015 balanced
+    // cells) — dropping group_b's cells AND its share of the ~50% inter-block
+    // seq_balanced overhead — so step energy drops sharply: step_j
+    // 2.5259595646e-9 → 1.8664606459e-9 (−26.1%), total_j 6.0623029551e-8 →
+    // 4.4795055502e-8, total_j = 24·step_j. B=24/T=20 codegen UNCHANGED (step_j-
+    // only change, same ROM/trace). Deterministic (per-cell sum). Behaviour is
+    // proven equivalent by the whole-domain per-op equiv + fib real-CPU teeth
+    // (tests/decoder.rs) and the Fable adversarial review
+    // (docs/reviews/b1-unit1-shared-alu-review.md, no BLOCKER).
+    // (Prior widen-PC baseline was step_j 2.5259595646e-9 / total_j 6.0623029551e-8.)
+    const GOLDEN_TOTAL_J: f64 = 4.4795055502e-8;
+    const GOLDEN_STEP_J: f64 = 1.8664606459e-9;
     const GOLDEN_B: usize = 24;
     const GOLDEN_T: usize = 20;
 
