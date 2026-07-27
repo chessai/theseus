@@ -96,7 +96,6 @@ fn sample_state(pc_in: impl Into<u16>) -> StateVals {
 /// Fast bounded companion: MAX_R=2, pc∈{0,4}, asserting
 /// ring.run == eval^R AND run == run_open.
 #[test]
-#[ignore = "A-6.4 widen-PC: OOM at the wider state (pending lean-lower_iso). The 16-bit PC (+PC_hi CpuState field) inflates the balanced ring/step net past host RAM — this ctx()-based test climbs past ~47 GB and is OOM-killed (SIGKILL), same class as me_a3_golden (energy.rs) and design §8 risk #5. The ring LOGIC is unchanged by the widen and its CPU-level behavior is proven green at the new width by step/branching/lfsr/chi/sbox + tests/widen_pc_payoff.rs (run_on_cpu==eval) and the (non-balancing) ring_two_body_timing certificate. Re-enable once a streaming/low-intermediate-memory lower_iso lands."]
 fn ring_matches_eval_oracle_fast() {
     let c = ctx();
     const MAX_R: u32 = 2;
@@ -149,7 +148,6 @@ fn ring_matches_eval_oracle() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore = "A-6.4 widen-PC: OOM at the wider state (pending lean-lower_iso). The 16-bit PC (+PC_hi CpuState field) inflates the balanced ring/step net past host RAM — this ctx()-based test climbs past ~47 GB and is OOM-killed (SIGKILL), same class as me_a3_golden (energy.rs) and design §8 risk #5. The ring LOGIC is unchanged by the widen and its CPU-level behavior is proven green at the new width by step/branching/lfsr/chi/sbox + tests/widen_pc_payoff.rs (run_on_cpu==eval) and the (non-balancing) ring_two_body_timing certificate. Re-enable once a streaming/low-intermediate-memory lower_iso lands."]
 fn ring_area_independent_of_revolutions() {
     let c = ctx();
     let counts = c.ring.compact().cell_counts();
@@ -182,7 +180,6 @@ fn ring_area_independent_of_revolutions() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore = "A-6.4 widen-PC: OOM at the wider state (pending lean-lower_iso). The 16-bit PC (+PC_hi CpuState field) inflates the balanced ring/step net past host RAM — this ctx()-based test climbs past ~47 GB and is OOM-killed (SIGKILL), same class as me_a3_golden (energy.rs) and design §8 risk #5. The ring LOGIC is unchanged by the widen and its CPU-level behavior is proven green at the new width by step/branching/lfsr/chi/sbox + tests/widen_pc_payoff.rs (run_on_cpu==eval) and the (non-balancing) ring_two_body_timing certificate. Re-enable once a streaming/low-intermediate-memory lower_iso lands."]
 fn ancillas_restored_after_one_revolution() {
     let c = ctx();
 
@@ -276,7 +273,6 @@ fn run_true_equals_run_when_ancillas_restored() {
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore = "A-6.4 widen-PC: OOM at the wider state (pending lean-lower_iso). The 16-bit PC (+PC_hi CpuState field) inflates the balanced ring/step net past host RAM — this ctx()-based test climbs past ~47 GB and is OOM-killed (SIGKILL), same class as me_a3_golden (energy.rs) and design §8 risk #5. The ring LOGIC is unchanged by the widen and its CPU-level behavior is proven green at the new width by step/branching/lfsr/chi/sbox + tests/widen_pc_payoff.rs (run_on_cpu==eval) and the (non-balancing) ring_two_body_timing certificate. Re-enable once a streaming/low-intermediate-memory lower_iso lands."]
 fn zero_boundary_vs_bennett_boundary() {
     let plain = &ctx().ring;
     let closed = closed_ctx();
