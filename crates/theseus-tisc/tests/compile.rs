@@ -1385,6 +1385,58 @@ fn mdw_b2_cpu_only_nonzero_mem_routes_system_step_inert() {
     assert_eq!(step_run.regs[1], 0x20 ^ 0xFF, "Xori did not run");
 }
 
+/// A-0 SCRATCH-OPERAND authority gap closure (A-5b scoping Piece 1; step-1
+/// review M7 + roadmap open-Q1): A-0 made scratch (s2..s7) operand-addressable
+/// via the reg∪scratch crossbar, but until now NO real-ring `run_on_cpu`
+/// (step / system_step) had EVER executed a scratch-operand instruction — only
+/// eval-level `decode_execute` (`blocker2_ccnot_uses_scratch_operand…`). This
+/// promotes that to the REAL ring authority: `Ccnot r0, r1, s2` (rt = operand
+/// idx 10 = s2) run through both real rings, `r0 ^= r1 & s2`, everything else
+/// preserved. Closes the "scratch operand never ran on authority" gap.
+#[test]
+fn scratch_operand_ccnot_runs_on_real_ring() {
+    // Ccnot rd=r0, rs=r1, rt=s2 (operand idx 10): r0 ^= r1 & s2.
+    let instrs = vec![Instr::Ccnot { rd: 0, rs: 1, rt: 10 }];
+    let s_max = max_skip_distance(&instrs);
+    // r1=0xFF, s2=0xAA → r0 (0x00) ^= 0xFF & 0xAA = 0xAA. Distinct sentinels
+    // elsewhere so a routing error (reading r2 instead of s2, say) is visible.
+    let mk = |mem: [u8; MEM_WORDS]| StateVals {
+        regs: [0x00, 0xFF, 0x3C, 0x11, 0x22, 0x33, 0x44, 0x55],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: [0x00, 0x00, 0xAA, 0xDE, 0xAD, 0xBE, 0xEF, 0x77],
+        mem,
+    };
+    let check = |got: StateVals, ring: &str| {
+        assert_eq!(
+            got.regs[0], 0xAA,
+            "{ring}: Ccnot r0,r1,s2 must give r0 = r1 & s2 = 0xFF & 0xAA = 0xAA \
+             (a routing bug reading r2=0x3C would give 0xFF&0x3C=0x3C)"
+        );
+        assert_eq!(got.regs[1], 0xFF, "{ring}: rs (r1) preserved");
+        assert_eq!(got.scratch[2], 0xAA, "{ring}: scratch operand s2 preserved");
+        assert_eq!(got.regs[2], 0x3C, "{ring}: r2 (the WRONG operand) untouched");
+        assert_eq!(got.scratch[0], 0, "{ring}: s0 restored");
+        assert_eq!(got.scratch[1], 0, "{ring}: s1 restored");
+        assert_eq!(got.br, 0, "{ring}: BR restored (Ccnot rides rt through BR)");
+    };
+    // Real ring #1 — CPU-only `step(rom)` (mem-quiescent).
+    check(
+        run_rom_on_cpu(&instrs, mk([0; MEM_WORDS]), 1, s_max, theseus_eval::eval)
+            .expect("scratch-operand Ccnot on step ring"),
+        "step",
+    );
+    // Real ring #2 — `system_step` (forced by nonzero init.mem), which must
+    // leave mem inert AND give the identical CpuState result.
+    let mut memnz = [0u8; MEM_WORDS];
+    memnz[0] = 0x9A;
+    let sys = run_rom_on_cpu(&instrs, mk(memnz), 1, s_max, theseus_eval::eval)
+        .expect("scratch-operand Ccnot on system_step ring");
+    check(sys.clone(), "system_step");
+    assert_eq!(sys.mem, memnz, "system_step: mem inert for a CPU-only op");
+}
+
 // ── T6: real-CPU spot-checks (AUTHORITATIVE, #[ignore]) ────────────
 
 #[test]
