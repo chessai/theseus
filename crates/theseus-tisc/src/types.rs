@@ -23,15 +23,144 @@
 use theseus_core::{Type, Value};
 use theseus_netlist::{bits_of, value_from_bits};
 
+// ── Layout — per-program state-layout parameters (B-2.0a) ───────────
+//
+// B-2 (per-program widths) makes the state layout a per-program parameter
+// instead of a global const. B-2.0a introduces the `Layout` struct as the
+// single source of truth for the layout parameters and threads it through
+// the CORE layout computation (`state_ty`/field offsets), while
+// `Layout::default()` reproduces TODAY's fixed layout byte-identically.
+//
+// The public `const`s below (`W`, `NUM_REGS`, …) are RETAINED as thin
+// aliases of `Layout::default()` fields so the ~500 existing const-callers
+// keep compiling unchanged; only the core layout functions gained a
+// `Layout`-parameterized `_with` variant. B-2.0b/B-2.1 then vary the
+// `Layout` per program — nothing in B-2.0a changes behavior.
+
+/// Per-program state-layout parameters.
+///
+/// Every field maps 1:1 onto a former layout `const`. `Layout::default()`
+/// is the shipped fixed layout (byte-identical to the pre-B-2 netlist).
+/// The `w_ctl` field decouples the decoder-reserved control region (s0/s1,
+/// PC operand scratch, the config one-hots) from the data-word width
+/// `w_data`, per the design Q3 resolution — for B-2.0a both are 8.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    /// Data-word width (bits per general register / scratch / memory word,
+    /// and the ALU datapath width).
+    pub w_data: usize,
+    /// Control-region width (the decoder-reserved s0/s1 words: config
+    /// one-hots + PC/fetch operand scratch). Decoupled from `w_data`
+    /// (design Q3-A); B-2.0a keeps `w_ctl == w_data == 8`.
+    pub w_ctl: usize,
+    /// Number of general registers.
+    pub num_regs: usize,
+    /// Number of scratch words.
+    pub num_scratch: usize,
+    /// Number of memory words.
+    pub mem_words: usize,
+    /// PC value width in bits.
+    pub w_pc: usize,
+    /// BR (branch-register / come-from-offset) width in bits.
+    pub w_br: usize,
+}
+
+impl Layout {
+    /// The shipped fixed layout — reproduces the pre-B-2 netlist
+    /// byte-identically (W=8, 8 regs, 8 scratch, 4 mem words, 16-bit PC,
+    /// 8-bit BR, control region width 8).
+    pub const fn default() -> Self {
+        Layout {
+            w_data: 8,
+            w_ctl: 8,
+            num_regs: 8,
+            num_scratch: 8,
+            mem_words: 4,
+            w_pc: 16,
+            w_br: 8,
+        }
+    }
+
+    /// Number of Word-sized fields PC occupies (`⌈w_pc / w_ctl⌉`).
+    pub const fn pc_fields(&self) -> usize {
+        self.w_pc / self.w_ctl
+    }
+
+    /// Number of Word-sized fields BR occupies (`⌈w_br / w_ctl⌉`).
+    pub const fn br_fields(&self) -> usize {
+        self.w_br / self.w_ctl
+    }
+
+    /// PC address space = `2^w_pc`.
+    pub const fn pc_addr_space(&self) -> usize {
+        1 << self.w_pc
+    }
+
+    /// Number of Word-sized fields in CpuState:
+    /// regs + PC_lo + BR_lo + 4 IR bytes + scratch + (PC_fields-1)
+    /// + (BR_fields-1). At the default layout this is 24.
+    pub const fn num_cpu_fields(&self) -> usize {
+        self.num_regs + 1 + 1 + 4 + self.num_scratch + (self.pc_fields() - 1)
+            + (self.br_fields() - 1)
+    }
+
+    /// Total number of Word-sized fields in CpuState (= `num_cpu_fields`).
+    pub const fn num_fields(&self) -> usize {
+        self.num_cpu_fields()
+    }
+
+    /// Total bits in CpuState.
+    pub const fn state_bits(&self) -> usize {
+        self.num_fields() * self.w_data
+    }
+
+    // ── Field index helpers ────────────────────────────────────────
+
+    /// Field index of general register `i`.
+    pub const fn reg_field(&self, i: usize) -> usize {
+        i
+    }
+
+    /// Field index of PC low byte.
+    pub const fn pc_field(&self) -> usize {
+        self.num_regs
+    }
+
+    /// Field index of BR low byte.
+    pub const fn br_field(&self) -> usize {
+        self.num_regs + 1
+    }
+
+    /// Field index of IR byte `k` (0..4).
+    pub const fn ir_byte_field(&self, k: usize) -> usize {
+        self.num_regs + 2 + k
+    }
+
+    /// Field index of scratch word `i`.
+    pub const fn scratch_field(&self, i: usize) -> usize {
+        self.num_regs + 6 + i
+    }
+
+    /// Field index of PC high byte (appended after the scratch words).
+    pub const fn pc_hi_field(&self) -> usize {
+        self.num_regs + 6 + self.num_scratch
+    }
+
+    /// Field index of memory word `i` in the composite carrier.
+    pub const fn mem_field(&self, i: usize) -> usize {
+        self.num_cpu_fields() + i
+    }
+}
+
 /// Number of bits per general register / scratch word / memory word.
-pub const W: usize = 8;
+pub const W: usize = Layout::default().w_data;
 
 /// PC value width (A-6.4 / A-2 widen-PC). Widened from `W` (8) to 16 so
 /// program bodies with `B > 256` can run: the end-of-step update
 /// `PC += BR + 1` is arithmetic mod `2^W_PC`, so the reachable step index
 /// (∝ B) must fit in `W_PC` bits. PC occupies `⌈W_PC / W⌉ = 2` Word8
 /// fields (PC_lo at `PC_FIELD`, PC_hi at `PC_HI_FIELD`).
-pub const W_PC: usize = 16;
+pub const W_PC: usize = Layout::default().w_pc;
 
 /// BR (branch-register / come-from-offset) width. **Stays 8** (minimal
 /// widening, resolves design open-Q #2): the end-of-step update adds BR
@@ -44,27 +173,27 @@ pub const W_PC: usize = 16;
 /// to the 8-bit-PC design; only the *adder* changes (it sign-extends).
 /// This is why "W_BR = 8 suffices" (design §5/§6): an 8-bit BR expresses
 /// every backward offset up to −128 and every forward offset up to +127.
-pub const W_BR: usize = 8;
+pub const W_BR: usize = Layout::default().w_br;
 
 /// Number of Word8 fields PC occupies (`⌈W_PC / W⌉`).
-pub const PC_FIELDS: usize = W_PC / W;
+pub const PC_FIELDS: usize = Layout::default().pc_fields();
 /// Number of Word8 fields BR occupies (`⌈W_BR / W⌉` = 1).
-pub const BR_FIELDS: usize = W_BR / W;
+pub const BR_FIELDS: usize = Layout::default().br_fields();
 
 /// PC address space = `2^W_PC` (was 256). Every wrap / cap / dead-zone
 /// bound routes through this single constant — no scattered `256`s.
-pub const PC_ADDR_SPACE: usize = 1 << W_PC;
+pub const PC_ADDR_SPACE: usize = Layout::default().pc_addr_space();
 
 /// Number of general registers.
-pub const NUM_REGS: usize = 8;
+pub const NUM_REGS: usize = Layout::default().num_regs;
 
 /// Number of scratch words.
-pub const NUM_SCRATCH: usize = 8;
+pub const NUM_SCRATCH: usize = Layout::default().num_scratch;
 
 /// Number of memory words (M-C2 Layer 1, ADR-0046 §3.1).
 /// Parameterized; C1 demonstrated at N ∈ {2,4,8}. Shipped N=4
 /// (the largest N that keeps all tests green without OOM/timeout).
-pub const MEM_WORDS: usize = 4;
+pub const MEM_WORDS: usize = Layout::default().mem_words;
 
 /// Type-safe memory width — makes illegal widths unrepresentable.
 ///
@@ -133,14 +262,14 @@ impl TryFrom<usize> for MemWidth {
 /// *field index*, never by bit-adjacency — see `pc_add_br` / `pc_inc` /
 /// `fetch` in step.rs). BR stays a single byte (W_BR = 8, sign-extended
 /// into PC by the adder), so no BR_hi field is added.
-pub const NUM_CPU_FIELDS: usize = 22 + (PC_FIELDS - 1) + (BR_FIELDS - 1);
+pub const NUM_CPU_FIELDS: usize = Layout::default().num_cpu_fields();
 
 /// Total number of Word8-sized fields in CpuState (= `NUM_CPU_FIELDS`).
 /// The ring step and all non-MEXCH instructions operate on this carrier.
-pub const NUM_FIELDS: usize = NUM_CPU_FIELDS;
+pub const NUM_FIELDS: usize = Layout::default().num_fields();
 
 /// Total bits in CpuState.
-pub const STATE_BITS: usize = NUM_FIELDS * W;
+pub const STATE_BITS: usize = Layout::default().state_bits();
 
 /// Total bits in the composite (CpuState, MemState) carrier.
 pub const COMPOSITE_BITS: usize = (NUM_CPU_FIELDS + MEM_WORDS) * W;
@@ -201,9 +330,15 @@ fn right_nested(types: &[Type]) -> Type {
     }
 }
 
-/// CpuState type: right-nested product of `NUM_CPU_FIELDS` (=24) Word8 fields.
+/// Data-word type for a given layout: right-nested product of `w_data` bits.
+/// At the default layout this is `word8()`.
+pub fn data_word(layout: &Layout) -> Type {
+    flat(layout.w_data)
+}
+
+/// CpuState type for a given `Layout` (core, layout-parameterized).
 ///
-/// Field order (index):
+/// Field order (index), at the default layout (24 fields):
 ///   0..8   = r0..r7    (general registers)
 ///   8      = PC_lo     (bits 0..8 of the 16-bit PC)
 ///   9      = BR        (8-bit branch offset, sign-extended into PC)
@@ -212,17 +347,30 @@ fn right_nested(types: &[Type]) -> Type {
 ///   22     = PC_hi     (bits 8..16 of the 16-bit PC) — appended (A-6.4)
 ///
 /// The ring step and all non-MEXCH instructions operate on this carrier.
-pub fn state_ty() -> Type {
-    let fields: Vec<Type> = (0..NUM_CPU_FIELDS).map(|_| word8()).collect();
+pub fn state_ty_with(layout: &Layout) -> Type {
+    let w = data_word(layout);
+    let fields: Vec<Type> = (0..layout.num_cpu_fields()).map(|_| w.clone()).collect();
     right_nested(&fields)
 }
 
-/// MemState type: right-nested product of `MEM_WORDS` Word8 fields.
+/// CpuState type at the default layout (byte-identical to today).
+pub fn state_ty() -> Type {
+    state_ty_with(&Layout::default())
+}
+
+/// MemState type for a given `Layout`: right-nested product of
+/// `mem_words` data-word fields.
+pub fn mem_state_ty_with(layout: &Layout) -> Type {
+    let w = data_word(layout);
+    let fields: Vec<Type> = (0..layout.mem_words).map(|_| w.clone()).collect();
+    right_nested(&fields)
+}
+
+/// MemState type at the default layout.
 ///
 /// Field order (index): 0..MEM_WORDS = m0..m_{MEM_WORDS-1}.
 pub fn mem_state_ty() -> Type {
-    let fields: Vec<Type> = (0..MEM_WORDS).map(|_| word8()).collect();
-    right_nested(&fields)
+    mem_state_ty_with(&Layout::default())
 }
 
 /// Composite state type: `(CpuState, MemState)` — carrier for `system_step`.
@@ -252,18 +400,18 @@ pub fn system_state_ty() -> Type {
 /// Field index of general register `i` (0..8).
 pub fn reg_field(i: usize) -> usize {
     assert!(i < NUM_REGS);
-    i
+    Layout::default().reg_field(i)
 }
 
 /// Field index of PC low byte (bits 0..8 of the `W_PC`-bit PC).
-pub const PC_FIELD: usize = 8;
+pub const PC_FIELD: usize = Layout::default().pc_field();
 
 /// Field index of BR low byte (bits 0..8 of the `W_BR`-bit BR).
-pub const BR_FIELD: usize = 9;
+pub const BR_FIELD: usize = Layout::default().br_field();
 
 /// Field index of PC high byte (bits 8..16). Appended after the scratch
 /// words so the low-index layout is unchanged (A-6.4 widen-PC).
-pub const PC_HI_FIELD: usize = 22;
+pub const PC_HI_FIELD: usize = Layout::default().pc_hi_field();
 
 /// The Word8 field index of PC byte `k` (`k=0` → low, `k=1` → high).
 pub const fn pc_byte_field(k: usize) -> usize {
@@ -275,13 +423,13 @@ pub const fn pc_byte_field(k: usize) -> usize {
 }
 
 /// Field index of IR byte 0 (bits 0..8 of the 32-bit IR).
-pub const IR_B0_FIELD: usize = 10;
+pub const IR_B0_FIELD: usize = Layout::default().ir_byte_field(0);
 /// Field index of IR byte 1 (bits 8..16).
-pub const IR_B1_FIELD: usize = 11;
+pub const IR_B1_FIELD: usize = Layout::default().ir_byte_field(1);
 /// Field index of IR byte 2 (bits 16..24).
-pub const IR_B2_FIELD: usize = 12;
+pub const IR_B2_FIELD: usize = Layout::default().ir_byte_field(2);
 /// Field index of IR byte 3 (bits 24..32).
-pub const IR_B3_FIELD: usize = 13;
+pub const IR_B3_FIELD: usize = Layout::default().ir_byte_field(3);
 
 /// Legacy alias: IR byte 0 (was `IR_lo` of the 16-bit IR).
 pub const IR_LO_FIELD: usize = IR_B0_FIELD;
@@ -291,13 +439,13 @@ pub const IR_HI_FIELD: usize = IR_B1_FIELD;
 /// Field index of scratch word `i` (0..8).
 pub fn scratch_field(i: usize) -> usize {
     assert!(i < NUM_SCRATCH);
-    14 + i
+    Layout::default().scratch_field(i)
 }
 
 /// Field index of memory word `i` (0..MEM_WORDS).
 pub fn mem_field(i: usize) -> usize {
     assert!(i < MEM_WORDS);
-    NUM_CPU_FIELDS + i
+    Layout::default().mem_field(i)
 }
 
 // ── StateVals encode / decode ──────────────────────────────────────
