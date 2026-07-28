@@ -877,6 +877,48 @@ fn poc_b1_perblock_measure() {
     eprintln!("B1 blocks SUM balanced cells = {total} (vs whole decode_execute 834940 post-B1.1; remainder = shared fetch/pc/park plumbing)");
 }
 
+/// B-2.1c: quantify the reduced-`w_data` decode win (`decode_execute` is 67.7%
+/// of the step, so its shrink drives step_j). Balanced `decode_execute` cells
+/// at the default layout (w_data=8, num_regs=8) vs w_data=4 alone (isolates the
+/// data-word/ALU narrowing) vs the combined POC layout (w_data=4, num_regs=4).
+/// fib/me_a3 are UNCHANGED (fib is 8-bit → w_data=8 → byte-identical).
+#[test]
+fn poc_b21c_data_word_measure() {
+    use theseus_tisc::types::Layout;
+    let de = |l: &Layout| theseus_tisc::decoder::decode_execute_l(l);
+    let default = Layout::default();
+    let w4 = Layout {
+        w_data: 4,
+        ..Layout::default()
+    };
+    let w4r4 = Layout {
+        w_data: 4,
+        num_regs: 4,
+        ..Layout::default()
+    };
+    let cells = |iso: &theseus_core::Iso| -> usize {
+        instruction_energy(iso, char_db(), T_RAMP)
+            .expect("decode energy")
+            .by_kind
+            .values()
+            .map(|k| k.count)
+            .sum()
+    };
+    let (c8, c4, c4r4) = {
+        let _g = LOWER_GATE.lock().unwrap();
+        (cells(&de(&default)), cells(&de(&w4)), cells(&de(&w4r4)))
+    };
+    eprintln!(
+        "B-2.1c decode_execute BALANCED cells: default(w_data=8) {c8} → w_data=4 {c4} \
+         (−{:.1}%) → w_data=4+num_regs=4 {c4r4} (−{:.1}% total); decode is ~68% of the step \
+         so step_j drops roughly proportionally for narrow-data programs.",
+        (c8 - c4) as f64 / c8 as f64 * 100.0,
+        (c8 - c4r4) as f64 / c8 as f64 * 100.0
+    );
+    assert!(c4 < c8, "reduced w_data must shrink decode_execute ({c4} >= {c8})");
+    assert!(c4r4 < c4, "reduced num_regs shrinks it further ({c4r4} >= {c4})");
+}
+
 // ── me_a5: range (negative) ─────────────────────────────────────────
 
 #[test]
