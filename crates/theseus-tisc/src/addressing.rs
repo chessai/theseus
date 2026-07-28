@@ -10,14 +10,37 @@
 //! 3. Applies the inverse permutation to restore field order.
 //!
 //! All routing is zero-cell (pure wire permutation at the field level).
+//!
+//! ## Mixed-width fields (B-2.1c, Option A)
+//!
+//! Under the per-program data-word width `w_data`, CpuState is a **mixed-width**
+//! product: DATA fields (registers, `s2..`, memory) are `flat(w_data)` while
+//! CONTROL fields (`s0`, `s1`, PC, BR, IR) are `flat(w_ctl = 8)`. Every field
+//! router therefore carries a **per-field width vector** so its `SwapProd` /
+//! `Assoc*Prod` nodes are typed on the field's real width, not a uniform
+//! `word8()`. The uniform `fields`/`swap_field_adj`/`split_fields`/
+//! `route_to_head_n`/`at_fields_n` entry points are thin wrappers that pass a
+//! `[8; n]` width vector, so at the default layout the produced iso is exactly
+//! the shipped `word8()`-typed one — **byte-identical**.
 
 use crate::plumbing::seq_balanced;
-use crate::types::{word8, NUM_FIELDS};
+use crate::types::{flat, word8, NUM_FIELDS};
 use theseus_core::{Iso, Type};
 
 // ── Right-nested product helpers (field-level, not bit-level) ──────
 
-/// Right-nested product of `n` Word8 fields.
+/// Right-nested product of fields with the given per-field bit-widths.
+/// `fields(n) == fields_typed(&[8; n])` (byte-identical).
+pub fn fields_typed(widths: &[usize]) -> Type {
+    assert!(!widths.is_empty());
+    if widths.len() == 1 {
+        flat(widths[0])
+    } else {
+        Type::prod(flat(widths[0]), fields_typed(&widths[1..]))
+    }
+}
+
+/// Right-nested product of `n` Word8 fields (uniform-width shorthand).
 pub fn fields(n: usize) -> Type {
     assert!(n >= 1);
     let w = word8();
@@ -28,37 +51,46 @@ pub fn fields(n: usize) -> Type {
     }
 }
 
-/// Swap adjacent fields at positions `k` and `k+1` in `fields(n)`.
-/// Zero cells: pure product-structure plumbing.
-fn swap_field_adj(n: usize, k: usize) -> Iso {
+/// Swap adjacent fields at positions `k` and `k+1` in `fields_typed(widths)`.
+/// Zero cells: pure product-structure plumbing on the two fields' real types.
+fn swap_field_adj_typed(widths: &[usize], k: usize) -> Iso {
+    let n = widths.len();
     assert!(k + 1 < n);
-    let w = word8();
     if k > 0 {
-        return Iso::times(Iso::Id(w), swap_field_adj(n - 1, k - 1));
+        // Peel the head field (width widths[0]) as identity, recurse on the tail.
+        return Iso::times(
+            Iso::Id(flat(widths[0])),
+            swap_field_adj_typed(&widths[1..], k - 1),
+        );
     }
-    // k == 0: swap the first two fields
+    // k == 0: swap the first two fields (types flat(widths[0]), flat(widths[1])).
+    let a = flat(widths[0]);
+    let b = flat(widths[1]);
     if n == 2 {
-        Iso::SwapProd(w.clone(), w)
+        Iso::SwapProd(a, b)
     } else {
-        let rest = fields(n - 2);
+        let rest = fields_typed(&widths[2..]);
         // (A x (B x R)) -> ((A x B) x R) -> ((B x A) x R) -> (B x (A x R))
         Iso::seq(
             Iso::seq(
-                Iso::AssocLProd(w.clone(), w.clone(), rest.clone()),
-                Iso::times(Iso::SwapProd(w.clone(), w.clone()), Iso::Id(rest.clone())),
+                Iso::AssocLProd(a.clone(), b.clone(), rest.clone()),
+                Iso::times(Iso::SwapProd(a.clone(), b.clone()), Iso::Id(rest.clone())),
             ),
-            Iso::AssocRProd(w.clone(), w, rest),
+            Iso::AssocRProd(b, a, rest),
         )
     }
 }
 
 /// Build the routing iso that moves fields at `indices` (in order) to
-/// positions 0, 1, 2, ... at the head of a product of `n_fields` Word8
-/// fields, using adjacent swaps.
-/// Returns the routing iso and the inverse is just `Iso::sym(route)`.
-pub fn route_to_head_n(indices: &[usize], n_fields: usize) -> Iso {
-    let n = n_fields;
+/// positions 0, 1, 2, ... at the head of a product whose per-field widths are
+/// `widths`, using adjacent swaps. Returns the routing iso; its inverse is
+/// `Iso::sym(route)`. Also returns the **permuted width vector** after routing
+/// (so callers can reshape/split against the post-routing field order).
+pub fn route_to_head_typed(indices: &[usize], widths: &[usize]) -> (Iso, Vec<usize>) {
+    let n = widths.len();
     let mut arr: Vec<usize> = (0..n).collect();
+    // `cur` tracks the live per-field width vector as swaps are applied.
+    let mut cur: Vec<usize> = widths.to_vec();
     let mut swaps: Vec<Iso> = Vec::new();
 
     for (slot, &orig) in indices.iter().enumerate() {
@@ -68,60 +100,65 @@ pub fn route_to_head_n(indices: &[usize], n_fields: usize) -> Iso {
             .expect("field index in range");
         assert!(p >= slot, "routing: field already consumed or out of order");
         for k in (slot..p).rev() {
-            swaps.push(swap_field_adj(n, k));
+            swaps.push(swap_field_adj_typed(&cur, k));
             arr.swap(k, k + 1);
+            cur.swap(k, k + 1);
         }
     }
 
-    if swaps.is_empty() {
-        Iso::Id(fields(n))
+    let route = if swaps.is_empty() {
+        Iso::Id(fields_typed(widths))
     } else {
         seq_balanced(swaps)
-    }
+    };
+    (route, cur)
 }
 
-/// `fields(k+r) <-> fields(k) x fields(r)`: split the first k fields
-/// out of the right-nested product as a separate group.
-///
-/// fields(n) is right-nested: `W x (W x (... x W))`. To apply an
-/// operand iso on the first k fields, we need them grouped as `fields(k)`
-/// on the left of a product with `fields(r)` on the right.
-pub fn split_fields(k: usize, r: usize) -> Iso {
-    assert!(k >= 1 && r >= 1);
-    let w = word8();
-    if k == 1 {
-        // fields(1+r) = W x fields(r) = fields(1) x fields(r). Done.
-        Iso::Id(fields(1 + r))
+/// Uniform-width `route_to_head` (all fields Word8).
+pub fn route_to_head_n(indices: &[usize], n_fields: usize) -> Iso {
+    route_to_head_typed(indices, &vec![8usize; n_fields]).0
+}
+
+/// `fields_typed(left ++ right) <-> fields_typed(left) x fields_typed(right)`:
+/// split the first `left.len()` fields out of the right-nested product as a
+/// separate group. Widths are honored so the produced `Assoc*Prod` nodes are
+/// typed on the real field types.
+pub fn split_fields_typed(left: &[usize], right: &[usize]) -> Iso {
+    assert!(!left.is_empty() && !right.is_empty());
+    let head = flat(left[0]);
+    if left.len() == 1 {
+        // fields(head ++ right) already begins with `head`; done.
+        Iso::Id(fields_typed(&[left, right].concat()))
     } else {
-        // fields(k+r) = W x fields((k-1)+r)
-        // -> W x (fields(k-1) x fields(r))     [recursive split]
-        // -> (W x fields(k-1)) x fields(r)     [AssocL]
-        // = fields(k) x fields(r)
+        // fields(k+r) = head x fields((k-1) ++ r)
+        //  -> head x (fields(k-1) x fields(r))   [recursive split]
+        //  -> (head x fields(k-1)) x fields(r)   [AssocL]
+        //  = fields(k) x fields(r)
         Iso::seq(
-            Iso::times(Iso::Id(w.clone()), split_fields(k - 1, r)),
-            Iso::AssocLProd(w, fields(k - 1), fields(r)),
+            Iso::times(Iso::Id(head.clone()), split_fields_typed(&left[1..], right)),
+            Iso::AssocLProd(head, fields_typed(&left[1..]), fields_typed(right)),
         )
     }
 }
 
-/// Lift an operand-level iso at given field indices within a product of
-/// `n_fields` Word8 fields.
+/// Uniform-width `split_fields` (all fields Word8).
+pub fn split_fields(k: usize, r: usize) -> Iso {
+    split_fields_typed(&vec![8usize; k], &vec![8usize; r])
+}
+
+/// Lift an operand-level iso at given field indices within a product whose
+/// per-field widths are `widths`.
 ///
-/// `op` operates on a right-nested product of `indices.len()` Word8 fields.
-/// The result is an iso on `fields(n_fields)` that:
-/// - routes the addressed fields to the head,
-/// - reshapes to `fields(k) x fields(rest)`,
-/// - applies `op x Id(rest)`,
-/// - reshapes back,
-/// - routes back.
-///
-/// All unaddressed fields pass through as identity.
-pub fn at_fields_n(op: Iso, indices: &[usize], n_fields: usize) -> Iso {
-    let n = n_fields;
+/// `op` operates on `fields_typed(addressed-widths)` (the addressed fields in
+/// `indices` order). The result is an iso on `fields_typed(widths)` that
+/// routes the addressed fields to the head, reshapes to
+/// `fields_typed(addressed) x fields_typed(rest)`, applies `op x Id(rest)`,
+/// and reshapes/routes back. All unaddressed fields pass through as identity.
+pub fn at_fields_typed(op: Iso, indices: &[usize], widths: &[usize]) -> Iso {
+    let n = widths.len();
     let k = indices.len();
     assert!(k >= 1 && k <= n);
 
-    // Validate indices are distinct and in range
     for &idx in indices {
         assert!(idx < n, "field index {idx} out of range");
     }
@@ -131,23 +168,29 @@ pub fn at_fields_n(op: Iso, indices: &[usize], n_fields: usize) -> Iso {
         }
     }
 
-    let route = route_to_head_n(indices, n_fields);
-    let rest_count = n - k;
+    let (route, routed_widths) = route_to_head_typed(indices, widths);
+    // After routing, the first `k` fields are the addressed ones (in order),
+    // the remaining are the rest (their relative order preserved).
+    let addressed = &routed_widths[..k];
+    let rest = &routed_widths[k..];
+    let rest_count = rest.len();
 
     if rest_count == 0 {
-        // op covers all fields, no rest
         Iso::seq(Iso::seq(route.clone(), op), Iso::sym(route))
     } else if k == 1 {
-        // No reshape needed: fields(n) = W x fields(n-1), op : W <-> W
-        let lifted = Iso::times(op, Iso::Id(fields(rest_count)));
+        let lifted = Iso::times(op, Iso::Id(fields_typed(rest)));
         Iso::seq(Iso::seq(route.clone(), lifted), Iso::sym(route))
     } else {
-        // Reshape: fields(n) <-> fields(k) x fields(rest)
-        let reshape = split_fields(k, rest_count);
-        let apply = Iso::times(op, Iso::Id(fields(rest_count)));
+        let reshape = split_fields_typed(addressed, rest);
+        let apply = Iso::times(op, Iso::Id(fields_typed(rest)));
         let inner = Iso::seq(Iso::seq(reshape.clone(), apply), Iso::sym(reshape));
         Iso::seq(Iso::seq(route.clone(), inner), Iso::sym(route))
     }
+}
+
+/// Uniform-width `at_fields_n` (all `n_fields` fields Word8).
+pub fn at_fields_n(op: Iso, indices: &[usize], n_fields: usize) -> Iso {
+    at_fields_typed(op, indices, &vec![8usize; n_fields])
 }
 
 /// Lift an operand-level iso to State level at given field indices.

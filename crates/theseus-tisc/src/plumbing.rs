@@ -155,12 +155,14 @@ pub(crate) fn gate_at(n: usize, wires: &[usize], prim: Iso) -> Iso {
     Iso::seq(Iso::seq(route.clone(), head_k(n, k, prim)), Iso::sym(route))
 }
 
-/// Transpositions realizing a fixed left-rotation-by-`s` of 8 wire slots.
-pub(crate) fn rot_transpositions(s: usize) -> Vec<(usize, usize)> {
-    let mut arr: Vec<usize> = (0..8).collect();
+/// Transpositions realizing a fixed left-rotation-by-`s` of `width` wire
+/// slots (B-2.1c: was a hardcoded 8-slot rotate). `rot_transpositions(s, 8)`
+/// reproduces the shipped 8-slot rotator exactly (byte-identical).
+pub(crate) fn rot_transpositions(s: usize, width: usize) -> Vec<(usize, usize)> {
+    let mut arr: Vec<usize> = (0..width).collect();
     let mut out = Vec::new();
-    for j in 0..8 {
-        let want = (j + 8 - s) % 8;
+    for j in 0..width {
+        let want = (j + width - (s % width)) % width;
         let p = arr.iter().position(|&x| x == want).expect("bit present");
         if p != j {
             out.push((j, p));

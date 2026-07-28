@@ -74,7 +74,7 @@ use theseus_core::Iso;
 
 use crate::decoder::{self, cnot_prim, on_fields_l, toffoli_prim, Op};
 use crate::plumbing::{at_wire, gate_at, not_iso, seq_balanced};
-use crate::types::{state_ty, Layout, W_PC};
+use crate::types::{Layout, W_PC};
 
 // ── Fetch (narrow-A, A-6.4) ────────────────────────────────────────
 //

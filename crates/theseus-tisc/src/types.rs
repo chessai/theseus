@@ -148,9 +148,17 @@ impl Layout {
         self.num_cpu_fields()
     }
 
-    /// Total bits in CpuState.
+    /// Total bits in CpuState. Under the mixed-width carrier (Option A) this
+    /// is `Σ field_width(idx)` over all CPU fields, NOT `num_fields *
+    /// w_data`; at the default layout (all fields 8-wide) the two agree.
     pub const fn state_bits(&self) -> usize {
-        self.num_fields() * self.w_data
+        let mut total = 0;
+        let mut i = 0;
+        while i < self.num_cpu_fields() {
+            total += self.field_width(i);
+            i += 1;
+        }
+        total
     }
 
     // ── Field index helpers ────────────────────────────────────────
@@ -188,6 +196,47 @@ impl Layout {
     /// Field index of memory word `i` in the composite carrier.
     pub const fn mem_field(&self, i: usize) -> usize {
         self.num_cpu_fields() + i
+    }
+
+    /// The bit-width of CpuState/MemState field `idx` under Option A
+    /// (the mixed-width carrier, design Q1). This is the single point that
+    /// decides, per field, whether it is a **data** word (`w_data`) or a
+    /// **control** word (`w_ctl`):
+    ///
+    /// - general registers `r0..`, operand-scratch `s2..`, and memory words
+    ///   are DATA → `w_data` (they hold `Flat(w_data)` values and are the
+    ///   operand space the crossbar swaps within);
+    /// - `s0` (operand-A buffer + decode workspace), `s1` (config one-hots +
+    ///   predicate), PC bytes, BR, and the four IR bytes are CONTROL →
+    ///   `w_ctl` (the fixed 8-bit control region, per Option A / DF-2).
+    ///
+    /// At `Layout::default()` (`w_data == w_ctl == 8`) every field is 8 wide,
+    /// so `state_ty_with` and every width-aware router collapse to the shipped
+    /// uniform `word8()` machinery — byte-identical.
+    pub const fn field_width(&self, idx: usize) -> usize {
+        // Registers r0..r{num_regs-1}: DATA.
+        if idx < self.num_regs {
+            return self.w_data;
+        }
+        // Scratch words: s0/s1 are CONTROL, s2.. are DATA operand space.
+        let s0 = self.scratch_field(0);
+        if idx >= s0 && idx < s0 + self.num_scratch {
+            let s = idx - s0;
+            return if s <= 1 { self.w_ctl } else { self.w_data };
+        }
+        // Memory words (composite carrier): DATA.
+        if idx >= self.num_cpu_fields() {
+            return self.w_data;
+        }
+        // Everything else in the CPU region — PC bytes, BR, IR bytes — CONTROL.
+        self.w_ctl
+    }
+
+    /// The per-field width vector for the whole CpuState product
+    /// (`num_cpu_fields()` entries), used to drive the width-aware field
+    /// routers. At the default layout this is `[8; 24]`.
+    pub fn cpu_field_widths(&self) -> Vec<usize> {
+        (0..self.num_cpu_fields()).map(|i| self.field_width(i)).collect()
     }
 }
 
@@ -387,8 +436,13 @@ pub fn data_word(layout: &Layout) -> Type {
 ///
 /// The ring step and all non-MEXCH instructions operate on this carrier.
 pub fn state_ty_with(layout: &Layout) -> Type {
-    let w = data_word(layout);
-    let fields: Vec<Type> = (0..layout.num_cpu_fields()).map(|_| w.clone()).collect();
+    // Mixed-width carrier (Option A / B-2.1c): each field takes its own
+    // `field_width` — DATA fields (regs, s2.., mem) are `flat(w_data)`,
+    // CONTROL fields (s0, s1, PC, BR, IR) are `flat(w_ctl)`. At the default
+    // layout every field is `flat(8) = word8()`, so this is byte-identical.
+    let fields: Vec<Type> = (0..layout.num_cpu_fields())
+        .map(|i| flat(layout.field_width(i)))
+        .collect();
     right_nested(&fields)
 }
 
@@ -555,7 +609,8 @@ impl StateVals {
     /// helpers: r0..r{num_regs-1}, PC_lo, BR, IR_b0..b3, s0..s{num_scratch-1},
     /// PC_hi. `w_data` is 8 in B-2.1b so each word is a full byte.
     pub fn encode_with(&self, layout: &Layout) -> Value {
-        assert_eq!(layout.w_data, W, "encode_with: B-2.1b keeps w_data == 8");
+        assert!(layout.w_data <= W, "encode_with: w_data must be ≤ 8");
+        assert_eq!(layout.w_ctl, W, "encode_with: w_ctl is the fixed 8-bit control region");
         // Dropped (un-named) registers/scratch must be zero — the reduced
         // state cannot represent them, and the compiler only shrinks past
         // registers it proved un-named.
@@ -569,18 +624,40 @@ impl StateVals {
                 assert_eq!(s, 0, "encode_with: dropped scratch s{i} must be 0, got {s:#04x}");
             }
         }
+        // At a reduced `w_data`, a DATA word (register / s2..) may only carry
+        // `w_data` bits — the high bits are un-representable and must be 0.
+        let wd = layout.w_data;
+        if wd < W {
+            let mask: u8 = ((1u16 << wd) - 1) as u8;
+            for (i, &r) in self.regs.iter().take(layout.num_regs).enumerate() {
+                assert_eq!(r & !mask, 0, "encode_with: reg r{i}={r:#04x} exceeds w_data={wd}");
+            }
+            // s0/s1 are CONTROL (8-bit); s2.. are DATA (w_data).
+            for (i, &s) in self.scratch.iter().take(layout.num_scratch).enumerate() {
+                if i >= 2 {
+                    assert_eq!(s & !mask, 0, "encode_with: scratch s{i}={s:#04x} exceeds w_data={wd}");
+                }
+            }
+        }
         let ty = state_ty_with(layout);
         let mut all_bits: Vec<bool> = Vec::with_capacity(layout.state_bits());
+        // Fields in `field_width` order: r0..r{nr-1} (w_data), PC_lo (w_ctl),
+        // BR (w_ctl), IR_b0..b3 (w_ctl), s0..s{ns-1} (s0/s1 w_ctl, s2.. w_data),
+        // PC_hi (w_ctl).
         for &r in self.regs.iter().take(layout.num_regs) {
-            push_u8_bits(&mut all_bits, r);
+            push_n_bits(&mut all_bits, r, wd);
         }
-        push_u8_bits(&mut all_bits, self.pc as u8); // PC_lo
-        push_u8_bits(&mut all_bits, self.br); // BR
-        push_ir_bits(&mut all_bits, self.ir); // IR_b0..IR_b3
-        for &s in self.scratch.iter().take(layout.num_scratch) {
-            push_u8_bits(&mut all_bits, s);
+        push_u8_bits(&mut all_bits, self.pc as u8); // PC_lo (w_ctl=8)
+        push_u8_bits(&mut all_bits, self.br); // BR (w_ctl=8)
+        push_ir_bits(&mut all_bits, self.ir); // IR_b0..IR_b3 (w_ctl=8)
+        for (i, &s) in self.scratch.iter().take(layout.num_scratch).enumerate() {
+            if i <= 1 {
+                push_u8_bits(&mut all_bits, s); // s0/s1 CONTROL (8-bit)
+            } else {
+                push_n_bits(&mut all_bits, s, wd); // s2.. DATA (w_data)
+            }
         }
-        push_u8_bits(&mut all_bits, (self.pc >> 8) as u8); // PC_hi (appended)
+        push_u8_bits(&mut all_bits, (self.pc >> 8) as u8); // PC_hi (w_ctl=8)
         value_from_bits(&ty, &all_bits).expect("StateVals::encode_with")
     }
 
@@ -588,25 +665,37 @@ impl StateVals {
     /// back to a full `StateVals`. Registers/scratch beyond the reduced
     /// counts read back as zero (they were never plumbed). Memory is zero.
     pub fn decode_with(layout: &Layout, val: &Value) -> Self {
-        assert_eq!(layout.w_data, W, "decode_with: B-2.1b keeps w_data == 8");
+        assert!(layout.w_data <= W, "decode_with: w_data must be ≤ 8");
+        assert_eq!(layout.w_ctl, W, "decode_with: w_ctl is the fixed 8-bit control region");
         let ty = state_ty_with(layout);
         let all_bits = bits_of(val, &ty).expect("StateVals::decode_with");
         assert_eq!(all_bits.len(), layout.state_bits());
 
+        // Bit offset of a CPU field = Σ field_width(<idx) (mixed-width carrier).
+        let field_off = |idx: usize| -> usize {
+            (0..idx).map(|j| layout.field_width(j)).sum()
+        };
+        let wd = layout.w_data;
+
         let mut regs = [0u8; NUM_REGS];
         for (i, r) in regs.iter_mut().enumerate().take(layout.num_regs) {
-            *r = read_u8_bits(&all_bits, layout.reg_field(i) * W);
+            *r = read_n_bits(&all_bits, field_off(layout.reg_field(i)), wd);
         }
         let pc = {
-            let lo = read_u8_bits(&all_bits, layout.pc_field() * W);
-            let hi = read_u8_bits(&all_bits, layout.pc_hi_field() * W);
+            let lo = read_u8_bits(&all_bits, field_off(layout.pc_field()));
+            let hi = read_u8_bits(&all_bits, field_off(layout.pc_hi_field()));
             u16::from(lo) | (u16::from(hi) << 8)
         };
-        let br = read_u8_bits(&all_bits, layout.br_field() * W);
-        let ir = read_ir_bits(&all_bits, layout.ir_byte_field(0) * W);
+        let br = read_u8_bits(&all_bits, field_off(layout.br_field()));
+        let ir = read_ir_bits(&all_bits, field_off(layout.ir_byte_field(0)));
         let mut scratch = [0u8; NUM_SCRATCH];
         for (i, s) in scratch.iter_mut().enumerate().take(layout.num_scratch) {
-            *s = read_u8_bits(&all_bits, layout.scratch_field(i) * W);
+            let off = field_off(layout.scratch_field(i));
+            *s = if i <= 1 {
+                read_u8_bits(&all_bits, off) // s0/s1 CONTROL (8-bit)
+            } else {
+                read_n_bits(&all_bits, off, wd) // s2.. DATA (w_data)
+            };
         }
 
         StateVals {
@@ -804,6 +893,25 @@ fn push_u8_bits(bits: &mut Vec<bool>, val: u8) {
     for i in 0..W {
         bits.push((val >> i) & 1 == 1);
     }
+}
+
+/// Push the low `w` bits of `val` (LSB first). For the mixed-width carrier:
+/// DATA words push `w_data` bits, CONTROL words push `w_ctl = 8`.
+fn push_n_bits(bits: &mut Vec<bool>, val: u8, w: usize) {
+    for i in 0..w {
+        bits.push((val >> i) & 1 == 1);
+    }
+}
+
+/// Read a `w`-bit word (LSB first) at `offset` back into a `u8` (high bits 0).
+fn read_n_bits(bits: &[bool], offset: usize, w: usize) -> u8 {
+    let mut val = 0u8;
+    for i in 0..w {
+        if bits[offset + i] {
+            val |= 1 << i;
+        }
+    }
+    val
 }
 
 /// Read a `W_PC`-bit PC value split across `PC_FIELD` (low byte) and

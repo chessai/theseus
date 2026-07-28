@@ -203,7 +203,7 @@ fn rotl_operand() -> Iso {
     let mut cascade: Vec<Iso> = Vec::new();
     for k in 0..3 {
         let ctrl = W + k;
-        for (i, j) in rot_transpositions(1 << k) {
+        for (i, j) in rot_transpositions(1 << k, W) {
             cascade.push(fredkin_at(n, ctrl, i, j));
         }
     }

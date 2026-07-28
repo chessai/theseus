@@ -244,14 +244,42 @@ pub fn on_fields_n(field_idxs: &[usize], gates: Vec<Iso>, n_fields: usize) -> Is
     at_fields_n(core, field_idxs, n_fields)
 }
 
-/// Lift a list of flat-wire gates over the given CpuState fields of `layout`:
-/// within the core, field-list slot `j`, bit `i` is wire `w_data*j + i`.
-/// Equivalent to `on_fields_n(field_idxs, gates, layout.num_fields())`.
+/// Lift a list of flat-wire gates over the given CpuState fields of `layout`,
+/// **honoring the mixed-width carrier** (B-2.1c). Each addressed field-list
+/// slot `j` occupies `layout.field_width(field_idxs[j])` wires, laid at the
+/// running offset `Σ_{i<j} width(field_idxs[i])`. The gate `wires` must be
+/// expressed against that same running-offset layout (the ALU cores derive
+/// their operand/predicate bases from the addressed fields' widths — see
+/// `opd0`/`pred3`).
 ///
-/// B-2.1a: the CORE layout-parameterized `on_fields`. The zero-arg
-/// [`on_fields`] delegates at `Layout::default()`.
+/// At `Layout::default()` (all fields Word8) the offsets are `8·j` and the
+/// flatten is `k × word8()`, so this is byte-identical to the shipped
+/// `on_fields_n(field_idxs, gates, num_fields())`.
 pub(crate) fn on_fields_l(layout: &Layout, field_idxs: &[usize], gates: Vec<Iso>) -> Iso {
-    on_fields_n(field_idxs, gates, layout.num_fields())
+    use crate::addressing::{at_fields_typed, fields_typed};
+    let addressed_widths: Vec<usize> =
+        field_idxs.iter().map(|&f| layout.field_width(f)).collect();
+    let n: usize = addressed_widths.iter().sum();
+    let fl = flatten(&fields_typed(&addressed_widths));
+    let core = Iso::seq(fl.clone(), Iso::seq(seq_list(n, gates), Iso::sym(fl)));
+    at_fields_typed(core, field_idxs, &layout.cpu_field_widths())
+}
+
+/// The running wire-base of each addressed field slot for [`on_fields_l`]:
+/// slot `j` starts at `Σ_{i<j} field_width(field_idxs[i])`. A gate builder
+/// that lays wires against `on_fields_l` MUST derive its per-slot bit
+/// positions from these bases (NOT from a uniform `w·j`), so a mixed-width
+/// field product (e.g. `[reg(w_data), s0(w_ctl), s1(w_ctl)]`) is addressed
+/// correctly. At the default layout every base is `8·j` (byte-identical).
+/// Returns `(bases, total_wires)`.
+fn field_bases(layout: &Layout, field_idxs: &[usize]) -> (Vec<usize>, usize) {
+    let mut bases = Vec::with_capacity(field_idxs.len());
+    let mut off = 0usize;
+    for &f in field_idxs {
+        bases.push(off);
+        off += layout.field_width(f);
+    }
+    (bases, off)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -298,10 +326,21 @@ pub const I_RD: RegSel = regsel([20, 21, 22, 23, 24]);
 /// control bit at `(ctrl_field, ctrl_bit)` is set. 8 K1 Fredkins; the
 /// control threads through each cell (no fanout).
 fn ctrl_word_swap(layout: &Layout, ctrl_field: usize, ctrl_bit: usize, fa: usize, fb: usize) -> Iso {
-    let w = layout.w_data;
-    let n = 3 * w;
+    // Mixed-width safe (B-2.1c): `[ctrl_field, fa, fb]` may span the width
+    // boundary — the operand crossbar swaps two DATA words (both `w_data`),
+    // but `fetch_rs_fmt_gated` swaps a DATA register (`w_data`) with s0
+    // (`w_ctl`). Derive each field's wire base from its real width and swap
+    // only the low `min(width(fa), width(fb))` bits: for the reg↔s0 boundary
+    // that is the `w_data` operand bits, ZERO-EXTENDED into s0's low `w_data`
+    // bits (s0's high `w_ctl−w_data` bits stay 0 — they carry no operand).
+    // `ctrl_bit` must be within the control field's width.
+    let (bases, n) = field_bases(layout, &[ctrl_field, fa, fb]);
+    let (c0, a0, b0) = (bases[0], bases[1], bases[2]);
+    let wa = layout.field_width(fa);
+    let wb = layout.field_width(fb);
+    let w = wa.min(wb);
     let gates = (0..w)
-        .map(|i| gate_at(n, &[ctrl_bit, w + i, 2 * w + i], fredkin_prim()))
+        .map(|i| gate_at(n, &[c0 + ctrl_bit, a0 + i, b0 + i], fredkin_prim()))
         .collect();
     on_fields_l(layout, &[ctrl_field, fa, fb], gates)
 }
@@ -663,21 +702,24 @@ fn i_pred(op: u8) -> Vec<(usize, bool)> {
 // Gated operation cores
 // ══════════════════════════════════════════════════════════════════════
 
-// Standard 3-field core [target=r0-slot, s0, s1]: target wires 0..w_data,
-// operand wires w_data..2·w_data, predicate wire 2·w_data. At the default
-// layout (w_data = 8) these are 0 / 8 / 16. B-2.1a derives them from
-// `layout.w_data` via `tgt0/opd0/pred3`.
+// Standard 3-field core [target=r0-slot, s0, s1]. Under the MIXED-width
+// carrier (B-2.1c) the three fields have DIFFERENT widths: target = r0-slot
+// (`w_data`), operand = s0 (`w_ctl`), predicate = s1 (`w_ctl`). So the running
+// wire bases are: target 0, operand `w_data`, predicate `w_data + w_ctl`
+// (NOT `2·w_data`). At the default layout (`w_data = w_ctl = 8`) these are
+// 0 / 8 / 16 — byte-identical.
 
-/// Standard 3-field-core wire offsets for a given data width `w`
-/// (`[target=r0-slot, s0, s1]`): target base 0, operand base `w`, predicate `2w`.
-const fn tgt0(_w: usize) -> usize {
-    0
-}
-const fn opd0(w: usize) -> usize {
-    w
-}
-const fn pred3(w: usize) -> usize {
-    2 * w
+/// Wire bases + total wire count for the standard `[r0-slot, s0, s1]` core of
+/// `layout`: returns `(n, tgt0, opd0, pred0)`. The predicate is s1's bit 0, so
+/// a config one-hot `k` lands at `pred0 + k`. The ALU cores loop `0..w_data`
+/// over the DATA operand bits at `tgt0`/`opd0`; s0/s1's high `w_ctl−w_data`
+/// bits are inert (zero-extended operand).
+fn std_bases(layout: &Layout) -> (usize, usize, usize, usize) {
+    let (bases, n) = field_bases(
+        layout,
+        &[layout.reg_field(0), layout.scratch_field(0), layout.scratch_field(1)],
+    );
+    (n, bases[0], bases[1], bases[2])
 }
 
 /// The Takahashi–Kunihiro zero-ancilla in-place adder gate list on
@@ -749,23 +791,27 @@ fn gated_xor_gates_w(w: usize, n: usize, pred: usize, t0: usize, s0: usize) -> V
         .collect()
 }
 
-/// Gated barrel rotate-left of the `w` target wires `t0..t0+w` by the 3-bit
-/// amount whose bit `k` is at wire `ctrl(k)`, all gated on `pred`.
+/// Gated barrel rotate-left of the `w` target wires `t0..t0+w` by the
+/// `log2(w)`-bit amount whose bit `k` is at wire `ctrl(k)`, all gated on
+/// `pred`.
 ///
-/// B-2.1a NOTE: `rot_transpositions` hardcodes an 8-slot rotation, so the
-/// rotator's permutation is fixed to `w = 8`. At `Layout::default()` this is
-/// exactly the shipped rotator; a reduced `w_data` (B-2.1b/c) needs a
-/// `w`-slot `rot_transpositions` — a residual hard dependency (see report).
+/// B-2.1c: the rotator is a `w`-slot barrel rotate (was hardcoded 8-slot).
+/// The shift amount needs `log2(w)` control bits and `rot_transpositions` now
+/// rotates `w` slots. At `w = 8` (`log2 = 3`, 8 slots) this is byte-identical
+/// to the shipped rotator. NOTE: for the POC (add/xor only) this core is BUILT
+/// but never fires (config-gated off), so this only needs to be a well-formed
+/// `w`-slot permutation; its whole-domain rotate equivalence is B-2.1c-2.
 fn gated_rotl_gates_w(
-    _w: usize,
+    w: usize,
     n: usize,
     pred: usize,
     t0: usize,
     ctrl: impl Fn(usize) -> usize,
 ) -> Vec<Iso> {
+    let shift_bits = w.trailing_zeros() as usize; // log2(w) for power-of-two w
     let mut gates = Vec::new();
-    for k in 0..3 {
-        for (i, j) in rot_transpositions(1 << k) {
+    for k in 0..shift_bits {
+        for (i, j) in rot_transpositions(1 << k, w) {
             gates.push(gate_at(
                 n,
                 &[pred, ctrl(k), t0 + i, t0 + j],
@@ -839,14 +885,16 @@ fn with_two_regs(layout: &Layout, dst: RegSel, src: RegSel, core: Iso) -> Iso {
 
 fn add_core(layout: &Layout) -> Iso {
     let w = layout.w_data;
-    std_core(layout, gated_tk_gates_w(w, 3 * w, pred3(w), tgt0(w), opd0(w)))
+    let (n, tgt0, opd0, pred0) = std_bases(layout);
+    std_core(layout, gated_tk_gates_w(w, n, pred0, tgt0, opd0))
 }
 
 fn rotl_core(layout: &Layout) -> Iso {
     let w = layout.w_data;
+    let (n, tgt0, opd0, pred0) = std_bases(layout);
     std_core(
         layout,
-        gated_rotl_gates_w(w, 3 * w, pred3(w), tgt0(w), |k| opd0(w) + k),
+        gated_rotl_gates_w(w, n, pred0, tgt0, |k| opd0 + k),
     )
 }
 
@@ -860,34 +908,32 @@ fn rotl_core(layout: &Layout) -> Iso {
 
 fn add_core_at(layout: &Layout, cfg: usize) -> Iso {
     let w = layout.w_data;
-    std_core(
-        layout,
-        gated_tk_gates_w(w, 3 * w, pred3(w) + cfg, tgt0(w), opd0(w)),
-    )
+    let (n, tgt0, opd0, pred0) = std_bases(layout);
+    std_core(layout, gated_tk_gates_w(w, n, pred0 + cfg, tgt0, opd0))
 }
 
 fn xor_core_at(layout: &Layout, cfg: usize) -> Iso {
     let w = layout.w_data;
-    std_core(
-        layout,
-        gated_xor_gates_w(w, 3 * w, pred3(w) + cfg, tgt0(w), opd0(w)),
-    )
+    let (n, tgt0, opd0, pred0) = std_bases(layout);
+    std_core(layout, gated_xor_gates_w(w, n, pred0 + cfg, tgt0, opd0))
 }
 
 fn rotl_core_at(layout: &Layout, cfg: usize) -> Iso {
     let w = layout.w_data;
+    let (n, tgt0, opd0, pred0) = std_bases(layout);
     std_core(
         layout,
-        gated_rotl_gates_w(w, 3 * w, pred3(w) + cfg, tgt0(w), |k| opd0(w) + k),
+        gated_rotl_gates_w(w, n, pred0 + cfg, tgt0, |k| opd0 + k),
     )
 }
 
 fn exch_core_at(layout: &Layout, cfg: usize) -> Iso {
     let w = layout.w_data;
+    let (n, tgt0, opd0, pred0) = std_bases(layout);
     std_core(
         layout,
         (0..w)
-            .map(|i| gate_at(3 * w, &[pred3(w) + cfg, tgt0(w) + i, opd0(w) + i], fredkin_prim()))
+            .map(|i| gate_at(n, &[pred0 + cfg, tgt0 + i, opd0 + i], fredkin_prim()))
             .collect(),
     )
 }
@@ -902,15 +948,17 @@ fn sub_instr(layout: &Layout) -> Iso {
 
 fn xor_core(layout: &Layout) -> Iso {
     let w = layout.w_data;
-    std_core(layout, gated_xor_gates_w(w, 3 * w, pred3(w), tgt0(w), opd0(w)))
+    let (n, tgt0, opd0, pred0) = std_bases(layout);
+    std_core(layout, gated_xor_gates_w(w, n, pred0, tgt0, opd0))
 }
 
 fn exch_core(layout: &Layout) -> Iso {
     let w = layout.w_data;
+    let (n, tgt0, opd0, pred0) = std_bases(layout);
     std_core(
         layout,
         (0..w)
-            .map(|i| gate_at(3 * w, &[pred3(w), tgt0(w) + i, opd0(w) + i], fredkin_prim()))
+            .map(|i| gate_at(n, &[pred0, tgt0 + i, opd0 + i], fredkin_prim()))
             .collect(),
     )
 }
@@ -947,22 +995,24 @@ fn rotr_instr(layout: &Layout) -> Iso {
 /// removed afterwards (r[rd] itself is never modified).
 fn cswap_instr(layout: &Layout) -> Iso {
     let w = layout.w_data;
+    let (cb, cn) = field_bases(layout, &[layout.reg_field(0), layout.scratch_field(1)]);
     let copy_rd0 = with_target(
         layout,
         R_RD,
         on_fields_l(
             layout,
             &[layout.reg_field(0), layout.scratch_field(1)],
-            vec![gate_at(2 * w, &[0, w + CSWAP_CTRL_WIRE_IN_S1], cnot_prim())],
+            vec![gate_at(cn, &[cb[0], cb[1] + CSWAP_CTRL_WIRE_IN_S1], cnot_prim())],
         ),
     );
+    let (n, tgt0, opd0, pred0) = std_bases(layout);
     let core = std_core(
         layout,
         (0..w)
             .map(|i| {
                 gate_at(
-                    3 * w,
-                    &[pred3(w), pred3(w) + CSWAP_CTRL_WIRE_IN_S1, opd0(w) + i, tgt0(w) + i],
+                    n,
+                    &[pred0, pred0 + CSWAP_CTRL_WIRE_IN_S1, opd0 + i, tgt0 + i],
                     gated_fredkin_prim(),
                 )
             })
@@ -1028,12 +1078,20 @@ fn ccnot_fetch_rt_br(layout: &Layout) -> Iso {
 fn shared_fetch_rt_br_gated(layout: &Layout) -> Iso {
     let w = layout.w_data;
     let sel_rt = select_operand_l(layout, R_RT, |i| operand_field_l(layout, i));
+    // Slots `[r0(w_data), BR(w_ctl), s1(w_ctl)]` — mixed-width bases. Swap
+    // r0[i]↔BR[i] over the `w_data` operand bits (rt rides into BR's low
+    // `w_data` bits, zero-extended), gated on the s1 config one-hot `cfg`.
+    let (bases, n) = field_bases(
+        layout,
+        &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],
+    );
+    let (r0, br0, s1) = (bases[0], bases[1], bases[2]);
     let gated_swap = |cfg: usize| {
         on_fields_l(
             layout,
             &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],
             (0..w)
-                .map(|i| gate_at(3 * w, &[2 * w + cfg, i, w + i], fredkin_prim()))
+                .map(|i| gate_at(n, &[s1 + cfg, r0 + i, br0 + i], fredkin_prim()))
                 .collect(),
         )
     };
@@ -1095,17 +1153,31 @@ fn ccnot_instr(layout: &Layout) -> Iso {
 /// The copy is self-inverse and restores IR in every case.
 fn xchg_instr(layout: &Layout) -> Iso {
     let w = layout.w_data;
-    // [IR_lo, s1]: pad = wire 0, pred = wire w.
+    // pad_copy over [IR_b0(w_ctl), s1(w_ctl)]: copy pred (s1 bit 0) onto
+    // IR_b0 bit 0 (a routing-stable IR wire). Bases from field widths.
+    let (pb, pn) = field_bases(layout, &[layout.ir_byte_field(0), layout.scratch_field(1)]);
     let pad_copy = on_fields_l(
         layout,
         &[layout.ir_byte_field(0), layout.scratch_field(1)],
-        vec![gate_at(2 * w, &[w, 0], cnot_prim())],
+        vec![gate_at(pn, &[pb[1], pb[0]], cnot_prim())],
     );
     let selr = select_operand_l(layout, R_RD, |i| operand_field_l(layout, i));
     let sels = select_fields(layout, R_RT, |i| layout.scratch_field(i));
-    // [IR_b3, IR_lo, r0-slot, s0-slot]: fmt = wire 7 (IR bit 31),
-    // pred-copy = wire w (IR bit 0). 2-controlled swap on fmt ∧ IR[0].
-    let fmt_wire = FMT_BIT % W; // bit 7 within IR_b3
+    // Slots [IR_b3(w_ctl), IR_b0(w_ctl), r0(w_data), s0(w_ctl)]: 2-controlled
+    // swap of r0[i]↔s0[i] over the `w_data` operand bits, gated on
+    // fmt (IR_b3 bit 7) ∧ IR_b0[0]-copy. Bases from field widths.
+    let (gb, gn) = field_bases(
+        layout,
+        &[
+            layout.ir_byte_field(3),
+            layout.ir_byte_field(0),
+            layout.reg_field(0),
+            layout.scratch_field(0),
+        ],
+    );
+    let fmt_wire = gb[0] + (FMT_BIT % W); // bit 7 within IR_b3
+    let pred_copy_wire = gb[1]; // IR_b0 bit 0
+    let (r0, s0) = (gb[2], gb[3]);
     let gsw = on_fields_l(
         layout,
         &[
@@ -1117,8 +1189,8 @@ fn xchg_instr(layout: &Layout) -> Iso {
         (0..w)
             .map(|i| {
                 gate_at(
-                    4 * w,
-                    &[fmt_wire, w, 2 * w + i, 3 * w + i],
+                    gn,
+                    &[fmt_wire, pred_copy_wire, r0 + i, s0 + i],
                     gated_fredkin_prim(),
                 )
             })
@@ -1190,11 +1262,18 @@ fn cross_factor_gated_swap(
 /// SWAPBR word (SWAPBR ignores s0; restored on exit).
 fn swapbr_core(layout: &Layout) -> Iso {
     let w = layout.w_data;
+    // Slots [r0(w_data), BR(w_ctl), s1(w_ctl)]: gated swap r0[i]↔BR[i] over
+    // the `w_data` operand bits, gated on s1 bit 0 (pred). Mixed-width bases.
+    let (bases, n) = field_bases(
+        layout,
+        &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],
+    );
+    let (r0, br0, s1) = (bases[0], bases[1], bases[2]);
     on_fields_l(
         layout,
         &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],
         (0..w)
-            .map(|i| gate_at(3 * w, &[2 * w, i, w + i], fredkin_prim()))
+            .map(|i| gate_at(n, &[s1, r0 + i, br0 + i], fredkin_prim()))
             .collect(),
     )
 }
@@ -1562,23 +1641,27 @@ fn fetch_rs_fmt_gated(layout: &Layout) -> Iso {
 /// fetched rs value is untouched. The core lifts over [s0, IR_b0, IR_b3]
 /// (IR_b3 holds fmt bit 31 = local bit 7).
 fn imm_to_a(layout: &Layout) -> Iso {
-    let w = layout.w_data;
-    let n = 3 * w;
-    // local wires: s0 = 0..w, IR_b0 = w..2w, IR_b3 = 2w..3w.
-    let s0 = |j: usize| j;
-    let imm = |j: usize| w + j;
-    let fmt_local = 2 * w + (FMT_BIT % W); // fmt bit within IR_b3
+    // Addressed fields `[s0, IR_b0, IR_b3]` are ALL control-region (w_ctl);
+    // the immediate is a DATA operand only `w_data` bits wide, masked into
+    // s0's low `w_data` bits (zero-extended — s0's high bits stay 0). Wire
+    // bases are the running offsets of three w_ctl fields.
+    let wd = layout.w_data;
+    let fields = [
+        layout.scratch_field(0),
+        layout.ir_byte_field(0),
+        layout.ir_byte_field(3),
+    ];
+    let (bases, n) = field_bases(layout, &fields);
+    let s0 = |j: usize| bases[0] + j;
+    let imm = |j: usize| bases[1] + j;
+    let fmt_local = bases[2] + (FMT_BIT % W); // fmt bit within IR_b3
     let mut gates: Vec<Iso> = Vec::new();
     gates.push(at_wire(n, fmt_local, not_iso())); // ¬fmt
-    for j in 0..w {
+    for j in 0..wd {
         gates.push(gate_at(n, &[fmt_local, imm(j), s0(j)], toffoli_prim()));
     }
     gates.push(at_wire(n, fmt_local, not_iso())); // restore fmt
-    on_fields_l(
-        layout,
-        &[layout.scratch_field(0), layout.ir_byte_field(0), layout.ir_byte_field(3)],
-        gates,
-    )
+    on_fields_l(layout, &fields, gates)
 }
 
 /// B1.1 measurement hook: the PRE-B1.1 Group-A block (one shared route,
@@ -1902,9 +1985,24 @@ fn reg_imm_alu(layout: &Layout) -> Iso {
 /// `rd ^= rs & rt`, config-gated). Verbatim `ccnot_core`'s CCC-NOT pattern
 /// but the 4th control is the CFG_CCNOT one-hot instead of the raw pred bit.
 fn ccnot_core_at(layout: &Layout, cfg: usize) -> Iso {
+    // 4-slot `[D=r0(w_data), A=s0(w_ctl), B=BR(w_ctl), s1(w_ctl)]`. A/B hold
+    // `w_data` operands zero-extended into their control-width fields; the
+    // per-bit CCC-NOT loops `0..w_data` and the wire bases are the running
+    // offsets. (Untriggered by the add/xor POC — config one-hot never fires —
+    // but must be BUILD-consistent with the mixed-width flatten.)
     let w = layout.w_data;
+    let (bases, n) = field_bases(
+        layout,
+        &[
+            layout.reg_field(0),
+            layout.scratch_field(0),
+            layout.br_field(),
+            layout.scratch_field(1),
+        ],
+    );
+    let (d0, a0, b0, s1) = (bases[0], bases[1], bases[2], bases[3]);
     let gates = (0..w)
-        .map(|i| gate_at(4 * w, &[3 * w + cfg, w + i, 2 * w + i, i], cccnot_prim()))
+        .map(|i| gate_at(n, &[s1 + cfg, a0 + i, b0 + i, d0 + i], cccnot_prim()))
         .collect();
     on_fields_l(
         layout,
@@ -1928,11 +2026,22 @@ fn ccnot_core_at(layout: &Layout, cfg: usize) -> Iso {
 /// swapping A↔B under D[0] and unwinding the fetch brackets writes the
 /// swapped values back into r[rs]/r[rt]; D (rd) itself is never modified.
 fn cswap_core_at(layout: &Layout, cfg: usize) -> Iso {
+    // 4-slot `[D=r0(w_data), A=s0(w_ctl), B=BR(w_ctl), s1(w_ctl)]`, mixed-width
+    // bases. Gated Fredkin control pair (cfg_cswap, D[0]) swaps A[i]↔B[i] over
+    // the `w_data` operand bits. (Untriggered by the add/xor POC.)
     let w = layout.w_data;
-    // Wires: D[0] = 0, A[i] = w+i, B[i] = 2w+i, cfg one-hot = 3w+cfg.
-    // Gated Fredkin control pair (cfg_cswap, D[0]) swaps A[i], B[i].
+    let (bases, n) = field_bases(
+        layout,
+        &[
+            layout.reg_field(0),
+            layout.scratch_field(0),
+            layout.br_field(),
+            layout.scratch_field(1),
+        ],
+    );
+    let (d0, a0, b0, s1) = (bases[0], bases[1], bases[2], bases[3]);
     let gates = (0..w)
-        .map(|i| gate_at(4 * w, &[3 * w + cfg, 0, w + i, 2 * w + i], gated_fredkin_prim()))
+        .map(|i| gate_at(n, &[s1 + cfg, d0, a0 + i, b0 + i], gated_fredkin_prim()))
         .collect();
     on_fields_l(
         layout,
