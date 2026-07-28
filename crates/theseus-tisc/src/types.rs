@@ -543,6 +543,82 @@ impl StateVals {
         value_from_bits(&ty, &all_bits).expect("StateVals::encode")
     }
 
+    /// B-2.1b: encode this State's CPU fields against a **reduced** `Layout`
+    /// (`state_ty_with(layout)`). Only `layout.num_regs` registers and
+    /// `layout.num_scratch` scratch words are plumbed into the reduced-field
+    /// carrier; the remaining `StateVals` regs/scratch are asserted zero so
+    /// the reduced state is a faithful projection (the compiler shrinks
+    /// `num_regs` to `next_pow2(max_named_reg+1)`, so every dropped register
+    /// is un-named and stays zero across the run).
+    ///
+    /// Field order at the reduced layout follows the `Layout::*_field`
+    /// helpers: r0..r{num_regs-1}, PC_lo, BR, IR_b0..b3, s0..s{num_scratch-1},
+    /// PC_hi. `w_data` is 8 in B-2.1b so each word is a full byte.
+    pub fn encode_with(&self, layout: &Layout) -> Value {
+        assert_eq!(layout.w_data, W, "encode_with: B-2.1b keeps w_data == 8");
+        // Dropped (un-named) registers/scratch must be zero — the reduced
+        // state cannot represent them, and the compiler only shrinks past
+        // registers it proved un-named.
+        for (i, &r) in self.regs.iter().enumerate() {
+            if i >= layout.num_regs {
+                assert_eq!(r, 0, "encode_with: dropped reg r{i} must be 0, got {r:#04x}");
+            }
+        }
+        for (i, &s) in self.scratch.iter().enumerate() {
+            if i >= layout.num_scratch {
+                assert_eq!(s, 0, "encode_with: dropped scratch s{i} must be 0, got {s:#04x}");
+            }
+        }
+        let ty = state_ty_with(layout);
+        let mut all_bits: Vec<bool> = Vec::with_capacity(layout.state_bits());
+        for &r in self.regs.iter().take(layout.num_regs) {
+            push_u8_bits(&mut all_bits, r);
+        }
+        push_u8_bits(&mut all_bits, self.pc as u8); // PC_lo
+        push_u8_bits(&mut all_bits, self.br); // BR
+        push_ir_bits(&mut all_bits, self.ir); // IR_b0..IR_b3
+        for &s in self.scratch.iter().take(layout.num_scratch) {
+            push_u8_bits(&mut all_bits, s);
+        }
+        push_u8_bits(&mut all_bits, (self.pc >> 8) as u8); // PC_hi (appended)
+        value_from_bits(&ty, &all_bits).expect("StateVals::encode_with")
+    }
+
+    /// B-2.1b: decode a `Value` of `state_ty_with(layout)` (reduced CpuState)
+    /// back to a full `StateVals`. Registers/scratch beyond the reduced
+    /// counts read back as zero (they were never plumbed). Memory is zero.
+    pub fn decode_with(layout: &Layout, val: &Value) -> Self {
+        assert_eq!(layout.w_data, W, "decode_with: B-2.1b keeps w_data == 8");
+        let ty = state_ty_with(layout);
+        let all_bits = bits_of(val, &ty).expect("StateVals::decode_with");
+        assert_eq!(all_bits.len(), layout.state_bits());
+
+        let mut regs = [0u8; NUM_REGS];
+        for (i, r) in regs.iter_mut().enumerate().take(layout.num_regs) {
+            *r = read_u8_bits(&all_bits, layout.reg_field(i) * W);
+        }
+        let pc = {
+            let lo = read_u8_bits(&all_bits, layout.pc_field() * W);
+            let hi = read_u8_bits(&all_bits, layout.pc_hi_field() * W);
+            u16::from(lo) | (u16::from(hi) << 8)
+        };
+        let br = read_u8_bits(&all_bits, layout.br_field() * W);
+        let ir = read_ir_bits(&all_bits, layout.ir_byte_field(0) * W);
+        let mut scratch = [0u8; NUM_SCRATCH];
+        for (i, s) in scratch.iter_mut().enumerate().take(layout.num_scratch) {
+            *s = read_u8_bits(&all_bits, layout.scratch_field(i) * W);
+        }
+
+        StateVals {
+            regs,
+            pc,
+            br,
+            ir,
+            scratch,
+            mem: [0; MEM_WORDS],
+        }
+    }
+
     /// Decode a `Value` of `state_ty()` (CpuState) back to `StateVals`.
     /// Memory fields are set to zero — use [`decode_composite`] for the
     /// system_step carrier.

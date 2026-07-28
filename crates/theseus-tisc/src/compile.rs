@@ -4500,6 +4500,68 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
     Ok(final_state)
 }
 
+/// B-2.1b: run a compiled program on the CPU-only ring at a **reduced**
+/// [`Layout`] (fewer general registers). This is the reduced-state run
+/// authority — it lowers `step_with(&layout, rom)` over the reduced
+/// `state_ty_with(&layout)` carrier and marshals `StateVals` through
+/// `encode_with`/`decode_with`, so only `layout.num_regs` registers are
+/// plumbed every step. Requires a CPU-only program (`is_cpu_only`) with
+/// quiescent memory; a memory program still uses `run_rom_on_cpu`.
+///
+/// Semantically equal to `run_rom_on_cpu` for any program whose named
+/// registers all fit in `layout.num_regs` (the dropped registers are
+/// un-named and stay zero), so a reduced-layout run and a default-layout run
+/// agree on every named field. That equality is the correctness authority.
+pub fn run_rom_on_cpu_with<E: std::fmt::Debug>(
+    layout: &Layout,
+    instrs: &[Instr],
+    init: StateVals,
+    budget: usize,
+    s_max_val: usize,
+    eval_fn: impl Fn(&Iso, Value, &mut u64) -> Result<Value, E>,
+) -> Result<StateVals, CompileError> {
+    assert!(
+        is_cpu_only(instrs),
+        "run_rom_on_cpu_with: reduced-layout run is CPU-only (no Mexch)"
+    );
+    assert!(
+        init.mem.iter().all(|&m| m == 0),
+        "run_rom_on_cpu_with: initial memory must be quiescent"
+    );
+    let rom =
+        assemble(instrs).map_err(|e| CompileError::Deferred(format!("assemble failed: {e}")))?;
+
+    if budget + s_max_val > layout.pc_addr_space() {
+        return Err(CompileError::Deferred(format!(
+            "parked PC B+S_max={} exceeds PC address space {}",
+            budget + s_max_val,
+            layout.pc_addr_space()
+        )));
+    }
+
+    let mut fuel = (budget as u64) * 500_000_000u64;
+    if fuel < 8_000_000_000 {
+        fuel = 8_000_000_000;
+    }
+
+    let step_iso = crate::step::step_with(layout, &rom);
+    let mut cur = init.encode_with(layout);
+    for _ in 0..budget {
+        cur = eval_fn(&step_iso, cur, &mut fuel)
+            .map_err(|e| CompileError::Deferred(format!("CPU eval failed: {e:?}")))?;
+    }
+    let final_state = StateVals::decode_with(layout, &cur);
+
+    if final_state.br != 0 || final_state.scratch[0] != 0 || final_state.scratch[1] != 0 {
+        return Err(CompileError::Deferred(format!(
+            "terminal precondition violated (BR={}/s0={}/s1={} != 0)",
+            final_state.br, final_state.scratch[0], final_state.scratch[1]
+        )));
+    }
+
+    Ok(final_state)
+}
+
 /// Compile an `Iso` to a TISC-1 ROM, marshal an input value, run it on
 /// the simulated CPU for exactly `B = rom.len()` steps, and unmarshal
 /// the output. The `eval_fn` parameter is the interpreter

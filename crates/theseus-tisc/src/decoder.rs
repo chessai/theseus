@@ -123,10 +123,35 @@ pub const AUX_PRED_FIELD: usize = 15;
 // fmt = bit 31; opcode = bits 25..30 (6 bits); rd = bits 20..24;
 // rs = bits 15..19; rt = bits 10..14 (all 5-bit); I-imm = bits 0..19.
 
-/// Global IR-bit index → the (byte-field, bit-within-byte) it lives at.
-/// IR byte `k` (k=0..4) is field `IR_B0_FIELD + k`, holding bits 8k..8k+8.
+/// Global IR-bit index → the (byte-field, bit-within-byte) it lives at
+/// **at the default layout**. IR byte `k` (k=0..4) is field `IR_B0_FIELD + k`,
+/// holding bits 8k..8k+8.
+///
+/// B-2.1b: `IR_B0_FIELD` is the DEFAULT-layout IR-b0 field index (= 10 at
+/// num_regs=8). The `RegSel`/`FMT` control fields are built from this const, so
+/// at a reduced `num_regs` (where the IR bytes shift down) they must be remapped
+/// through [`remap_ir_ctrl`] before they index a reduced-layout core.
 pub const fn ir_bit(b: usize) -> (usize, usize) {
     (IR_B0_FIELD + b / W, b % W)
+}
+
+/// B-2.1b: remap a control `(field, bit)` that was built at the DEFAULT layout
+/// (an IR byte-field from [`ir_bit`], as baked into the `RegSel` constants and
+/// the `FMT_BIT` control) onto `layout`'s IR byte-field indices.
+///
+/// At the default layout this is the identity (the IR bytes are already at
+/// `IR_B0_FIELD..`); at a reduced `num_regs` the IR bytes moved down by
+/// `8 - num_regs` fields, so the crossbar/fmt controls must follow. Only IR
+/// byte-fields are remapped — no other field kind is ever a `RegSel`/`FMT`
+/// control, and the debug assert guards that.
+fn remap_ir_ctrl(layout: &Layout, ctrl: (usize, usize)) -> (usize, usize) {
+    let (field, bit) = ctrl;
+    debug_assert!(
+        (IR_B0_FIELD..IR_B0_FIELD + 4).contains(&field),
+        "remap_ir_ctrl: control field {field} is not a default IR byte-field"
+    );
+    let byte = field - IR_B0_FIELD;
+    (layout.ir_byte_field(byte), bit)
 }
 
 /// IR bit index of the format bit (1 = R-format).
@@ -336,9 +361,10 @@ pub fn cross_ctrl_fredkin(
 /// selectable fields (`num_regs = 8`). At a reduced `num_regs` the tree
 /// depth shrinks (design DF-3) — a residual B-2.1b/c dependency.
 fn select_fields(layout: &Layout, sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
-    let (f2, b2) = sel.bits[2];
-    let (f1, b1) = sel.bits[1];
-    let (f0, b0) = sel.bits[0];
+    // B-2.1b: remap the default-layout RegSel control fields onto `layout`.
+    let (f2, b2) = remap_ir_ctrl(layout, sel.bits[2]);
+    let (f1, b1) = remap_ir_ctrl(layout, sel.bits[1]);
+    let (f0, b0) = remap_ir_ctrl(layout, sel.bits[0]);
     let mut steps = Vec::new();
     for i in 0..4 {
         steps.push(ctrl_word_swap(layout, f2, b2, base(i), base(i + 4)));
@@ -394,32 +420,73 @@ pub fn operand_field(i: usize) -> usize {
 /// s2..s7 (idx 10..15) lives at position 10..15 = `base(2+k)+8`, reached
 /// purely via the i∈2..8 swaps; register operands (bit3=0) are inert
 /// here regardless. So s0/s1 (fields 14/15) are left UNTOUCHED.
-/// B-2.1a: the CORE layout-parameterized crossbar. `ctrl_word_swap` derives
-/// its swapped-word width from `layout`; the 4-level `2..8 / +8 / 0..4 / 0..2`
-/// topology assumes `num_regs = 8` (residual B-2.1b/c dependency, DF-3). The
-/// zero-arg [`select_operand`] delegates at `Layout::default()`.
+/// B-2.1b: the CORE layout-parameterized crossbar, **`num_regs`-parametric**.
+///
+/// The operand index space is `reg(0..num_regs) ∪ scratch(num_regs..num_regs
+/// + num_scratch)`; the tree routes `base(operand_idx) → base(0)`. It has two
+/// stacked parts, both sized off `layout`:
+///
+///   • the **register butterfly** — `rbits = log2(num_regs)` levels over
+///     positions `0..num_regs`, controlled by operand bits `0..rbits`
+///     (bit L → stride `2^L` swaps `(i, i+2^L)` for `i in 0..2^L`). This is a
+///     standard 1-of-`num_regs` router (register operands have every higher
+///     operand bit = 0, so only these levels fire for them).
+///
+///   • the **reg↔scratch descent** — for scratch operands (operand bit
+///     `rbits` and above set), higher levels bring the addressed scratch word
+///     down into the register range. The split level (bit `rbits`) swaps
+///     `(i, i + num_regs)` and so partitions at **`num_regs`**, not a
+///     hardcoded 8. Deeper scratch levels (present only when `num_scratch >
+///     num_regs`) route within the descended half.
+///
+/// **s0/s1 protection (A-0 BLOCKER-1).** `base(num_regs)` and
+/// `base(num_regs+1)` are `s0`/`s1` — the reserved operand buffer
+/// (`AUX_OPERAND_FIELD`) and predicate word (`AUX_PRED_FIELD`), never legal
+/// operands. The split level therefore EXCLUDES `i ∈ {0,1}` (their scratch
+/// partners are exactly s0/s1); swapping `r0↔s0` / `r1↔s1` mid-instruction
+/// would displace the operand buffer and corrupt the predicate word. Every
+/// legal scratch operand `s2..` is reached purely via the `i ≥ 2` swaps.
+///
+/// **Byte-identity at `num_regs = 8`, `num_scratch = 8`.** Then `rbits = 3`,
+/// the register butterfly is levels 2/1/0 (`0..4 / 0..2 / 0..1`), and the
+/// single descent level (bit 3, stride = num_regs = 8) swaps `(i, i+8)` for
+/// `i in 2..8` — bit-for-bit the shipped `2..8 / +8 / 0..4 / 0..2` topology.
+/// The zero-arg [`select_operand`] delegates at `Layout::default()`.
 pub fn select_operand_l(layout: &Layout, sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
-    let (f3, b3) = sel.bits[3];
-    let (f2, b2) = sel.bits[2];
-    let (f1, b1) = sel.bits[1];
-    let (f0, b0) = sel.bits[0];
+    let n_reg = layout.num_regs;
+    let n_scr = layout.num_scratch;
+    debug_assert!(n_reg.is_power_of_two(), "num_regs must be a power of two");
+    let rbits = n_reg.trailing_zeros() as usize;
+    let n_total = n_reg + n_scr;
+    // Highest operand bit the tree can steer (levels above this are dead for
+    // any addressable position). `sel.bits` holds 5 operand bits (LSB-first).
+    let n_levels = (n_total.next_power_of_two()).trailing_zeros() as usize;
+    let n_levels = n_levels.min(sel.bits.len());
+
     let mut steps = Vec::new();
-    // Level 3 (bit 3): reg half ↔ scratch half, EXCLUDING positions 0/1
-    // (whose scratch partners base(8)/base(9) = s0/s1 are the reserved
-    // operand-buffer + predicate word — never legal operands).
-    for i in 2..8 {
-        steps.push(ctrl_word_swap(layout, f3, b3, base(i), base(i + 8)));
+    // Descent levels (bit `rbits` and above): bring an addressed scratch word
+    // down into the register range. Process high→low, splitting at powers of
+    // two of the position index. The split level (L == rbits) partitions at
+    // `num_regs` and skips the s0/s1 partners (i ∈ {0,1}); every level below
+    // rbits is the register butterfly.
+    for level in (0..n_levels).rev() {
+        // B-2.1b: RegSel control fields are built at the default layout; remap
+        // the IR byte-field onto this layout (identity at Layout::default()).
+        let (cf, cb) = remap_ir_ctrl(layout, sel.bits[level]);
+        let stride = 1usize << level;
+        // Positions to exclude at the reg↔scratch split level: i ∈ {0,1},
+        // whose scratch partners base(num_regs)/base(num_regs+1) = s0/s1 are
+        // decoder-reserved. Below the split (register butterfly) no exclusion.
+        let excl = if level == rbits { 2 } else { 0 };
+        for i in excl..stride {
+            let j = i + stride;
+            // Route only positions that exist AND (for the split/descent) do
+            // not straddle into the reserved s0/s1 slots.
+            if j < n_total {
+                steps.push(ctrl_word_swap(layout, cf, cb, base(i), base(j)));
+            }
+        }
     }
-    // Level 2 (bit 2): quarter swaps within the low 8.
-    for i in 0..4 {
-        steps.push(ctrl_word_swap(layout, f2, b2, base(i), base(i + 4)));
-    }
-    // Level 1 (bit 1).
-    for i in 0..2 {
-        steps.push(ctrl_word_swap(layout, f1, b1, base(i), base(i + 2)));
-    }
-    // Level 0 (bit 0).
-    steps.push(ctrl_word_swap(layout, f0, b0, base(0), base(1)));
     seq_balanced(steps)
 }
 
@@ -1463,7 +1530,8 @@ fn shared_alu_block(layout: &Layout) -> Iso {
 /// still steer the crossbar, but it is a pure self-inverse permutation and
 /// nothing is fetched. For R-format (fmt=1) it is exactly `fetch_operand`.
 fn fetch_rs_fmt_gated(layout: &Layout) -> Iso {
-    let (fmt_field, fmt_bit) = ir_bit(FMT_BIT);
+    // B-2.1b: fmt is IR bit 31 → IR_b3, remapped onto `layout`.
+    let (fmt_field, fmt_bit) = remap_ir_ctrl(layout, ir_bit(FMT_BIT));
     let sel = select_operand_l(layout, R_RS, |i| operand_field_l(layout, i));
     // fmt-gated word swap operand_field(0) ↔ s0 (AUX_OPERAND_FIELD).
     let gated_swap = ctrl_word_swap(
