@@ -236,3 +236,44 @@ fn pred_base_is_w_data_plus_w_ctl_not_2_w_data() {
         2 * poc.w_data
     );
 }
+
+/// B-2.1c review MAJOR-2: the IMMEDIATE datapath (`imm_to_a`, LIVE + ¬fmt-gated
+/// in the shared ALU block) at `w_data=4`. Every other w4 test is R-format, so
+/// Addi/Subi/Xori at reduced w_data were UNCOVERED despite "reg+imm" being the
+/// POC scope (the L15 "correct by reading" trap). Whole-domain over rd-value ×
+/// 4-bit immediate — all 16×16 per op == the 4-bit arithmetic. (Immediates are
+/// ≤ 15, valid for w_data=4; the imm ≥ 2^w_data masking is a separate MINOR.)
+#[test]
+fn whole_domain_imm_at_w_data_4() {
+    for x in 0u8..16 {
+        for a in 0u8..16 {
+            let got = run4(&[Instr::Addi { rd: 0, imm: x }], a, 0);
+            assert_eq!(
+                got.regs[0],
+                (a + x) & 0x0F,
+                "Addi #{x} at w4: a={a} → r0={} want {}",
+                got.regs[0],
+                (a + x) & 0x0F
+            );
+
+            let got = run4(&[Instr::Xori { rd: 0, imm: x }], a, 0);
+            assert_eq!(
+                got.regs[0],
+                a ^ x,
+                "Xori #{x} at w4: a={a} → r0={} want {}",
+                got.regs[0],
+                a ^ x
+            );
+
+            let got = run4(&[Instr::Subi { rd: 0, imm: x }], a, 0);
+            assert_eq!(
+                got.regs[0],
+                a.wrapping_sub(x) & 0x0F,
+                "Subi #{x} at w4: a={a} → r0={} want {}",
+                got.regs[0],
+                a.wrapping_sub(x) & 0x0F
+            );
+        }
+    }
+    eprintln!("whole-domain Addi/Subi/Xori at w_data=4: all 16×16 per op == 4-bit arithmetic ✓");
+}

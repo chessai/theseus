@@ -808,6 +808,16 @@ fn gated_rotl_gates_w(
     t0: usize,
     ctrl: impl Fn(usize) -> usize,
 ) -> Vec<Iso> {
+    // B-2.1c review MAJOR-3: the barrel rotator uses `log2(w)` shift stages,
+    // valid ONLY for a power-of-two data-word width. At a non-pow-2 `w` (e.g.
+    // Flat(5)/Flat(6) from a future w_data auto-derive) `trailing_zeros` silently
+    // under-counts the stages → Rotl degenerates toward identity with no error.
+    // Fail LOUD until a general-width rotator lands.
+    assert!(
+        w.is_power_of_two(),
+        "gated_rotl_gates_w: data-word width w={w} must be a power of two (the \
+         barrel rotator has no non-pow-2 form yet); constrain w_data to a power of two"
+    );
     let shift_bits = w.trailing_zeros() as usize; // log2(w) for power-of-two w
     let mut gates = Vec::new();
     for k in 0..shift_bits {
@@ -1449,6 +1459,20 @@ pub fn instruction(op: Op) -> Iso {
 /// B-2.1a: layout-parameterized [`instruction`]. The zero-arg entry
 /// delegates at `Layout::default()`.
 pub fn instruction_l(layout: &Layout, op: Op) -> Iso {
+    // B-2.1c review MAJOR-1: this LEGACY replicated per-op path (fetch_operand +
+    // per-op cores) is NOT yet mixed-width-safe — its brackets/cores still assume
+    // uniform width (k·w offsets, `SwapProd(word8,word8)`). Every caller today
+    // passes the default layout; fail LOUD if invoked at a reduced w_data before
+    // the width-fix (deferred to B-2.1c-2, which needs this path for per-op tests)
+    // rather than silently mis-lower. The wired decoder uses `decode_execute_l`
+    // (the shared ALU block), which IS mixed-width-safe.
+    assert!(
+        layout.w_data == layout.w_ctl,
+        "instruction_l (legacy per-op path) is not yet width-safe at reduced \
+         w_data (w_data={}, w_ctl={}); use decode_execute_l, or land B-2.1c-2",
+        layout.w_data,
+        layout.w_ctl
+    );
     match op {
         Op::Add => add_instr(layout),
         Op::Sub => sub_instr(layout),
