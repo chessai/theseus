@@ -439,13 +439,16 @@ pub fn operand_field(i: usize) -> usize {
 ///     hardcoded 8. Deeper scratch levels (present only when `num_scratch >
 ///     num_regs`) route within the descended half.
 ///
-/// **s0/s1 protection (A-0 BLOCKER-1).** `base(num_regs)` and
-/// `base(num_regs+1)` are `s0`/`s1` — the reserved operand buffer
-/// (`AUX_OPERAND_FIELD`) and predicate word (`AUX_PRED_FIELD`), never legal
-/// operands. The split level therefore EXCLUDES `i ∈ {0,1}` (their scratch
-/// partners are exactly s0/s1); swapping `r0↔s0` / `r1↔s1` mid-instruction
-/// would displace the operand buffer and corrupt the predicate word. Every
-/// legal scratch operand `s2..` is reached purely via the `i ≥ 2` swaps.
+/// **s0/s1 protection (A-0 BLOCKER-1 + B-2.1b review F2).** Operand positions
+/// `num_regs` and `num_regs+1` are `s0`/`s1` — the reserved operand buffer
+/// (`AUX_OPERAND_FIELD`) and predicate/config word (`AUX_PRED_FIELD`, which
+/// holds B-1's config one-hots), never legal operands. NO swap at ANY level may
+/// touch them: the loop skips any `(i, j)` with `i` or `j ∈ {num_regs,
+/// num_regs+1}`. At `num_regs = 8` this is exactly the split-level `(0,8)/(1,9)`
+/// skip (byte-identical); at `num_regs < 8` it ALSO kills the descent-level
+/// swaps that a split-level-only exclusion would let displace s0/s1
+/// mid-instruction. Legal scratch operands `s2..` (positions ≥ `num_regs+2`)
+/// are never touched, so routing is unaffected.
 ///
 /// **Byte-identity at `num_regs = 8`, `num_scratch = 8`.** Then `rbits = 3`,
 /// the register butterfly is levels 2/1/0 (`0..4 / 0..2 / 0..1`), and the
@@ -456,7 +459,6 @@ pub fn select_operand_l(layout: &Layout, sel: RegSel, base: impl Fn(usize) -> us
     let n_reg = layout.num_regs;
     let n_scr = layout.num_scratch;
     debug_assert!(n_reg.is_power_of_two(), "num_regs must be a power of two");
-    let rbits = n_reg.trailing_zeros() as usize;
     let n_total = n_reg + n_scr;
     // Highest operand bit the tree can steer (levels above this are dead for
     // any addressable position). `sel.bits` holds 5 operand bits (LSB-first).
@@ -464,27 +466,35 @@ pub fn select_operand_l(layout: &Layout, sel: RegSel, base: impl Fn(usize) -> us
     let n_levels = n_levels.min(sel.bits.len());
 
     let mut steps = Vec::new();
-    // Descent levels (bit `rbits` and above): bring an addressed scratch word
-    // down into the register range. Process high→low, splitting at powers of
-    // two of the position index. The split level (L == rbits) partitions at
-    // `num_regs` and skips the s0/s1 partners (i ∈ {0,1}); every level below
-    // rbits is the register butterfly.
+    // Butterfly over operand positions: the low `log2(num_regs)` levels are the
+    // register router; higher levels descend an addressed scratch word into the
+    // register range. Process high→low.
     for level in (0..n_levels).rev() {
         // B-2.1b: RegSel control fields are built at the default layout; remap
         // the IR byte-field onto this layout (identity at Layout::default()).
         let (cf, cb) = remap_ir_ctrl(layout, sel.bits[level]);
         let stride = 1usize << level;
-        // Positions to exclude at the reg↔scratch split level: i ∈ {0,1},
-        // whose scratch partners base(num_regs)/base(num_regs+1) = s0/s1 are
-        // decoder-reserved. Below the split (register butterfly) no exclusion.
-        let excl = if level == rbits { 2 } else { 0 };
-        for i in excl..stride {
+        for i in 0..stride {
             let j = i + stride;
-            // Route only positions that exist AND (for the split/descent) do
-            // not straddle into the reserved s0/s1 slots.
-            if j < n_total {
-                steps.push(ctrl_word_swap(layout, cf, cb, base(i), base(j)));
+            if j >= n_total {
+                continue;
             }
+            // s0/s1 = operand positions `n_reg` / `n_reg + 1` (the reserved
+            // operand buffer `AUX_OPERAND_FIELD` + predicate/config word
+            // `AUX_PRED_FIELD`) are IMMOVABLE: NO swap at ANY level may touch
+            // them. Otherwise, at a reduced `num_regs`, a descent level would
+            // displace s0 / corrupt the s1 config word mid-instruction — and the
+            // s1 config one-hots are B-1's load-bearing state (B-2.1b review F2).
+            // At `num_regs = 8` this position-based exclusion is exactly the
+            // split-level `(0,8)/(1,9)` skip — BYTE-IDENTICAL to the shipped
+            // topology; at `num_regs < 8` it also kills the descent-level
+            // `(n_reg,·)`/`(n_reg+1,·)` swaps the old `level == rbits`-only
+            // exclusion missed. Legal scratch operands s2.. (positions
+            // ≥ `n_reg + 2`) are never touched, so routing is unaffected.
+            if i == n_reg || j == n_reg || i == n_reg + 1 || j == n_reg + 1 {
+                continue;
+            }
+            steps.push(ctrl_word_swap(layout, cf, cb, base(i), base(j)));
         }
     }
     seq_balanced(steps)

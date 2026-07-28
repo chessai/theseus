@@ -86,11 +86,14 @@ fn derive_reg_rounding_and_clamp() {
         derive_layout(&[Instr::Add { rd: 7, rs: 0 }]).num_regs,
         8
     );
-    // Scratch operand (idx 10 = s2) is NOT a register — excluded from the
-    // reg bound (num_scratch is not shrunk this slice).
+    // Scratch operand (idx 10 = s2) is an ABSOLUTE index (num_regs + s); its
+    // decode is tied to the default register-file boundary, so its presence
+    // PINS num_regs = 8 rather than misrouting at a reduced num_regs — even
+    // though only r0 is named as a register (B-2.1b derive_layout scratch
+    // safety; review F1).
     assert_eq!(
         derive_layout(&[Instr::Add { rd: 0, rs: 10 }]).num_regs,
-        1
+        8
     );
 }
 

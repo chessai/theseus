@@ -326,3 +326,91 @@ fn derive_layout_pins_num_regs_when_scratch_operand_used() {
         "scratch operand (idx 10=s2) present → num_regs must stay 8, not misroute"
     );
 }
+
+/// B-2.1b review F2 (regression): the s0/s1 immovability invariant — NO operand
+/// crossbar swap may touch the reserved operand-buffer s0 / config word s1 (the
+/// latter holds B-1's config one-hots) — must hold at EVERY `num_regs`. At
+/// `num_regs=2` the OLD split-level-only exclusion let a DESCENT level (operand
+/// bit 2, stride 4) fire swaps `(pos2,pos6)`/`(pos3,pos7)` = s0↔s4 / s1↔s5,
+/// displacing s0/s1 mid-instruction. The position-based exclusion skips any swap
+/// touching positions `num_regs`/`num_regs+1` at every level. Assert: routing
+/// ANY operand selector at num_regs=2 leaves s0/s1 UNTOUCHED. (Fails on the old
+/// code for any selector with bit 2 set, e.g. 4..8.)
+#[test]
+fn reduced_crossbar_preserves_s0_s1_at_num_regs_2() {
+    let layout = Layout {
+        num_regs: 2,
+        ..Layout::default()
+    };
+    let iso = select_operand_l(&layout, R_RD, |i| operand_field_l(&layout, i));
+    for sel_idx in 0u32..16 {
+        let mut s = distinct_state_reduced(layout.num_regs, sel_idx);
+        s.scratch[0] = 0xC0; // s0 sentinel (reserved operand buffer)
+        s.scratch[1] = 0xC1; // s1 sentinel (reserved config/predicate word)
+        let got = eval_reduced(&layout, &iso, &s);
+        assert_eq!(
+            got.scratch[0], 0xC0,
+            "num_regs=2, selector {sel_idx}: s0 displaced — F2 invariant violated"
+        );
+        assert_eq!(
+            got.scratch[1], 0xC1,
+            "num_regs=2, selector {sel_idx}: s1 (config word) corrupted — F2 invariant violated"
+        );
+    }
+    eprintln!("num_regs=2: s0/s1 immovable across all operand selectors ✓");
+}
+
+/// B-2.1b review F2 (correctness at the newly-reachable width): the position-
+/// based exclusion keeps `num_regs ∈ {1,2}` reachable, so verify a 2-register
+/// program actually RUNS correctly on the reduced-layout netlist (reduced ==
+/// default == exec), not just that the crossbar preserves s0/s1.
+#[test]
+fn num_regs_2_program_runs_correctly() {
+    let prog = vec![
+        Instr::Add { rd: 0, rs: 1 },
+        Instr::Xor { rd: 1, rs: 0 },
+    ];
+    let layout = derive_layout(&prog);
+    assert_eq!(layout.num_regs, 2, "r0,r1-only program → num_regs=2");
+    let budget = prog.len();
+    for bytes in [
+        &[0x12u8, 0x34][..],
+        &[0xFF, 0x0F][..],
+        &[0x00, 0x00][..],
+        &[0x80, 0x7F][..],
+    ] {
+        let mut regs = [0u8; NUM_REGS];
+        regs[0] = bytes[0];
+        regs[1] = bytes[1];
+        let init = StateVals {
+            regs,
+            pc: 0,
+            br: 0,
+            ir: 0,
+            scratch: [0; NUM_SCRATCH],
+            mem: [0; MEM_WORDS],
+        };
+        let want = exec_reference(&prog, &init);
+        let reduced = run_rom_on_cpu_with(
+            &layout,
+            &prog,
+            init.clone(),
+            budget,
+            0,
+            theseus_eval::eval,
+        )
+        .unwrap_or_else(|e| panic!("num_regs=2 reduced run failed for {bytes:?}: {e}"));
+        let default = run_rom_on_cpu(&prog, init.clone(), budget, 0, theseus_eval::eval)
+            .unwrap_or_else(|e| panic!("default run failed for {bytes:?}: {e}"));
+        assert_eq!(
+            &reduced.regs[..2],
+            &want.regs[..2],
+            "num_regs=2 reduced run != exec for {bytes:?}"
+        );
+        assert_eq!(
+            reduced.regs, default.regs,
+            "num_regs=2 reduced run != default run for {bytes:?}"
+        );
+    }
+    eprintln!("num_regs=2 program: reduced == default == exec ✓");
+}

@@ -333,7 +333,10 @@ pub fn fetch_with(layout: &Layout, rom: &[u32]) -> Iso {
         .map(|(p, &w)| fetch_entry(layout, p, w, a))
         .collect();
     if entries.is_empty() {
-        Iso::Id(state_ty())
+        // Identity over the ACTUAL (possibly reduced) carrier, not the default
+        // (B-2.1b review F3): an all-zero/empty ROM under a reduced layout must
+        // still type-check against `state_ty_with(layout)`.
+        Iso::Id(crate::types::state_ty_with(layout))
     } else {
         // Shared high-zero gate computed once, wrapping all entries.
         let hz = pc_high_zero(layout, a);
