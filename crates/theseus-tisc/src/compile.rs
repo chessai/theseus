@@ -28,6 +28,15 @@ use crate::types::{
 pub enum CompileError {
     /// The program requires more leaves than the compiler supports.
     TooManyLeaves { needed: usize, max: usize },
+    /// A skip-block (`Plus`/controlled-idiom/data-dependent-iter/fold) needed
+    /// `needed` non-reusable aux registers LIVE across its body, but only
+    /// `available` free register slots (plus zero-init scratch/mem displacement
+    /// slots) could be drawn without aliasing live data. This is a GRACEFUL
+    /// register-budget reject (reject-don't-corrupt), NOT a leaf-count overflow
+    /// and NOT corruption: each nesting level spends per-level skip-block aux
+    /// that the aux FRAME's O(1)-in-depth reuse does not cover (A-5b §2.3), so
+    /// deep nesting exhausts the register budget at the deepest skip-block.
+    AuxRegistersExhausted { needed: usize, available: usize },
     /// A constructor deferred to a later milestone.
     Deferred(String),
     /// A `Prim` whose clause table doesn't match any recognized pattern.
@@ -64,6 +73,13 @@ impl fmt::Display for CompileError {
             CompileError::TooManyLeaves { needed, max } => {
                 write!(f, "program needs {needed} leaves but maximum is {max}")
             }
+            CompileError::AuxRegistersExhausted { needed, available } => write!(
+                f,
+                "skip-block needs {needed} live aux register(s) but only {available} free \
+                 register slot(s) are available without aliasing live data — a graceful \
+                 register-budget reject (per-level skip-block aux, not covered by the O(1) \
+                 aux-frame reuse), NOT corruption (A-5b §2.3)"
+            ),
             CompileError::Deferred(msg) => write!(f, "deferred to later milestone: {msg}"),
             CompileError::UnrecognizedPrim(msg) => write!(f, "unrecognized prim: {msg}"),
             CompileError::AliasedRegisters { instr } => {
@@ -396,7 +412,12 @@ impl OccSet {
 const MAX_LEAVES: usize = 14 + MEM_WORDS;
 
 /// Maximum leaves for branching programs (need 2 free-zero cells for aux
-/// zero-source, ADR-0044 §2.4 / ADR-0046 §3.1).
+/// zero-source, ADR-0044 §2.4 / ADR-0046 §3.1). Documents the design bound; the
+/// skip-block aux-draw reject now reports `AuxRegistersExhausted` (register
+/// slots) rather than borrowing this leaf bound in a misleading message (A-5b
+/// review Finding 2), so this constant is currently referenced only as design
+/// documentation.
+#[allow(dead_code)]
 const MAX_LEAVES_BRANCHING: usize = 12 + MEM_WORDS;
 
 /// Maximum payload leaves for loop-carrier bodies (M-D.d §3, M-D.e slice 1).
@@ -743,9 +764,14 @@ fn allocate_aux(
         .collect();
 
     if free_slots.len() < needed || displaceable.len() < needed {
-        return Err(CompileError::TooManyLeaves {
-            needed: ctx.homes.len(),
-            max: MAX_LEAVES_BRANCHING,
+        // Register-budget exhaustion for THIS skip-block's aux draw — not a
+        // leaf-count overflow of the whole program. `count` aux regs are needed
+        // live across the body; `free_regs.len()` came free directly and the
+        // shortfall (`needed`) could not be covered by displacing register-home
+        // leaves into zero-init scratch/mem. Report register slots, not leaves.
+        return Err(CompileError::AuxRegistersExhausted {
+            needed: count,
+            available: free_regs.len(),
         });
     }
 
@@ -4070,6 +4096,21 @@ fn lower_fold_unfold(
             reusable_aux: dctx.reusable_aux,
         };
 
+        // A-5b FRAGILITY INVARIANT (review Finding 3): `body_ctx.occ` is
+        // `dctx.occ` UNCHANGED — this fold's OWN live aux (`rb`=aux[0],
+        // `temp`=aux[1], drawn from `allocate_aux` above and live across every
+        // layer's body copy) are NOT occ-marked here, unlike R4/R5's skip-block
+        // aux (`lower_data_dependent_iter`/`lower_bare_plus`, which occ-mark
+        // {rb,temp} before lowering their bodies). So a nested skip-block or
+        // Trace frame draw inside `body` would NOT see {rb,temp} as taken and
+        // could alias them. This is SAFE TODAY ONLY because Guard 2 below
+        // rejects any body that emits a Swapbr — no inner skip-block/Trace can
+        // survive under a fold copy, so no body-side frame draw ever runs, and
+        // the A-5b `reusable_aux` propagation above is dead code (protection by
+        // accident of a different guard). The DAY fold admits inner control,
+        // occ-mark {rb,temp} here (R4/R5-style) BEFORE lowering the body, or
+        // this becomes live frame-aliasing corruption.
+        //
         // Lower the body against this per-copy context.
         let (body_instrs, body_ctx_out) = lower(body, &body_ctx, meta)?;
 

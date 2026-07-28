@@ -1917,6 +1917,17 @@ fn mdd_trace_under_times_compiles_and_runs() {
     // BR/scratch that only the terminal check can see. This program was the exact
     // observation-DEGENERATE case (trace factor : One↔One, sibling Id) that the
     // fast oracle could not certify — so we assert the REAL CPU here.
+    //
+    // DEGENERATE for Finding-1 coverage — DO NOT count this as the adversarial
+    // reproducer. The body here is a self-cancelling One↔One trace with a
+    // symmetric Id sibling: a wrong arm / aliased tag is INVISIBLE in the output
+    // payload, so this program passes green even if the tag aliases g. It earns
+    // its place only as a REAL-CPU witness (the terminal BR/s0/s1 check catches
+    // parked residue that the fast oracle cannot). The genuine Finding-1
+    // reproducers — asymmetric arms where a wrong arm is VISIBLE in the payload —
+    // are `times_trace_nondegenerate_body_runs` (probe1/probe2) and
+    // `times_trace_wider_payload_runs` (probe6). If those are ever removed,
+    // this test does NOT cover the Finding-1 regression on its own.
     let (body, u_ty) = build_3cycle_body(); // Trace(Bit, 3cycle) : One ↔ One
     let trace = Iso::trace(u_ty, body);
     let g = Iso::Id(Type::sum(Type::One, Type::One)); // Id(Bit) — the sibling factor
