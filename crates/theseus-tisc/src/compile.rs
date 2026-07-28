@@ -412,12 +412,10 @@ impl OccSet {
 const MAX_LEAVES: usize = 14 + MEM_WORDS;
 
 /// Maximum leaves for branching programs (need 2 free-zero cells for aux
-/// zero-source, ADR-0044 §2.4 / ADR-0046 §3.1). Documents the design bound; the
-/// skip-block aux-draw reject now reports `AuxRegistersExhausted` (register
-/// slots) rather than borrowing this leaf bound in a misleading message (A-5b
-/// review Finding 2), so this constant is currently referenced only as design
-/// documentation.
-#[allow(dead_code)]
+/// zero-source, ADR-0044 §2.4 / ADR-0046 §3.1). The skip-block aux-draw reject
+/// reports `TooManyLeaves` against this bound for a genuine leaf-count overflow,
+/// and `AuxRegistersExhausted` when the leaves fit but a per-level skip-block's
+/// aux can't be drawn (A-5b review Finding 2).
 const MAX_LEAVES_BRANCHING: usize = 12 + MEM_WORDS;
 
 /// Maximum payload leaves for loop-carrier bodies (M-D.d §3, M-D.e slice 1).
@@ -764,14 +762,26 @@ fn allocate_aux(
         .collect();
 
     if free_slots.len() < needed || displaceable.len() < needed {
-        // Register-budget exhaustion for THIS skip-block's aux draw — not a
-        // leaf-count overflow of the whole program. `count` aux regs are needed
-        // live across the body; `free_regs.len()` came free directly and the
-        // shortfall (`needed`) could not be covered by displacing register-home
-        // leaves into zero-init scratch/mem. Report register slots, not leaves.
-        return Err(CompileError::AuxRegistersExhausted {
-            needed: count,
-            available: free_regs.len(),
+        // This site has TWO distinct failure modes; report them distinctly
+        // (A-5b review Finding 2):
+        //  (a) LEAF-COUNT overflow — the whole program has more leaves than the
+        //      branching budget supports (`ctx.homes.len() > MAX_LEAVES_BRANCHING`);
+        //      a genuine capacity overflow → `TooManyLeaves`.
+        //  (b) AUX-REGISTER exhaustion — the program's leaves DO fit, but THIS
+        //      skip-block's `count` live aux regs can't be drawn without aliasing
+        //      live data (per-level skip-block aux not covered by the O(1)
+        //      aux-frame reuse, A-5b §2.3) → `AuxRegistersExhausted`, a graceful
+        //      register-budget reject (reject-don't-corrupt), NOT corruption.
+        return Err(if ctx.homes.len() > MAX_LEAVES_BRANCHING {
+            CompileError::TooManyLeaves {
+                needed: ctx.homes.len(),
+                max: MAX_LEAVES_BRANCHING,
+            }
+        } else {
+            CompileError::AuxRegistersExhausted {
+                needed: count,
+                available: free_regs.len(),
+            }
         });
     }
 
