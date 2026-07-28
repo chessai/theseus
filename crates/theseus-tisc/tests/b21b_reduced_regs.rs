@@ -291,3 +291,38 @@ fn register_shrink_win_measurement() {
         "reduced num_regs must lower step_j (got {j4:.6e} >= {j8:.6e})"
     );
 }
+
+/// B-2.1b correctness (advisor): `derive_layout` must NOT shrink `num_regs`
+/// when the program names a SCRATCH operand. Scratch operand indices are
+/// absolute (`NUM_REGS + s`) and decode via `s[idx − num_regs]`, so a reduced
+/// `num_regs` would misroute them (idx 10 = s2 at num_regs=8 → s6 at num_regs=4
+/// = silent corruption). A program using only r0..r3 but ALSO scratch s2 must
+/// therefore keep `num_regs = 8`, forgoing the register-shrink win rather than
+/// misroute. (Reproduces the latent hazard: without the fix, derive_layout
+/// ignores the scratch operand and returns num_regs=4.)
+#[test]
+fn derive_layout_pins_num_regs_when_scratch_operand_used() {
+    // Register-only r0..r3 → shrinks to num_regs = 4 (the win applies).
+    let reg_only = vec![
+        Instr::Add { rd: 0, rs: 1 },
+        Instr::Xor { rd: 2, rs: 3 },
+    ];
+    assert_eq!(
+        derive_layout(&reg_only).num_regs,
+        4,
+        "register-only r0..r3 must shrink to num_regs=4"
+    );
+
+    // Same registers, but ALSO a scratch operand s2 (Ccnot rt = idx 10) →
+    // num_regs must stay 8 (else idx 10 misroutes to s6).
+    let with_scratch = vec![
+        Instr::Add { rd: 0, rs: 1 },
+        Instr::Xor { rd: 2, rs: 3 },
+        Instr::Ccnot { rd: 0, rs: 1, rt: 10 },
+    ];
+    assert_eq!(
+        derive_layout(&with_scratch).num_regs,
+        8,
+        "scratch operand (idx 10=s2) present → num_regs must stay 8, not misroute"
+    );
+}

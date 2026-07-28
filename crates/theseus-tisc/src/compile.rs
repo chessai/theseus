@@ -3049,24 +3049,45 @@ use crate::types::Layout;
 ///    program is CPU-only and `mem_words = 0` (it runs on the CPU-only
 ///    `step(rom)` ring — no composite carrier, no bus).
 ///  - **registers**: the highest general-register operand index named
-///    (`< NUM_REGS`; scratch operands `8..16` are excluded — the scratch
-///    region is not shrunk in this slice). `num_regs` rounds this up to a
-///    power of two.
+///    (`< NUM_REGS`). `num_regs` rounds this up to a power of two.
 ///
-/// `w_data`/`w_ctl`/`w_pc` are unchanged (B-2.1/B-2.2 own those). At the
+/// **SCRATCH-OPERAND SAFETY (correctness-critical):** a scratch operand is
+/// encoded as an ABSOLUTE index `NUM_REGS + s` (= 8 + s), and `operand_field`
+/// decodes it as `s[idx − num_regs]`. That decode is only correct at the
+/// `num_regs` the index was encoded against (the default 8). If we shrank
+/// `num_regs` while the program names a scratch operand, idx `8+s` would decode
+/// to `s[8+s − num_regs]` — the WRONG scratch word (silent misroute). So: if the
+/// program names ANY scratch operand (`loc ≥ NUM_REGS`), we DO NOT shrink the
+/// register file (`num_regs` stays 8). The register-shrink win therefore applies
+/// only to register-only programs; scratch-using programs keep the default
+/// register file (no misroute). (Re-encoding scratch indices against a reduced
+/// `num_regs` is a possible future slice; not this one.)
+///
+/// `w_data`/`w_ctl`/`w_pc` are unchanged (B-2.1c/B-2.2 own those). At the
 /// default program shape this returns a layout equal to `Layout::default()`
 /// EXCEPT `mem_words`/`num_regs` when the program genuinely uses fewer.
 pub fn derive_layout(instrs: &[Instr]) -> Layout {
     let uses_mem = instrs.iter().any(Instr::uses_mem);
     let mut max_named_reg: Option<usize> = None;
+    let mut uses_scratch_operand = false;
     for instr in instrs {
         for loc in instr.operand_locs() {
             let l = loc as usize;
             if l < NUM_REGS {
                 max_named_reg = Some(max_named_reg.map_or(l, |m| m.max(l)));
+            } else {
+                // A scratch operand (absolute index ≥ NUM_REGS) — its decode is
+                // tied to the default register-file boundary; pin num_regs = 8.
+                uses_scratch_operand = true;
             }
         }
     }
+    // Pin the full register file when scratch operands are present (see above).
+    let max_named_reg = if uses_scratch_operand {
+        Some(NUM_REGS - 1)
+    } else {
+        max_named_reg
+    };
     Layout::for_program_facts(uses_mem, max_named_reg)
 }
 
