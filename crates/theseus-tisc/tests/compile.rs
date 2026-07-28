@@ -1437,6 +1437,107 @@ fn scratch_operand_ccnot_runs_on_real_ring() {
     assert_eq!(sys.mem, memnz, "system_step: mem inert for a CPU-only op");
 }
 
+/// A-5b Piece 1 — scratch-`rd` SWAPBR real-ring AUTHORITY. The encoder
+/// relaxation (asm.rs) lets `Swapbr` name a scratch operand (s2..s7); the
+/// datapath already routes rd over the reg∪scratch A-0 crossbar. This proves a
+/// scratch-`rd` SWAPBR executes a REAL branch + come-from on the real ring
+/// (`run_rom_on_cpu == eval`), where the come-from token lives in scratch s2 the
+/// whole time — the SWAPBR-specific analogue of `scratch_operand_ccnot_…`.
+///
+/// It mirrors `branching::taken_branch_with_come_from`, but the come-from token
+/// rests in s2 (operand idx 10) instead of r0:
+///   init:  s2 = δ = 3, BR = 0, all regs 0.
+///   PC=0:  SWAPBR s2   — BR ← 3, s2 ← 0.  end-of-step PC = 0 + 3 + 1 = 4 (branch).
+///   PC=4:  SWAPBR s2   — come-from: BR ← 0, s2 ← 3 (token restored). PC = 4+0+1 = 5.
+///   PC=5:  ADDI r1,0x42 — arrival proof: r1 = 0x42.
+/// Indices 1..4 are XORI r7,0 NOPs (identity) so PC=4 lands on the come-from.
+/// After PC=5 the CPU parks (BR=0, zero ROM words = ADDI r0,0 identity). Terminal
+/// BR/s0/s1 = 0 (checked by run_rom_on_cpu); s2 restored to its input δ.
+#[test]
+fn scratch_operand_swapbr_runs_on_real_ring() {
+    let delta: u8 = 3;
+    let target = delta as usize + 1; // = 4 (PC after the branch SWAPBR)
+    let mut instrs: Vec<Instr> = vec![
+        Instr::Swapbr { rd: 10 }, // 0: branch — BR ← s2(=δ), s2 ← 0
+    ];
+    while instrs.len() < target {
+        instrs.push(Instr::Xori { rd: 7, imm: 0 }); // NOP filler (identity)
+    }
+    instrs.push(Instr::Swapbr { rd: 10 }); // 4: come-from — BR ← 0, s2 ← δ
+    instrs.push(Instr::Addi { rd: 1, imm: 0x42 }); // 5: arrival proof
+
+    // The encoder must now ACCEPT the scratch-rd SWAPBR (the relaxation).
+    theseus_tisc::asm::assemble(&instrs).expect("scratch-rd SWAPBR must now assemble");
+
+    let s_max = max_skip_distance(&instrs);
+    // Budget: run past the ADDI plus a couple of park steps to prove the CPU
+    // idles quiescently after arrival (BR stays 0, s2 stays δ).
+    let budget = instrs.len() + 2;
+
+    let mk = |mem: [u8; MEM_WORDS]| StateVals {
+        regs: [0; NUM_REGS],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        // s2 (idx 10 operand) = δ come-from token; distinct sentinels in the
+        // OTHER data scratch words so a routing bug (reading s3 instead of s2)
+        // is visible.
+        scratch: [0x00, 0x00, delta, 0xDE, 0xAD, 0xBE, 0xEF, 0x77],
+        mem,
+    };
+
+    let check = |got: &StateVals, ring: &str| {
+        assert_eq!(
+            got.regs[1], 0x42,
+            "{ring}: arrival ADDI must have run (r1 = 0x42) — proves the branch \
+             SWAPBR jumped to the come-from at PC={target} then fell through to ADDI"
+        );
+        assert_eq!(
+            got.scratch[2], delta,
+            "{ring}: come-from must RESTORE the token into s2 (= δ); a datapath \
+             gap swapping BR against the wrong word would leave s2 = 0"
+        );
+        assert_eq!(got.scratch[3], 0xDE, "{ring}: s3 (the WRONG operand) untouched");
+        assert_eq!(got.scratch[4], 0xAD, "{ring}: s4 untouched");
+        assert_eq!(got.br, 0, "{ring}: BR restored to 0 (come-from cleared)");
+        assert_eq!(got.scratch[0], 0, "{ring}: s0 restored");
+        assert_eq!(got.scratch[1], 0, "{ring}: s1 restored");
+        // No other register perturbed (only r1 got the arrival marker).
+        for (i, &r) in got.regs.iter().enumerate() {
+            if i != 1 {
+                assert_eq!(r, 0, "{ring}: r{i} must stay 0");
+            }
+        }
+    };
+
+    // Cross-check against the byte-level reference sim (pinned to eval).
+    let fast = run_rom_fast(
+        &theseus_tisc::asm::assemble(&instrs).unwrap(),
+        mk([0; MEM_WORDS]),
+        budget,
+    );
+    check(&fast, "run_rom_fast");
+
+    // Real ring #1 — CPU-only `step(rom)` (mem-quiescent).
+    let step_run = run_rom_on_cpu(&instrs, mk([0; MEM_WORDS]), budget, s_max, theseus_eval::eval)
+        .expect("scratch-rd SWAPBR on step ring");
+    check(&step_run, "step");
+
+    // Real ring #2 — `system_step` (forced by nonzero init.mem), which must
+    // leave mem inert AND give the identical CpuState result.
+    let mut memnz = [0u8; MEM_WORDS];
+    memnz[0] = 0x9A;
+    let sys = run_rom_on_cpu(&instrs, mk(memnz), budget, s_max, theseus_eval::eval)
+        .expect("scratch-rd SWAPBR on system_step ring");
+    check(&sys, "system_step");
+    assert_eq!(sys.mem, memnz, "system_step: mem inert for a CPU-only program");
+
+    // The two real rings agree on the whole CpuState.
+    assert_eq!(sys.regs, step_run.regs, "step vs system_step regs differ");
+    assert_eq!(sys.scratch, step_run.scratch, "step vs system_step scratch differ");
+    assert_eq!(sys.br, step_run.br, "step vs system_step br differ");
+}
+
 // ── T6: real-CPU spot-checks (AUTHORITATIVE, #[ignore]) ────────────
 
 #[test]

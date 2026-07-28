@@ -351,11 +351,42 @@ fn encode_mexch_addr_out_of_range() {
 }
 
 #[test]
-fn encode_swapbr_reg_out_of_range() {
+fn encode_swapbr_operand_legality() {
+    // A-5b Piece 1: SWAPBR's rd now goes through the SAME `check_operand`
+    // legality as every other reg∪scratch op (the SWAPBR-specific
+    // `SwapbrRegOutOfRange` guard was removed). So the rejection variants
+    // change, and a legal scratch rd now ENCODES.
+
+    // rd = 9 (= s1, decoder-reserved) is still rejected — but now as the
+    // uniform `OperandReservedScratch`, not the old `SwapbrRegOutOfRange`.
     assert!(matches!(
         encode(Instr::Swapbr { rd: 9 }),
-        Err(AsmError::SwapbrRegOutOfRange { rd: 9 })
+        Err(AsmError::OperandReservedScratch { which: "rd", val: 9 })
     ));
+    // rd = 8 (= s0, the operand buffer) is likewise reserved.
+    assert!(matches!(
+        encode(Instr::Swapbr { rd: 8 }),
+        Err(AsmError::OperandReservedScratch { which: "rd", val: 8 })
+    ));
+    // rd = 16 (out of the 0..16 operand space) still rejects.
+    assert!(matches!(
+        encode(Instr::Swapbr { rd: 16 }),
+        Err(AsmError::RegOutOfRange { which: "rd", val: 16 })
+    ));
+
+    // POSITIVE: rd = 10 (= s2, a legal scratch operand) now ENCODES, and
+    // round-trips through decode exactly like a register rd.
+    let word = encode(Instr::Swapbr { rd: 10 }).expect("SWAPBR s2 must now encode");
+    assert_eq!(
+        decode(word),
+        Some(Instr::Swapbr { rd: 10 }),
+        "scratch-rd SWAPBR must round-trip encode∘decode"
+    );
+    // r0..r7 unaffected — a register rd still encodes.
+    assert!(encode(Instr::Swapbr { rd: 0 }).is_ok());
+    assert!(encode(Instr::Swapbr { rd: 7 }).is_ok());
+    // Top legal scratch operand s7 (= idx 15) encodes.
+    assert!(encode(Instr::Swapbr { rd: 15 }).is_ok());
 }
 
 #[test]

@@ -379,12 +379,14 @@ pub fn encode(instr: Instr) -> Result<u32, AsmError> {
             }
             r_word(0b0111, rd, 0, sx)
         }
-        Instr::Swapbr { rd } => {
-            if (rd as usize) >= NUM_REGS {
-                return Err(AsmError::SwapbrRegOutOfRange { rd });
-            }
-            r_word(0b1000, rd, 0, 0)
-        }
+        // A-5b Piece 1: route SWAPBR's rd through the SAME `check_operand`
+        // legality as every other reg∪scratch op (via `r_word`). The
+        // datapath already routes rd over the full reg∪scratch A-0 crossbar
+        // (decoder `with_target(R_RD, ...)`), so a scratch rd (s2..s7 = idx
+        // 10..15) executes correctly; only this conservative encoder guard
+        // rejected it. `check_operand` still rejects s0/s1 (idx 8/9,
+        // `OperandReservedScratch`) and idx ≥16 (`RegOutOfRange`).
+        Instr::Swapbr { rd } => r_word(0b1000, rd, 0, 0),
         Instr::Mexch { rd, addr } => {
             if (addr as usize) >= MEM_WORDS {
                 return Err(AsmError::MexchAddrOutOfRange { addr });
