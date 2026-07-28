@@ -106,9 +106,8 @@ use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_balanced, seq_list,
 };
 use crate::types::{
-    flat, reg_field, scratch_field, word8, MemWidth, BR_FIELD, BUS_ADDR_FIELD, BUS_ENABLE_FIELD,
-    BUS_WORD_FIELD, IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, IR_LO_FIELD, MEM_WIDTH,
-    MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_FIELDS, NUM_REGS, W,
+    flat, reg_field, scratch_field, word8, Layout, MemWidth, BUS_ADDR_FIELD, BUS_ENABLE_FIELD,
+    BUS_WORD_FIELD, IR_B0_FIELD, MEM_WIDTH, MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_REGS, W,
 };
 
 // ── Aux-field conventions ──────────────────────────────────────────
@@ -203,6 +202,14 @@ fn fields_ty(k: usize) -> Type {
 /// Lift a list of flat-wire gates over the given fields within a product
 /// of `n_fields` Word8 fields: within the core, field-list slot `j`,
 /// bit `i` is wire `8*j + i`.
+///
+/// B-2.1a: the per-field width is `W` (= `Layout::default().w_data`); when a
+/// reduced `w_data` lands (B-2.1b/c) this family must derive the wire count
+/// from the layout, and the `word8()` field type in `fields_ty` /
+/// `addressing::fields` must become a per-field data/control width — that
+/// mixed-width field type is the residual B-2.1b/c hard dependency (see the
+/// B-2.1a report). At `Layout::default()` (w_data = w_ctl = 8) it is exactly
+/// `word8()`, so this is byte-identical.
 pub fn on_fields_n(field_idxs: &[usize], gates: Vec<Iso>, n_fields: usize) -> Iso {
     use crate::addressing::at_fields_n;
     let k = field_idxs.len();
@@ -212,11 +219,14 @@ pub fn on_fields_n(field_idxs: &[usize], gates: Vec<Iso>, n_fields: usize) -> Is
     at_fields_n(core, field_idxs, n_fields)
 }
 
-/// Lift a list of flat-wire gates over the given State fields: within
-/// the core, field-list slot `j`, bit `i` is wire `8*j + i`.
-/// Equivalent to `on_fields_n(field_idxs, gates, NUM_FIELDS)`.
-pub(crate) fn on_fields(field_idxs: &[usize], gates: Vec<Iso>) -> Iso {
-    on_fields_n(field_idxs, gates, NUM_FIELDS)
+/// Lift a list of flat-wire gates over the given CpuState fields of `layout`:
+/// within the core, field-list slot `j`, bit `i` is wire `w_data*j + i`.
+/// Equivalent to `on_fields_n(field_idxs, gates, layout.num_fields())`.
+///
+/// B-2.1a: the CORE layout-parameterized `on_fields`. The zero-arg
+/// [`on_fields`] delegates at `Layout::default()`.
+pub(crate) fn on_fields_l(layout: &Layout, field_idxs: &[usize], gates: Vec<Iso>) -> Iso {
+    on_fields_n(field_idxs, gates, layout.num_fields())
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -262,12 +272,13 @@ pub const I_RD: RegSel = regsel([20, 21, 22, 23, 24]);
 /// Controlled word-swap: swap the Word8 fields `fa` and `fb` iff the
 /// control bit at `(ctrl_field, ctrl_bit)` is set. 8 K1 Fredkins; the
 /// control threads through each cell (no fanout).
-fn ctrl_word_swap(ctrl_field: usize, ctrl_bit: usize, fa: usize, fb: usize) -> Iso {
-    let n = 3 * W;
-    let gates = (0..W)
-        .map(|i| gate_at(n, &[ctrl_bit, W + i, 2 * W + i], fredkin_prim()))
+fn ctrl_word_swap(layout: &Layout, ctrl_field: usize, ctrl_bit: usize, fa: usize, fb: usize) -> Iso {
+    let w = layout.w_data;
+    let n = 3 * w;
+    let gates = (0..w)
+        .map(|i| gate_at(n, &[ctrl_bit, w + i, 2 * w + i], fredkin_prim()))
         .collect();
-    on_fields(&[ctrl_field, fa, fb], gates)
+    on_fields_l(layout, &[ctrl_field, fa, fb], gates)
 }
 
 /// Controlled swap of two W-bit words across a 2-factor product boundary.
@@ -320,23 +331,37 @@ pub fn cross_ctrl_fredkin(
 
 /// The 1-of-8 select tree over the fields `base(0)..base(7)`, steered
 /// by the low 3 bits of the operand field (`sel.bits[0..3]`).
-fn select_fields(sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
+///
+/// B-2.1a NOTE: the 3-level `0..4 / 0..2 / 0..1` topology assumes 8
+/// selectable fields (`num_regs = 8`). At a reduced `num_regs` the tree
+/// depth shrinks (design DF-3) — a residual B-2.1b/c dependency.
+fn select_fields(layout: &Layout, sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
     let (f2, b2) = sel.bits[2];
     let (f1, b1) = sel.bits[1];
     let (f0, b0) = sel.bits[0];
     let mut steps = Vec::new();
     for i in 0..4 {
-        steps.push(ctrl_word_swap(f2, b2, base(i), base(i + 4)));
+        steps.push(ctrl_word_swap(layout, f2, b2, base(i), base(i + 4)));
     }
     for i in 0..2 {
-        steps.push(ctrl_word_swap(f1, b1, base(i), base(i + 2)));
+        steps.push(ctrl_word_swap(layout, f1, b1, base(i), base(i + 2)));
     }
-    steps.push(ctrl_word_swap(f0, b0, base(0), base(1)));
+    steps.push(ctrl_word_swap(layout, f0, b0, base(0), base(1)));
     seq_balanced(steps)
 }
 
-/// Map an operand index `0..16` to its State field: `i<8 → r[i]`,
-/// `8 ≤ i < 16 → s[i−8]` (the A-0 scratch-addressable operand space).
+/// Map an operand index to its State field for `layout`: `i < num_regs →
+/// r[i]`, else `s[i − num_regs]` (the A-0 scratch-addressable operand space).
+pub fn operand_field_l(layout: &Layout, i: usize) -> usize {
+    if i < layout.num_regs {
+        layout.reg_field(i)
+    } else {
+        layout.scratch_field(i - layout.num_regs)
+    }
+}
+
+/// Map an operand index `0..16` to its State field at the default layout:
+/// `i<8 → r[i]`, `8 ≤ i < 16 → s[i−8]`.
 pub fn operand_field(i: usize) -> usize {
     if i < NUM_REGS {
         reg_field(i)
@@ -369,7 +394,11 @@ pub fn operand_field(i: usize) -> usize {
 /// s2..s7 (idx 10..15) lives at position 10..15 = `base(2+k)+8`, reached
 /// purely via the i∈2..8 swaps; register operands (bit3=0) are inert
 /// here regardless. So s0/s1 (fields 14/15) are left UNTOUCHED.
-pub fn select_operand(sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
+/// B-2.1a: the CORE layout-parameterized crossbar. `ctrl_word_swap` derives
+/// its swapped-word width from `layout`; the 4-level `2..8 / +8 / 0..4 / 0..2`
+/// topology assumes `num_regs = 8` (residual B-2.1b/c dependency, DF-3). The
+/// zero-arg [`select_operand`] delegates at `Layout::default()`.
+pub fn select_operand_l(layout: &Layout, sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
     let (f3, b3) = sel.bits[3];
     let (f2, b2) = sel.bits[2];
     let (f1, b1) = sel.bits[1];
@@ -379,31 +408,37 @@ pub fn select_operand(sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
     // (whose scratch partners base(8)/base(9) = s0/s1 are the reserved
     // operand-buffer + predicate word — never legal operands).
     for i in 2..8 {
-        steps.push(ctrl_word_swap(f3, b3, base(i), base(i + 8)));
+        steps.push(ctrl_word_swap(layout, f3, b3, base(i), base(i + 8)));
     }
     // Level 2 (bit 2): quarter swaps within the low 8.
     for i in 0..4 {
-        steps.push(ctrl_word_swap(f2, b2, base(i), base(i + 4)));
+        steps.push(ctrl_word_swap(layout, f2, b2, base(i), base(i + 4)));
     }
     // Level 1 (bit 1).
     for i in 0..2 {
-        steps.push(ctrl_word_swap(f1, b1, base(i), base(i + 2)));
+        steps.push(ctrl_word_swap(layout, f1, b1, base(i), base(i + 2)));
     }
     // Level 0 (bit 0).
-    steps.push(ctrl_word_swap(f0, b0, base(0), base(1)));
+    steps.push(ctrl_word_swap(layout, f0, b0, base(0), base(1)));
     seq_balanced(steps)
+}
+
+/// The 1-of-16 operand select tree over `reg ∪ scratch` at the default
+/// layout. Delegates to [`select_operand_l`] with `Layout::default()`.
+pub fn select_operand(sel: RegSel, base: impl Fn(usize) -> usize) -> Iso {
+    select_operand_l(&Layout::default(), sel, base)
 }
 
 /// Bring general register `r[sel]` to the fixed slot r0 (field 0).
 /// The other registers are permuted data-dependently; composing with
 /// `Iso::sym(select_reg(sel))` restores them exactly.
 pub fn select_reg(sel: RegSel) -> Iso {
-    select_fields(sel, reg_field)
+    select_fields(&Layout::default(), sel, reg_field)
 }
 
 /// Bring scratch word `s[sel]` to the fixed slot s0 (field 14).
 pub fn select_scratch(sel: RegSel) -> Iso {
-    select_fields(sel, scratch_field)
+    select_fields(&Layout::default(), sel, scratch_field)
 }
 
 /// The 1-of-N select tree over a right factor of `n_mem` Word8 fields,
@@ -472,18 +507,18 @@ pub fn crossbar_model(field: usize, regs: &mut [u8; 8]) {
 
 // Wire layout of the predicate core [IR_b0, IR_b1, IR_b2, IR_b3, s1]
 // (A-0, 32-bit IR): IR bit b (0..32) = wire b; s1 bit j = wire 32 + j.
-const PRED_WIRE: usize = 32; // s1 bit 0
-const CHAIN0_WIRE: usize = 33; // s1 bits 1..3: Toffoli-chain intermediates
+// B-2.1a: the IR bytes + s1 are the control region (w_ctl); `pred_compute`
+// derives the s1 base as `4·w_ctl` (= 32 at the default layout, w_ctl = 8).
 const CSWAP_CTRL_WIRE_IN_S1: usize = 4; // s1 bit 4: CSWAP rd[0] copy
 
 /// The five fields the predicate core lifts over (four IR bytes + s1).
-fn pred_fields() -> [usize; 5] {
+fn pred_fields(layout: &Layout) -> [usize; 5] {
     [
-        IR_B0_FIELD,
-        IR_B1_FIELD,
-        IR_B2_FIELD,
-        IR_B3_FIELD,
-        AUX_PRED_FIELD,
+        layout.ir_byte_field(0),
+        layout.ir_byte_field(1),
+        layout.ir_byte_field(2),
+        layout.ir_byte_field(3),
+        layout.scratch_field(1), // s1 = AUX_PRED_FIELD
     ]
 }
 
@@ -492,9 +527,14 @@ fn pred_fields() -> [usize; 5] {
 /// in s1 bits 1..3 and stay set until the adjoint uncomputes them.
 ///
 /// A-0: the core spans four IR byte-fields (32 wires) + s1 (wires
-/// 32..40); IR-bit literals index the flat 32-wire IR directly.
-fn pred_compute(controls: &[(usize, bool)]) -> Iso {
-    let n = 5 * W;
+/// `4·w_ctl`..`5·w_ctl`); IR-bit literals index the flat 32-wire IR
+/// directly. B-2.1a: s1 (the config/predicate word) is a control-region
+/// (`w_ctl`) field; `pred_wire = 4·w_ctl` (`= PRED_WIRE` at default).
+fn pred_compute(layout: &Layout, controls: &[(usize, bool)]) -> Iso {
+    let wc = layout.w_ctl;
+    let n = 5 * wc;
+    let pred_wire = 4 * wc; // s1 bit 0
+    let chain0_wire = 4 * wc + 1; // s1 bit 1
     let k = controls.len();
     assert!((2..=5).contains(&k));
     let nots: Vec<Iso> = controls
@@ -506,15 +546,15 @@ fn pred_compute(controls: &[(usize, bool)]) -> Iso {
     let mut acc = controls[0].0;
     for (j, c) in controls.iter().enumerate().skip(1) {
         let tgt = if j == k - 1 {
-            PRED_WIRE
+            pred_wire
         } else {
-            CHAIN0_WIRE + (j - 1)
+            chain0_wire + (j - 1)
         };
         gates.push(gate_at(n, &[acc, c.0, tgt], toffoli_prim()));
         acc = tgt;
     }
     gates.extend(nots);
-    on_fields(&pred_fields(), gates)
+    on_fields_l(layout, &pred_fields(layout), gates)
 }
 
 /// Predicate literals for R-format opcode `op` (fmt bit = 1; the four
@@ -546,16 +586,27 @@ fn i_pred(op: u8) -> Vec<(usize, bool)> {
 // Gated operation cores
 // ══════════════════════════════════════════════════════════════════════
 
-// Standard 3-field core [target=r0-slot, s0, s1]: target wires 0..8,
-// operand wires 8..16, predicate wire 16.
-const TGT0: usize = 0;
-const OPD0: usize = W;
-const PRED3: usize = 2 * W;
+// Standard 3-field core [target=r0-slot, s0, s1]: target wires 0..w_data,
+// operand wires w_data..2·w_data, predicate wire 2·w_data. At the default
+// layout (w_data = 8) these are 0 / 8 / 16. B-2.1a derives them from
+// `layout.w_data` via `tgt0/opd0/pred3`.
+
+/// Standard 3-field-core wire offsets for a given data width `w`
+/// (`[target=r0-slot, s0, s1]`): target base 0, operand base `w`, predicate `2w`.
+const fn tgt0(_w: usize) -> usize {
+    0
+}
+const fn opd0(w: usize) -> usize {
+    w
+}
+const fn pred3(w: usize) -> usize {
+    2 * w
+}
 
 /// The Takahashi–Kunihiro zero-ancilla in-place adder gate list on
-/// target wires `b0..b0+8` and operand wires `a0..a0+8`, with every
-/// gate carrying `pred` as an additional control.
-fn gated_tk_gates(n: usize, pred: usize, b0: usize, a0: usize) -> Vec<Iso> {
+/// target wires `b0..b0+w` and operand wires `a0..a0+w`, with every
+/// gate carrying `pred` as an additional control. `w` = data-word width.
+fn gated_tk_gates_w(w: usize, n: usize, pred: usize, b0: usize, a0: usize) -> Vec<Iso> {
     enum Tk {
         C { c: usize, t: usize },
         T { c1: usize, c2: usize, t: usize },
@@ -563,16 +614,16 @@ fn gated_tk_gates(n: usize, pred: usize, b0: usize, a0: usize) -> Vec<Iso> {
     let a = |i: usize| a0 + i;
     let b = |i: usize| b0 + i;
     let mut g: Vec<Tk> = Vec::new();
-    for i in 1..W - 1 {
+    for i in 1..w - 1 {
         g.push(Tk::C { c: a(i), t: b(i) });
     }
-    for i in (1..W - 1).rev() {
+    for i in (1..w - 1).rev() {
         g.push(Tk::C {
             c: a(i),
             t: a(i + 1),
         });
     }
-    for i in 0..W - 1 {
+    for i in 0..w - 1 {
         g.push(Tk::T {
             c1: a(i),
             c2: b(i),
@@ -580,15 +631,15 @@ fn gated_tk_gates(n: usize, pred: usize, b0: usize, a0: usize) -> Vec<Iso> {
         });
     }
     g.push(Tk::C {
-        c: a(W - 1),
-        t: b(W - 1),
+        c: a(w - 1),
+        t: b(w - 1),
     });
     g.push(Tk::T {
-        c1: a(W - 2),
-        c2: b(W - 2),
-        t: a(W - 1),
+        c1: a(w - 2),
+        c2: b(w - 2),
+        t: a(w - 1),
     });
-    for i in (1..W - 1).rev() {
+    for i in (1..w - 1).rev() {
         g.push(Tk::C { c: a(i), t: b(i) });
         g.push(Tk::T {
             c1: a(i - 1),
@@ -596,13 +647,13 @@ fn gated_tk_gates(n: usize, pred: usize, b0: usize, a0: usize) -> Vec<Iso> {
             t: a(i),
         });
     }
-    for i in 1..W - 1 {
+    for i in 1..w - 1 {
         g.push(Tk::C {
             c: a(i),
             t: a(i + 1),
         });
     }
-    for i in 0..W - 1 {
+    for i in 0..w - 1 {
         g.push(Tk::C { c: a(i), t: b(i) });
     }
     g.into_iter()
@@ -613,17 +664,28 @@ fn gated_tk_gates(n: usize, pred: usize, b0: usize, a0: usize) -> Vec<Iso> {
         .collect()
 }
 
-/// Gated XOR merge: target wires `t0..t0+8` ^= operand wires `s0..s0+8`
-/// iff `pred`.
-fn gated_xor_gates(n: usize, pred: usize, t0: usize, s0: usize) -> Vec<Iso> {
-    (0..W)
+/// Gated XOR merge: target wires `t0..t0+w` ^= operand wires `s0..s0+w`
+/// iff `pred`. `w` = data-word width.
+fn gated_xor_gates_w(w: usize, n: usize, pred: usize, t0: usize, s0: usize) -> Vec<Iso> {
+    (0..w)
         .map(|i| gate_at(n, &[pred, s0 + i, t0 + i], toffoli_prim()))
         .collect()
 }
 
-/// Gated barrel rotate-left of target wires `t0..t0+8` by the 3-bit
+/// Gated barrel rotate-left of the `w` target wires `t0..t0+w` by the 3-bit
 /// amount whose bit `k` is at wire `ctrl(k)`, all gated on `pred`.
-fn gated_rotl_gates(n: usize, pred: usize, t0: usize, ctrl: impl Fn(usize) -> usize) -> Vec<Iso> {
+///
+/// B-2.1a NOTE: `rot_transpositions` hardcodes an 8-slot rotation, so the
+/// rotator's permutation is fixed to `w = 8`. At `Layout::default()` this is
+/// exactly the shipped rotator; a reduced `w_data` (B-2.1b/c) needs a
+/// `w`-slot `rot_transpositions` — a residual hard dependency (see report).
+fn gated_rotl_gates_w(
+    _w: usize,
+    n: usize,
+    pred: usize,
+    t0: usize,
+    ctrl: impl Fn(usize) -> usize,
+) -> Vec<Iso> {
     let mut gates = Vec::new();
     for k in 0..3 {
         for (i, j) in rot_transpositions(1 << k) {
@@ -644,41 +706,48 @@ fn gated_rotl_gates(n: usize, pred: usize, t0: usize, ctrl: impl Fn(usize) -> us
 /// Swap-fetch: exchange `r[src]` with s0 (bring the operand to the
 /// fixed s0 slot). Exact inverse restores both; zero cells beyond the
 /// two crossbar traversals.
-fn fetch_operand(src: RegSel) -> Iso {
+///
+/// B-2.1a: `at_fields` moves a `word8()` (control-width) field, and
+/// `select_operand` routes over `layout.num_regs`; both derive from `layout`.
+fn fetch_operand(layout: &Layout, src: RegSel) -> Iso {
     // A-0 (BLOCKER-2 fix): route over reg∪scratch (the full 16-way
     // crossbar), not the 8-way register-only tree. A register operand
     // (idx 0..8) has operand-bit 3 = 0, so the top crossbar level is
     // inert and behaviour is identical to the old `select_reg`; a scratch
     // operand (idx 8..16) brings s[idx-8] to the fixed slot `operand_field(0)`.
-    let sel = select_operand(src, operand_field);
+    let sel = select_operand_l(layout, src, |i| operand_field_l(layout, i));
     let swap = at_fields(
         Iso::SwapProd(word8(), word8()),
-        &[operand_field(0), AUX_OPERAND_FIELD],
+        &[operand_field_l(layout, 0), layout.scratch_field(0)],
     );
     Iso::seq(sel.clone(), Iso::seq(swap, Iso::sym(sel)))
 }
 
 /// Route operand `sel` (over reg∪scratch) to the fixed slot, apply
 /// `core`, route back. A-0 (BLOCKER-2 fix): the crossbar spans reg∪scratch.
-fn with_target(sel: RegSel, core: Iso) -> Iso {
-    let s = select_operand(sel, operand_field);
+fn with_target(layout: &Layout, sel: RegSel, core: Iso) -> Iso {
+    let s = select_operand_l(layout, sel, |i| operand_field_l(layout, i));
     Iso::seq(s.clone(), Iso::seq(core, Iso::sym(s)))
 }
 
 /// Bracket `body` with predicate compute/uncompute.
-fn predicated(controls: &[(usize, bool)], body: Iso) -> Iso {
-    let p = pred_compute(controls);
+fn predicated(layout: &Layout, controls: &[(usize, bool)], body: Iso) -> Iso {
+    let p = pred_compute(layout, controls);
     Iso::seq(p.clone(), Iso::seq(body, Iso::sym(p)))
 }
 
-/// Standard core lift onto [r0-slot, s0, s1].
-fn std_core(gates: Vec<Iso>) -> Iso {
-    on_fields(&[reg_field(0), AUX_OPERAND_FIELD, AUX_PRED_FIELD], gates)
+/// Standard core lift onto [r0-slot, s0, s1] of `layout`.
+fn std_core(layout: &Layout, gates: Vec<Iso>) -> Iso {
+    on_fields_l(
+        layout,
+        &[layout.reg_field(0), layout.scratch_field(0), layout.scratch_field(1)],
+        gates,
+    )
 }
 
 /// A gated reg-reg instruction: fetch rs, route rd, run `core`.
-fn reg_reg(opcode: u8, core: Iso) -> Iso {
-    predicated(&r_pred(opcode), with_two_regs(R_RD, R_RS, core))
+fn reg_reg(layout: &Layout, opcode: u8, core: Iso) -> Iso {
+    predicated(layout, &r_pred(opcode), with_two_regs(layout, R_RD, R_RS, core))
 }
 
 /// Fetch `r[src]` into s0 and route `r[dst]` to the r0 slot, run
@@ -686,85 +755,111 @@ fn reg_reg(opcode: u8, core: Iso) -> Iso {
 /// leaves the *value* of `r[src]` in s0 (and writes s0's final content
 /// back into `r[src]` on exit), a core may read AND WRITE both
 /// operands locally: writes to the s0 wires become writes to `r[src]`.
-fn with_two_regs(dst: RegSel, src: RegSel, core: Iso) -> Iso {
-    let f = fetch_operand(src);
-    Iso::seq(f.clone(), Iso::seq(with_target(dst, core), Iso::sym(f)))
+fn with_two_regs(layout: &Layout, dst: RegSel, src: RegSel, core: Iso) -> Iso {
+    let f = fetch_operand(layout, src);
+    Iso::seq(f.clone(), Iso::seq(with_target(layout, dst, core), Iso::sym(f)))
 }
 
-fn add_core() -> Iso {
-    std_core(gated_tk_gates(3 * W, PRED3, TGT0, OPD0))
+fn add_core(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    std_core(layout, gated_tk_gates_w(w, 3 * w, pred3(w), tgt0(w), opd0(w)))
 }
 
-fn rotl_core() -> Iso {
-    std_core(gated_rotl_gates(3 * W, PRED3, TGT0, |k| OPD0 + k))
+fn rotl_core(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    std_core(
+        layout,
+        gated_rotl_gates_w(w, 3 * w, pred3(w), tgt0(w), |k| opd0(w) + k),
+    )
 }
 
 // ── B1.1: config-wire-parameterized cores ──────────────────────────────
 //
 // Identical to the `*_core()` builders above, but each gate carries s1 bit
-// `cfg` (PRED3 + cfg) as its control instead of the fixed predicate bit 0.
+// `cfg` (pred3 + cfg) as its control instead of the fixed predicate bit 0.
 // This lets the shared ALU gate each sub-block on its own decoded config
 // line while all sub-blocks share ONE fixed netlist. `cfg == 0` reproduces
 // the original `*_core()` exactly.
 
-fn add_core_at(cfg: usize) -> Iso {
-    std_core(gated_tk_gates(3 * W, PRED3 + cfg, TGT0, OPD0))
-}
-
-fn xor_core_at(cfg: usize) -> Iso {
-    std_core(gated_xor_gates(3 * W, PRED3 + cfg, TGT0, OPD0))
-}
-
-fn rotl_core_at(cfg: usize) -> Iso {
-    std_core(gated_rotl_gates(3 * W, PRED3 + cfg, TGT0, |k| OPD0 + k))
-}
-
-fn exch_core_at(cfg: usize) -> Iso {
+fn add_core_at(layout: &Layout, cfg: usize) -> Iso {
+    let w = layout.w_data;
     std_core(
-        (0..W)
-            .map(|i| gate_at(3 * W, &[PRED3 + cfg, TGT0 + i, OPD0 + i], fredkin_prim()))
+        layout,
+        gated_tk_gates_w(w, 3 * w, pred3(w) + cfg, tgt0(w), opd0(w)),
+    )
+}
+
+fn xor_core_at(layout: &Layout, cfg: usize) -> Iso {
+    let w = layout.w_data;
+    std_core(
+        layout,
+        gated_xor_gates_w(w, 3 * w, pred3(w) + cfg, tgt0(w), opd0(w)),
+    )
+}
+
+fn rotl_core_at(layout: &Layout, cfg: usize) -> Iso {
+    let w = layout.w_data;
+    std_core(
+        layout,
+        gated_rotl_gates_w(w, 3 * w, pred3(w) + cfg, tgt0(w), |k| opd0(w) + k),
+    )
+}
+
+fn exch_core_at(layout: &Layout, cfg: usize) -> Iso {
+    let w = layout.w_data;
+    std_core(
+        layout,
+        (0..w)
+            .map(|i| gate_at(3 * w, &[pred3(w) + cfg, tgt0(w) + i, opd0(w) + i], fredkin_prim()))
             .collect(),
     )
 }
 
-fn add_instr() -> Iso {
-    reg_reg(0b0000, add_core())
+fn add_instr(layout: &Layout) -> Iso {
+    reg_reg(layout, 0b0000, add_core(layout))
 }
 
-fn sub_instr() -> Iso {
-    reg_reg(0b0001, Iso::sym(add_core()))
+fn sub_instr(layout: &Layout) -> Iso {
+    reg_reg(layout, 0b0001, Iso::sym(add_core(layout)))
 }
 
-fn xor_core() -> Iso {
-    std_core(gated_xor_gates(3 * W, PRED3, TGT0, OPD0))
+fn xor_core(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    std_core(layout, gated_xor_gates_w(w, 3 * w, pred3(w), tgt0(w), opd0(w)))
 }
 
-fn exch_core() -> Iso {
+fn exch_core(layout: &Layout) -> Iso {
+    let w = layout.w_data;
     std_core(
-        (0..W)
-            .map(|i| gate_at(3 * W, &[PRED3, TGT0 + i, OPD0 + i], fredkin_prim()))
+        layout,
+        (0..w)
+            .map(|i| gate_at(3 * w, &[pred3(w), tgt0(w) + i, opd0(w) + i], fredkin_prim()))
             .collect(),
     )
 }
 
-fn xor_instr() -> Iso {
-    reg_reg(0b0010, xor_core())
+fn xor_instr(layout: &Layout) -> Iso {
+    reg_reg(layout, 0b0010, xor_core(layout))
 }
 
 /// EXCH rd, rs: with r[rd] at the r0 slot and the VALUE of r[rs] in s0
 /// (swap-fetch), a predicated swap of the two words is 8 native
 /// 1-controlled swaps; the swapped s0 content is written back into
 /// r[rs] by the unfetch.
-fn exch_instr() -> Iso {
-    predicated(&r_pred(0b0011), with_two_regs(R_RD, R_RS, exch_core()))
+fn exch_instr(layout: &Layout) -> Iso {
+    predicated(
+        layout,
+        &r_pred(0b0011),
+        with_two_regs(layout, R_RD, R_RS, exch_core(layout)),
+    )
 }
 
-fn rotl_instr() -> Iso {
-    reg_reg(0b0100, rotl_core())
+fn rotl_instr(layout: &Layout) -> Iso {
+    reg_reg(layout, 0b0100, rotl_core(layout))
 }
 
-fn rotr_instr() -> Iso {
-    reg_reg(0b0101, Iso::sym(rotl_core()))
+fn rotr_instr(layout: &Layout) -> Iso {
+    reg_reg(layout, 0b0101, Iso::sym(rotl_core(layout)))
 }
 
 /// CSWAP rd, rs, rt: copy the control bit r[rd][0] into s1 bit 4, then
@@ -773,20 +868,24 @@ fn rotr_instr() -> Iso {
 /// (controls = predicate ∧ rd[0]-copy); the swapped s0 content is
 /// written back into r[rs] by the unfetch, and the control copy is
 /// removed afterwards (r[rd] itself is never modified).
-fn cswap_instr() -> Iso {
+fn cswap_instr(layout: &Layout) -> Iso {
+    let w = layout.w_data;
     let copy_rd0 = with_target(
+        layout,
         R_RD,
-        on_fields(
-            &[reg_field(0), AUX_PRED_FIELD],
-            vec![gate_at(2 * W, &[0, W + CSWAP_CTRL_WIRE_IN_S1], cnot_prim())],
+        on_fields_l(
+            layout,
+            &[layout.reg_field(0), layout.scratch_field(1)],
+            vec![gate_at(2 * w, &[0, w + CSWAP_CTRL_WIRE_IN_S1], cnot_prim())],
         ),
     );
     let core = std_core(
-        (0..W)
+        layout,
+        (0..w)
             .map(|i| {
                 gate_at(
-                    3 * W,
-                    &[PRED3, PRED3 + CSWAP_CTRL_WIRE_IN_S1, OPD0 + i, TGT0 + i],
+                    3 * w,
+                    &[pred3(w), pred3(w) + CSWAP_CTRL_WIRE_IN_S1, opd0(w) + i, tgt0(w) + i],
                     gated_fredkin_prim(),
                 )
             })
@@ -794,9 +893,9 @@ fn cswap_instr() -> Iso {
     );
     let body = Iso::seq(
         copy_rd0.clone(),
-        Iso::seq(with_two_regs(R_RT, R_RS, core), Iso::sym(copy_rd0)),
+        Iso::seq(with_two_regs(layout, R_RT, R_RS, core), Iso::sym(copy_rd0)),
     );
-    predicated(&r_pred(0b0110), body)
+    predicated(layout, &r_pred(0b0110), body)
 }
 
 /// CCNOT rd, rs, rt: byte-parallel — `r[rd] ^= r[rs] & r[rt]` over all 8 bits.
@@ -822,9 +921,12 @@ fn cswap_instr() -> Iso {
 /// bracket in `decode_execute_shared`: the fetch operates on the
 /// UN-permuted register file, so it must sit outside the shared `sel_rd`
 /// crossbar (but inside/beside `fetch_rs`, disjoint slots).
-fn ccnot_fetch_rt_br() -> Iso {
-    let sel_rt = select_operand(R_RT, operand_field);
-    let swap_br = at_fields(Iso::SwapProd(word8(), word8()), &[reg_field(0), BR_FIELD]);
+fn ccnot_fetch_rt_br(layout: &Layout) -> Iso {
+    let sel_rt = select_operand_l(layout, R_RT, |i| operand_field_l(layout, i));
+    let swap_br = at_fields(
+        Iso::SwapProd(word8(), word8()),
+        &[layout.reg_field(0), layout.br_field()],
+    );
     Iso::seq(sel_rt.clone(), Iso::seq(swap_br, Iso::sym(sel_rt)))
 }
 
@@ -846,13 +948,15 @@ fn ccnot_fetch_rt_br() -> Iso {
 /// (it fetches over the un-permuted file). The swap targets are r0-slot and
 /// BR, both position-stable at this nesting depth. Wire layout of the gated
 /// swap core [r0-slot, BR, s1]: r0-slot = 0..W, BR = W..2W, s1 = 2W..3W.
-fn shared_fetch_rt_br_gated() -> Iso {
-    let sel_rt = select_operand(R_RT, operand_field);
+fn shared_fetch_rt_br_gated(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    let sel_rt = select_operand_l(layout, R_RT, |i| operand_field_l(layout, i));
     let gated_swap = |cfg: usize| {
-        on_fields(
-            &[reg_field(0), BR_FIELD, AUX_PRED_FIELD],
-            (0..W)
-                .map(|i| gate_at(3 * W, &[2 * W + cfg, i, W + i], fredkin_prim()))
+        on_fields_l(
+            layout,
+            &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],
+            (0..w)
+                .map(|i| gate_at(3 * w, &[2 * w + cfg, i, w + i], fredkin_prim()))
                 .collect(),
         )
     };
@@ -865,27 +969,34 @@ fn shared_fetch_rt_br_gated() -> Iso {
 /// [r0-slot(rd), s0(rs), BR(rt-value), s1(pred)] — gated on the pred bit.
 /// Wire layout: r0-slot = 0..W, s0 = W..2W, BR = 2W..3W, s1 = 3W..4W.
 /// Per-bit CCC-NOT: target = bit i, controls = pred(3W), rs-bit(W+i), rt-bit(2W+i).
-fn ccnot_core() -> Iso {
-    let gates = (0..W)
-        .map(|i| gate_at(4 * W, &[3 * W, W + i, 2 * W + i, i], cccnot_prim()))
+fn ccnot_core(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    let gates = (0..w)
+        .map(|i| gate_at(4 * w, &[3 * w, w + i, 2 * w + i, i], cccnot_prim()))
         .collect();
-    on_fields(
-        &[reg_field(0), AUX_OPERAND_FIELD, BR_FIELD, AUX_PRED_FIELD],
+    on_fields_l(
+        layout,
+        &[
+            layout.reg_field(0),
+            layout.scratch_field(0),
+            layout.br_field(),
+            layout.scratch_field(1),
+        ],
         gates,
     )
 }
 
-fn ccnot_instr() -> Iso {
-    let fetch_rt_br = ccnot_fetch_rt_br();
+fn ccnot_instr(layout: &Layout) -> Iso {
+    let fetch_rt_br = ccnot_fetch_rt_br(layout);
     // Body: fetch_rt_br ; with_two_regs(R_RD, R_RS, core) ; sym(fetch_rt_br)
     let body = Iso::seq(
         fetch_rt_br.clone(),
         Iso::seq(
-            with_two_regs(R_RD, R_RS, ccnot_core()),
+            with_two_regs(layout, R_RD, R_RS, ccnot_core(layout)),
             Iso::sym(fetch_rt_br),
         ),
     );
-    predicated(&r_pred(0b1011), body)
+    predicated(layout, &r_pred(0b1011), body)
 }
 
 /// XCHG rd, sx: gated swap of the routed register and scratch slots.
@@ -905,24 +1016,32 @@ fn ccnot_instr() -> Iso {
 ///     copies the predicate onto it (and removes it on exit), giving
 ///     `fmt(=1) ∧ pred`.
 /// The copy is self-inverse and restores IR in every case.
-fn xchg_instr() -> Iso {
-    // [IR_lo, s1]: pad = wire 0, pred = wire 8.
-    let pad_copy = on_fields(
-        &[IR_LO_FIELD, AUX_PRED_FIELD],
-        vec![gate_at(2 * W, &[W, 0], cnot_prim())],
+fn xchg_instr(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    // [IR_lo, s1]: pad = wire 0, pred = wire w.
+    let pad_copy = on_fields_l(
+        layout,
+        &[layout.ir_byte_field(0), layout.scratch_field(1)],
+        vec![gate_at(2 * w, &[w, 0], cnot_prim())],
     );
-    let selr = select_operand(R_RD, operand_field);
-    let sels = select_scratch(R_RT);
+    let selr = select_operand_l(layout, R_RD, |i| operand_field_l(layout, i));
+    let sels = select_fields(layout, R_RT, |i| layout.scratch_field(i));
     // [IR_b3, IR_lo, r0-slot, s0-slot]: fmt = wire 7 (IR bit 31),
-    // pred-copy = wire 8 (IR bit 0). 2-controlled swap on fmt ∧ IR[0].
+    // pred-copy = wire w (IR bit 0). 2-controlled swap on fmt ∧ IR[0].
     let fmt_wire = FMT_BIT % W; // bit 7 within IR_b3
-    let gsw = on_fields(
-        &[IR_B3_FIELD, IR_LO_FIELD, reg_field(0), scratch_field(0)],
-        (0..W)
+    let gsw = on_fields_l(
+        layout,
+        &[
+            layout.ir_byte_field(3),
+            layout.ir_byte_field(0),
+            layout.reg_field(0),
+            layout.scratch_field(0),
+        ],
+        (0..w)
             .map(|i| {
                 gate_at(
-                    4 * W,
-                    &[fmt_wire, W, 2 * W + i, 3 * W + i],
+                    4 * w,
+                    &[fmt_wire, w, 2 * w + i, 3 * w + i],
                     gated_fredkin_prim(),
                 )
             })
@@ -941,7 +1060,7 @@ fn xchg_instr() -> Iso {
             ),
         ),
     );
-    predicated(&r_pred(0b0111), body)
+    predicated(layout, &r_pred(0b0111), body)
 }
 
 /// Controlled swap of one CpuState field with one MemState field,
@@ -992,84 +1111,124 @@ fn cross_factor_gated_swap(
 /// sel_rd provides) and reads BR (untouched by Group A's fetch_rs/sel_rd
 /// over registers). Group A's fetch_rs harmlessly routes r[rs=0]→s0 for a
 /// SWAPBR word (SWAPBR ignores s0; restored on exit).
-fn swapbr_core() -> Iso {
-    on_fields(
-        &[reg_field(0), BR_FIELD, AUX_PRED_FIELD],
-        (0..W)
-            .map(|i| gate_at(3 * W, &[2 * W, i, W + i], fredkin_prim()))
+fn swapbr_core(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    on_fields_l(
+        layout,
+        &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],
+        (0..w)
+            .map(|i| gate_at(3 * w, &[2 * w, i, w + i], fredkin_prim()))
             .collect(),
     )
 }
 
-fn swapbr_instr() -> Iso {
+fn swapbr_instr(layout: &Layout) -> Iso {
     // A-0 (BLOCKER-2 fix): route rd over reg∪scratch.
-    predicated(&r_pred(0b1000), with_target(R_RD, swapbr_core()))
+    predicated(
+        layout,
+        &r_pred(0b1000),
+        with_target(layout, R_RD, swapbr_core(layout)),
+    )
 }
 
 /// ADDI core on [r0-slot, s0, IR_b0, s1] (A-0): CNOT-mask the imm8
 /// (IR bits 0..8, all in byte 0) onto s0, gated TK add, unmask.
 /// Requires s0 = 0.
-fn addi_core() -> Iso {
-    let n = 4 * W;
-    let pred = 3 * W;
-    // imm bit j = IR bit j = IR_b0 bit j = wire 2W + j.
-    let imm_wire = |j: usize| 2 * W + j;
-    let mask: Vec<Iso> = (0..W)
-        .map(|j| gate_at(n, &[imm_wire(j), W + j], cnot_prim()))
+fn addi_core(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    let n = 4 * w;
+    let pred = 3 * w;
+    // imm bit j = IR bit j = IR_b0 bit j = wire 2w + j.
+    let imm_wire = |j: usize| 2 * w + j;
+    let mask: Vec<Iso> = (0..w)
+        .map(|j| gate_at(n, &[imm_wire(j), w + j], cnot_prim()))
         .collect();
     let mut gates = mask.clone();
-    gates.extend(gated_tk_gates(n, pred, 0, W));
+    gates.extend(gated_tk_gates_w(w, n, pred, 0, w));
     gates.extend(mask);
-    on_fields(
-        &[reg_field(0), AUX_OPERAND_FIELD, IR_B0_FIELD, AUX_PRED_FIELD],
+    on_fields_l(
+        layout,
+        &[
+            layout.reg_field(0),
+            layout.scratch_field(0),
+            layout.ir_byte_field(0),
+            layout.scratch_field(1),
+        ],
         gates,
     )
 }
 
-fn addi_instr() -> Iso {
-    predicated(&i_pred(0b000), with_target(I_RD, addi_core()))
+fn addi_instr(layout: &Layout) -> Iso {
+    predicated(
+        layout,
+        &i_pred(0b000),
+        with_target(layout, I_RD, addi_core(layout)),
+    )
 }
 
-fn subi_instr() -> Iso {
-    predicated(&i_pred(0b001), with_target(I_RD, Iso::sym(addi_core())))
+fn subi_instr(layout: &Layout) -> Iso {
+    predicated(
+        layout,
+        &i_pred(0b001),
+        with_target(layout, I_RD, Iso::sym(addi_core(layout))),
+    )
 }
 
 /// XORI core on [r0-slot, IR_b0, s1] (A-0): gated CNOTs straight from
 /// the IR immediate bits (IR bits 0..8, all in byte 0, act as controls
 /// — the legal fanout).
-fn xori_core() -> Iso {
-    let n = 3 * W;
-    let pred = 2 * W;
-    // imm bit j = IR bit j = IR_b0 bit j = wire W + j.
-    let imm_wire = |j: usize| W + j;
-    let gates: Vec<Iso> = (0..W)
+fn xori_core(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    let n = 3 * w;
+    let pred = 2 * w;
+    // imm bit j = IR bit j = IR_b0 bit j = wire w + j.
+    let imm_wire = |j: usize| w + j;
+    let gates: Vec<Iso> = (0..w)
         .map(|j| gate_at(n, &[pred, imm_wire(j), j], toffoli_prim()))
         .collect();
-    on_fields(&[reg_field(0), IR_B0_FIELD, AUX_PRED_FIELD], gates)
+    on_fields_l(
+        layout,
+        &[layout.reg_field(0), layout.ir_byte_field(0), layout.scratch_field(1)],
+        gates,
+    )
 }
 
-fn xori_instr() -> Iso {
-    predicated(&i_pred(0b010), with_target(I_RD, xori_core()))
+fn xori_instr(layout: &Layout) -> Iso {
+    predicated(
+        layout,
+        &i_pred(0b010),
+        with_target(layout, I_RD, xori_core(layout)),
+    )
 }
 
 /// ROTLI core on [r0-slot, IR_b0, s1] (A-0): barrel rotate controlled
 /// directly by IR imm bits 0..2 (IR bits 0..2, byte 0).
-fn rotli_core() -> Iso {
-    let n = 3 * W;
-    let pred = 2 * W;
-    // rotate-amount bit k = IR bit k = IR_b0 bit k = wire W + k.
-    on_fields(
-        &[reg_field(0), IR_B0_FIELD, AUX_PRED_FIELD],
-        gated_rotl_gates(n, pred, 0, |k| W + k),
+fn rotli_core(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    let n = 3 * w;
+    let pred = 2 * w;
+    // rotate-amount bit k = IR bit k = IR_b0 bit k = wire w + k.
+    on_fields_l(
+        layout,
+        &[layout.reg_field(0), layout.ir_byte_field(0), layout.scratch_field(1)],
+        gated_rotl_gates_w(w, n, pred, 0, |k| w + k),
     )
 }
 
-fn rotli_instr() -> Iso {
-    predicated(&i_pred(0b011), with_target(I_RD, rotli_core()))
+fn rotli_instr(layout: &Layout) -> Iso {
+    predicated(
+        layout,
+        &i_pred(0b011),
+        with_target(layout, I_RD, rotli_core(layout)),
+    )
 }
 
-fn rotri_instr() -> Iso {
-    predicated(&i_pred(0b100), with_target(I_RD, Iso::sym(rotli_core())))
+fn rotri_instr(layout: &Layout) -> Iso {
+    predicated(
+        layout,
+        &i_pred(0b100),
+        with_target(layout, I_RD, Iso::sym(rotli_core(layout))),
+    )
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1128,25 +1287,31 @@ impl Op {
 /// composite carrier via emit/mem/absorb; use [`system_decode_execute`]
 /// for the oracle path.
 pub fn instruction(op: Op) -> Iso {
+    instruction_l(&Layout::default(), op)
+}
+
+/// B-2.1a: layout-parameterized [`instruction`]. The zero-arg entry
+/// delegates at `Layout::default()`.
+pub fn instruction_l(layout: &Layout, op: Op) -> Iso {
     match op {
-        Op::Add => add_instr(),
-        Op::Sub => sub_instr(),
-        Op::Xor => xor_instr(),
-        Op::Exch => exch_instr(),
-        Op::Rotl => rotl_instr(),
-        Op::Rotr => rotr_instr(),
-        Op::Cswap => cswap_instr(),
-        Op::Ccnot => ccnot_instr(),
-        Op::Xchg => xchg_instr(),
-        Op::Swapbr => swapbr_instr(),
+        Op::Add => add_instr(layout),
+        Op::Sub => sub_instr(layout),
+        Op::Xor => xor_instr(layout),
+        Op::Exch => exch_instr(layout),
+        Op::Rotl => rotl_instr(layout),
+        Op::Rotr => rotr_instr(layout),
+        Op::Cswap => cswap_instr(layout),
+        Op::Ccnot => ccnot_instr(layout),
+        Op::Xchg => xchg_instr(layout),
+        Op::Swapbr => swapbr_instr(layout),
         Op::Mexch | Op::MexchReg => {
             panic!("Op::{op:?} operates on (CpuState, MemState); use system_decode_execute")
         }
-        Op::Addi => addi_instr(),
-        Op::Subi => subi_instr(),
-        Op::Xori => xori_instr(),
-        Op::Rotli => rotli_instr(),
-        Op::Rotri => rotri_instr(),
+        Op::Addi => addi_instr(layout),
+        Op::Subi => subi_instr(layout),
+        Op::Xori => xori_instr(layout),
+        Op::Rotli => rotli_instr(layout),
+        Op::Rotri => rotri_instr(layout),
     }
 }
 
@@ -1159,7 +1324,8 @@ pub fn instruction(op: Op) -> Iso {
 /// ring decoder ([`decode_execute`]) uses the SHARED-crossbar form below.
 pub fn decode_execute_ops(ops: &[Op]) -> Iso {
     assert!(!ops.is_empty(), "nonempty op list");
-    seq_balanced(ops.iter().map(|&o| instruction(o)).collect())
+    let layout = Layout::default();
+    seq_balanced(ops.iter().map(|&o| instruction_l(&layout, o)).collect())
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1217,9 +1383,9 @@ pub fn decode_execute_ops(ops: &[Op]) -> Iso {
 ///
 /// Swapbr / Ccnot / Cswap / Xchg stay separate (their brackets differ —
 /// see `decode_execute_shared`).
-fn reg_imm_shared() -> Iso {
-    let fetch_rs = fetch_rs_fmt_gated();
-    let inner = with_target(R_RD, reg_imm_alu());
+fn reg_imm_shared(layout: &Layout) -> Iso {
+    let fetch_rs = fetch_rs_fmt_gated(layout);
+    let inner = with_target(layout, R_RD, reg_imm_alu(layout));
     Iso::seq(fetch_rs.clone(), Iso::seq(inner, Iso::sym(fetch_rs)))
 }
 
@@ -1256,28 +1422,28 @@ fn reg_imm_shared() -> Iso {
 /// avoids the rt-field=0 aliasing corruption of r[0]/BR when rd names r0.
 /// Cswap reads its control D[0] directly (no rd[0] copy). Swapbr/Xchg keep
 /// their own separate blocks (their brackets differ).
-fn shared_alu_block() -> Iso {
-    let fetch_rt_br = shared_fetch_rt_br_gated();
-    let fetch_rs = fetch_rs_fmt_gated();
-    let decode = alu_config_decode();
-    let imm = imm_to_a();
+fn shared_alu_block(layout: &Layout) -> Iso {
+    let fetch_rt_br = shared_fetch_rt_br_gated(layout);
+    let fetch_rs = fetch_rs_fmt_gated(layout);
+    let decode = alu_config_decode(layout);
+    let imm = imm_to_a(layout);
 
     // The gated ALU core (reg+imm + ccnot + cswap), all on [D, A, B, s1].
     let alu = seq_balanced(vec![
-        add_core_at(CFG_ADD_FWD),            // Add / Addi
-        Iso::sym(add_core_at(CFG_ADD_REV)),  // Sub / Subi  = adder adjoint
-        xor_core_at(CFG_XOR),                // Xor / Xori
-        exch_core_at(CFG_EXCH),              // Exch (R-only)
-        rotl_core_at(CFG_ROT_FWD),           // Rotl / Rotli
-        Iso::sym(rotl_core_at(CFG_ROT_REV)), // Rotr / Rotri = rotator adjoint
-        ccnot_core_at(CFG_CCNOT),            // Ccnot (R-only)
-        cswap_core_at(CFG_CSWAP),            // Cswap (R-only)
+        add_core_at(layout, CFG_ADD_FWD),            // Add / Addi
+        Iso::sym(add_core_at(layout, CFG_ADD_REV)),  // Sub / Subi  = adder adjoint
+        xor_core_at(layout, CFG_XOR),                // Xor / Xori
+        exch_core_at(layout, CFG_EXCH),              // Exch (R-only)
+        rotl_core_at(layout, CFG_ROT_FWD),           // Rotl / Rotli
+        Iso::sym(rotl_core_at(layout, CFG_ROT_REV)), // Rotr / Rotri = rotator adjoint
+        ccnot_core_at(layout, CFG_CCNOT),            // Ccnot (R-only)
+        cswap_core_at(layout, CFG_CSWAP),            // Cswap (R-only)
     ]);
 
     // Innermost: imm_to_a ; ALU ; imm_to_a⁻¹ on the routed slots.
     let with_imm = Iso::seq(imm.clone(), Iso::seq(alu, Iso::sym(imm)));
     // sel_rd routes rd → r0-slot around the imm+ALU.
-    let with_rd = with_target(R_RD, with_imm);
+    let with_rd = with_target(layout, R_RD, with_imm);
     // fetch_rs deposits rs → s0 (fmt-gated) around sel_rd.
     let with_rs = Iso::seq(fetch_rs.clone(), Iso::seq(with_rd, Iso::sym(fetch_rs)));
     // fetch_rt_br delivers rt → BR (config-gated) around the A-deposit.
@@ -1296,11 +1462,17 @@ fn shared_alu_block() -> Iso {
 /// = id` — the "rs field" bits (which are immediate bits under I-format)
 /// still steer the crossbar, but it is a pure self-inverse permutation and
 /// nothing is fetched. For R-format (fmt=1) it is exactly `fetch_operand`.
-fn fetch_rs_fmt_gated() -> Iso {
+fn fetch_rs_fmt_gated(layout: &Layout) -> Iso {
     let (fmt_field, fmt_bit) = ir_bit(FMT_BIT);
-    let sel = select_operand(R_RS, operand_field);
-    // fmt-gated word swap operand_field(0) ↔ AUX_OPERAND_FIELD.
-    let gated_swap = ctrl_word_swap(fmt_field, fmt_bit, operand_field(0), AUX_OPERAND_FIELD);
+    let sel = select_operand_l(layout, R_RS, |i| operand_field_l(layout, i));
+    // fmt-gated word swap operand_field(0) ↔ s0 (AUX_OPERAND_FIELD).
+    let gated_swap = ctrl_word_swap(
+        layout,
+        fmt_field,
+        fmt_bit,
+        operand_field_l(layout, 0),
+        layout.scratch_field(0),
+    );
     Iso::seq(sel.clone(), Iso::seq(gated_swap, Iso::sym(sel)))
 }
 
@@ -1311,19 +1483,24 @@ fn fetch_rs_fmt_gated() -> Iso {
 /// back to 0. For R-format (fmt=1) this is the identity, so s0 = the
 /// fetched rs value is untouched. The core lifts over [s0, IR_b0, IR_b3]
 /// (IR_b3 holds fmt bit 31 = local bit 7).
-fn imm_to_a() -> Iso {
-    let n = 3 * W;
-    // local wires: s0 = 0..W, IR_b0 = W..2W, IR_b3 = 2W..3W.
+fn imm_to_a(layout: &Layout) -> Iso {
+    let w = layout.w_data;
+    let n = 3 * w;
+    // local wires: s0 = 0..w, IR_b0 = w..2w, IR_b3 = 2w..3w.
     let s0 = |j: usize| j;
-    let imm = |j: usize| W + j;
-    let fmt_local = 2 * W + (FMT_BIT % W); // fmt bit within IR_b3
+    let imm = |j: usize| w + j;
+    let fmt_local = 2 * w + (FMT_BIT % W); // fmt bit within IR_b3
     let mut gates: Vec<Iso> = Vec::new();
     gates.push(at_wire(n, fmt_local, not_iso())); // ¬fmt
-    for j in 0..W {
+    for j in 0..w {
         gates.push(gate_at(n, &[fmt_local, imm(j), s0(j)], toffoli_prim()));
     }
     gates.push(at_wire(n, fmt_local, not_iso())); // restore fmt
-    on_fields(&[AUX_OPERAND_FIELD, IR_B0_FIELD, IR_B3_FIELD], gates)
+    on_fields_l(
+        layout,
+        &[layout.scratch_field(0), layout.ir_byte_field(0), layout.ir_byte_field(3)],
+        gates,
+    )
 }
 
 /// B1.1 measurement hook: the PRE-B1.1 Group-A block (one shared route,
@@ -1332,15 +1509,16 @@ fn imm_to_a() -> Iso {
 /// report the Group-A-portion delta vs the shared configurable ALU
 /// (`group_a_shared`). NOT wired into the decoder.
 pub fn group_a_pre_b11_for_measurement() -> Iso {
+    let l = &Layout::default();
     let cores = seq_balanced(vec![
-        predicated(&r_pred(0b0000), add_core()),            // Add
-        predicated(&r_pred(0b0001), Iso::sym(add_core())),  // Sub
-        predicated(&r_pred(0b0010), xor_core()),            // Xor
-        predicated(&r_pred(0b0011), exch_core()),           // Exch
-        predicated(&r_pred(0b0100), rotl_core()),           // Rotl
-        predicated(&r_pred(0b0101), Iso::sym(rotl_core())), // Rotr
+        predicated(l, &r_pred(0b0000), add_core(l)),            // Add
+        predicated(l, &r_pred(0b0001), Iso::sym(add_core(l))),  // Sub
+        predicated(l, &r_pred(0b0010), xor_core(l)),            // Xor
+        predicated(l, &r_pred(0b0011), exch_core(l)),           // Exch
+        predicated(l, &r_pred(0b0100), rotl_core(l)),           // Rotl
+        predicated(l, &r_pred(0b0101), Iso::sym(rotl_core(l))), // Rotr
     ]);
-    with_two_regs(R_RD, R_RS, cores)
+    with_two_regs(l, R_RD, R_RS, cores)
 }
 
 /// B1.1 measurement hook: the shared configurable ALU Group-A block.
@@ -1349,14 +1527,15 @@ pub fn group_a_pre_b11_for_measurement() -> Iso {
 /// I-format config lines), kept so the B1.1 Group-A-portion Δ is still
 /// reproducible after the unification.
 pub fn group_a_shared_for_measurement() -> Iso {
-    with_two_regs(R_RD, R_RS, group_a_alu_view())
+    let l = &Layout::default();
+    with_two_regs(l, R_RD, R_RS, group_a_alu_view(l))
 }
 
 /// B1.2 measurement hook: the UNIFIED reg+imm block (was group_a_shared +
 /// group_b_shared). Its balanced cell mass vs (B1.1 group_a + group_b) is
 /// the apples-to-apples "did we remove the group_b block" number.
 pub fn reg_imm_shared_for_measurement() -> Iso {
-    reg_imm_shared()
+    reg_imm_shared(&Layout::default())
 }
 
 /// B1.3 measurement/equiv hook: the UNIVERSAL 3-operand shared block
@@ -1366,20 +1545,21 @@ pub fn reg_imm_shared_for_measurement() -> Iso {
 /// whole-domain equiv test evaluates (all other blocks — xchg/swapbr — are
 /// the identity for reg+imm/ccnot/cswap opcodes).
 pub fn shared_alu_block_for_measurement() -> Iso {
-    shared_alu_block()
+    shared_alu_block(&Layout::default())
 }
 
 /// B1.2 measurement hook: the pre-B1.2 group_b (5 per-op predicated
 /// immediate cores under one shared sel_rd), so its balanced mass can be
 /// summed with B1.1's group_a for the removal comparison. NOT wired.
 pub fn group_b_pre_b12_for_measurement() -> Iso {
+    let l = &Layout::default();
     let sel_rd = select_operand(R_RD, operand_field);
     let cores = seq_balanced(vec![
-        predicated(&i_pred(0b000), addi_core()),            // Addi
-        predicated(&i_pred(0b001), Iso::sym(addi_core())),  // Subi
-        predicated(&i_pred(0b010), xori_core()),            // Xori
-        predicated(&i_pred(0b011), rotli_core()),           // Rotli
-        predicated(&i_pred(0b100), Iso::sym(rotli_core())), // Rotri
+        predicated(l, &i_pred(0b000), addi_core(l)),            // Addi
+        predicated(l, &i_pred(0b001), Iso::sym(addi_core(l))),  // Subi
+        predicated(l, &i_pred(0b010), xori_core(l)),            // Xori
+        predicated(l, &i_pred(0b011), rotli_core(l)),           // Rotli
+        predicated(l, &i_pred(0b100), Iso::sym(rotli_core(l))), // Rotri
     ]);
     Iso::seq(sel_rd.clone(), Iso::seq(cores, Iso::sym(sel_rd)))
 }
@@ -1389,11 +1569,12 @@ pub fn group_b_pre_b12_for_measurement() -> Iso {
 /// grounds the B-1 re-sequencing decision — where the un-shared *routing*
 /// mass actually lives (the controlled ops each carry a PRIVATE crossbar).
 pub fn decode_blocks_for_measurement() -> Vec<(&'static str, Iso)> {
+    let l = &Layout::default();
     vec![
         // B1.3: the universal block absorbs reg+imm + ccnot + cswap.
-        ("shared_alu", shared_alu_block()),
-        ("xchg", xchg_instr()),
-        ("swapbr", swapbr_instr()),
+        ("shared_alu", shared_alu_block(l)),
+        ("xchg", xchg_instr(l)),
+        ("swapbr", swapbr_instr(l)),
     ]
 }
 
@@ -1429,28 +1610,29 @@ const CFG_CHAIN_S0: usize = 1; //  s0 bit 1: transient op-body AND
 
 /// s1 wire for a HELD config one-hot bit `k` within the config-decode core,
 /// which lifts over `config_decode_fields()` = [IR_b0..b3, s1, s0]; IR bits
-/// are wires 0..31, s1 bit `k` is wire 32+`k`, s0 bit `k` is wire 40+`k`.
-const fn cfg_wire(k: usize) -> usize {
-    32 + k
+/// are wires `0..4·w_ctl`, s1 bit `k` is wire `4·w_ctl + k`, s0 bit `k` is
+/// wire `5·w_ctl + k`. `wc` = control-region width (`= W` at default).
+const fn cfg_wire(wc: usize, k: usize) -> usize {
+    4 * wc + k
 }
 
 /// s0 wire for a TRANSIENT decode-workspace bit `k` (prefix/chain).
-const fn cfg_ws_wire(k: usize) -> usize {
-    5 * W + k // s0 is field-slot 5 in config_decode_fields()
+const fn cfg_ws_wire(wc: usize, k: usize) -> usize {
+    5 * wc + k // s0 is field-slot 5 in config_decode_fields()
 }
 
 /// The six fields the config decode lifts over: four IR bytes + s1 (held
 /// one-hots) + s0 (transient prefix/chain workspace). Extends the old
 /// `pred_fields()` [IR_b0..b3, s1] with s0 as the transient workspace so
 /// s1's 8 bits can all hold one-hot lines (B1.3).
-fn config_decode_fields() -> [usize; 6] {
+fn config_decode_fields(layout: &Layout) -> [usize; 6] {
     [
-        IR_B0_FIELD,
-        IR_B1_FIELD,
-        IR_B2_FIELD,
-        IR_B3_FIELD,
-        AUX_PRED_FIELD,   // s1 (slot 4): held one-hots
-        AUX_OPERAND_FIELD, // s0 (slot 5): transient workspace
+        layout.ir_byte_field(0),
+        layout.ir_byte_field(1),
+        layout.ir_byte_field(2),
+        layout.ir_byte_field(3),
+        layout.scratch_field(1), // s1 (slot 4): held one-hots
+        layout.scratch_field(0), // s0 (slot 5): transient workspace
     ]
 }
 
@@ -1486,8 +1668,8 @@ fn config_decode_fields() -> [usize; 6] {
 /// config bits start and end at 0. Opcodes are mutually exclusive (fmt +
 /// disjoint low-3 patterns), so at most one one-hot fires — the mutual-
 /// exclusion the ALU Branch relies on.
-fn alu_config_decode() -> Iso {
-    alu_config_decode_families(true)
+fn alu_config_decode(layout: &Layout) -> Iso {
+    alu_config_decode_families(layout, true)
 }
 
 /// R-format opcode literal bits `[op2, op1, op0]` for `op` (the low three
@@ -1499,11 +1681,12 @@ const fn low3(op: u8) -> [bool; 3] {
 /// Config decode over the R family (`include_i = false`) or BOTH families
 /// (`include_i = true`, the wired form). The R-only form reproduces the
 /// exact B1.1 decode for the `group_a_shared_for_measurement` hook.
-fn alu_config_decode_families(include_i: bool) -> Iso {
-    let n = 6 * W; // config_decode core: 4 IR bytes + s1 + s0
+fn alu_config_decode_families(layout: &Layout, include_i: bool) -> Iso {
+    let wc = layout.w_ctl;
+    let n = 6 * wc; // config_decode core: 4 IR bytes + s1 + s0
     let op = |k: usize| opcode_bit(k); // global IR wire of opcode bit k
-    let prefix = cfg_ws_wire(CFG_PREFIX_S0); // s0 bit 0 (transient)
-    let chain = cfg_ws_wire(CFG_CHAIN_S0); //  s0 bit 1 (transient)
+    let prefix = cfg_ws_wire(wc, CFG_PREFIX_S0); // s0 bit 0 (transient)
+    let chain = cfg_ws_wire(wc, CFG_CHAIN_S0); //  s0 bit 1 (transient)
     let mut gates: Vec<Iso> = Vec::new();
 
     // Land one op: `final ^= g ∧ (op2==l2 ∧ op1==l1 ∧ op0==l0)`, with the
@@ -1526,7 +1709,7 @@ fn alu_config_decode_families(include_i: bool) -> Iso {
         // final ^= g ∧ chain
         g.push(gate_at(
             n,
-            &[prefix, chain, cfg_wire(final_bit)],
+            &[prefix, chain, cfg_wire(wc, final_bit)],
             toffoli_prim(),
         ));
         // uncompute chain (re-NOT, CCC-NOT, un-NOT) — restores chain to 0.
@@ -1596,7 +1779,7 @@ fn alu_config_decode_families(include_i: bool) -> Iso {
         gates.push(at_wire(n, FMT_BIT, not_iso()));
     }
 
-    on_fields(&config_decode_fields(), gates)
+    on_fields_l(layout, &config_decode_fields(layout), gates)
 }
 
 /// The UNIFIED reg+imm configurable ALU core (B1.2), run on the shared
@@ -1617,16 +1800,16 @@ fn alu_config_decode_families(include_i: bool) -> Iso {
 /// adjoint gated on `CFG_ROT_REV` (`Iso::sym` of the config-wired forward
 /// block, so the whole reverse block still carries the config line as its
 /// per-gate control).
-fn reg_imm_alu() -> Iso {
-    let imm = imm_to_a();
-    let decode = alu_config_decode();
+fn reg_imm_alu(layout: &Layout) -> Iso {
+    let imm = imm_to_a(layout);
+    let decode = alu_config_decode(layout);
     let core = seq_balanced(vec![
-        add_core_at(CFG_ADD_FWD),            // Add / Addi
-        Iso::sym(add_core_at(CFG_ADD_REV)),  // Sub / Subi  = adder adjoint
-        xor_core_at(CFG_XOR),                // Xor / Xori
-        exch_core_at(CFG_EXCH),              // Exch (R-only)
-        rotl_core_at(CFG_ROT_FWD),           // Rotl / Rotli
-        Iso::sym(rotl_core_at(CFG_ROT_REV)), // Rotr / Rotri = rotator adjoint
+        add_core_at(layout, CFG_ADD_FWD),            // Add / Addi
+        Iso::sym(add_core_at(layout, CFG_ADD_REV)),  // Sub / Subi  = adder adjoint
+        xor_core_at(layout, CFG_XOR),                // Xor / Xori
+        exch_core_at(layout, CFG_EXCH),              // Exch (R-only)
+        rotl_core_at(layout, CFG_ROT_FWD),           // Rotl / Rotli
+        Iso::sym(rotl_core_at(layout, CFG_ROT_REV)), // Rotr / Rotri = rotator adjoint
     ]);
     let alu = Iso::seq(decode.clone(), Iso::seq(core, Iso::sym(decode)));
     Iso::seq(imm.clone(), Iso::seq(alu, Iso::sym(imm)))
@@ -1640,12 +1823,19 @@ fn reg_imm_alu() -> Iso {
 /// Ccnot core: `D[i] ^= cfg_ccnot ∧ A[i] ∧ B[i]` per bit (byte-parallel
 /// `rd ^= rs & rt`, config-gated). Verbatim `ccnot_core`'s CCC-NOT pattern
 /// but the 4th control is the CFG_CCNOT one-hot instead of the raw pred bit.
-fn ccnot_core_at(cfg: usize) -> Iso {
-    let gates = (0..W)
-        .map(|i| gate_at(4 * W, &[3 * W + cfg, W + i, 2 * W + i, i], cccnot_prim()))
+fn ccnot_core_at(layout: &Layout, cfg: usize) -> Iso {
+    let w = layout.w_data;
+    let gates = (0..w)
+        .map(|i| gate_at(4 * w, &[3 * w + cfg, w + i, 2 * w + i, i], cccnot_prim()))
         .collect();
-    on_fields(
-        &[reg_field(0), AUX_OPERAND_FIELD, BR_FIELD, AUX_PRED_FIELD],
+    on_fields_l(
+        layout,
+        &[
+            layout.reg_field(0),
+            layout.scratch_field(0),
+            layout.br_field(),
+            layout.scratch_field(1),
+        ],
         gates,
     )
 }
@@ -1659,14 +1849,21 @@ fn ccnot_core_at(cfg: usize) -> Iso {
 /// Reproduces `r[rs] ↔ r[rt] iff r[rd][0]`: with rd→D, rs→A(s0), rt→B(BR),
 /// swapping A↔B under D[0] and unwinding the fetch brackets writes the
 /// swapped values back into r[rs]/r[rt]; D (rd) itself is never modified.
-fn cswap_core_at(cfg: usize) -> Iso {
-    // Wires: D[0] = 0, A[i] = W+i, B[i] = 2W+i, cfg one-hot = 3W+cfg.
+fn cswap_core_at(layout: &Layout, cfg: usize) -> Iso {
+    let w = layout.w_data;
+    // Wires: D[0] = 0, A[i] = w+i, B[i] = 2w+i, cfg one-hot = 3w+cfg.
     // Gated Fredkin control pair (cfg_cswap, D[0]) swaps A[i], B[i].
-    let gates = (0..W)
-        .map(|i| gate_at(4 * W, &[3 * W + cfg, 0, W + i, 2 * W + i], gated_fredkin_prim()))
+    let gates = (0..w)
+        .map(|i| gate_at(4 * w, &[3 * w + cfg, 0, w + i, 2 * w + i], gated_fredkin_prim()))
         .collect();
-    on_fields(
-        &[reg_field(0), AUX_OPERAND_FIELD, BR_FIELD, AUX_PRED_FIELD],
+    on_fields_l(
+        layout,
+        &[
+            layout.reg_field(0),
+            layout.scratch_field(0),
+            layout.br_field(),
+            layout.scratch_field(1),
+        ],
         gates,
     )
 }
@@ -1679,15 +1876,15 @@ fn cswap_core_at(cfg: usize) -> Iso {
 /// this is no longer bit-identical to the pre-B1.2 `group_a_alu` — treat the
 /// number as indicative, not exact. Measurement-only; NOT wired into the
 /// decoder (the wired path is `reg_imm_alu` inside `shared_alu_block`).
-fn group_a_alu_view() -> Iso {
-    let decode = alu_config_decode_families(false);
+fn group_a_alu_view(layout: &Layout) -> Iso {
+    let decode = alu_config_decode_families(layout, false);
     let core = seq_balanced(vec![
-        add_core_at(CFG_ADD_FWD),
-        Iso::sym(add_core_at(CFG_ADD_REV)),
-        xor_core_at(CFG_XOR),
-        exch_core_at(CFG_EXCH),
-        rotl_core_at(CFG_ROT_FWD),
-        Iso::sym(rotl_core_at(CFG_ROT_REV)),
+        add_core_at(layout, CFG_ADD_FWD),
+        Iso::sym(add_core_at(layout, CFG_ADD_REV)),
+        xor_core_at(layout, CFG_XOR),
+        exch_core_at(layout, CFG_EXCH),
+        rotl_core_at(layout, CFG_ROT_FWD),
+        Iso::sym(rotl_core_at(layout, CFG_ROT_REV)),
     ]);
     Iso::seq(decode.clone(), Iso::seq(core, Iso::sym(decode)))
 }
@@ -1703,11 +1900,11 @@ fn group_a_alu_view() -> Iso {
 /// so their two private crossbars are gone and the top-level block count
 /// drops 5→3. Only Xchg (2nd scratch crossbar) and Swapbr (rs=0 aliases
 /// rd) keep their own separate small blocks — their brackets differ.
-fn decode_execute_shared() -> Iso {
+fn decode_execute_shared(layout: &Layout) -> Iso {
     seq_balanced(vec![
-        shared_alu_block(), // B1.3: reg+imm + Ccnot + Cswap (universal bracket)
-        xchg_instr(),
-        swapbr_instr(),
+        shared_alu_block(layout), // B1.3: reg+imm + Ccnot + Cswap (universal bracket)
+        xchg_instr(layout),
+        swapbr_instr(layout),
     ])
 }
 
@@ -1721,7 +1918,13 @@ fn decode_execute_shared() -> Iso {
 /// A-0 shared crossbar: uses [`decode_execute_shared`] (operands routed
 /// once per step) instead of the per-op replicated form.
 pub fn decode_execute() -> Iso {
-    decode_execute_shared()
+    decode_execute_l(&Layout::default())
+}
+
+/// B-2.1a: layout-parameterized [`decode_execute`]. The zero-arg entry
+/// delegates at `Layout::default()`.
+pub fn decode_execute_l(layout: &Layout) -> Iso {
+    decode_execute_shared(layout)
 }
 
 /// `system_decode_execute : (CpuState, MemState) <-> (CpuState, MemState)`
@@ -1734,8 +1937,9 @@ pub fn decode_execute() -> Iso {
 /// MEXCH and MEXCHR are handled by the emit/mem/absorb 3-cycle in
 /// `system_step` (Stage 1b-A).
 pub fn system_decode_execute() -> Iso {
+    let layout = Layout::default();
     let mem_id = Iso::Id(crate::types::mem_state_ty());
-    Iso::times(decode_execute_shared(), mem_id)
+    Iso::times(decode_execute_shared(&layout), mem_id)
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1964,6 +2168,7 @@ pub fn emit() -> Iso {
 /// Public for Stage 2a: `cpu_pre`/`cpu_post` compose this directly on the
 /// `(Cpu, Bus)` carrier without the `view_cpu_bus` lift.
 pub fn emit_on_cpu_bus() -> Iso {
+    let layout = Layout::default();
     let bus_ty = crate::types::bus_state_ty();
     let bus_id = Iso::Id(bus_ty);
     let n_cpu = NUM_CPU_FIELDS;
@@ -1972,7 +2177,7 @@ pub fn emit_on_cpu_bus() -> Iso {
 
     // ── MEXCH block (opcode 0b1001, immediate addressing) ─────────
     let mexch_block = {
-        let pred_cpu = pred_compute(&r_pred(0b1001));
+        let pred_cpu = pred_compute(&layout, &r_pred(0b1001));
         let pred = Iso::times(pred_cpu, bus_id.clone());
 
         // A-0 (BLOCKER-2 fix): route rd over reg∪scratch (bit3=0 for a
@@ -2016,7 +2221,7 @@ pub fn emit_on_cpu_bus() -> Iso {
 
     // ── MEXCHR block (opcode 0b1010, register addressing, M-D.b) ──
     let mexchr_block = {
-        let pred_cpu = pred_compute(&r_pred(0b1010));
+        let pred_cpu = pred_compute(&layout, &r_pred(0b1010));
         let pred = Iso::times(pred_cpu, bus_id.clone());
 
         // Ra bracket: route reg[ra] to r0 slot via R_RS crossbar,

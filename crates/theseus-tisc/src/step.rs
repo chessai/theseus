@@ -72,14 +72,9 @@
 
 use theseus_core::Iso;
 
-use crate::decoder::{
-    self, cnot_prim, on_fields, toffoli_prim, Op, AUX_OPERAND_FIELD, AUX_PRED_FIELD,
-};
+use crate::decoder::{self, cnot_prim, on_fields_l, toffoli_prim, Op};
 use crate::plumbing::{at_wire, gate_at, not_iso, seq_balanced};
-use crate::types::{
-    state_ty, BR_FIELD, IR_B0_FIELD, IR_B1_FIELD, IR_B2_FIELD, IR_B3_FIELD, PC_FIELD, PC_HI_FIELD,
-    W, W_PC,
-};
+use crate::types::{state_ty, Layout, W_PC};
 
 // ── Fetch (narrow-A, A-6.4) ────────────────────────────────────────
 //
@@ -102,32 +97,60 @@ use crate::types::{
 // unreachable high PC PARK (no false match) rather than corrupt.
 
 // The fetch core lifts over 8 fields [PC_lo, PC_hi, IR_b0..b3, s0, s1]
-// (n = 8*W = 64). PC bit i (0..16) = wire i; IR bit b = wire 16+b; s0 bit
-// j = wire 48+j; s1 bit j = wire 56+j. BOTH scratch bytes are used as AND-
-// chain space: fetch runs first in the step (and the unfetch after decode
-// restores s0=0), so s0 and s1 are both 0 at fetch/unfetch time. This
-// gives 14 usable chain-intermediate bits, enough for the up-to-15-input
-// high-zero AND under a 16-bit PC — a single s1 byte (the 8-bit-PC design)
-// is too narrow for the wider high-zero gate.
-const FETCH_N: usize = 8 * W;
-/// IR bit 0 wire.
-const FETCH_IR0: usize = W_PC; // IR bit 0 = wire 16
-/// s0 base wire (chain scratch).
-const FETCH_S0: usize = 6 * W; // s0 bit 0 = wire 48
-/// s1 base wire.
-const FETCH_S1: usize = 7 * W; // s1 bit 0 = wire 56
-/// Shared "high bits all zero" gate (`hz`) lands in s1 bit 7.
-const FETCH_HZ_WIRE: usize = FETCH_S1 + 7;
-/// Per-entry predicate `PC == addr` lands in s1 bit 0.
-const FETCH_PRED_WIRE: usize = FETCH_S1;
+// (n = 8·w_ctl = 64 at default). PC bit i (0..w_pc) = wire i; IR bit b =
+// wire w_pc+b; s0 bit j = wire 6·w_ctl+j; s1 bit j = wire 7·w_ctl+j. BOTH
+// scratch bytes are AND-chain space: fetch runs first in the step (and the
+// unfetch after decode restores s0=0), so s0 and s1 are both 0 at
+// fetch/unfetch time. This gives 2·w_ctl-2 usable chain-intermediate bits,
+// enough for the up-to-(w_pc-1)-input high-zero AND — a single s1 byte (the
+// 8-bit-PC design) is too narrow for the wider high-zero gate.
+//
+// B-2.1a: the fetch core is entirely control-region — PC (`w_pc` bits over
+// `pc_fields` control words), the four IR bytes, and s0/s1 (`w_ctl`). The
+// `FetchWires` bundle below derives every wire base from `layout.w_ctl` /
+// `layout.w_pc`; at `Layout::default()` (w_ctl = 8, w_pc = 16) these are the
+// shipped 8·W / W_PC / 6·W / 7·W offsets, so the fetch net is byte-identical.
 
-/// AND-chain intermediate wire `k` (k = 0, 1, 2, …): s0 bits 0..8, then
-/// s1 bits 1..7 (skips s1 bit 0 = pred and s1 bit 7 = hz). Up to 14 slots.
-const fn fetch_chain(k: usize) -> usize {
-    if k < W {
-        FETCH_S0 + k // s0 bits 0..8
-    } else {
-        FETCH_S1 + 1 + (k - W) // s1 bits 1..7
+/// Control-region wire bases for the fetch core `[PC_lo, PC_hi, IR_b0..b3,
+/// s0, s1]` of a given `layout`. The core is 8 control words wide: PC bit i
+/// (0..w_pc) = wire i; IR bit b = wire `w_pc + b`; s0 bit j = wire `6·w_ctl
+/// + j`; s1 bit j = wire `7·w_ctl + j`.
+#[derive(Clone, Copy)]
+struct FetchWires {
+    n: usize,
+    ir0: usize,
+    s0: usize,
+    s1: usize,
+    hz: usize,
+    pred: usize,
+    w_ctl: usize,
+    w_pc: usize,
+}
+
+impl FetchWires {
+    fn new(layout: &Layout) -> Self {
+        let wc = layout.w_ctl;
+        let s1 = 7 * wc;
+        FetchWires {
+            n: 8 * wc,
+            ir0: layout.w_pc, // IR bit 0 (PC occupies pc_fields=w_pc/w_ctl words)
+            s0: 6 * wc,
+            s1,
+            hz: s1 + (wc - 1), // hz lands in s1's top bit
+            pred: s1,          // per-entry predicate in s1 bit 0
+            w_ctl: wc,
+            w_pc: layout.w_pc,
+        }
+    }
+
+    /// AND-chain intermediate wire `k`: s0 bits `0..w_ctl`, then s1 bits
+    /// `1..w_ctl-1` (skips s1 bit 0 = pred and s1 top bit = hz).
+    fn chain(&self, k: usize) -> usize {
+        if k < self.w_ctl {
+            self.s0 + k
+        } else {
+            self.s1 + 1 + (k - self.w_ctl)
+        }
     }
 }
 
@@ -149,16 +172,16 @@ pub const MAX_FETCH_ROM_LEN: usize = 1 << MAX_FETCH_A;
 
 /// The fields the fetch core lifts over: PC_lo, PC_hi, the four IR
 /// bytes, s0, s1.
-fn fetch_fields() -> [usize; 8] {
+fn fetch_fields(layout: &Layout) -> [usize; 8] {
     [
-        PC_FIELD,
-        PC_HI_FIELD,
-        IR_B0_FIELD,
-        IR_B1_FIELD,
-        IR_B2_FIELD,
-        IR_B3_FIELD,
-        AUX_OPERAND_FIELD,
-        AUX_PRED_FIELD,
+        layout.pc_field(),
+        layout.pc_hi_field(),
+        layout.ir_byte_field(0),
+        layout.ir_byte_field(1),
+        layout.ir_byte_field(2),
+        layout.ir_byte_field(3),
+        layout.scratch_field(0), // s0 (AUX_OPERAND_FIELD)
+        layout.scratch_field(1), // s1 (AUX_PRED_FIELD)
     ]
 }
 
@@ -183,21 +206,24 @@ pub fn fetch_addr_bits(rom_len: usize) -> usize {
 /// (a plain NOT sets s1 bit 7). `Iso::sym` uncomputes it. Only fetch
 /// entries whose address is ≥ 0 need it; it is threaded as an extra
 /// control into every per-entry predicate.
-fn pc_high_zero(a: usize) -> Iso {
-    if a >= W_PC {
-        // No high bits: hz ≡ 1. Set s1 bit 7.
-        return on_fields(&fetch_fields(), vec![at_wire(FETCH_N, FETCH_HZ_WIRE, not_iso())]);
+fn pc_high_zero(layout: &Layout, a: usize) -> Iso {
+    let fw = FetchWires::new(layout);
+    let w_pc = fw.w_pc;
+    if a >= w_pc {
+        // No high bits: hz ≡ 1. Set s1 top bit.
+        return on_fields_l(
+            layout,
+            &fetch_fields(layout),
+            vec![at_wire(fw.n, fw.hz, not_iso())],
+        );
     }
-    let hi: Vec<usize> = (a..W_PC).collect();
+    let hi: Vec<usize> = (a..w_pc).collect();
     // NOT every high bit so "all zero" ⇒ "all negated = 1".
-    let nots: Vec<Iso> = hi
-        .iter()
-        .map(|&i| at_wire(FETCH_N, i, not_iso()))
-        .collect();
+    let nots: Vec<Iso> = hi.iter().map(|&i| at_wire(fw.n, i, not_iso())).collect();
     let mut gates = nots.clone();
     if hi.len() == 1 {
         // Single high bit: hz ^= ¬PC[a].
-        gates.push(gate_at(FETCH_N, &[hi[0], FETCH_HZ_WIRE], cnot_prim()));
+        gates.push(gate_at(fw.n, &[hi[0], fw.hz], cnot_prim()));
     } else {
         // Compute the AND chain into intermediate scratch (NOT hz), CNOT
         // the final AND onto hz, then UNCOMPUTE the chain — so hz alone is
@@ -207,61 +233,63 @@ fn pc_high_zero(a: usize) -> Iso {
         let mut acc = hi[0];
         let mut last = acc;
         for (t, &i) in hi[1..].iter().enumerate() {
-            let tgt = fetch_chain(t);
-            chain.push(gate_at(FETCH_N, &[acc, i, tgt], toffoli_prim()));
+            let tgt = fw.chain(t);
+            chain.push(gate_at(fw.n, &[acc, i, tgt], toffoli_prim()));
             acc = tgt;
             last = tgt;
         }
         gates.extend(chain.clone());
-        gates.push(gate_at(FETCH_N, &[last, FETCH_HZ_WIRE], cnot_prim())); // hz ^= AND
+        gates.push(gate_at(fw.n, &[last, fw.hz], cnot_prim())); // hz ^= AND
         chain.reverse();
         gates.extend(chain); // uncompute the AND chain (restore scratch)
     }
     gates.extend(nots); // restore the negated PC bits
-    on_fields(&fetch_fields(), gates)
+    on_fields_l(layout, &fetch_fields(layout), gates)
 }
 
-/// Compute `pred = hz ∧ (PC[0..a] == addr)` into `FETCH_PRED_WIRE`
-/// (s1 bit 0): NOTs on the zero low-literals, an `(a+1)`-input AND
-/// (the `a` low PC literals plus the shared `hz` control) via a Toffoli
-/// chain through s1 bits 1..a, NOTs undone. `Iso::sym` uncomputes it.
-fn pc_pred(addr: usize, a: usize) -> Iso {
+/// Compute `pred = hz ∧ (PC[0..a] == addr)` into the s1-bit-0 pred wire:
+/// NOTs on the zero low-literals, an `(a+1)`-input AND (the `a` low PC
+/// literals plus the shared `hz` control) via a Toffoli chain through the
+/// fetch-chain slots, NOTs undone. `Iso::sym` uncomputes it.
+fn pc_pred(layout: &Layout, addr: usize, a: usize) -> Iso {
+    let fw = FetchWires::new(layout);
     // Low literals (bits 0..a) NOT-ed where addr bit is 0.
     let nots: Vec<Iso> = (0..a)
         .filter(|i| (addr >> i) & 1 == 0)
-        .map(|i| at_wire(FETCH_N, i, not_iso()))
+        .map(|i| at_wire(fw.n, i, not_iso()))
         .collect();
     let mut gates = nots.clone();
     // AND chain over controls [hz, PC0, PC1, ..., PC_{a-1}] → pred.
-    let controls: Vec<usize> = std::iter::once(FETCH_HZ_WIRE).chain(0..a).collect();
+    let controls: Vec<usize> = std::iter::once(fw.hz).chain(0..a).collect();
     if controls.len() == 1 {
         // a == 0 (impossible, a≥1) — pred = hz.
-        gates.push(gate_at(FETCH_N, &[controls[0], FETCH_PRED_WIRE], cnot_prim()));
+        gates.push(gate_at(fw.n, &[controls[0], fw.pred], cnot_prim()));
     } else {
         let mut acc = controls[0];
         for (t, &c) in controls[1..].iter().enumerate() {
             let tgt = if t == controls.len() - 2 {
-                FETCH_PRED_WIRE
+                fw.pred
             } else {
-                fetch_chain(t)
+                fw.chain(t)
             };
-            gates.push(gate_at(FETCH_N, &[acc, c, tgt], toffoli_prim()));
+            gates.push(gate_at(fw.n, &[acc, c, tgt], toffoli_prim()));
             acc = tgt;
         }
     }
     gates.extend(nots);
-    on_fields(&fetch_fields(), gates)
+    on_fields_l(layout, &fetch_fields(layout), gates)
 }
 
 /// One ROM entry: iff `hz ∧ PC[0..a] == addr`, XOR the constant 32-bit
 /// `word` into IR.
-fn fetch_entry(addr: usize, word: u32, a: usize) -> Iso {
-    let pred = pc_pred(addr, a);
+fn fetch_entry(layout: &Layout, addr: usize, word: u32, a: usize) -> Iso {
+    let fw = FetchWires::new(layout);
+    let pred = pc_pred(layout, addr, a);
     let cnots: Vec<Iso> = (0..32usize)
         .filter(|&b| (word >> b) & 1 == 1)
-        .map(|b| gate_at(FETCH_N, &[FETCH_PRED_WIRE, FETCH_IR0 + b], cnot_prim()))
+        .map(|b| gate_at(fw.n, &[fw.pred, fw.ir0 + b], cnot_prim()))
         .collect();
-    let body = on_fields(&fetch_fields(), cnots);
+    let body = on_fields_l(layout, &fetch_fields(layout), cnots);
     Iso::seq(pred.clone(), Iso::seq(body, Iso::sym(pred)))
 }
 
@@ -271,41 +299,45 @@ fn fetch_entry(addr: usize, word: u32, a: usize) -> Iso {
 /// matches nothing). Self-inverse for a fixed PC, so it doubles as the
 /// unfetch. Requires s1 = 0 on entry (restored on exit).
 pub fn fetch(rom: &[u32]) -> Iso {
+    fetch_with(&Layout::default(), rom)
+}
+
+/// B-2.1a: layout-parameterized [`fetch`]. The zero-arg entry delegates at
+/// `Layout::default()`.
+pub fn fetch_with(layout: &Layout, rom: &[u32]) -> Iso {
+    let w_pc = layout.w_pc;
     assert!(
-        rom.len() <= 1 << W_PC,
-        "ROM exceeds the {W_PC}-bit PC address space"
+        rom.len() <= 1 << w_pc,
+        "ROM exceeds the {w_pc}-bit PC address space"
     );
-    // A-6.4 F-2: at A_fetch = 16 (rom_len > 32768) the per-entry predicate's
-    // AND-chain intermediate collides with the shared high-zero wire and
-    // INVERTS the predicate (aliasing, review probe B). Reject rom_len beyond
-    // the narrow-fetch chain budget rather than silently corrupt (this makes
-    // the structural limit the asm.rs doc-comment claims actually exist). A
-    // 2-byte-scratch chain is the follow-up for larger ROMs.
+    // A-6.4 F-2: at A_fetch = w_pc (rom_len > 2^(w_pc-1)) the per-entry
+    // predicate's AND-chain intermediate collides with the shared high-zero
+    // wire and INVERTS the predicate (aliasing, review probe B). Reject
+    // rom_len beyond the narrow-fetch chain budget rather than silently
+    // corrupt. A 2-byte-scratch chain is the follow-up for larger ROMs.
+    let max_rom_len = 1usize << (w_pc - 1);
     assert!(
-        rom.len() <= MAX_FETCH_ROM_LEN,
+        rom.len() <= max_rom_len,
         "ROM length {} exceeds the narrow-fetch predicate limit {} \
          (A_fetch would be {}, colliding the AND-chain with the high-zero wire; \
          A-6.4 F-2). A wider (2-byte) fetch-chain scratch is the follow-up.",
         rom.len(),
-        MAX_FETCH_ROM_LEN,
-        W_PC,
+        max_rom_len,
+        w_pc,
     );
     let a = fetch_addr_bits(rom.len());
     let entries: Vec<Iso> = rom
         .iter()
         .enumerate()
         .filter(|&(_, &w)| w != 0)
-        .map(|(p, &w)| fetch_entry(p, w, a))
+        .map(|(p, &w)| fetch_entry(layout, p, w, a))
         .collect();
     if entries.is_empty() {
         Iso::Id(state_ty())
     } else {
         // Shared high-zero gate computed once, wrapping all entries.
-        let hz = pc_high_zero(a);
-        Iso::seq(
-            hz.clone(),
-            Iso::seq(seq_balanced(entries), Iso::sym(hz)),
-        )
+        let hz = pc_high_zero(layout, a);
+        Iso::seq(hz.clone(), Iso::seq(seq_balanced(entries), Iso::sym(hz)))
     }
 }
 
@@ -360,16 +392,24 @@ pub fn fetch(rom: &[u32]) -> Iso {
 ///   PC bit i (0..16) = wire i ; BR bit j (0..8) = wire 16+j ;
 ///   s0 bit j = wire 24+j (operand low) ; s1 bit j = wire 32+j (operand high).
 pub fn pc_add_br() -> Iso {
-    let n = 5 * W;
-    let pc = |i: usize| i; // PC target bit i (0..16) — wires 0..16
-    let br = |j: usize| 2 * W + j; // BR bit j — wires 16..24
-    let op = |i: usize| 3 * W + i; // 16-bit operand op[i] — wires 24..40 (s0‖s1)
-    let np = W_PC;
+    pc_add_br_with(&Layout::default())
+}
+
+/// B-2.1a: layout-parameterized [`pc_add_br`]. PC/BR/s0/s1 are all
+/// control-region (`w_ctl`); PC is `w_pc` bits. The zero-arg entry
+/// delegates at `Layout::default()`.
+pub fn pc_add_br_with(layout: &Layout) -> Iso {
+    let wc = layout.w_ctl;
+    let n = 5 * wc;
+    let pc = |i: usize| i; // PC target bit i (0..w_pc)
+    let br = |j: usize| 2 * wc + j; // BR bit j
+    let op = |i: usize| 3 * wc + i; // w_pc-bit operand op[i] (s0‖s1)
+    let np = layout.w_pc;
 
     let mut build: Vec<Iso> = Vec::new();
-    // ── Materialize op = sext(BR): op[i] = BR[i] (i<8), op[i]=BR[7] (i≥8) ──
+    // ── Materialize op = sext(BR): op[i] = BR[i] (i<w_br), op[i]=BR[msb] (i≥) ──
     for i in 0..np {
-        let src = if i < W { br(i) } else { br(W - 1) };
+        let src = if i < wc { br(i) } else { br(wc - 1) };
         build.push(gate_at(n, &[src, op(i)], cnot_prim()));
     }
 
@@ -408,8 +448,15 @@ pub fn pc_add_br() -> Iso {
     let mut gates = build;
     gates.extend(add);
     gates.extend(unbuild);
-    on_fields(
-        &[PC_FIELD, PC_HI_FIELD, BR_FIELD, AUX_OPERAND_FIELD, AUX_PRED_FIELD],
+    on_fields_l(
+        layout,
+        &[
+            layout.pc_field(),
+            layout.pc_hi_field(),
+            layout.br_field(),
+            layout.scratch_field(0),
+            layout.scratch_field(1),
+        ],
         gates,
     )
 }
@@ -430,10 +477,18 @@ pub fn pc_add_br() -> Iso {
 ///   PC bit i (0..16) = wire i ; operand op[i] (0..16) = wire 16+i
 ///   (op low byte in s0, high byte in s1; only op[0] = 1 is set).
 pub fn pc_inc() -> Iso {
-    let n = 4 * W;
-    let pc = |i: usize| i; // PC target bit (0..16)
-    let op = |i: usize| 2 * W + i; // 16-bit operand op[i] in s0‖s1 (only op[0]=1)
-    let np = W_PC;
+    pc_inc_with(&Layout::default())
+}
+
+/// B-2.1a: layout-parameterized [`pc_inc`]. PC/s0/s1 are control-region
+/// (`w_ctl`); PC is `w_pc` bits. The zero-arg entry delegates at
+/// `Layout::default()`.
+pub fn pc_inc_with(layout: &Layout) -> Iso {
+    let wc = layout.w_ctl;
+    let n = 4 * wc;
+    let pc = |i: usize| i; // PC target bit (0..w_pc)
+    let op = |i: usize| 2 * wc + i; // w_pc-bit operand op[i] in s0‖s1 (only op[0]=1)
+    let np = layout.w_pc;
 
     let mut gates: Vec<Iso> = Vec::new();
     // Materialize the constant 1: op[0] = 1 (NOT s0 bit 0). op[1..np] = 0.
@@ -467,8 +522,14 @@ pub fn pc_inc() -> Iso {
     // Clear op[0] (sym of the NOT).
     gates.push(at_wire(n, op(0), not_iso()));
 
-    on_fields(
-        &[PC_FIELD, PC_HI_FIELD, AUX_OPERAND_FIELD, AUX_PRED_FIELD],
+    on_fields_l(
+        layout,
+        &[
+            layout.pc_field(),
+            layout.pc_hi_field(),
+            layout.scratch_field(0),
+            layout.scratch_field(1),
+        ],
         gates,
     )
 }
@@ -505,13 +566,22 @@ pub fn step_ops(rom: &[u32], ops: &[Op]) -> Iso {
 /// path lowers, so the sharing is what keeps `me_a3` off the OOM cliff and
 /// drops step_j. Semantically identical to `step_ops(rom, &Op::ALL)`.
 pub fn step(rom: &[u32]) -> Iso {
-    let f = fetch(rom);
+    step_with(&Layout::default(), rom)
+}
+
+/// B-2.1a: layout-parameterized [`step`] — the CORE builder threaded end to
+/// end (`fetch_with`, `decode_execute_l`, `pc_add_br_with`, `pc_inc_with`).
+/// The zero-arg [`step`] delegates at `Layout::default()`, so the produced
+/// step net is byte-identical to the pre-B-2.1a code (the `poc_step_net`
+/// golden). B-2.1b/c pass a reduced `Layout` here to get the win.
+pub fn step_with(layout: &Layout, rom: &[u32]) -> Iso {
+    let f = fetch_with(layout, rom);
     let phases = vec![
-        f.clone(),                 // fetch
-        decoder::decode_execute(), // decode + execute (SHARED crossbar)
-        f,                         // unfetch
-        pc_add_br(),               // PC += BR
-        pc_inc(),                  // PC += 1
+        f.clone(),                          // fetch
+        decoder::decode_execute_l(layout),  // decode + execute (SHARED crossbar)
+        f,                                  // unfetch
+        pc_add_br_with(layout),             // PC += BR
+        pc_inc_with(layout),                // PC += 1
     ];
     seq_balanced(phases)
 }
