@@ -260,6 +260,95 @@ pub fn type_of(iso: &Iso) -> Result<(Type, Type), TypeError> {
     }
 }
 
+/// The widest `Flat(n)` leaf appearing anywhere inside a [`Type`] tree.
+///
+/// Returns `Some(n)` for the maximum `Flat(n)` width reached by descending
+/// `Sum`/`Prod`; `None` if the type contains no `Flat` leaf at all
+/// (`Zero`/`One`/unary-numeral/list-spine-of-`One` shapes carry no data word).
+fn type_max_flat_width(ty: &Type) -> Option<u8> {
+    match ty {
+        Type::Flat(n) => Some(*n),
+        Type::Sum(a, b) | Type::Prod(a, b) => {
+            match (type_max_flat_width(a), type_max_flat_width(b)) {
+                (Some(x), Some(y)) => Some(x.max(y)),
+                (Some(x), None) | (None, Some(x)) => Some(x),
+                (None, None) => None,
+            }
+        }
+        Type::Zero | Type::One => None,
+    }
+}
+
+/// The widest data-word (`Type::Flat(n)`) the program manipulates — the
+/// per-program `w_data` derivation input (B-2.1c auto-derive).
+///
+/// The compiled `&[Instr]` stream is byte-oriented and has lost the source
+/// data width, so the width must be read off the SOURCE `Iso`'s `Type`s. This
+/// recurses the ENTIRE iso: the explicit `Type` parameters on every structural
+/// combinator (`Id`/`SwapSum`/`AssocL/RSum`/`Unite/UnitiSum`/`SwapProd`/
+/// `AssocL/RProd`/`Unite/UnitiProd`/`Distrib`/`Factor`/`Trace`/`Iter`/`Fold`/
+/// `Unfold`), the input/output types of every `Prim`, and every sub-iso of
+/// `Sym`/`Seq`/`Plus`/`Times`/`Trace`/`Iter`/`Fold`/`Unfold`. For each embedded
+/// `Type` it takes the widest `Flat(n)` leaf ([`type_max_flat_width`]).
+///
+/// Returns the max `n` seen, clamped to `[1, 8]`. **Defaults to `8` when no
+/// `Flat` leaf is found** — this is the SAFE direction: it never under-reports
+/// (a spuriously narrow `w_data` would misroute a wide data word — a silent
+/// corruption). A program whose widest value is `Flat(4)` returns `4`; a
+/// byte (`Flat(8)`) program returns `8`; a mixed `Flat(4)` + `Flat(8)` program
+/// returns `8`.
+///
+/// Coverage note: every `Type`-carrying constructor is explicitly matched (no
+/// `_` fallthrough), so adding a new width-bearing `Iso`/`Type` variant is a
+/// compile error here rather than a silent under-report.
+pub fn max_flat_width(iso: &Iso) -> usize {
+    /// Accumulate the widest `Flat` leaf over the whole iso, folding each
+    /// embedded `Type` and recursing into sub-isos. `None` = no `Flat` seen.
+    fn go(iso: &Iso, acc: Option<u8>) -> Option<u8> {
+        // Fold in one embedded type's widest Flat leaf.
+        fn fold_ty(acc: Option<u8>, ty: &Type) -> Option<u8> {
+            match (acc, type_max_flat_width(ty)) {
+                (Some(x), Some(y)) => Some(x.max(y)),
+                (Some(x), None) | (None, Some(x)) => Some(x),
+                (None, None) => None,
+            }
+        }
+        match iso {
+            // Structural combinators: fold in their explicit Type params.
+            Iso::Id(a) => fold_ty(acc, a),
+            Iso::SwapSum(a, b) | Iso::SwapProd(a, b) => fold_ty(fold_ty(acc, a), b),
+            Iso::AssocLSum(a, b, c)
+            | Iso::AssocRSum(a, b, c)
+            | Iso::AssocLProd(a, b, c)
+            | Iso::AssocRProd(a, b, c)
+            | Iso::Distrib(a, b, c)
+            | Iso::Factor(a, b, c) => fold_ty(fold_ty(fold_ty(acc, a), b), c),
+            Iso::UniteSum(a) | Iso::UnitiSum(a) | Iso::UniteProd(a) | Iso::UnitiProd(a) => {
+                fold_ty(acc, a)
+            }
+
+            // Composition: recurse into sub-isos.
+            Iso::Sym(f) => go(f, acc),
+            Iso::Seq(f, g) | Iso::Plus(f, g) | Iso::Times(f, g) => go(g, go(f, acc)),
+
+            // Combinators carrying BOTH a Type param and a body iso.
+            Iso::Trace(u, f) | Iso::Iter(u, f) | Iso::Fold(u, f) | Iso::Unfold(u, f) => {
+                go(f, fold_ty(acc, u))
+            }
+
+            // Prim: fold in both its input and output types (authoritative;
+            // any PrimSpec.width mirrors these).
+            Iso::Prim(def) => fold_ty(fold_ty(acc, &def.input_ty), &def.output_ty),
+        }
+    }
+    match go(iso, None) {
+        Some(n) => (n as usize).clamp(1, 8),
+        // No Flat leaf anywhere — default to the full byte width (never
+        // under-report; a narrow w_data would misroute wide data).
+        None => 8,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,6 +360,96 @@ mod tests {
     }
     fn bool_ty() -> Type {
         Type::sum(Type::One, Type::One)
+    }
+
+    // ── max_flat_width pins (B-2.1c auto-derive) ─────────────────────
+
+    #[test]
+    fn max_flat_width_flat4_is_4() {
+        // A program whose only data word is Flat(4) → 4.
+        assert_eq!(max_flat_width(&Iso::Id(Type::Flat(4))), 4);
+        assert_eq!(
+            max_flat_width(&Iso::SwapProd(Type::Flat(4), Type::Flat(4))),
+            4
+        );
+    }
+
+    #[test]
+    fn max_flat_width_flat8_is_8() {
+        assert_eq!(max_flat_width(&Iso::Id(Type::Flat(8))), 8);
+    }
+
+    #[test]
+    fn max_flat_width_mixed_is_max() {
+        // Times(Flat(4), Flat(8)) → the wider leaf (8), NEVER under-report.
+        let mixed = Iso::times(Iso::Id(Type::Flat(4)), Iso::Id(Type::Flat(8)));
+        assert_eq!(max_flat_width(&mixed), 8);
+        // Order-independent.
+        let mixed2 = Iso::times(Iso::Id(Type::Flat(8)), Iso::Id(Type::Flat(4)));
+        assert_eq!(max_flat_width(&mixed2), 8);
+    }
+
+    #[test]
+    fn max_flat_width_wrapped_reaches_inner_flat() {
+        // The Flat(4) is buried inside Times / Plus / Trace / Iter / Sym / Seq —
+        // each wrapper must be descended, else the width is under-reported.
+        let inner = || Iso::Id(Type::Flat(4));
+        // Times: sub-iso descent.
+        assert_eq!(max_flat_width(&Iso::times(inner(), Iso::Id(Type::One))), 4);
+        // Plus: sub-iso descent.
+        assert_eq!(max_flat_width(&Iso::plus(inner(), Iso::Id(Type::One))), 4);
+        // Seq: both sub-isos (Id(Flat4);Id(Flat4)).
+        assert_eq!(max_flat_width(&Iso::seq(inner(), inner())), 4);
+        // Sym: sub-iso descent.
+        assert_eq!(max_flat_width(&Iso::sym(inner())), 4);
+        // Trace: carrier is One, but the body reaches Flat(4).
+        //   body : One + Flat(4) ↔ One + Flat(4)  → trace over carrier One.
+        let body = Iso::plus(Iso::Id(Type::One), inner());
+        assert_eq!(max_flat_width(&Iso::trace(Type::One, body)), 4);
+        // Iter: numeral counter (no Flat), body reaches Flat(4).
+        assert_eq!(max_flat_width(&Iso::iter(Type::numeral_ty(3), inner())), 4);
+        // Trace whose CARRIER itself is the wide word.
+        assert_eq!(
+            max_flat_width(&Iso::trace(Type::Flat(4), Iso::Id(Type::sum(
+                Type::Flat(4),
+                Type::One
+            )))),
+            4
+        );
+    }
+
+    #[test]
+    fn max_flat_width_no_flat_defaults_to_8() {
+        // No Flat leaf anywhere → default 8 (never under-report).
+        assert_eq!(max_flat_width(&Iso::Id(Type::One)), 8);
+        assert_eq!(max_flat_width(&Iso::Id(bool_ty())), 8);
+        assert_eq!(max_flat_width(&Iso::Id(Type::numeral_ty(5))), 8);
+    }
+
+    #[test]
+    fn max_flat_width_reaches_prim_types() {
+        // A Prim carries its data width in input_ty/output_ty. Build a trivial
+        // Flat(4) → Flat(4) identity prim and confirm the width is read off it.
+        use crate::prim::PrimDef;
+        use std::collections::BTreeMap;
+        let flat4 = Type::Flat(4);
+        let vals = crate::prim::enumerate_values(&flat4);
+        let mut fwd = BTreeMap::new();
+        let mut bwd = BTreeMap::new();
+        for v in &vals {
+            fwd.insert(v.clone(), v.clone());
+            bwd.insert(v.clone(), v.clone());
+        }
+        let def = PrimDef {
+            forward_name: "id4".into(),
+            backward_name: "id4".into(),
+            input_ty: flat4.clone(),
+            output_ty: flat4,
+            forward: fwd,
+            backward: bwd,
+            symbolic: None,
+        };
+        assert_eq!(max_flat_width(&Iso::Prim(Box::new(def))), 4);
     }
 
     #[test]

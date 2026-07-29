@@ -13,7 +13,7 @@
 use std::fmt;
 
 use theseus_core::typing::is_numeral_ty;
-use theseus_core::{adjoint, Iso, Type, Value};
+use theseus_core::{adjoint, max_flat_width, Iso, Type, Value};
 
 use crate::asm::{assemble, Instr};
 use crate::bveq;
@@ -3091,6 +3091,38 @@ pub fn derive_layout(instrs: &[Instr]) -> Layout {
     Layout::for_program_facts(uses_mem, max_named_reg)
 }
 
+/// Derive the FULL per-program [`Layout`] (B-2.1c auto-derive): the
+/// instrs-based `num_regs`/`mem_words` derivation ([`derive_layout`]) COMBINED
+/// with the auto-derived data-word width `w_data` read off the SOURCE `iso`.
+///
+/// The compiled `&[Instr]` stream is byte-oriented and has lost the source
+/// data width; the width lives only in the `iso`'s `Type::Flat(n)` leaves. So
+/// `w_data` MUST be derived from the iso, not the instrs. We take:
+///
+/// - `w_data = next_pow2(max_flat_width(iso))` — the datapath rotator needs a
+///   power-of-two slot count, so the widest `Flat(n)` the program manipulates
+///   is rounded UP to a power of two (e.g. `Flat(4)` → 4, `Flat(3)` → 4,
+///   `Flat(5)` → 8). [`max_flat_width`] clamps to `[1,8]` and defaults to 8
+///   when it sees no `Flat` leaf, so `w_data` is never under-reported (an
+///   under-narrow `w_data` would misroute a wide data word — silent
+///   corruption).
+/// - `num_regs`/`mem_words` from [`derive_layout`] (unchanged).
+/// - `w_ctl = 8` (Option A: the control region stays byte-wide).
+///
+/// **SCRATCH-OPERAND SAFETY:** the `num_regs` scratch-operand pin in
+/// [`derive_layout`] still applies (a program naming a scratch operand keeps
+/// the full register file). For `w_data`, the operand-addressable scratch words
+/// `s2..s{num_scratch-1}` are ALREADY `w_data`-wide (`Layout::field_width`
+/// returns `w_data` for scratch fields ≥ 2), matching the registers — the
+/// operand crossbar therefore stays within one width (design Q2), so no extra
+/// `w_data` pin is needed for scratch operands. (s0/s1 are `w_ctl` and are
+/// crossbar-excluded; PC/BR/IR are `w_ctl`.)
+pub fn derive_full_layout(iso: &Iso, instrs: &[Instr]) -> Layout {
+    let base = derive_layout(instrs);
+    let w_data = max_flat_width(iso).next_power_of_two();
+    Layout { w_data, ..base }
+}
+
 /// True iff the program is CPU-only (emits no memory op), so it can run on
 /// the CPU-only `step(rom)` ring rather than the composite `system_step`
 /// (dropping the MemState + BusMsg tensor). B-2.0b MEM-drop predicate.
@@ -4606,7 +4638,19 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
     let s_max_val = lowered.s_max();
     let state = marshal(input, &in_ty);
 
-    let final_state = run_rom_on_cpu(&lowered.instrs, state, budget, s_max_val, eval_fn)?;
+    // B-2.1c auto-derive: run the oracle at the per-program layout read off the
+    // source iso's `Flat(n)` data width. A CPU-only, mem-quiescent program runs
+    // on the reduced-`w_data` mixed-width ring (`run_rom_on_cpu_with`), so a
+    // narrow-data (e.g. `Flat(4)`) program exercises the auto-selected w_data=4
+    // datapath. A memory / non-quiescent program keeps the default-layout
+    // composite path (reduced-`w_data` memory is out of scope for B-2.1c).
+    let layout = derive_full_layout(iso, &lowered.instrs);
+    let mem_quiescent = state.mem.iter().all(|&m| m == 0);
+    let final_state = if is_cpu_only(&lowered.instrs) && mem_quiescent {
+        run_rom_on_cpu_with(&layout, &lowered.instrs, state, budget, s_max_val, eval_fn)?
+    } else {
+        run_rom_on_cpu(&lowered.instrs, state, budget, s_max_val, eval_fn)?
+    };
 
     Ok(unmarshal(&final_state, &out_ty))
 }

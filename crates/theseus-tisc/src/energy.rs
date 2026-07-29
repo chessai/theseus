@@ -446,6 +446,37 @@ pub fn rom_program_energy(
     })
 }
 
+/// Energy-price a program at its AUTO-DERIVED [`Layout`] (B-2.1c auto-derive).
+///
+/// Unlike [`rom_program_energy`] — which prices against a caller-supplied
+/// `step_net` (lowered at whatever layout the caller chose, historically the
+/// default `w_data=8`) — this derives the per-program layout from the SOURCE
+/// iso ([`crate::compile::derive_full_layout`]) and lowers the step netlist at
+/// that layout (`step_with(layout, rom)`). So a narrow-data program's PRICED
+/// `step_j` reflects the reduced-`w_data` datapath: a `Flat(4)` program is
+/// priced on the `w_data=4` ring, a byte (`Flat(8)`) program on the byte ring
+/// (identical to the default `step(rom)` net at `w_data=8`).
+///
+/// Lowering the step net is the expensive step; callers pricing many inputs of
+/// the SAME iso should lower once (via [`crate::compile::derive_full_layout`] +
+/// `step_with` + `lower_iso`) and call [`rom_program_energy`] with that net.
+/// This convenience lowers per call.
+pub fn rom_program_energy_auto(
+    iso: &theseus_core::Iso,
+    input: &theseus_core::Value,
+    db: &CharDb,
+    t_ramp: f64,
+) -> Result<ProgramEnergy, RomProgramEnergyError> {
+    let lowered = crate::compile::compile_with_metadata(iso)?;
+    let rom = crate::asm::assemble(&lowered.instrs)
+        .map_err(|e| RomProgramEnergyError::Asm(format!("{e}")))?;
+    let layout = crate::compile::derive_full_layout(iso, &lowered.instrs);
+    let step_iso = crate::step::step_with(&layout, &rom);
+    let step_net = theseus_netlist::lower_iso(&step_iso)
+        .map_err(|e| RomProgramEnergyError::Asm(format!("lower_iso step_with: {e:?}")))?;
+    rom_program_energy(iso, input, db, t_ramp, &step_net)
+}
+
 /// Energy-price a compiled TISC-1 ROM with resident-array marshalling (F2-2).
 ///
 /// Mirrors [`rom_program_energy`] but uses `compile_with_metadata_resident`
