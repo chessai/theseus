@@ -277,3 +277,234 @@ fn whole_domain_imm_at_w_data_4() {
     }
     eprintln!("whole-domain Addi/Subi/Xori at w_data=4: all 16×16 per op == 4-bit arithmetic ✓");
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// 5. B-2.1c-2 — the REMAINING ops whole-domained at w_data=4
+// ══════════════════════════════════════════════════════════════════════
+//
+// B-2.1c-1 (the POC) proved Add/Xor/imm at w_data=4. The `shared_alu_block`
+// wired-decode path ALREADY builds EVERY op at reduced w_data (`exch_core_at`,
+// `rotl_core_at`, `ccnot_core_at`, `cswap_core_at`, Sub = adder adjoint), but
+// only Add/Xor/imm were exercised. This section whole-domains the rest against
+// the 4-bit arithmetic reference — the teeth for the untested cores (the
+// rotator's log2(w) barrel stages at w_data=4, the 3-operand controls that
+// could land on an always-zero s0/s1 high bit, and Sub/Exch).
+
+/// 4-bit left-rotate of `v` (low nibble) by `k` (mod 4).
+fn rotl4(v: u8, k: u32) -> u8 {
+    let v = (v & 0x0F) as u32;
+    let k = k % 4;
+    (((v << k) | (v >> ((4 - k) % 4))) & 0x0F) as u8
+}
+
+/// 4-bit right-rotate of `v` (low nibble) by `k` (mod 4).
+fn rotr4(v: u8, k: u32) -> u8 {
+    rotl4(v, (4 - (k % 4)) % 4)
+}
+
+#[test]
+fn whole_domain_sub_at_w_data_4() {
+    // Sub = the adder's adjoint (CFG_ADD_REV) at reduced width: r0 -= r1 mod 16.
+    let prog = vec![Instr::Sub { rd: 0, rs: 1 }];
+    for a in 0u8..16 {
+        for b in 0u8..16 {
+            let got = run4(&prog, a, b);
+            let want = a.wrapping_sub(b) & 0x0F;
+            assert_eq!(
+                got.regs[0], want,
+                "Sub r0-=r1 at w_data=4: a={a} b={b} → got r0={} want {want}",
+                got.regs[0]
+            );
+            assert_eq!(got.regs[1], b, "Sub: r1 (rs) preserved (a={a} b={b})");
+        }
+    }
+    eprintln!("whole-domain Sub at w_data=4: all 256 (a,b) == (a-b) mod 16 ✓");
+}
+
+#[test]
+fn whole_domain_exch_at_w_data_4() {
+    // Exch swaps r0,r1 as 4-bit words (the operand-space Fredkin at reduced w).
+    let prog = vec![Instr::Exch { rd: 0, rs: 1 }];
+    for a in 0u8..16 {
+        for b in 0u8..16 {
+            let got = run4(&prog, a, b);
+            assert_eq!(got.regs[0], b, "Exch: r0 must become b (a={a} b={b}) got {}", got.regs[0]);
+            assert_eq!(got.regs[1], a, "Exch: r1 must become a (a={a} b={b}) got {}", got.regs[1]);
+        }
+    }
+    eprintln!("whole-domain Exch at w_data=4: all 256 (a,b) swap correctly ✓");
+}
+
+#[test]
+fn whole_domain_rotl_rotr_at_w_data_4() {
+    // Rotl/Rotr: the barrel rotator at w_data=4 uses log2(4)=2 shift stages.
+    // The shift amount is r[rs] read at s0's low 2 bits → effectively `rs & 3`
+    // = `rs & (w_data-1)` (a 4-bit rotate, NOT `rs & 7`). Whole-domain over
+    // value × shift-amount (all 16×16); r1 (rs) supplies the shift.
+    for a in 0u8..16 {
+        for k in 0u8..16 {
+            let gotl = run4(&[Instr::Rotl { rd: 0, rs: 1 }], a, k);
+            let wantl = rotl4(a, k as u32);
+            assert_eq!(
+                gotl.regs[0], wantl,
+                "Rotl r0 by r1 at w4: a={a} k={k} (eff {}) → got {} want {wantl}",
+                k & 3, gotl.regs[0]
+            );
+
+            let gotr = run4(&[Instr::Rotr { rd: 0, rs: 1 }], a, k);
+            let wantr = rotr4(a, k as u32);
+            assert_eq!(
+                gotr.regs[0], wantr,
+                "Rotr r0 by r1 at w4: a={a} k={k} (eff {}) → got {} want {wantr}",
+                k & 3, gotr.regs[0]
+            );
+        }
+    }
+    eprintln!("whole-domain Rotl/Rotr at w_data=4: all 16×16 == 4-bit rotate (amt = k & 3) ✓");
+}
+
+#[test]
+fn whole_domain_rotli_rotri_at_w_data_4() {
+    // Rotli/Rotri: immediate barrel rotate. The shift amount is the immediate
+    // masked to s0's low 2 bits at w_data=4 (imm & (w_data-1)=imm & 3), NOT
+    // imm & 7 — verify the immediate shift-field masking is w_data-correct.
+    for a in 0u8..16 {
+        for imm in 0u8..16 {
+            let gotl = run4(&[Instr::Rotli { rd: 0, imm }], a, 0);
+            let wantl = rotl4(a, imm as u32);
+            assert_eq!(
+                gotl.regs[0], wantl,
+                "Rotli #{imm} at w4: a={a} (eff {}) → got {} want {wantl}",
+                imm & 3, gotl.regs[0]
+            );
+
+            let gotr = run4(&[Instr::Rotri { rd: 0, imm }], a, 0);
+            let wantr = rotr4(a, imm as u32);
+            assert_eq!(
+                gotr.regs[0], wantr,
+                "Rotri #{imm} at w4: a={a} (eff {}) → got {} want {wantr}",
+                imm & 3, gotr.regs[0]
+            );
+        }
+    }
+    eprintln!("whole-domain Rotli/Rotri at w_data=4: all 16×16 == 4-bit rotate (amt = imm & 3) ✓");
+}
+
+/// Ccnot at w_data=4: `r0 ^= r1 & r2`, 4-bit-parallel. rt (r2) rides in BR
+/// (w_ctl=8) zero-extended to its low w_data bits — verify the 3-operand path
+/// + BR restoration (run_rom_on_cpu_with hard-fails if terminal BR != 0). Full
+/// 3-operand domain 16³ = 4096. Operands must be distinct (assembler rejects
+/// aliases): rd=0, rs=1, rt=2.
+#[test]
+fn whole_domain_ccnot_at_w_data_4() {
+    let prog = vec![Instr::Ccnot { rd: 0, rs: 1, rt: 2 }];
+    for a in 0u8..16 {
+        for b in 0u8..16 {
+            for c in 0u8..16 {
+                let init = state_with_regs(&[a, b, c]);
+                let got = run_rom_on_cpu_with(
+                    &poc_layout(), &prog, init, prog.len(), 0, theseus_eval::eval,
+                )
+                .unwrap_or_else(|e| panic!("Ccnot w4 run failed a={a} b={b} c={c}: {e}"));
+                let want = a ^ (b & c);
+                assert_eq!(
+                    got.regs[0], want,
+                    "Ccnot r0^=r1&r2 at w4: a={a} b={b} c={c} → got {} want {want}",
+                    got.regs[0]
+                );
+                assert_eq!(got.regs[1], b, "Ccnot: r1 preserved (a={a} b={b} c={c})");
+                assert_eq!(got.regs[2], c, "Ccnot: r2 preserved (a={a} b={b} c={c})");
+            }
+        }
+    }
+    eprintln!("whole-domain Ccnot at w_data=4: all 4096 (a,b,c) == a^(b&c), BR restored ✓");
+}
+
+/// Cswap at w_data=4: swap r1,r2 (4-bit words) gated on r0[0]. Both polarities
+/// (r0[0]=0 → identity; r0[0]=1 → swap). rt rides in BR zero-extended. Full
+/// 3-operand domain 16³. rd=0, rs=1, rt=2 (distinct).
+#[test]
+fn whole_domain_cswap_at_w_data_4() {
+    let prog = vec![Instr::Cswap { rd: 0, rs: 1, rt: 2 }];
+    for a in 0u8..16 {
+        for b in 0u8..16 {
+            for c in 0u8..16 {
+                let init = state_with_regs(&[a, b, c]);
+                let got = run_rom_on_cpu_with(
+                    &poc_layout(), &prog, init, prog.len(), 0, theseus_eval::eval,
+                )
+                .unwrap_or_else(|e| panic!("Cswap w4 run failed a={a} b={b} c={c}: {e}"));
+                let (want1, want2) = if a & 1 == 1 { (c, b) } else { (b, c) };
+                assert_eq!(
+                    got.regs[1], want1,
+                    "Cswap r1↔r2 iff r0[0] at w4: a={a} b={b} c={c} → r1 got {} want {want1}",
+                    got.regs[1]
+                );
+                assert_eq!(
+                    got.regs[2], want2,
+                    "Cswap r1↔r2 iff r0[0] at w4: a={a} b={b} c={c} → r2 got {} want {want2}",
+                    got.regs[2]
+                );
+                assert_eq!(got.regs[0], a, "Cswap: r0 (control) preserved (a={a} b={b} c={c})");
+            }
+        }
+    }
+    eprintln!("whole-domain Cswap at w_data=4: all 4096 both polarities correct, BR restored ✓");
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 6. B-2.1c-2 — a SCRATCH operand at w_data=4 (mixed-width crossbar)
+// ══════════════════════════════════════════════════════════════════════
+//
+// Scratch operands use ABSOLUTE indices (s2 = idx 10), decoded via
+// `s[idx - num_regs]`. So a scratch operand REQUIRES the default num_regs=8
+// (derive_layout pins num_regs=8 whenever a scratch operand is named, else
+// idx 10 misroutes to s6). Unlike num_regs, a scratch operand does NOT need to
+// pin w_data: s2..s7 are ALREADY w_data in the mixed-width state (Q1), so the
+// operand crossbar is w_data-homogeneous (Q2 — reg↔scratch swaps stay within
+// one width). This test uses `w_data=4, num_regs=8` and a scratch rt (s2=idx10)
+// to prove the s2 operand routes + computes correctly at the reduced datapath.
+
+/// Layout with a narrow datapath but FULL num_regs (required for absolute
+/// scratch-operand indices to route correctly).
+fn scratch_op_layout() -> Layout {
+    Layout {
+        w_data: 4,
+        num_regs: 8,
+        ..Layout::default()
+    }
+}
+
+#[test]
+fn scratch_operand_ccnot_at_w_data_4() {
+    // Ccnot r0, r1, s2  — rt is a SCRATCH operand (s2 = idx 10), a w_data word
+    // in the mixed-width state. The crossbar must route s2 into the operand
+    // path and the 3-operand Ccnot core must compute r0 ^= r1 & s2 at 4 bits.
+    let prog = vec![Instr::Ccnot { rd: 0, rs: 1, rt: 10 }];
+    let layout = scratch_op_layout();
+    // Spread of (r0, r1, s2) including edge nibbles.
+    let cases: &[(u8, u8, u8)] = &[
+        (0x0, 0x0, 0x0),
+        (0xF, 0xF, 0xF),
+        (0x5, 0xF, 0xA),
+        (0xA, 0x6, 0xF),
+        (0x8, 0x9, 0x1),
+        (0x3, 0xC, 0x7),
+        (0xF, 0x8, 0x8),
+    ];
+    for &(r0, r1, s2) in cases {
+        let mut init = state_with_regs(&[r0, r1]);
+        init.scratch[2] = s2;
+        let got = run_rom_on_cpu_with(&layout, &prog, init, prog.len(), 0, theseus_eval::eval)
+            .unwrap_or_else(|e| panic!("scratch-op Ccnot w4 failed r0={r0} r1={r1} s2={s2}: {e}"));
+        let want = r0 ^ (r1 & s2);
+        assert_eq!(
+            got.regs[0], want,
+            "Ccnot r0^=r1&s2 (scratch operand) at w4: r0={r0} r1={r1} s2={s2} → got {} want {want}",
+            got.regs[0]
+        );
+        assert_eq!(got.regs[1], r1, "scratch-op Ccnot: r1 preserved");
+        assert_eq!(got.scratch[2], s2, "scratch-op Ccnot: s2 (scratch operand) preserved");
+        eprintln!("scratch-op Ccnot: r0={r0} r1={r1} s2={s2} → r0={} == r0^(r1&s2) ✓", got.regs[0]);
+    }
+}
