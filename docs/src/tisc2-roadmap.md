@@ -16,7 +16,11 @@
 > **A-0 (shared, scratch-addressable operand crossbar + instruction-word reformat)** is inserted
 > before the frame slice; with it, the GCD body returns to ~28 (B=194) exactly as first estimated.
 
-> **⇒⇒ CURRENT STATUS (2026-07-27) — COVERAGE COMPLETE; Phase B B-1 shared ALU COMPLETE (step_j −39.4%); B-2 per-program-widths infra merged, B-2.1 big win awaits USER (DF-2 fork):**
+> **⇒⇒ CURRENT STATUS (2026-07-28) — COVERAGE COMPLETE; Phase B B-1 shared ALU COMPLETE (step_j −39.4%); B-2 per-program widths LANDING (DF-2=Option A):**
+> - **✅ B-2.1b MERGED (`4e5a4dc`): reduced `num_regs`** — few-register programs shrink the register file + crossbar; −16.8% step_j on a 4-register kernel (fib byte-identical). Advisor caught+fixed a scratch-operand misroute + the F2 s0/s1-immovability erosion (byte-identical position-based crossbar exclusion).
+> - **✅ B-2.1c MERGED (`37c7a6c`): reduced `w_data` (mixed-width state)** — the big data-word win. `state_ty` is mixed-width (registers/s2../mem = w_data; s0/s1/PC/BR/IR = w_ctl=8) via `Layout::field_width` + per-field width vectors through `addressing::*`. **decode_execute 337459→103462 balanced cells (−69.3%) at w_data=4/num_regs=4 → ~−47% step_j for a narrow-data program**, stacking on B-1 (~−68% cumulative from the original baseline). Byte-identical at w_data=8 (fib/me_a3 unchanged); whole-domain Add/Xor/Addi/Subi/Xori at w_data=4 correct + run_on_cpu==eval; Fable no-BLOCKER + heavy authority 592/0. POC = register+imm; DEFERRED to B-2.1c-2: rotator/Ccnot/Cswap/scratch at reduced w_data, auto-derive w_data (from source Iso).
+>
+> **(historical) CURRENT STATUS (2026-07-27) — B-2 infra merged, B-2.1 big win awaited USER (DF-2 fork):**
 > - **A-0 MERGED** to `chessai/theseus-v2` (`5f11e6b`): 32-bit word + shared scratch-addressable
 >   operand crossbar; net energy WIN −11.9%.
 > - **A-1 (hand-walk GCD) ABANDONED** — a correct reversible in-place gcd2 walk to ≤40 is
