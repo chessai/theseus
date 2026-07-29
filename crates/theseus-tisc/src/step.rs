@@ -111,10 +111,33 @@ use crate::types::{Layout, W_PC};
 // `layout.w_pc`; at `Layout::default()` (w_ctl = 8, w_pc = 16) these are the
 // shipped 8·W / W_PC / 6·W / 7·W offsets, so the fetch net is byte-identical.
 
-/// Control-region wire bases for the fetch core `[PC_lo, PC_hi, IR_b0..b3,
-/// s0, s1]` of a given `layout`. The core is 8 control words wide: PC bit i
-/// (0..w_pc) = wire i; IR bit b = wire `w_pc + b`; s0 bit j = wire `6·w_ctl
-/// + j`; s1 bit j = wire `7·w_ctl + j`.
+/// B-2.2a (Fable MAJOR-1): PC must occupy a whole number of `w_ctl`-wide
+/// fields. `pc_fields()` is **floor** division (`w_pc / w_ctl`), so a `w_pc`
+/// that is not a positive multiple of `w_ctl` (e.g. 12) would under-count the
+/// PC carrier and silently route the high PC bits onto BR/operand wires
+/// (`pc_add_br` writing into BR; `pc_inc` aliasing op) instead of failing.
+/// The pre-refactor code panicked loudly on such a layout (the unconditional
+/// `pc_hi_field()` addressed one-past-the-last field); this restores that
+/// loud-failure property at every PC-builder entry. No valid layout
+/// (w_pc ∈ {8, 16}, w_ctl = 8) ever trips it.
+fn assert_pc_carrier(layout: &Layout) {
+    assert!(
+        layout.pc_fields() >= 1 && layout.w_pc == layout.pc_fields() * layout.w_ctl,
+        "PC carrier invariant violated: w_pc={} is not a positive multiple of w_ctl={} \
+         (pc_fields()={}); PC would alias BR/operand wires",
+        layout.w_pc,
+        layout.w_ctl,
+        layout.pc_fields(),
+    );
+}
+
+/// Control-region wire bases for the fetch core `[PC(pc_fields words),
+/// IR_b0..b3, s0, s1]` of a given `layout`. The core is `pc_fields + 6`
+/// control words wide: PC bit i (0..w_pc) = wire i; IR bit b = wire
+/// `w_pc + b`; s0 bit j = wire `(pc_fields+4)·w_ctl + j`; s1 bit j = wire
+/// `(pc_fields+5)·w_ctl + j`. At `Layout::default()` (pc_fields = 2) this is
+/// the shipped 8-word core (s0 = 6·w_ctl, s1 = 7·w_ctl, n = 8·w_ctl),
+/// byte-identical.
 #[derive(Clone, Copy)]
 struct FetchWires {
     n: usize,
@@ -129,6 +152,7 @@ struct FetchWires {
 
 impl FetchWires {
     fn new(layout: &Layout) -> Self {
+        assert_pc_carrier(layout);
         let wc = layout.w_ctl;
         // B-2.2a: the fetch core carrier is `[PC(pc_fields words), IR_b0..b3,
         // s0, s1]` = `pc_fields + 6` control words. At the default (pc_fields
@@ -431,6 +455,7 @@ pub fn pc_add_br() -> Iso {
 /// control-region (`w_ctl`); PC is `w_pc` bits. The zero-arg entry
 /// delegates at `Layout::default()`.
 pub fn pc_add_br_with(layout: &Layout) -> Iso {
+    assert_pc_carrier(layout); // Fable MAJOR-1: PC must occupy whole w_ctl fields
     let wc = layout.w_ctl;
     // B-2.2a: the field list is `[PC(pc_fields words), BR, s0, s1]` =
     // `pc_fields + 3` control words. At the default (pc_fields = 2) this is
@@ -524,6 +549,7 @@ pub fn pc_inc() -> Iso {
 /// (`w_ctl`); PC is `w_pc` bits. The zero-arg entry delegates at
 /// `Layout::default()`.
 pub fn pc_inc_with(layout: &Layout) -> Iso {
+    assert_pc_carrier(layout); // Fable MAJOR-1: PC must occupy whole w_ctl fields
     let wc = layout.w_ctl;
     // B-2.2a: the field list is `[PC(pc_fields words), s0, s1]` =
     // `pc_fields + 2` control words. At the default (pc_fields = 2) this is

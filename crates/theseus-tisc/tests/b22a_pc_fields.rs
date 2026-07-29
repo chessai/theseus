@@ -123,3 +123,46 @@ fn w_pc8_encode_decode_roundtrip() {
     assert_eq!(back.regs[0], sv.regs[0], "r0 round-trips");
     assert_eq!(back.ir, sv.ir, "IR round-trips");
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// 4. Fable MAJOR-1 regression: a non-byte-multiple w_pc fails LOUDLY.
+// ══════════════════════════════════════════════════════════════════════
+//
+// `pc_fields()` is floor division, so `w_pc=12` (w_ctl=8) gives pc_fields()=1
+// but np=12 — the PC adder would route PC bits 8..11 onto BR/operand wires
+// (silent corruption). The pre-refactor code panicked loudly (the
+// unconditional `pc_hi_field()` addressed one-past-the-last field). The
+// `assert_pc_carrier` guard restores that loud failure. This reproduces the
+// finding: without the guard the builder silently emits a corrupt adder; with
+// it, it panics. (No valid layout — w_pc ∈ {8,16} — trips it.)
+
+#[test]
+#[should_panic(expected = "PC carrier invariant violated")]
+fn major1_non_byte_multiple_w_pc_panics_add() {
+    let bad = Layout {
+        w_pc: 12,
+        ..Layout::default()
+    };
+    // pc_fields()=1 but w_pc=12 → carrier under-count → must panic, not
+    // silently alias PC bits 8..11 onto BR.
+    let _ = theseus_tisc::step::pc_add_br_with(&bad);
+}
+
+#[test]
+#[should_panic(expected = "PC carrier invariant violated")]
+fn major1_non_byte_multiple_w_pc_panics_inc() {
+    let bad = Layout {
+        w_pc: 12,
+        ..Layout::default()
+    };
+    let _ = theseus_tisc::step::pc_inc_with(&bad);
+}
+
+// And a w_pc=8 layout (a VALID multiple) must NOT panic — the guard is not
+// over-eager.
+#[test]
+fn valid_w_pc8_builders_do_not_panic() {
+    let s = layout_w_pc8();
+    let _ = theseus_tisc::step::pc_add_br_with(&s);
+    let _ = theseus_tisc::step::pc_inc_with(&s);
+}

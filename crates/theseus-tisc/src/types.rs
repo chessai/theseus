@@ -120,7 +120,11 @@ impl Layout {
         }
     }
 
-    /// Number of Word-sized fields PC occupies (`⌈w_pc / w_ctl⌉`).
+    /// Number of Word-sized fields PC occupies (**floor** `w_pc / w_ctl`).
+    /// A well-formed layout keeps `w_pc` a positive multiple of `w_ctl` (so
+    /// this is exact); the PC builders assert that invariant
+    /// (`step::assert_pc_carrier`, Fable B-2.2a MAJOR-1) — a non-multiple
+    /// `w_pc` would under-count the carrier and alias PC onto BR/op wires.
     pub const fn pc_fields(&self) -> usize {
         self.w_pc / self.w_ctl
     }
