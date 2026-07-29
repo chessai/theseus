@@ -130,11 +130,19 @@ struct FetchWires {
 impl FetchWires {
     fn new(layout: &Layout) -> Self {
         let wc = layout.w_ctl;
-        let s1 = 7 * wc;
+        // B-2.2a: the fetch core carrier is `[PC(pc_fields words), IR_b0..b3,
+        // s0, s1]` = `pc_fields + 6` control words. At the default (pc_fields
+        // = 2) this is 8 words with s0 = 6·wc, s1 = 7·wc, n = 8·wc — the
+        // shipped layout (byte-identical). At w_pc = 8 (pc_fields = 1) the
+        // core is 7 words: PC drops one field, so s0/s1/n each shift down by
+        // one word. `fetch_fields` returns the matching field list.
+        let pcf = layout.pc_fields();
+        let s0 = (pcf + 4) * wc;
+        let s1 = (pcf + 5) * wc;
         FetchWires {
-            n: 8 * wc,
+            n: (pcf + 6) * wc,
             ir0: layout.w_pc, // IR bit 0 (PC occupies pc_fields=w_pc/w_ctl words)
-            s0: 6 * wc,
+            s0,
             s1,
             hz: s1 + (wc - 1), // hz lands in s1's top bit
             pred: s1,          // per-entry predicate in s1 bit 0
@@ -170,19 +178,29 @@ pub const MAX_FETCH_A: usize = W_PC - 1; // 15
 /// F-2 chain/hz-wire collision (`2^MAX_FETCH_A = 32768`).
 pub const MAX_FETCH_ROM_LEN: usize = 1 << MAX_FETCH_A;
 
-/// The fields the fetch core lifts over: PC_lo, PC_hi, the four IR
-/// bytes, s0, s1.
-fn fetch_fields(layout: &Layout) -> [usize; 8] {
-    [
-        layout.pc_field(),
-        layout.pc_hi_field(),
+/// The fields the fetch core lifts over: the `pc_fields()` PC words (PC_lo,
+/// then PC_hi only when `pc_fields() >= 2`), the four IR bytes, s0, s1.
+///
+/// B-2.2a: at the default (`w_pc = 16`, `pc_fields = 2`) this returns the
+/// shipped 8-field list `[PC_lo, PC_hi, IR_b0..b3, s0, s1]` (byte-identical).
+/// At `w_pc = 8` (`pc_fields = 1`) PC_hi does not exist (`pc_hi_field()`
+/// would address one-past-the-last CPU field), so it is dropped and the list
+/// is 7 fields. `FetchWires` derives its wire bases from the same
+/// `pc_fields()`, so the two stay in lockstep.
+fn fetch_fields(layout: &Layout) -> Vec<usize> {
+    let mut fields = vec![layout.pc_field()];
+    if layout.pc_fields() >= 2 {
+        fields.push(layout.pc_hi_field());
+    }
+    fields.extend([
         layout.ir_byte_field(0),
         layout.ir_byte_field(1),
         layout.ir_byte_field(2),
         layout.ir_byte_field(3),
         layout.scratch_field(0), // s0 (AUX_OPERAND_FIELD)
         layout.scratch_field(1), // s1 (AUX_PRED_FIELD)
-    ]
+    ]);
+    fields
 }
 
 /// Bits needed to hold every reachable PC (= every ROM address plus the
@@ -192,11 +210,22 @@ fn fetch_fields(layout: &Layout) -> [usize; 8] {
 /// entry), `A_fetch` low bits distinguish every entry, and the shared
 /// high-zero gate rejects PC ≥ 2^A_fetch. Clamped to `W_PC`.
 pub fn fetch_addr_bits(rom_len: usize) -> usize {
+    fetch_addr_bits_with(rom_len, W_PC)
+}
+
+/// B-2.2a: layout-aware [`fetch_addr_bits`]. Clamps `A_fetch` to the
+/// program's own `w_pc` rather than the const `W_PC` (=16). At `w_pc = 16`
+/// this is identical to [`fetch_addr_bits`] (byte-identical default path).
+/// At a reduced `w_pc` the clamp is the correct per-program cap: DF-3 flags
+/// the const-`W_PC` clamp as a latent 16-pin on a per-program path (it never
+/// misfires today since `rom_len ≤ 2^(w_pc-1)` ⇒ `A_fetch ≤ w_pc - 1`, but
+/// threading it is the defensive fix).
+pub fn fetch_addr_bits_with(rom_len: usize, w_pc: usize) -> usize {
     if rom_len <= 1 {
         1
     } else {
         let a = (usize::BITS - (rom_len - 1).leading_zeros()) as usize;
-        a.clamp(1, W_PC)
+        a.clamp(1, w_pc)
     }
 }
 
@@ -325,7 +354,7 @@ pub fn fetch_with(layout: &Layout, rom: &[u32]) -> Iso {
         max_rom_len,
         w_pc,
     );
-    let a = fetch_addr_bits(rom.len());
+    let a = fetch_addr_bits_with(rom.len(), w_pc);
     let entries: Vec<Iso> = rom
         .iter()
         .enumerate()
@@ -403,10 +432,16 @@ pub fn pc_add_br() -> Iso {
 /// delegates at `Layout::default()`.
 pub fn pc_add_br_with(layout: &Layout) -> Iso {
     let wc = layout.w_ctl;
-    let n = 5 * wc;
-    let pc = |i: usize| i; // PC target bit i (0..w_pc)
-    let br = |j: usize| 2 * wc + j; // BR bit j
-    let op = |i: usize| 3 * wc + i; // w_pc-bit operand op[i] (s0‖s1)
+    // B-2.2a: the field list is `[PC(pc_fields words), BR, s0, s1]` =
+    // `pc_fields + 3` control words. At the default (pc_fields = 2) this is
+    // `[PC_lo, PC_hi, BR, s0, s1]` (n = 5·wc), byte-identical. At w_pc = 8
+    // (pc_fields = 1) PC_hi is dropped, so BR/op slide down one word:
+    // BR at slot pcf, op (s0‖s1) starting at slot pcf+1, and n = 4·wc.
+    let pcf = layout.pc_fields();
+    let n = (pcf + 3) * wc;
+    let pc = |i: usize| i; // PC target bit i (0..w_pc), spans the pcf PC words
+    let br = |j: usize| pcf * wc + j; // BR bit j (slot pcf)
+    let op = |i: usize| (pcf + 1) * wc + i; // w_pc-bit operand op[i] (s0‖s1)
     let np = layout.w_pc;
 
     let mut build: Vec<Iso> = Vec::new();
@@ -451,17 +486,19 @@ pub fn pc_add_br_with(layout: &Layout) -> Iso {
     let mut gates = build;
     gates.extend(add);
     gates.extend(unbuild);
-    on_fields_l(
-        layout,
-        &[
-            layout.pc_field(),
-            layout.pc_hi_field(),
-            layout.br_field(),
-            layout.scratch_field(0),
-            layout.scratch_field(1),
-        ],
-        gates,
-    )
+    // B-2.2a: `[PC(pc_fields words), BR, s0, s1]`; PC_hi appears only when
+    // pc_fields >= 2 (dropped at w_pc = 8). The `br`/`op` closures above are
+    // keyed off `pcf`, so they track the field-list order.
+    let mut fields = vec![layout.pc_field()];
+    if pcf >= 2 {
+        fields.push(layout.pc_hi_field());
+    }
+    fields.extend([
+        layout.br_field(),
+        layout.scratch_field(0),
+        layout.scratch_field(1),
+    ]);
+    on_fields_l(layout, &fields, gates)
 }
 
 // ── PC increment ───────────────────────────────────────────────────
@@ -488,9 +525,15 @@ pub fn pc_inc() -> Iso {
 /// `Layout::default()`.
 pub fn pc_inc_with(layout: &Layout) -> Iso {
     let wc = layout.w_ctl;
-    let n = 4 * wc;
-    let pc = |i: usize| i; // PC target bit (0..w_pc)
-    let op = |i: usize| 2 * wc + i; // w_pc-bit operand op[i] in s0‖s1 (only op[0]=1)
+    // B-2.2a: the field list is `[PC(pc_fields words), s0, s1]` =
+    // `pc_fields + 2` control words. At the default (pc_fields = 2) this is
+    // `[PC_lo, PC_hi, s0, s1]` (n = 4·wc), byte-identical. At w_pc = 8
+    // (pc_fields = 1) PC_hi is dropped, so op (s0‖s1) slides down one word to
+    // slot pcf and n = 3·wc.
+    let pcf = layout.pc_fields();
+    let n = (pcf + 2) * wc;
+    let pc = |i: usize| i; // PC target bit (0..w_pc), spans the pcf PC words
+    let op = |i: usize| pcf * wc + i; // w_pc-bit operand op[i] in s0‖s1 (only op[0]=1)
     let np = layout.w_pc;
 
     let mut gates: Vec<Iso> = Vec::new();
@@ -525,16 +568,15 @@ pub fn pc_inc_with(layout: &Layout) -> Iso {
     // Clear op[0] (sym of the NOT).
     gates.push(at_wire(n, op(0), not_iso()));
 
-    on_fields_l(
-        layout,
-        &[
-            layout.pc_field(),
-            layout.pc_hi_field(),
-            layout.scratch_field(0),
-            layout.scratch_field(1),
-        ],
-        gates,
-    )
+    // B-2.2a: `[PC(pc_fields words), s0, s1]`; PC_hi appears only when
+    // pc_fields >= 2 (dropped at w_pc = 8). The `op` closure above is keyed
+    // off `pcf`, so it tracks the field-list order.
+    let mut fields = vec![layout.pc_field()];
+    if pcf >= 2 {
+        fields.push(layout.pc_hi_field());
+    }
+    fields.extend([layout.scratch_field(0), layout.scratch_field(1)]);
+    on_fields_l(layout, &fields, gates)
 }
 
 // ── The step iso ───────────────────────────────────────────────────

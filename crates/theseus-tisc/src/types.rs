@@ -506,12 +506,23 @@ pub const BR_FIELD: usize = Layout::default().br_field();
 /// words so the low-index layout is unchanged (A-6.4 widen-PC).
 pub const PC_HI_FIELD: usize = Layout::default().pc_hi_field();
 
-/// The Word8 field index of PC byte `k` (`k=0` → low, `k=1` → high).
+/// The Word8 field index of PC byte `k` under the **default** layout
+/// (`k=0` → low, `k=1` → high). B-2.2a: this is a default-layout convenience
+/// (it has no `Layout` param and no callers in the reduced-`w_pc` path — see
+/// the grep in the B-2.2 design Q4.1); the bound is
+/// `Layout::default().pc_fields()` (= 2 at w_pc=16) rather than a hardcoded
+/// "2", so it does not silently bake the 2-field assumption. A reduced-layout
+/// caller should address PC via `layout.pc_field()` / `layout.pc_hi_field()`
+/// guarded on `layout.pc_fields()`.
 pub const fn pc_byte_field(k: usize) -> usize {
+    assert!(
+        k < Layout::default().pc_fields(),
+        "pc_byte_field: k out of range for the default layout's pc_fields()"
+    );
     match k {
         0 => PC_FIELD,
         1 => PC_HI_FIELD,
-        _ => panic!("pc_byte_field: k out of range for W_PC=16"),
+        _ => unreachable!(),
     }
 }
 
@@ -657,7 +668,21 @@ impl StateVals {
                 push_n_bits(&mut all_bits, s, wd); // s2.. DATA (w_data)
             }
         }
-        push_u8_bits(&mut all_bits, (self.pc >> 8) as u8); // PC_hi (w_ctl=8)
+        // B-2.2a: PC_hi is appended only when PC occupies >= 2 fields (the
+        // default w_pc=16). At w_pc=8 (pc_fields()==1) there is no PC_hi
+        // field, so pushing it would over-fill the reduced carrier; the high
+        // PC byte must be 0 (the reduced PC is 8-bit).
+        if layout.pc_fields() >= 2 {
+            push_u8_bits(&mut all_bits, (self.pc >> 8) as u8); // PC_hi (w_ctl=8)
+        } else {
+            assert_eq!(
+                self.pc >> 8,
+                0,
+                "encode_with: pc {:#06x} exceeds w_pc={} (no PC_hi field)",
+                self.pc,
+                layout.w_pc
+            );
+        }
         value_from_bits(&ty, &all_bits).expect("StateVals::encode_with")
     }
 
@@ -683,7 +708,13 @@ impl StateVals {
         }
         let pc = {
             let lo = read_u8_bits(&all_bits, field_off(layout.pc_field()));
-            let hi = read_u8_bits(&all_bits, field_off(layout.pc_hi_field()));
+            // B-2.2a: read the PC_hi byte only when PC occupies >= 2 fields.
+            // At w_pc=8 (pc_fields()==1) there is no PC_hi field, so hi = 0.
+            let hi = if layout.pc_fields() >= 2 {
+                read_u8_bits(&all_bits, field_off(layout.pc_hi_field()))
+            } else {
+                0
+            };
             u16::from(lo) | (u16::from(hi) << 8)
         };
         let br = read_u8_bits(&all_bits, field_off(layout.br_field()));
