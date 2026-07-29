@@ -3119,8 +3119,41 @@ pub fn derive_layout(instrs: &[Instr]) -> Layout {
 /// crossbar-excluded; PC/BR/IR are `w_ctl`.)
 pub fn derive_full_layout(iso: &Iso, instrs: &[Instr]) -> Layout {
     let base = derive_layout(instrs);
-    let w_data = max_flat_width(iso).next_power_of_two();
-    Layout { w_data, ..base }
+
+    // `w_data` from the source data width — BUT the compiler also mints CONTROL
+    // values into GENERAL REGISTERS: a Trace's come-from offset δu = 256−iter_len
+    // (always ≥ 0x80) and forward-skip distances, staged via Addi+Swapbr. Those
+    // are 8-bit control, NOT Flat(w_data) data; at a narrow `w_data` the reduced
+    // `addi_core` masks the immediate and `swapbr` swaps only `w_data` BR bits →
+    // the loop/skip offset is truncated and the program diverges (Fable autoderive
+    // BLOCKER-1). So a program that emits ANY Swapbr (Trace / skip block =
+    // `has_inner_control`) keeps the full data-word (w_data=8); only straight-line
+    // programs narrow. (Staging control into control-width fields to let loops
+    // narrow too is a separate reviewed slice.) MAJOR-1: the reduced datapath is
+    // equiv-verified only at w_data ∈ {4,8} (B-2.1c/c-2), so floor at 4.
+    let w_data = if has_inner_control(instrs) {
+        base.w_data
+    } else {
+        max_flat_width(iso).next_power_of_two().max(4)
+    };
+
+    // BLOCKER-2: marshal fills registers by INPUT LEAF — an untouched Id/Times
+    // component occupies an UNNAMED register. Sizing `num_regs` off named operands
+    // alone (`derive_layout`) under-counts, so `encode_with` would drop (and
+    // assert-panic on) a live input leaf. Cover the input-leaf count.
+    let input_leaves = theseus_core::type_of(iso)
+        .ok()
+        .and_then(|(in_ty, _)| num_leaves(&in_ty).ok())
+        .unwrap_or(NUM_REGS); // unknown → full register file (safe)
+    let num_regs = base
+        .num_regs
+        .max(input_leaves.clamp(1, NUM_REGS).next_power_of_two());
+
+    Layout {
+        w_data,
+        num_regs,
+        ..base
+    }
 }
 
 /// True iff the program is CPU-only (emits no memory op), so it can run on

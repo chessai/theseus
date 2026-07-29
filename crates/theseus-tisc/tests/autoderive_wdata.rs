@@ -31,7 +31,7 @@ use theseus_tisc::compile::{
     compile_with_metadata, derive_full_layout, marshal, run_on_cpu,
     value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
 };
-use theseus_tisc::energy::balanced_energy;
+use theseus_tisc::energy::{balanced_energy, rom_program_energy, rom_program_energy_auto};
 use theseus_tisc::types::Layout;
 
 const T_RAMP: f64 = 1e-7;
@@ -162,6 +162,30 @@ fn win_flat4_step_net_shrinks_vs_default_auto() {
         sj_auto < sj_def,
         "auto (w_data=4) step_j must be lower than default (w_data=8): {sj_auto:.6e} vs {sj_def:.6e}"
     );
+
+    // Fable autoderive MAJOR-2: `rom_program_energy_auto` is the public convenience
+    // that derives the per-program layout + lowers `step_with(layout, rom)` in one
+    // call. Prove it prices at the SAME auto layout as the manual path lowered here
+    // (`net_auto`): its `step_j` must equal `rom_program_energy(iso, .., net_auto)`.
+    // This gives the wrapper real coverage (it was previously untested).
+    let ty = Type::prod(Type::Flat(4), Type::Flat(4));
+    let (input, _) = value_from_leaf_bytes_pub(&vec![0xA, 0x5], &ty);
+    let pe_manual = rom_program_energy(&iso, &input, &db, T_RAMP, &net_auto)
+        .expect("manual-auto rom_program_energy");
+    let pe_conv =
+        rom_program_energy_auto(&iso, &input, &db, T_RAMP).expect("rom_program_energy_auto");
+    let rel = (pe_conv.step_j - pe_manual.step_j).abs() / pe_manual.step_j.abs();
+    assert!(
+        rel < 1e-12,
+        "rom_program_energy_auto step_j ({:.6e}) must equal manual auto-layout pricing \
+         ({:.6e}); rel_err={rel:.2e}",
+        pe_conv.step_j,
+        pe_manual.step_j
+    );
+    eprintln!(
+        "rom_program_energy_auto == manual auto-layout pricing: step_j={:.6e} ✓",
+        pe_conv.step_j
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -248,4 +272,77 @@ fn flat4_marshal_stays_in_nibble() {
     let st = marshal(&v, &in_ty);
     assert!(st.regs[0] <= 0xF && st.regs[1] <= 0xF, "Flat(4) nibbles marshal < 16");
     let _ = (max_flat_width(&iso),); // keep import used across cfgs
+}
+
+// ── BLOCKER / MAJOR regression tests (Fable autoderive review) ───────
+
+/// Fable autoderive BLOCKER-1: the compiler mints CONTROL into general
+/// registers (a Trace's come-from δu ≥ 0x80, forward-skip distances, via
+/// Addi+Swapbr). At w_data<8 the reduced `addi_core` masks the immediate and
+/// `swapbr` swaps only w_data BR bits → the 8-bit control offset is truncated
+/// and the loop/skip diverges. So a program whose ROM contains ANY Swapbr must
+/// keep the full data-word (w_data=8), even with narrow SOURCE data. Reproduces
+/// the misroute: without the fix, `derive_full_layout` returns w_data=4 for a
+/// Flat(4) iso + Swapbr ROM.
+#[test]
+fn blocker1_swapbr_program_pins_full_w_data() {
+    use theseus_tisc::asm::Instr;
+    let iso = kernel_iso(4); // Flat(4) source data → max_flat_width = 4
+    assert_eq!(max_flat_width(&iso), 4);
+    // A ROM staging control in a register (big Addi immediate + Swapbr) — the
+    // shape Trace / forward-skip emit.
+    let control_rom = vec![
+        Instr::Addi { rd: 0, imm: 0xF6 }, // δu-style control byte (≥ 0x80)
+        Instr::Swapbr { rd: 0 },
+        Instr::Swapbr { rd: 0 },
+    ];
+    let layout = derive_full_layout(&iso, &control_rom);
+    assert_eq!(
+        layout.w_data, 8,
+        "Swapbr (control-in-registers) program must keep w_data=8, not narrow to \
+         {} and truncate the 8-bit control offset",
+        layout.w_data
+    );
+}
+
+/// Fable autoderive BLOCKER-2: marshal fills registers by INPUT LEAF, so an
+/// UNTOUCHED input leaf (an `Id`/`Times` component not named by any instr)
+/// occupies an unnamed register. `num_regs` must cover the input-leaf count, or
+/// `encode_with` drops (and asserts-nonzero-panic on) a live leaf. `Id(Flat4 ×
+/// Flat4)` lowers to 0 instrs → the named-reg bound gives num_regs=1, but there
+/// are 2 input leaves. Reproduces the panic (without the fix) on any nonzero
+/// second leaf.
+#[test]
+fn blocker2_untouched_input_leaf_covered_by_num_regs() {
+    let ty = Type::prod(Type::Flat(4), Type::Flat(4));
+    let iso = Iso::Id(ty.clone());
+    let lowered = compile_with_metadata(&iso).expect("compile Id(Flat4×Flat4)");
+    let layout = derive_full_layout(&iso, &lowered.instrs);
+    assert!(
+        layout.num_regs >= 2,
+        "num_regs must cover the 2 input leaves (marshal fills regs by leaf), got {}",
+        layout.num_regs
+    );
+    // And it must RUN (identity) without panicking on a nonzero second leaf.
+    for v in enumerate_values(&ty) {
+        let out = run_on_cpu(&iso, &v, theseus_eval::eval)
+            .unwrap_or_else(|e| panic!("run_on_cpu on Id(Flat4×Flat4) failed for {v:?}: {e}"));
+        assert_eq!(out, v, "Id must return its input unchanged (auto layout)");
+    }
+}
+
+/// Fable autoderive MAJOR-1: the reduced datapath is equiv-verified only at
+/// w_data ∈ {4,8} (B-2.1c/c-2). A Flat(2) program must FLOOR w_data at 4 (not
+/// use the never-verified w_data=2).
+#[test]
+fn major1_narrow_flat_floors_w_data_at_4() {
+    let iso = kernel_iso(2); // Flat(2) source data → max_flat_width = 2
+    assert_eq!(max_flat_width(&iso), 2);
+    let lowered = compile_with_metadata(&iso).expect("compile Flat(2) kernel");
+    let layout = derive_full_layout(&iso, &lowered.instrs);
+    assert_eq!(
+        layout.w_data, 4,
+        "Flat(2) must floor w_data at 4 (widths <4 are not equiv-verified), got {}",
+        layout.w_data
+    );
 }
