@@ -253,13 +253,17 @@ mod heavy {
     // the fetch assert panicking. We drive both sides of the rom_len=128 edge.
     #[test]
     fn boundary_derived_wpc_runs_without_guard_error() {
-        // Just under the fetch edge: 120 xors → rom_len ~120 <= 128, B small
-        // enough for w_pc=8. Must derive 8 AND run clean.
-        let iso = xor_chain_iso(120);
+        // EXACTLY ON the fetch edge (Fable B-2.2c MINOR-3): 128 xors → rom_len ==
+        // 128 == 1<<(w_pc-1) at w_pc=8, the SHARPEST w_pc=8 case (rom_len 129
+        // would force 16). B=128 <= 256. Must derive 8 AND run clean — a real run
+        // at the exact fetch-injectivity boundary, not just under it.
+        let iso = xor_chain_iso(128);
         let lowered = compile_with_metadata(&iso).expect("compile");
         let (b, s, rl) = (lowered.wcet(), lowered.s_max(), lowered.instrs.len());
-        eprintln!("boundary chain(120): B={b} S_max={s} rom_len={rl}");
+        eprintln!("boundary chain(128) [rom_len==128 fetch edge]: B={b} S_max={s} rom_len={rl}");
+        assert_eq!(rl, 128, "chain(128) must give rom_len==128 (the exact fetch edge)");
         let layout = derive_full_layout_from_lowered(&iso, &lowered);
+        assert_eq!(layout.w_pc, 8, "rom_len==128 (== 1<<7) must derive w_pc=8, the sharp edge");
         eprintln!("  → derive_w_pc={} (direct={})", layout.w_pc, derive_w_pc(b, s, rl));
         // Whatever w_pc is derived, it MUST run — that is the crux: a mis-narrowed
         // w_pc would Deferred-fail here or panic the fetch assert.

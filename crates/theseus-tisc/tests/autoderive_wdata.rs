@@ -28,7 +28,7 @@ use theseus_spice::chardb::rung0_measured;
 
 use theseus_tisc::asm::assemble;
 use theseus_tisc::compile::{
-    compile_with_metadata, derive_full_layout, marshal, run_on_cpu,
+    compile_with_metadata, derive_full_layout, derive_full_layout_from_lowered, marshal, run_on_cpu,
     value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
 };
 use theseus_tisc::energy::{balanced_energy, rom_program_energy, rom_program_energy_auto};
@@ -128,10 +128,13 @@ fn win_flat4_step_net_shrinks_vs_default_auto() {
     let lowered = compile_with_metadata(&iso).expect("compile Flat(4) kernel");
     let rom = assemble(&lowered.instrs).expect("assemble");
 
-    // AUTO layout (w_data=4, num_regs auto), and the DEFAULT-shape byte layout
-    // (w_data=8) but with the SAME num_regs so the ONLY difference is w_data —
-    // isolating the datapath-width win.
-    let auto = derive_full_layout(&iso, &lowered.instrs);
+    // AUTO layout (w_data=4, num_regs auto, AND w_pc auto per B-2.2c — this small
+    // kernel derives w_pc=8), and a w_data=8 variant with the SAME num_regs AND
+    // w_pc so the ONLY difference is w_data — isolating the datapath-width win.
+    // NOTE: use `derive_full_layout_from_lowered` (not `derive_full_layout`) so
+    // this net matches what `rom_program_energy_auto` prices (it also derives
+    // w_pc from the Lowered) — the MAJOR-2 equivalence assert below depends on it.
+    let auto = derive_full_layout_from_lowered(&iso, &lowered);
     assert_eq!(auto.w_data, 4);
     let default_wd8 = Layout { w_data: 8, ..auto };
 

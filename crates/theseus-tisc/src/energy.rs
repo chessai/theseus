@@ -450,17 +450,21 @@ pub fn rom_program_energy(
 ///
 /// Unlike [`rom_program_energy`] — which prices against a caller-supplied
 /// `step_net` (lowered at whatever layout the caller chose, historically the
-/// default `w_data=8`) — this derives the per-program layout from the SOURCE
-/// iso ([`crate::compile::derive_full_layout`]) and lowers the step netlist at
-/// that layout (`step_with(layout, rom)`). So a narrow-data program's PRICED
-/// `step_j` reflects the reduced-`w_data` datapath: a `Flat(4)` program is
-/// priced on the `w_data=4` ring, a byte (`Flat(8)`) program on the byte ring
-/// (identical to the default `step(rom)` net at `w_data=8`).
+/// default `w_data=8`) — this derives the FULL per-program layout from the
+/// compiled program ([`crate::compile::derive_full_layout_from_lowered`]:
+/// `w_data`/`num_regs` off the source iso + `w_pc` off the `Lowered`'s
+/// B+S_max/rom_len, B-2.2c) and lowers the step netlist at that layout
+/// (`step_with(layout, rom)`). So a narrow program's PRICED `step_j` reflects
+/// BOTH the reduced-`w_data` datapath AND the reduced-`w_pc` fetch/PC adder: a
+/// small `Flat(4)` program is priced on the `w_data=4, w_pc=8` ring; a byte
+/// (`Flat(8)`) or large program on the `w_data=8, w_pc=16` ring (identical to
+/// the default `step(rom)` net).
 ///
 /// Lowering the step net is the expensive step; callers pricing many inputs of
-/// the SAME iso should lower once (via [`crate::compile::derive_full_layout`] +
-/// `step_with` + `lower_iso`) and call [`rom_program_energy`] with that net.
-/// This convenience lowers per call.
+/// the SAME iso should lower once (via
+/// [`crate::compile::derive_full_layout_from_lowered`] + `step_with` +
+/// `lower_iso`) and call [`rom_program_energy`] with that net. This convenience
+/// lowers per call.
 pub fn rom_program_energy_auto(
     iso: &theseus_core::Iso,
     input: &theseus_core::Value,
