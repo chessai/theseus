@@ -3156,6 +3156,82 @@ pub fn derive_full_layout(iso: &Iso, instrs: &[Instr]) -> Layout {
     }
 }
 
+/// Derive the per-program PC value width `w_pc` (B-2.2c).
+///
+/// PC ranges over the closed interval `[0, budget + s_max]` (the reachable-PC
+/// zone: `budget` productive steps plus `s_max` forward-skip parking), and the
+/// fetch net needs `rom_len` distinct injective ROM addresses. So the minimum
+/// safe `w_pc` must satisfy BOTH lower bounds simultaneously:
+///
+/// 1. **Address-space bound** — `(1 << w_pc) >= budget + s_max`. This matches the
+///    `run_rom_on_cpu_with` guard `budget + s_max_val <= layout.pc_addr_space()`
+///    EXACTLY (`pc_addr_space() == 1 << w_pc`). Choosing a `w_pc` that violates
+///    it would turn a runnable program into a `Deferred` error — a correctness
+///    REGRESSION — so this bound is non-negotiable.
+/// 2. **Fetch-injectivity bound** — `rom_len <= (1 << (w_pc - 1))`. This matches
+///    the `fetch_with` assert (`rom_len <= 1 << (w_pc - 1)`, the F-2 injectivity
+///    witness): the top PC bit partitions the address space into the ROM half and
+///    the parked/high half, so the ROM must fit in the lower half.
+///
+/// We take the required bit-count = the smallest `b` satisfying both, round it UP
+/// to a whole multiple of `w_ctl` (=8) so PC occupies an integer number of
+/// `w_ctl`-wide fields (`assert_pc_carrier`: `w_pc == pc_fields()*w_ctl`), and
+/// clamp to `[8, W_PC]` (=`[8,16]`). The only live values are therefore `w_pc ∈
+/// {8, 16}`.
+///
+/// **Boundary discipline (be conservative).** Both bounds are checked with the
+/// exact `>=` / `<=` comparisons the runtime guards use, so `w_pc=8` is picked
+/// ONLY when `budget + s_max <= 256` AND `rom_len <= 128`. A program needing 9
+/// bits (e.g. `budget + s_max == 257`, or `rom_len == 129`) picks `w_pc=16`. A
+/// mis-derived `w_pc=8` on a program needing 9 bits would either `Deferred`-fail
+/// the run guard or panic the fetch assert; the equalities here forbid that.
+pub fn derive_w_pc(budget: usize, s_max: usize, rom_len: usize) -> usize {
+    let w_ctl = Layout::default().w_ctl;
+    let max_w_pc = crate::types::W_PC;
+
+    // Smallest `w` (in bits) with `(1 << w) >= reach`, where reach = budget+s_max.
+    // reach==0 needs 0 bits (empty address range); guard the shift saturation.
+    let reach = budget + s_max;
+    let mut bits_reach = 0usize;
+    while (1usize << bits_reach.min(max_w_pc)) < reach {
+        bits_reach += 1;
+        if bits_reach >= max_w_pc {
+            break;
+        }
+    }
+
+    // Smallest `w` with `rom_len <= (1 << (w-1))`, i.e. `(1 << (w-1)) >= rom_len`,
+    // i.e. `w-1 >= ceil(log2(rom_len))`, so `w >= ceil(log2(rom_len)) + 1`.
+    let mut bits_fetch = 1usize;
+    while rom_len > (1usize << (bits_fetch - 1).min(max_w_pc)) {
+        bits_fetch += 1;
+        if bits_fetch >= max_w_pc {
+            break;
+        }
+    }
+
+    let bits_needed = bits_reach.max(bits_fetch);
+
+    // Round UP to a whole multiple of w_ctl, then clamp to [w_ctl, W_PC].
+    let rounded = bits_needed.div_ceil(w_ctl) * w_ctl;
+    rounded.clamp(w_ctl, max_w_pc)
+}
+
+/// Derive the FULL per-program layout including PC width `w_pc` (B-2.2c).
+///
+/// This is [`derive_full_layout`] (which fixes `w_data`/`num_regs` from the iso +
+/// instrs and leaves `w_pc = 16 = default`) with the per-program PC width folded
+/// in via [`derive_w_pc`]. It is the single entry point per design Q6-A: callers
+/// with a `Lowered` in hand (which alone carries `budget = wcet()` and `s_max =
+/// s_max()`) route through here so a small program auto-runs on the `w_pc=8` ring.
+///
+/// Callers WITHOUT a `Lowered` keep [`derive_full_layout`] (`w_pc=16`).
+pub fn derive_full_layout_from_lowered(iso: &Iso, lowered: &Lowered) -> Layout {
+    let base = derive_full_layout(iso, &lowered.instrs);
+    let w_pc = derive_w_pc(lowered.wcet(), lowered.s_max(), lowered.instrs.len());
+    Layout { w_pc, ..base }
+}
+
 /// True iff the program is CPU-only (emits no memory op), so it can run on
 /// the CPU-only `step(rom)` ring rather than the composite `system_step`
 /// (dropping the MemState + BusMsg tensor). B-2.0b MEM-drop predicate.
@@ -4677,7 +4753,10 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
     // narrow-data (e.g. `Flat(4)`) program exercises the auto-selected w_data=4
     // datapath. A memory / non-quiescent program keeps the default-layout
     // composite path (reduced-`w_data` memory is out of scope for B-2.1c).
-    let layout = derive_full_layout(iso, &lowered.instrs);
+    // B-2.2c: derive w_pc per program too — a small CPU-only program (B+S_max ≤
+    // 256, rom_len ≤ 128) auto-runs on the w_pc=8 ring; larger programs stay at
+    // w_pc=16 (byte-identical default path).
+    let layout = derive_full_layout_from_lowered(iso, &lowered);
     let mem_quiescent = state.mem.iter().all(|&m| m == 0);
     let final_state = if is_cpu_only(&lowered.instrs) && mem_quiescent {
         run_rom_on_cpu_with(&layout, &lowered.instrs, state, budget, s_max_val, eval_fn)?

@@ -470,7 +470,9 @@ pub fn rom_program_energy_auto(
     let lowered = crate::compile::compile_with_metadata(iso)?;
     let rom = crate::asm::assemble(&lowered.instrs)
         .map_err(|e| RomProgramEnergyError::Asm(format!("{e}")))?;
-    let layout = crate::compile::derive_full_layout(iso, &lowered.instrs);
+    // B-2.2c: derive w_pc per program too, so the auto-priced step_j reflects
+    // the w_pc=8 datapath for a small program (larger programs stay w_pc=16).
+    let layout = crate::compile::derive_full_layout_from_lowered(iso, &lowered);
     let step_iso = crate::step::step_with(&layout, &rom);
     let step_net = theseus_netlist::lower_iso(&step_iso)
         .map_err(|e| RomProgramEnergyError::Asm(format!("lower_iso step_with: {e:?}")))?;
