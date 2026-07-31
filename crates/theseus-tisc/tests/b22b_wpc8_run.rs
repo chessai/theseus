@@ -18,15 +18,17 @@
 //! OLDEST proven case (the pre-widen 8-bit PC). Also checks BR/s0/s1 are
 //! preserved and the ADJOINT subtracts.
 //!
-//! TEST 2 — a real end-to-end CPU run at `w_pc=8` via
-//! `run_rom_on_cpu_with(&w_pc8, ...)` on a small CPU-only program that
-//! EXERCISES the PC adder (a taken `Swapbr` forward branch + a taken
-//! backward branch + straight-line `pc_inc` steps). The core assertion:
-//! narrowing `w_pc` to 8 changes NOTHING observable — the w_pc=8 final state
-//! equals the SAME program run at the default w_pc=16 layout, on every input.
-//! `run_rom_on_cpu_with` internally enforces terminal quiescence
-//! (BR/s0/s1==0) and the `budget + s_max <= pc_addr_space()` bound, so a
-//! returned `Ok` already witnesses quiescence.
+//! TEST 2 — real end-to-end CPU runs at `w_pc=8` via
+//! `run_rom_on_cpu_with(&w_pc8, ...)` on small CPU-only programs that EXERCISE
+//! the PC adder: a taken `Swapbr` FORWARD branch, a taken BACKWARD branch that
+//! wraps through the 8-bit modulus (the two-register token-migration idiom —
+//! terminates without a loop counter, Fable MAJOR-1), high-PC `pc_inc` carries,
+//! and straight-line steps. The core assertion: narrowing `w_pc` to 8 changes
+//! NOTHING observable — the w_pc=8 final state equals the SAME program run at
+//! the default w_pc=16 layout, on every input. `run_rom_on_cpu_with` internally
+//! enforces terminal quiescence (BR/s0/s1==0) and the
+//! `budget + s_max <= pc_addr_space()` bound, so a returned `Ok` already
+//! witnesses quiescence.
 
 use theseus_core::Iso;
 
@@ -42,10 +44,15 @@ const EVAL_FUEL: u64 = 8_000_000_000;
 /// isolated. Constructed BY HAND — B-2.2b does not DERIVE w_pc (that is
 /// B-2.2c).
 fn layout_w_pc8() -> Layout {
-    Layout {
+    let l = Layout {
         w_pc: 8,
         ..Layout::default()
-    }
+    };
+    // Pin the invariant the whole file rests on: PC occupies exactly ONE
+    // control field at w_pc=8 (guards against a future w_ctl default change
+    // silently making this a 16-bit run — Fable B-2.2b nit).
+    assert_eq!(l.pc_fields(), 1, "w_pc=8 layout must have exactly 1 PC field");
+    l
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -230,6 +237,32 @@ fn skip_block_program() -> Vec<Instr> {
     ]
 }
 
+/// A CPU-only program with a genuinely TAKEN BACKWARD branch that TERMINATES
+/// without a loop counter — the two-register token-migration idiom (Fable
+/// B-2.2b MAJOR-1). The branch at addr 3 jumps BACK to addr 1 (PC wraps
+/// 3 + sext(0xFD) + 1 = 257 ≡ 1 mod 256 at w_pc=8; = 0x10001 ≡ 1 mod 2^16 at
+/// w_pc=16 — the layouts agree via sext). The token lives in r2 on pass 1 and
+/// migrates into r1 at the top come-from on pass 2, so the branch fires exactly
+/// once and the loop exits. This is the ONE run that drives a real backward
+/// jump wrapping through the 8-bit modulus (the intermediate arithmetic TEST 1
+/// covers exhaustively but no forward-only run reaches).
+///   0: Addi  r2, 0xFD   ; r2 = -3 token (top bit set)
+///   1: Swapbr r1        ; top come-from: pass1 no-op (r1=0); pass2 absorbs BR=0xFD→r1
+///   2: Addi  r3, 1      ; body — runs TWICE (r3: 0→1→2)
+///   3: Swapbr r2        ; pass1: BR←0xFD,r2←0 ⇒ PC = (3-3+1) mod 256 = 1 (BACK);
+///                       ;   pass2: r2=0 ⇒ no-op ⇒ PC = 4 (fall through)
+///   4: Xori  r1, 0xFD   ; clear migrated token → r1 = 0 (terminal quiescent)
+/// PC trace: 0→1→2→3→1→2→3→4→park. Terminal: BR/s0/s1=0, r1=r2=0, r3=2.
+fn backward_branch_program() -> Vec<Instr> {
+    vec![
+        Instr::Addi { rd: 2, imm: 0xFD }, // 0
+        Instr::Swapbr { rd: 1 },          // 1 top come-from
+        Instr::Addi { rd: 3, imm: 1 },    // 2 body (runs twice)
+        Instr::Swapbr { rd: 2 },          // 3 backward branch -> 1 (pass1)
+        Instr::Xori { rd: 1, imm: 0xFD }, // 4 clear migrated token
+    ]
+}
+
 fn init_regs(regs: [u8; NUM_REGS], pc: u8) -> StateVals {
     StateVals {
         regs,
@@ -311,6 +344,54 @@ fn wpc8_run_equals_wpc16_forward_branch() {
 }
 
 #[test]
+fn wpc8_run_equals_wpc16_backward_branch() {
+    // Fable B-2.2b MAJOR-1: a REAL terminating backward branch (no counter),
+    // via two-register token migration. This is the only run that drives a
+    // backward jump WRAPPING through the modulus (3 + sext(0xFD) + 1 = 257 ≡ 1
+    // mod 256 at w_pc=8; ≡ 1 mod 2^16 at w_pc=16 — the layouts agree via sext).
+    // TEST 1 proves this arithmetic exhaustively; this proves it in a real run.
+    let prog = backward_branch_program();
+    let budget = 8; // PC trace 0→1→2→3→1→2→3→4→park = 8 productive steps.
+
+    // r1/r2/r3 are the program's scratch (token/body) and must start 0; vary the
+    // registers the program never touches (r0, r4..) to still cover inputs.
+    for regs in [
+        [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+        [0x9C, 0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x11],
+        [0xFF, 0x00, 0x00, 0x00, 0x01, 0xAA, 0x55, 0xFF],
+    ] {
+        assert_wpc8_eq_wpc16(
+            &prog,
+            init_regs(regs, 0),
+            budget,
+            0,
+            &format!("backward-branch regs={regs:?}"),
+        );
+    }
+
+    // Verify the backward branch was actually TAKEN and the loop ran the body
+    // TWICE (r3: 0→1→2). A single pass (branch not taken / fell through the
+    // first time) would leave r3=1; three passes would be a runaway. r3==2 pins
+    // that the backward jump fired exactly once, then exited.
+    let got = run_rom_on_cpu_with(
+        &layout_w_pc8(),
+        &prog,
+        init_regs([0u8; NUM_REGS], 0),
+        budget,
+        0,
+        theseus_eval::eval,
+    )
+    .expect("backward-branch run");
+    assert_eq!(
+        got.regs[3], 2,
+        "the BACKWARD BRANCH must fire once (body at pc 2 runs TWICE ⇒ r3=2); \
+         r3=1 ⇒ branch never taken, r3>2 ⇒ did not terminate"
+    );
+    assert_eq!(got.regs[1], 0, "migrated token cleared (r1=0)");
+    assert_eq!(got.regs[2], 0, "token consumed (r2=0)");
+}
+
+#[test]
 fn wpc8_run_equals_wpc16_high_pc_and_branch() {
     // Two ways to walk the w_pc=8 PC adder near the top of the 8-bit range in a
     // REAL run, both asserting w_pc=8 == w_pc=16:
@@ -325,14 +406,15 @@ fn wpc8_run_equals_wpc16_high_pc_and_branch() {
     //            w_pc=16 agree exactly (their address spaces only diverge AT the
     //            256 boundary, which TEST 1 covers via (PC+BR+1) mod 256).
     //
-    // NOTE ON BACKWARD BRANCHES (BR top-bit set): a TERMINATING hand-built
-    // backward branch is not constructible without a loop counter — the
-    // reversible come-from RESTORES the offset token into its register, which
-    // re-arms the branch on the next pass (an infinite loop). The backward
-    // (top-bit-set BR, negative-sext) arithmetic through the real
-    // `pc_add_br_with(&w_pc8) ; pc_inc_with(&w_pc8)` datapath is therefore
-    // proven EXHAUSTIVELY by TEST 1 over all 128 top-bit-set BR values
-    // (BR ∈ 0x80..=0xFF), which is the same iso sequence the run drives.
+    // NOTE ON BACKWARD BRANCHES (BR top-bit set): a terminating hand-built
+    // backward branch IS constructible without a loop counter — via
+    // two-register token migration (`wpc8_run_equals_wpc16_backward_branch`
+    // above), which drives a real backward jump wrapping through the 8-bit
+    // modulus. The backward (top-bit-set BR, negative-sext) arithmetic is
+    // ADDITIONALLY proven EXHAUSTIVELY by TEST 1 over all 128 top-bit-set BR
+    // values (BR ∈ 0x80..=0xFF) through the same
+    // `pc_add_br_with(&w_pc8) ; pc_inc_with(&w_pc8)` iso the runs drive. This
+    // test focuses on the forward branch + high-PC carries.
     let prog = skip_block_program();
 
     // Case A: PC=0, branch taken — pc_add_br with BR=2 (forward), then park.
