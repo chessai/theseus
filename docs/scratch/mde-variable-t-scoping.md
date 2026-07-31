@@ -83,6 +83,51 @@ Concrete missing capabilities, in likely bite-order for gcd2:
 bounds" backlog into a concrete, measured blocker list before committing to the
 MEDIUM (W_BR) or LARGE (live-input spill) slice.
 
+## PROBE RESULTS (2026-07-31) — the fork is RESOLVED
+
+Two diagnostic spikes ran (both truthful, no guards weakened):
+
+**Probe 1 — GCD-under-Trace** (branch `gcd-trace-probe`, test `gcd_trace_probe.rs`,
+commit `3bd6f0d`). The gcd2 body IS a legal Trace bijection (4 leaves `[tag,a,b,h]`,
+total 256/256, injective, `body_in==body_out`); **every `lower_trace` skeleton guard
+PASSES** (leaf cap, canonical-homes, a/b-match, iter_len, live-input barrier
+`n_input+1≤4` passes at exactly 4≤4, WCET). It does NOT lower — the first blocker is
+the **general-synth operand-word budget** (`compile.rs:1932` `NeedsProvisioning`;
+`need_aux = n + 1 + node_lines`): gcd2's **degree-7 ANF → node_lines=35** → requires
+44 operand words, only 10 free (4 carriers + the loop's 4-register aux frame exhaust
+the register file → 6 scratch words). **So the Trace loop machinery is READY; the
+gcd2 wall is operand provisioning (widen-state / A-6.4), NOT the loop machinery, NOT
+W_BR, NOT live-input spill.** (Verified against the code: `need_aux = n+1+node_lines`,
+`required = n+need_aux`, `available = n+free.len()`.)
+
+**Probe 2 — low-degree variable-T fit** (branch `vart-lowdeg-probe`, test
+`vart_lowdeg_probe.rs`, commit `43e8ac2`). **A genuine variable-T program FITS the
+current budget.** halve-until-odd (2-adic valuation `v_2`), built as a
+manifestly-bijective **bit-rotation** of `(tag‖h‖v)` (node_lines=**1** — linear body,
+operand budget a non-issue), LOWERS under a Trace (at k=2,hb=2: iter_len=107, B=646,
+k_max=6, 111-instr ROM) and `run_on_cpu_fast == eval` on all inputs, with the
+iteration count genuinely tracking v_2 (T varies with input). NOTE: a naive
+convergent countdown (`c-=1` until 0) is NOT Trace-legal (c=1→0 and c=0→0 collide →
+not injective); a real reversible variable-T body must be a permutation orbit with a
+history leaf. Width sweep: node_lines stays 1 everywhere; it lowers iff `1+hb+k ≤ 6`
+bits — the wall is **`iter_len ≤ 128`** (`compile.rs:4033`, the W_BR=8 sign-extended
+back-jump δu), which grows with carrier bit-width.
+
+### Resolved direction (ranked, updated)
+1. **★ IN PROGRESS — harden halve-until-odd into the FIRST merged real variable-T
+   program** (branch `vart-halve-v1`). Tests-only; validates the real-`system_step`
+   authority pipeline for a real Trace program (fast-oracle ≠ real system_step — L15).
+   No new machinery. Advisor runs the real T3 authority + Fable review.
+2. **W_BR widen / two-byte δu mint** (`compile.rs:4033` + `:1020`; a6.4 §3.4) — lifts
+   the `iter_len ≤ 128` cap so WIDER variable-T programs (and low-degree GCD-family
+   bodies) lower. MEDIUM risk (come-from arithmetic). The next capability slice.
+3. **widen-state / A-6.4 operand provisioning** — DEFERRED; needed only for
+   HIGH-DEGREE bodies (gcd2 degree-7, node_lines=35). LARGE; touches state layout
+   (undoes some B-2 optimization). Do after W_BR, when a high-degree program is the
+   target. **NOT mandatory for a first useful variable-T program** (probe 2).
+4. Live-input relocation spill — unchanged (LARGE, own review), for wide LIVE
+   carriers; not on the near-term path.
+
 ## Code landing sites (all `crates/theseus-tisc/src/compile.rs` unless noted)
 
 - `lower_trace` (`:3570`) — loop state machine. Guards: leaf cap `MAX_LEAVES_LOOP=4`
