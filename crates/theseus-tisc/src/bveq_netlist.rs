@@ -540,7 +540,7 @@ pub fn build_concrete_system_sv(s: &crate::types::StateVals, vs: &BddVariableSet
         cpu_fields.push(sv_word8_const(r, vs));
     }
     cpu_fields.push(sv_word8_const(s.pc as u8, vs)); // PC_lo
-    cpu_fields.push(sv_word8_const(s.br, vs)); // BR (8-bit)
+    cpu_fields.push(sv_word8_const(s.br as u8, vs)); // BR (8-bit, default carrier)
     cpu_fields.push(sv_word8_const(s.ir as u8, vs)); // IR_b0
     cpu_fields.push(sv_word8_const((s.ir >> 8) as u8, vs)); // IR_b1
     cpu_fields.push(sv_word8_const((s.ir >> 16) as u8, vs)); // IR_b2

@@ -68,7 +68,7 @@ fn reference(s: &StateVals) -> StateVals {
                 }
             }
             0b0111 => std::mem::swap(&mut out.regs[rd], &mut out.scratch[rt]),
-            0b1000 => std::mem::swap(&mut out.regs[rd], &mut out.br),
+            0b1000 => { let t = out.regs[rd]; out.regs[rd] = out.br as u8; out.br = u16::from(t); },
             // 0b1001 = MEXCH, 0b1010 = MEXCHR: reserved at CpuState level (identity).
             0b1011 => {
                 // CCNOT: r[rd] ^= r[rs] & r[rt] (byte-parallel)

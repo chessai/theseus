@@ -50,7 +50,7 @@ fn ref_instr(word: u32, s: &mut StateVals) {
                 }
             }
             0b0111 => std::mem::swap(&mut s.regs[rd], &mut s.scratch[rt]),
-            0b1000 => std::mem::swap(&mut s.regs[rd], &mut s.br),
+            0b1000 => { let t = s.regs[rd]; s.regs[rd] = s.br as u8; s.br = u16::from(t); },
             0b1001 if rt < MEM_WORDS => std::mem::swap(&mut s.regs[rd], &mut s.mem[rt]),
             _ => {}
         }
@@ -73,7 +73,7 @@ fn ref_step(rom: &[u32], s: &StateVals) -> StateVals {
     let mut out = s.clone();
     let word = rom.get(s.pc as usize).copied().unwrap_or(0);
     ref_instr(word, &mut out);
-    out.pc = theseus_tisc::compile::pc_update(s.pc, out.br);
+    out.pc = theseus_tisc::compile::pc_update(s.pc, out.br as u8);
     out
 }
 
@@ -151,7 +151,7 @@ fn taken_branch_with_come_from() {
 
     // After step 1 (SWAPBR r0): r0 = 0 (old BR), BR = δ, PC = 1 + δ + 1 = target
     assert_eq!(trace[2].regs[0], 0, "after SWAPBR: r0 = old BR = 0");
-    assert_eq!(trace[2].br, delta, "after SWAPBR: BR = δ");
+    assert_eq!(trace[2].br, u16::from(delta), "after SWAPBR: BR = δ");
     assert_eq!(
         trace[2].pc, target as u16,
         "after SWAPBR: PC = target (branch taken!)"
@@ -220,7 +220,7 @@ fn ir_zero_and_scratch_after_branch() {
         let s = StateVals {
             regs: [r0, r1, 0, 0, 0, 0, 0, 0],
             pc,
-            br,
+            br: u16::from(br),
             ir: 0,
             scratch: [0; 8],
             mem: [0; MEM_WORDS],

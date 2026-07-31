@@ -80,7 +80,7 @@ fn wpc8_state(pc: u8, br: u8) -> StateVals {
     StateVals {
         regs,
         pc: u16::from(pc),
-        br,
+        br: u16::from(br),
         ir: 0xDEAD_BEEF,
         scratch: {
             let mut s = [0u8; NUM_SCRATCH];
@@ -130,7 +130,7 @@ fn adr0034_split_add_exhaustive_wpc8() {
             assert!(got.pc < 256, "w_pc=8 PC must fit in 8 bits");
 
             // BR is a read-only control ⇒ preserved. s0/s1 restored to 0.
-            assert_eq!(got.br, br, "BR preserved: pc={pc:#04x} br={br:#04x}");
+            assert_eq!(got.br, u16::from(br), "BR preserved: pc={pc:#04x} br={br:#04x}");
             assert_eq!(got.scratch[0], 0, "s0 restored: pc={pc:#04x} br={br:#04x}");
             assert_eq!(got.scratch[1], 0, "s1 restored: pc={pc:#04x} br={br:#04x}");
             // No stray write outside the PC/BR/s0/s1 region: regs, IR, and the

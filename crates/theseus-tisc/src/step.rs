@@ -131,6 +131,23 @@ fn assert_pc_carrier(layout: &Layout) {
     );
 }
 
+/// W_BR-a (mirror of `assert_pc_carrier`, Fable B-2.2a MAJOR-1): BR must
+/// occupy a whole number of `w_ctl`-wide fields. `br_fields()` is **floor**
+/// division (`w_br / w_ctl`), so a `w_br` that is not a positive multiple of
+/// `w_ctl` (e.g. 12) would under-count the BR carrier and silently route the
+/// high BR bits onto a neighboring field. This restores loud failure at every
+/// BR-builder entry. No valid layout (w_br ∈ {8, 16}, w_ctl = 8) trips it.
+fn assert_br_carrier(layout: &Layout) {
+    assert!(
+        layout.br_fields() >= 1 && layout.w_br == layout.br_fields() * layout.w_ctl,
+        "BR carrier invariant violated: w_br={} is not a positive multiple of w_ctl={} \
+         (br_fields()={}); BR would alias neighboring fields",
+        layout.w_br,
+        layout.w_ctl,
+        layout.br_fields(),
+    );
+}
+
 /// Control-region wire bases for the fetch core `[PC(pc_fields words),
 /// IR_b0..b3, s0, s1]` of a given `layout`. The core is `pc_fields + 6`
 /// control words wide: PC bit i (0..w_pc) = wire i; IR bit b = wire
@@ -456,23 +473,31 @@ pub fn pc_add_br() -> Iso {
 /// delegates at `Layout::default()`.
 pub fn pc_add_br_with(layout: &Layout) -> Iso {
     assert_pc_carrier(layout); // Fable MAJOR-1: PC must occupy whole w_ctl fields
+    assert_br_carrier(layout); // W_BR-a: BR must occupy whole w_ctl fields
     let wc = layout.w_ctl;
-    // B-2.2a: the field list is `[PC(pc_fields words), BR, s0, s1]` =
-    // `pc_fields + 3` control words. At the default (pc_fields = 2) this is
-    // `[PC_lo, PC_hi, BR, s0, s1]` (n = 5·wc), byte-identical. At w_pc = 8
-    // (pc_fields = 1) PC_hi is dropped, so BR/op slide down one word:
-    // BR at slot pcf, op (s0‖s1) starting at slot pcf+1, and n = 4·wc.
+    // B-2.2a / W_BR-a: the field list is `[PC(pc_fields words), BR(br_fields
+    // words), s0, s1]` = `pc_fields + br_fields + 2` control words. At the
+    // default (pc_fields = 2, br_fields = 1) this is `[PC_lo, PC_hi, BR, s0,
+    // s1]` (n = 5·wc), byte-identical. At w_br = 16 (br_fields = 2) BR spans
+    // two words and op/s slide down one word; at w_pc = 8 (pc_fields = 1)
+    // PC_hi is dropped so everything slides up one word.
     let pcf = layout.pc_fields();
-    let n = (pcf + 3) * wc;
+    let brf = layout.br_fields();
+    let wbr = layout.w_br;
+    let n = (pcf + brf + 2) * wc;
     let pc = |i: usize| i; // PC target bit i (0..w_pc), spans the pcf PC words
-    let br = |j: usize| pcf * wc + j; // BR bit j (slot pcf)
-    let op = |i: usize| (pcf + 1) * wc + i; // w_pc-bit operand op[i] (s0‖s1)
+    let br = |j: usize| pcf * wc + j; // BR bit j (0..w_br), spans the brf BR words
+    let op = |i: usize| (pcf + brf) * wc + i; // w_pc-bit operand op[i] (s0‖s1)
     let np = layout.w_pc;
 
     let mut build: Vec<Iso> = Vec::new();
     // ── Materialize op = sext(BR): op[i] = BR[i] (i<w_br), op[i]=BR[msb] (i≥) ──
+    // W_BR-a: the sext boundary is `w_br` (was `w_ctl` when BR was one field).
+    // At w_br=8 (=wc) this is byte-identical to the shipped single-field sext.
+    // At w_br=16=w_pc the extension is empty (op = BR verbatim); the SEMANTICS
+    // of the come-from arithmetic at w_br=16 are proved in W_BR-b, not here.
     for i in 0..np {
-        let src = if i < wc { br(i) } else { br(wc - 1) };
+        let src = if i < wbr { br(i) } else { br(wbr - 1) };
         build.push(gate_at(n, &[src, op(i)], cnot_prim()));
     }
 
@@ -511,18 +536,19 @@ pub fn pc_add_br_with(layout: &Layout) -> Iso {
     let mut gates = build;
     gates.extend(add);
     gates.extend(unbuild);
-    // B-2.2a: `[PC(pc_fields words), BR, s0, s1]`; PC_hi appears only when
-    // pc_fields >= 2 (dropped at w_pc = 8). The `br`/`op` closures above are
-    // keyed off `pcf`, so they track the field-list order.
+    // B-2.2a / W_BR-a: `[PC(pc_fields words), BR(br_fields words), s0, s1]`;
+    // PC_hi appears only when pc_fields >= 2 (dropped at w_pc = 8), and the BR
+    // list is all `br_fields()` BR words (one at the default, two at w_br=16).
+    // The `br`/`op` closures above are keyed off `pcf`/`brf`, so they track the
+    // field-list order.
     let mut fields = vec![layout.pc_field()];
     if pcf >= 2 {
         fields.push(layout.pc_hi_field());
     }
-    fields.extend([
-        layout.br_field(),
-        layout.scratch_field(0),
-        layout.scratch_field(1),
-    ]);
+    for k in 0..brf {
+        fields.push(layout.br_word_field(k));
+    }
+    fields.extend([layout.scratch_field(0), layout.scratch_field(1)]);
     on_fields_l(layout, &fields, gates)
 }
 

@@ -4853,9 +4853,12 @@ pub fn exec_instr(instr: Instr, state: &mut StateVals) {
             state.mem[addr] = rv;
         }
         Instr::Swapbr { rd } => {
+            // W_BR-a: `state.br` is now u16, but the interpreter keeps 8-bit
+            // BR semantics (byte-identical) — swap the reg with BR's low byte.
+            // The two-byte come-from swap is W_BR-b.
             let rv = state.operand_get(rd);
-            state.operand_set(rd, state.br);
-            state.br = rv;
+            state.operand_set(rd, state.br as u8);
+            state.br = u16::from(rv);
         }
         Instr::Addi { rd, imm } => {
             state.operand_set(rd, state.operand_get(rd).wrapping_add(imm));
@@ -4905,7 +4908,7 @@ pub fn run_on_cpu_fast(iso: &Iso, input: &Value) -> Result<Value, CompileError> 
             exec_instr(instr, &mut state);
         }
         // PC update: PC += BR + 1
-        state.pc = pc_update(state.pc, state.br);
+        state.pc = pc_update(state.pc, state.br as u8);
     }
 
     Ok(unmarshal(&state, &out_ty))
@@ -4972,7 +4975,7 @@ pub fn run_on_cpu_fast_resident(
         if let Some(instr) = crate::asm::decode(word) {
             exec_instr(instr, &mut state);
         }
-        state.pc = pc_update(state.pc, state.br);
+        state.pc = pc_update(state.pc, state.br as u8);
     }
 
     Ok(unmarshal_resident(&state, &out_ty, resident))
@@ -4987,7 +4990,7 @@ pub fn run_rom_fast(rom: &[u32], mut state: StateVals, steps: usize) -> StateVal
         if let Some(instr) = crate::asm::decode(word) {
             exec_instr(instr, &mut state);
         }
-        state.pc = pc_update(state.pc, state.br);
+        state.pc = pc_update(state.pc, state.br as u8);
     }
     state
 }

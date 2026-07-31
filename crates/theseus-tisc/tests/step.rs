@@ -76,7 +76,7 @@ fn ref_instr(word: u32, s: &mut StateVals) {
                 }
             }
             0b0111 => std::mem::swap(&mut s.regs[rd], &mut s.scratch[rt]),
-            0b1000 => std::mem::swap(&mut s.regs[rd], &mut s.br),
+            0b1000 => { let t = s.regs[rd]; s.regs[rd] = s.br as u8; s.br = u16::from(t); },
             0b1001 if rt < MEM_WORDS => std::mem::swap(&mut s.regs[rd], &mut s.mem[rt]),
             _ => {} // reserved
         }
@@ -105,7 +105,7 @@ fn ref_step(rom: &[u32], s: &StateVals) -> StateVals {
     let word = rom.get(s.pc as usize).copied().unwrap_or(0);
     ref_instr(word, &mut out);
     // ADR-0034 D2 / A-6.4: PC += sext(BR) + 1 (mod 2^W_PC), post-execute BR.
-    out.pc = theseus_tisc::compile::pc_update(s.pc, out.br);
+    out.pc = theseus_tisc::compile::pc_update(s.pc, out.br as u8);
     out
 }
 
@@ -290,7 +290,7 @@ fn pc_add_br_isolated() {
         (0x0140, 246), // 320 + (-10) = 310
     ] {
         let mut s = st(regs_a(), pc);
-        s.br = br;
+        s.br = u16::from(br);
         let got = eval_state("pc_add_br", &iso, &s);
         let mut expected = s.clone();
         expected.pc = pc.wrapping_add(sext(br));
@@ -414,14 +414,14 @@ fn adr0034_split_add_sampled() {
     ] {
         for br in [0u8, 1, 5, 0x7F, 0x80, 0xF6, 0xFF] {
             let mut s = st(regs_a(), pc);
-            s.br = br;
+            s.br = u16::from(br);
             let got = eval_state("split_add", &iso, &s);
             assert_eq!(
                 got.pc,
                 expect(pc, br),
                 "split (pc_add_br;pc_inc) != (PC+sext(BR)+1) mod 2^16: pc={pc:#06x} br={br:#04x}"
             );
-            assert_eq!(got.br, br, "BR preserved by the PC update");
+            assert_eq!(got.br, u16::from(br), "BR preserved by the PC update");
             assert_eq!(got.scratch[1], 0, "s1 restored by the PC update");
         }
     }
@@ -441,7 +441,7 @@ fn adr0034_split_add_exhaustive() {
     for br in 0..=u8::MAX {
         for pc in 0..=u16::MAX {
             let mut s = st(regs_b(), pc);
-            s.br = br;
+            s.br = u16::from(br);
             let got = eval_state("split_add/all", &iso, &s);
             let expected = theseus_tisc::compile::pc_update(pc, br);
             assert_eq!(
@@ -736,8 +736,8 @@ fn v1_counterexample_distinct_post_states() {
     // Verify the predecessor PCs are distinct (the key insight). A-6.4:
     // the predecessor PC is PC' − sext(BR') − 1 (mod 2^W_PC).
     let sext = |br: u8| br as i8 as i16 as u16;
-    let pred_a = a_out.pc.wrapping_sub(sext(a_out.br)).wrapping_sub(1);
-    let pred_b = b_out.pc.wrapping_sub(sext(b_out.br)).wrapping_sub(1);
+    let pred_a = a_out.pc.wrapping_sub(sext(a_out.br as u8)).wrapping_sub(1);
+    let pred_b = b_out.pc.wrapping_sub(sext(b_out.br as u8)).wrapping_sub(1);
     assert_eq!(pred_a, 5, "predecessor PC of A must be 5");
     assert_eq!(pred_b, 9, "predecessor PC of B must be 9");
     assert_ne!(pred_a, pred_b, "predecessor PCs must be distinct");

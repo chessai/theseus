@@ -197,6 +197,28 @@ impl Layout {
         self.num_regs + 6 + self.num_scratch
     }
 
+    /// Field index of BR high byte (appended after the scratch words AND the
+    /// `pc_fields()-1` PC-hi fields). At the default layout (`w_pc=16`,
+    /// `w_br=8`) `br_fields()==1` so there is no BR-hi field and this index is
+    /// never addressed; at `w_br=16` (`br_fields()==2`) it is the single
+    /// appended BR word, positioned right after PC_hi (W_BR-a). The appended
+    /// region order is: `[PC-hi × (pc_fields-1), BR-hi × (br_fields-1)]`, which
+    /// is exactly the order `encode_with`/`decode_with` marshal and the order
+    /// `field_off` walks — so the two stay in lockstep.
+    pub const fn br_hi_field(&self) -> usize {
+        self.num_regs + 6 + self.num_scratch + (self.pc_fields() - 1)
+    }
+
+    /// Field index of BR word `k` (`0` → low byte at `br_field()`; `k>=1` →
+    /// the `k`-th appended BR-hi word). `k` must be `< br_fields()`.
+    pub const fn br_word_field(&self, k: usize) -> usize {
+        if k == 0 {
+            self.br_field()
+        } else {
+            self.br_hi_field() + (k - 1)
+        }
+    }
+
     /// Field index of memory word `i` in the composite carrier.
     pub const fn mem_field(&self, i: usize) -> usize {
         self.num_cpu_fields() + i
@@ -510,6 +532,12 @@ pub const BR_FIELD: usize = Layout::default().br_field();
 /// words so the low-index layout is unchanged (A-6.4 widen-PC).
 pub const PC_HI_FIELD: usize = Layout::default().pc_hi_field();
 
+/// Field index of BR high byte (bits 8..16) under the **default** layout.
+/// At the default (`w_br=8`, `br_fields()==1`) BR occupies a single field, so
+/// this index is one-past-BR and unused; it becomes live only at `w_br=16`
+/// (W_BR-a). Callers on the wide path must guard on `layout.br_fields()`.
+pub const BR_HI_FIELD: usize = Layout::default().br_hi_field();
+
 /// The Word8 field index of PC byte `k` under the **default** layout
 /// (`k=0` → low, `k=1` → high). B-2.2a: this is a default-layout convenience
 /// (it has no `Layout` param and no callers in the reduced-`w_pc` path — see
@@ -565,9 +593,15 @@ pub struct StateVals {
     /// Program counter — 16-bit (A-6.4 widen-PC). Low byte at `PC_FIELD`,
     /// high byte at `PC_HI_FIELD`.
     pub pc: u16,
-    /// Branch register / come-from offset — 8-bit (W_BR=8), sign-extended
-    /// into the 16-bit PC by the end-of-step adder (`pc_add_br`).
-    pub br: u8,
+    /// Branch register / come-from offset — up to 16-bit (`W_BR ∈ {8,16}`),
+    /// sign-extended into the 16-bit PC by the end-of-step adder
+    /// (`pc_add_br`). W_BR-a widened the storage from `u8` to `u16` so a
+    /// `w_br=16` layout can marshal a two-byte offset; at the default
+    /// (`w_br=8`) only the low byte is populated/marshalled and the RUN-path
+    /// interpreter still treats BR as 8-bit (`pc_update`/`exec_instr` take the
+    /// low byte) — semantics are byte-identical. The two-byte come-from
+    /// arithmetic is W_BR-b.
+    pub br: u16,
     pub ir: u32,
     pub scratch: [u8; NUM_SCRATCH],
     pub mem: [u8; MEM_WORDS],
@@ -603,7 +637,8 @@ impl StateVals {
             push_u8_bits(&mut all_bits, r);
         }
         push_u8_bits(&mut all_bits, self.pc as u8); // PC_lo
-        push_u8_bits(&mut all_bits, self.br); // BR (8-bit)
+        debug_assert_eq!(self.br >> 8, 0, "encode: default carrier has one 8-bit BR field");
+        push_u8_bits(&mut all_bits, self.br as u8); // BR (8-bit)
         push_ir_bits(&mut all_bits, self.ir); // IR_b0..IR_b3 (32-bit)
         for &s in &self.scratch {
             push_u8_bits(&mut all_bits, s);
@@ -663,7 +698,7 @@ impl StateVals {
             push_n_bits(&mut all_bits, r, wd);
         }
         push_u8_bits(&mut all_bits, self.pc as u8); // PC_lo (w_ctl=8)
-        push_u8_bits(&mut all_bits, self.br); // BR (w_ctl=8)
+        push_u8_bits(&mut all_bits, self.br as u8); // BR_lo (w_ctl=8)
         push_ir_bits(&mut all_bits, self.ir); // IR_b0..IR_b3 (w_ctl=8)
         for (i, &s) in self.scratch.iter().take(layout.num_scratch).enumerate() {
             if i <= 1 {
@@ -686,6 +721,23 @@ impl StateVals {
                 self.pc,
                 layout.w_pc
             );
+        }
+        // W_BR-a: the BR-hi word(s) are appended after PC_hi (matching the
+        // `br_hi_field()` ordering). At the default (`br_fields()==1`) none are
+        // pushed and the whole `self.br` must fit in the single 8-bit BR field.
+        // At `w_br=16` (`br_fields()==2`) the BR high byte follows PC_hi. The
+        // low BR byte was already pushed inline above (BR_lo, w_ctl=8).
+        if layout.br_fields() < 2 {
+            assert_eq!(
+                self.br >> 8,
+                0,
+                "encode_with: br {:#06x} exceeds w_br={} (no BR-hi field)",
+                self.br,
+                layout.w_br
+            );
+        }
+        for k in 1..layout.br_fields() {
+            push_u8_bits(&mut all_bits, (self.br >> (8 * k)) as u8); // BR-hi word k
         }
         value_from_bits(&ty, &all_bits).expect("StateVals::encode_with")
     }
@@ -721,7 +773,17 @@ impl StateVals {
             };
             u16::from(lo) | (u16::from(hi) << 8)
         };
-        let br = read_u8_bits(&all_bits, field_off(layout.br_field()));
+        // W_BR-a: reassemble BR from its `br_fields()` words (low at
+        // `br_field()`, the appended hi words at `br_hi_field()+..`). At the
+        // default (`br_fields()==1`) this reads exactly the single low byte.
+        let br = {
+            let mut v = 0u16;
+            for k in 0..layout.br_fields() {
+                let byte = read_u8_bits(&all_bits, field_off(layout.br_word_field(k)));
+                v |= u16::from(byte) << (8 * k);
+            }
+            v
+        };
         let ir = read_ir_bits(&all_bits, field_off(layout.ir_byte_field(0)));
         let mut scratch = [0u8; NUM_SCRATCH];
         for (i, s) in scratch.iter_mut().enumerate().take(layout.num_scratch) {
@@ -756,7 +818,7 @@ impl StateVals {
             *r = read_u8_bits(&all_bits, i * W);
         }
         let pc = read_pc_bits(&all_bits);
-        let br = read_u8_bits(&all_bits, BR_FIELD * W);
+        let br = u16::from(read_u8_bits(&all_bits, BR_FIELD * W));
         let ir = read_ir_bits(&all_bits, 10 * W);
         let mut scratch = [0u8; NUM_SCRATCH];
         for (i, s) in scratch.iter_mut().enumerate() {
@@ -823,7 +885,8 @@ pub fn encode_composite(s: &StateVals) -> Value {
         push_u8_bits(&mut cpu_bits, r);
     }
     push_u8_bits(&mut cpu_bits, s.pc as u8); // PC_lo
-    push_u8_bits(&mut cpu_bits, s.br); // BR (8-bit)
+    debug_assert_eq!(s.br >> 8, 0, "encode_composite: default carrier has one 8-bit BR field");
+    push_u8_bits(&mut cpu_bits, s.br as u8); // BR (8-bit)
     push_ir_bits(&mut cpu_bits, s.ir);
     for &sc in &s.scratch {
         push_u8_bits(&mut cpu_bits, sc);
@@ -857,7 +920,7 @@ pub fn decode_composite(val: &Value) -> StateVals {
         *r = read_u8_bits(&cpu_bits, i * W);
     }
     let pc = read_pc_bits(&cpu_bits);
-    let br = read_u8_bits(&cpu_bits, BR_FIELD * W);
+    let br = u16::from(read_u8_bits(&cpu_bits, BR_FIELD * W));
     let ir = read_ir_bits(&cpu_bits, 10 * W);
     let mut scratch = [0u8; NUM_SCRATCH];
     for (i, s) in scratch.iter_mut().enumerate() {

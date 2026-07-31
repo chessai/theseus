@@ -1272,8 +1272,20 @@ fn cross_factor_gated_swap(
 /// SWAPBR word (SWAPBR ignores s0; restored on exit).
 fn swapbr_core(layout: &Layout) -> Iso {
     let w = layout.w_data;
-    // Slots [r0(w_data), BR(w_ctl), s1(w_ctl)]: gated swap r0[i]↔BR[i] over
-    // the `w_data` operand bits, gated on s1 bit 0 (pred). Mixed-width bases.
+    // Slots [r0(w_data), BR_lo(w_ctl), s1(w_ctl)]: gated swap r0[i]↔BR_lo[i]
+    // over the `w_data` operand bits, gated on s1 bit 0 (pred). Mixed-width
+    // bases.
+    //
+    // W_BR-a: this RUNTIME come-from swap addresses BR's LOW word only
+    // (`br_word_field(0)` == `br_field()`), which is byte-identical at w_br=8.
+    // SWAPBR swaps BR with an 8-bit register, so only the low BR word has a
+    // register partner; how a two-byte come-from offset is minted into (and
+    // swapped back out of) a one-byte register is the come-from ARITHMETIC —
+    // W_BR-b, a separate highest-bar slice. Widening this decoder swap to both
+    // BR words here (without the δu mint) would corrupt the offset, so W_BR-a
+    // deliberately leaves it low-word-only. (The standalone assembler helper
+    // `instr::swapbr_with` IS br_fields()-driven for symmetry, but it is not on
+    // the runtime path.)
     let (bases, n) = field_bases(
         layout,
         &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],

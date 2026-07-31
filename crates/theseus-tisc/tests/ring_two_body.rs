@@ -315,7 +315,7 @@ fn wide_strided_sample_states() -> Vec<StateVals> {
         states.push(StateVals {
             regs: [0x00, 0x05, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3],
             pc: 8,
-            br: br_val,
+            br: u16::from(br_val),
             ir: 0,
             scratch: [0; 8],
             mem: mem_patterns[0],

@@ -11,7 +11,7 @@ use crate::addressing::{at_fields, at_reg1, at_reg2, at_reg3};
 use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_list, swap_adj,
 };
-use crate::types::{bit, flat, reg_field, scratch_field, word8, BR_FIELD, W};
+use crate::types::{bit, flat, reg_field, scratch_field, word8, Layout, BR_FIELD, W};
 use theseus_core::{Iso, Type};
 use theseus_netlist::prim_from_bits;
 
@@ -479,8 +479,39 @@ pub fn exch(rd: usize, rs: usize) -> Iso {
 }
 
 /// `SWAPBR rd` : swap BR and r[rd] (ADR-0034 D1, Pendulum semantics).
+/// Default-layout entry (w_br = 8, one BR field); byte-identical.
 pub fn swapbr(rd: usize) -> Iso {
     at_fields(swap_words_iso(), &[reg_field(rd), BR_FIELD])
+}
+
+/// W_BR-a: layout-parameterized [`swapbr`]. SWAPBR must move the FULL
+/// `w_br`-bit come-from offset, so at `w_br=16` (`br_fields()==2`) it swaps
+/// r[rd] with BOTH BR words, not just the low byte. At the default
+/// (`br_fields()==1`) this is exactly the single-word swap `swapbr()` builds
+/// (byte-identical). The register is `w_data`(=8)-wide; how a two-byte offset
+/// is minted into a one-byte register is W_BR-b (this is pure addressing).
+pub fn swapbr_with(layout: &Layout, rd: usize) -> Iso {
+    // Swap the register word with each BR word in turn (self-inverse chain;
+    // exactly one SwapProd at the default, so byte-identical to `swapbr()`).
+    // `at_fields_n` routes over this layout's CPU field count. For
+    // br_fields()>1 the reg is swapped with each BR word sequentially so all
+    // BR words move through the register slot — the offset SEMANTICS are
+    // W_BR-b; this only fixes the ADDRESSING (which fields participate).
+    let n = layout.num_cpu_fields();
+    let reg = layout.reg_field(rd);
+    let mut iso: Option<Iso> = None;
+    for k in 0..layout.br_fields() {
+        let step = crate::addressing::at_fields_n(
+            swap_words_iso(),
+            &[reg, layout.br_word_field(k)],
+            n,
+        );
+        iso = Some(match iso {
+            None => step,
+            Some(prev) => Iso::seq(prev, step),
+        });
+    }
+    iso.expect("swapbr_with: br_fields() >= 1")
 }
 
 /// `XCHG rd, sx` : swap register `rd` with scratch word `sx`.
