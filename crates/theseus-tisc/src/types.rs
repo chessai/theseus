@@ -141,7 +141,9 @@ impl Layout {
 
     /// Number of Word-sized fields in CpuState:
     /// regs + PC_lo + BR_lo + 4 IR bytes + scratch + (PC_fields-1)
-    /// + (BR_fields-1). At the default layout this is 24.
+    /// + (BR_fields-1). At the default layout (w_pc=16→pc_fields=2, w_br=8→
+    /// br_fields=1) this is 8+1+1+4+8+1+0 = **23** (there is NO BR_hi field at
+    /// the default w_br=8). It becomes 24 only at w_br=16 (the appended BR_hi).
     pub const fn num_cpu_fields(&self) -> usize {
         self.num_regs + 1 + 1 + 4 + self.num_scratch + (self.pc_fields() - 1)
             + (self.br_fields() - 1)
@@ -367,7 +369,8 @@ impl TryFrom<usize> for MemWidth {
 
 /// Number of Word8-sized fields in CpuState:
 /// 8 regs + PC_lo + BR_lo + IR_b0..IR_b3 (32-bit IR) + 8 scratch
-/// + PC_hi + BR_hi = 22 + (PC_FIELDS-1) + (BR_FIELDS-1) = 24.
+/// = 22, + (PC_FIELDS-1 = 1) + (BR_FIELDS-1 = 0) = **23** at the default
+/// layout (PC_hi is appended; NO BR_hi at the default w_br=8).
 ///
 /// A-6.4 widen-PC **appends** the extra PC byte (PC_hi at index 22)
 /// rather than inserting it, so every reg / IR / scratch field index

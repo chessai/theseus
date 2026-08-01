@@ -135,8 +135,11 @@ defect (a lift that should have been width-parameterized but wasn't). It never
 surfaced because the SHARED step path uses the layout-aware `fetch_rs_fmt_gated`;
 **`swapbr_instr` is the first shared-step caller of `fetch_operand` at w_br=16**,
 which is why only W_BR-b exposed it. The identical defect existed in
-`ccnot_fetch_rt_br` (the replicated Ccnot/Cswap fetch — off the step path, but it
-made `instruction_l(Op::Ccnot/Cswap)` SeqMismatch at w_br=16 too).
+`ccnot_fetch_rt_br` (the replicated CCNOT fetch — off the step path, but it made
+`instruction_l(Op::Ccnot)` SeqMismatch at w_br=16). NOTE (fix-review MINOR-1): the
+replicated **Cswap** does NOT use `ccnot_fetch_rt_br`; its wide mismatch came via
+`fetch_operand` inside `with_two_regs(R_RT, R_RS, …)` — same root helper, different
+caller.
 
 **Fix.** Lift both swaps over the layout's real carrier —
 `at_fields_typed(op, idx, &layout.cpu_field_widths())` — instead of the default
@@ -164,3 +167,38 @@ test binary never compiled. Removed the redundant re-import.
 **Remaining gates before merge:** full heavy authority (SOLO) + the REAL
 `system_step` authority (netlist path) + a fresh-context Fable adversarial review of
 THIS fix (the netlist wiring), then rebase onto v2 + FF-merge.
+
+---
+
+## FIX-REVIEW (fresh-context Fable, read-only / NO cargo, 2026-08-01) — SHIP
+
+A fresh-context Fable reviewer (did NOT write the fix; read-only, no in-tree cargo
+while the heavy authority owned the box) adversarially reviewed the fix commit
+`3e1153e`. **Verdict: SHIP** (pending the already-gating heavy + real `system_step`
+authority). Verified BY READING (exact-tree, not just types):
+
+- **Byte-identity at default — airtight.** `at_fields(op,idx)` and
+  `at_fields_typed(op,idx,&cpu_field_widths())` route through the SAME builder;
+  at default `cpu_field_widths() == [8; NUM_FIELDS]` and `NUM_FIELDS == 23`, so the
+  produced Iso tree is identical, not merely same-typed.
+- **`w_data<8` + `w_br=16` cannot coexist** (compiler pins `w_data=8` whenever a ROM
+  contains any `Swapbr` → the only trigger for w_br=16), so the still-hardcoded
+  `SwapProd(word8,word8)` is correct wherever `fetch_operand` is actually reached; a
+  hand-built pathological layout fails LOUDLY (SeqMismatch), never silently.
+- **No residual default-carrier lift on the wide step path** — post-fix decoder.rs
+  has ZERO plain `at_fields(` calls; every shared-block fetch is layout-aware.
+- **TEST 6 is genuinely red-without-fix** (unfixed `fetch_operand` = seq(24-field,
+  23-field) → `type_of` Err → panic); it independently gates BOTH fixed lifts.
+- **mdd arithmetic sound** — `LOOP_OVERHEAD_WIDE == 14` (compile.rs:440), wide trigger
+  `iter_len_narrow=136>128`, wide `iter_len=140`.
+
+MINORs (both cosmetic, FIXED in the follow-up commit): MINOR-1 — the defect→path map
+mis-stated (ccnot_fetch_rt_br serves Ccnot only; Cswap's wide mismatch came via
+fetch_operand/with_two_regs); MINOR-2 — pre-existing stale `num_cpu_fields` doc
+comments claimed the default count is 24 (it is 23 — the very off-by-one that bred
+the bug). Both corrected in decoder.rs / types.rs.
+
+**Not verifiable without compiling (the authority runs must confirm):** (a) the wide
+step type-checks green end-to-end; (b) the mdd 126-NOP case actually lowers (register
+feasibility); (c) value-level correctness of the wide SWAPBR on the real
+`system_step` netlist (TEST 4 / `wbr_b_real_cpu`).

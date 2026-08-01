@@ -1075,10 +1075,12 @@ fn ccnot_fetch_rt_br(layout: &Layout) -> Iso {
     let sel_rt = select_operand_l(layout, R_RT, |i| operand_field_l(layout, i));
     // B-2.1/W_BR-b: same latent carrier bug as `fetch_operand` — lift the
     // r0-slot↔BR swap over the ACTUAL per-layout field carrier, not the
-    // hardcoded-default `at_fields`. This replicated Ccnot/Cswap fetch is not on
-    // the shared step path (the step uses `shared_fetch_rt_br_gated`), but it is
-    // exercised by `instruction_l(Op::Ccnot/Cswap)` and would SeqMismatch at
-    // w_br=16 exactly as fetch_operand did. Byte-identical at Layout::default().
+    // hardcoded-default `at_fields`. This replicated CCNOT fetch is not on the
+    // shared step path (the step uses `shared_fetch_rt_br_gated`), but it is
+    // exercised by `instruction_l(Op::Ccnot)` and would SeqMismatch at w_br=16
+    // exactly as fetch_operand did. (Replicated Cswap does NOT use this helper —
+    // its wide mismatch came via `fetch_operand` inside `with_two_regs`.)
+    // Byte-identical at Layout::default().
     let swap_br = crate::addressing::at_fields_typed(
         Iso::SwapProd(word8(), word8()),
         &[layout.reg_field(0), layout.br_field()],
