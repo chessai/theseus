@@ -204,10 +204,10 @@ fn adr0034_split_add_bootstrap_wpc8() {
 fn forward_branch_program() -> Vec<Instr> {
     vec![
         Instr::Addi { rd: 1, imm: 2 }, // 0
-        Instr::Swapbr { rd: 1 },       // 1  -> jumps to 4
+        Instr::Swapbr { rd: 1, rs: 0 },       // 1  -> jumps to 4
         Instr::Xori { rd: 2, imm: 0xFF }, // 2 (skipped)
         Instr::Xori { rd: 2, imm: 0x0F }, // 3 (skipped)
-        Instr::Swapbr { rd: 1 },       // 4  come-from
+        Instr::Swapbr { rd: 1, rs: 0 },       // 4  come-from
         Instr::Addi { rd: 3, imm: 1 }, // 5
         Instr::Sub { rd: 3, rs: 0 },   // 6
         Instr::Subi { rd: 1, imm: 2 }, // 7
@@ -229,10 +229,10 @@ fn forward_branch_program() -> Vec<Instr> {
 fn skip_block_program() -> Vec<Instr> {
     vec![
         Instr::Addi { rd: 1, imm: 2 }, // 0
-        Instr::Swapbr { rd: 1 },       // 1 -> jumps to 4 (come-from), skipping 2,3
+        Instr::Swapbr { rd: 1, rs: 0 },       // 1 -> jumps to 4 (come-from), skipping 2,3
         Instr::Add { rd: 2, rs: 0 },   // 2 (skipped)
         Instr::Xor { rd: 2, rs: 3 },   // 3 (skipped)
-        Instr::Swapbr { rd: 1 },       // 4 come-from: clears BR
+        Instr::Swapbr { rd: 1, rs: 0 },       // 4 come-from: clears BR
         Instr::Subi { rd: 1, imm: 2 }, // 5
     ]
 }
@@ -256,9 +256,9 @@ fn skip_block_program() -> Vec<Instr> {
 fn backward_branch_program() -> Vec<Instr> {
     vec![
         Instr::Addi { rd: 2, imm: 0xFD }, // 0
-        Instr::Swapbr { rd: 1 },          // 1 top come-from
+        Instr::Swapbr { rd: 1, rs: 0 },          // 1 top come-from
         Instr::Addi { rd: 3, imm: 1 },    // 2 body (runs twice)
-        Instr::Swapbr { rd: 2 },          // 3 backward branch -> 1 (pass1)
+        Instr::Swapbr { rd: 2, rs: 0 },          // 3 backward branch -> 1 (pass1)
         Instr::Xori { rd: 1, imm: 0xFD }, // 4 clear migrated token
     ]
 }

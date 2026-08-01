@@ -191,7 +191,14 @@ pub enum Instr {
     /// `BR ↔ r[rd]` (ADR-0034 D1: Pendulum semantics). The branch
     /// register is a PC offset consumed by the uniform end-of-step
     /// update `PC += BR + 1`.
-    Swapbr { rd: u8 },
+    ///
+    /// W_BR-b: two register operands for the two-byte come-from swap. At
+    /// w_br=8 `rs = 0` (unused sentinel) and the swap is the single
+    /// transposition `swap(r[rd], BR₀)` — byte-identical to the shipped
+    /// one-operand `Swapbr`. At w_br=16 `rs` names the hi-word partner and
+    /// the swap is TWO disjoint transpositions `swap(r[rd],BR₀);
+    /// swap(r[rs],BR₁)` (an involution; `rd != rs` enforced by `encode`).
+    Swapbr { rd: u8, rs: u8 },
     /// `r[rd] ↔ mem[addr]` (M-C2 Layer 1, ADR-0046 §3.1). Self-inverse
     /// memory exchange; `addr` indexes the memory bank (0..MEM_WORDS).
     Mexch { rd: u8, addr: u8 },
@@ -235,7 +242,7 @@ impl Instr {
             | Instr::Ccnot { .. }
             | Instr::Xchg { .. }
             | Instr::Swapbr { .. }
-            | Instr::Addi { .. }
+            | Instr::Addi { .. } // (Swapbr is CPU-only; touches BR, not mem)
             | Instr::Subi { .. }
             | Instr::Xori { .. }
             | Instr::Rotli { .. }
@@ -261,7 +268,9 @@ impl Instr {
             // Xchg names a register operand (rd) + a raw scratch slot (sx,
             // NOT a crossbar operand — excluded here; it bounds num_scratch).
             Instr::Xchg { rd, .. } => vec![rd],
-            Instr::Swapbr { rd } => vec![rd],
+            // W_BR-b: rs is the hi-word swap partner (0 = unused at w_br=8;
+            // rs=0 doesn't move the num_regs bound — MINOR-B).
+            Instr::Swapbr { rd, rs } => vec![rd, rs],
             // Mexch: rd is a register operand; addr is a mem index.
             Instr::Mexch { rd, .. } => vec![rd],
             Instr::MexchReg { rd, ra } => vec![rd, ra],
@@ -386,7 +395,18 @@ pub fn encode(instr: Instr) -> Result<u32, AsmError> {
         // 10..15) executes correctly; only this conservative encoder guard
         // rejected it. `check_operand` still rejects s0/s1 (idx 8/9,
         // `OperandReservedScratch`) and idx ≥16 (`RegOutOfRange`).
-        Instr::Swapbr { rd } => r_word(0b1000, rd, 0, 0),
+        // W_BR-b (MINOR-B): the two-transposition come-from swap needs
+        // `rd != rs`, else the two disjoint transpositions collapse onto one
+        // register — the P2 3-cycle trap. `rs == 0` is the w_br=8 sentinel
+        // (no hi partner; single transposition), which must stay byte-identical
+        // (`Swapbr{rd:0}` still encodes 0x9000_0000) — so the distinctness guard
+        // fires ONLY when a real hi partner (rs != 0) is named.
+        Instr::Swapbr { rd, rs } => {
+            if rs != 0 {
+                check_distinct("SWAPBR", rd, rs)?;
+            }
+            r_word(0b1000, rd, rs, 0)
+        }
         Instr::Mexch { rd, addr } => {
             if (addr as usize) >= MEM_WORDS {
                 return Err(AsmError::MexchAddrOutOfRange { addr });
@@ -447,7 +467,7 @@ pub fn decode(word: u32) -> Option<Instr> {
             0b0101 => Some(Instr::Rotr { rd, rs }),
             0b0110 => Some(Instr::Cswap { rd, rs, rt }),
             0b0111 => Some(Instr::Xchg { rd, sx: rt }),
-            0b1000 => Some(Instr::Swapbr { rd }),
+            0b1000 => Some(Instr::Swapbr { rd, rs }),
             0b1001 => Some(Instr::Mexch { rd, addr: rt }),
             0b1010 => Some(Instr::MexchReg { rd, ra: rs }),
             0b1011 => Some(Instr::Ccnot { rd, rs, rt }),

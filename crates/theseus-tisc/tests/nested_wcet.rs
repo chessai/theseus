@@ -109,6 +109,7 @@ fn blocker2_lowered_wcet_uses_tree_fold() {
         instrs: dummy,
         forward_skip_total: 0,
         loop_terms: vec![node.clone()],
+        w_br: 8,
     };
     let b = lowered.wcet();
     assert_eq!(b, rom_len + node.extra(), "wcet = |instrs| + Σ extra(node)");

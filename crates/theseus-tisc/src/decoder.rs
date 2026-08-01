@@ -1272,41 +1272,82 @@ fn cross_factor_gated_swap(
 /// SWAPBR word (SWAPBR ignores s0; restored on exit).
 fn swapbr_core(layout: &Layout) -> Iso {
     let w = layout.w_data;
-    // Slots [r0(w_data), BR_lo(w_ctl), s1(w_ctl)]: gated swap r0[i]↔BR_lo[i]
-    // over the `w_data` operand bits, gated on s1 bit 0 (pred). Mixed-width
-    // bases.
+    let wc = layout.w_ctl;
+    // W_BR-b: the come-from swap is the TWO-transposition involution
+    //   swap(r[rd], BR_lo) ; swap(r[rs], BR_hi)
+    // — the r[rd]↔BR_lo swap runs on the ROUTED r0-slot (rd), the r[rs]↔BR_hi
+    // swap runs on the s0-slot (rs was fetched there by `swapbr_instr`'s
+    // fetch_operand(R_RS), exactly as `with_two_regs` deposits rs into s0).
+    // Both transpositions are DISJOINT (different register slot AND different BR
+    // word), so they commute and the composition is self-inverse (design P2).
     //
-    // W_BR-a: this RUNTIME come-from swap addresses BR's LOW word only
-    // (`br_word_field(0)` == `br_field()`), which is byte-identical at w_br=8.
-    // SWAPBR swaps BR with an 8-bit register, so only the low BR word has a
-    // register partner; how a two-byte come-from offset is minted into (and
-    // swapped back out of) a one-byte register is the come-from ARITHMETIC —
-    // W_BR-b, a separate highest-bar slice. Widening this decoder swap to both
-    // BR words here (without the δu mint) would corrupt the offset, so W_BR-a
-    // deliberately leaves it low-word-only. (The standalone assembler helper
-    // `instr::swapbr_with` IS br_fields()-driven for symmetry, but it is not on
-    // the runtime path.)
-    let (bases, n) = field_bases(
-        layout,
-        &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],
-    );
-    let (r0, br0, s1) = (bases[0], bases[1], bases[2]);
-    on_fields_l(
-        layout,
-        &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],
-        (0..w)
-            .map(|i| gate_at(n, &[s1, r0 + i, br0 + i], fredkin_prim()))
-            .collect(),
-    )
+    // At w_br=8 (br_fields()==1) there is NO BR-hi field and rs=0, so ONLY the
+    // low transposition is emitted — byte-identical to the shipped one-operand
+    // SWAPBR (the s0-slot↔BR_hi gates simply do not exist). The high gates are
+    // added under `br_fields()==2` ONLY, so the w_br=8 netlist is unchanged
+    // (MINOR-B, the golden guards this).
+    let wide = layout.br_fields() >= 2;
+
+    if !wide {
+        // w_br=8: EXACTLY the shipped field list + gate set — byte-identical.
+        // Slots [r0(w_data), BR_lo(w_ctl), s1(w_ctl)]: gated swap r0[i]↔BR_lo[i]
+        // over the `w_data` operand bits, gated on s1 bit 0 (pred).
+        let (bases, n) = field_bases(
+            layout,
+            &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],
+        );
+        let (r0, br0, s1) = (bases[0], bases[1], bases[2]);
+        return on_fields_l(
+            layout,
+            &[layout.reg_field(0), layout.br_field(), layout.scratch_field(1)],
+            (0..w)
+                .map(|i| gate_at(n, &[s1, r0 + i, br0 + i], fredkin_prim()))
+                .collect(),
+        );
+    }
+
+    // w_br=16: two disjoint transpositions over
+    //   [r0-slot, s0-slot, BR_lo, BR_hi, s1].
+    // r0-slot is w_data; s0-slot / BR_lo / BR_hi / s1 are w_ctl control words.
+    // `field_bases` lays each at its running offset so the gate wire indices
+    // honor the mixed widths.
+    let fields = vec![
+        layout.reg_field(0),
+        layout.scratch_field(0),
+        layout.br_word_field(0),
+        layout.br_word_field(1),
+        layout.scratch_field(1),
+    ];
+    let (bases, n) = field_bases(layout, &fields);
+    let (r0, s0, br_lo, br_hi, s1) = (bases[0], bases[1], bases[2], bases[3], bases[4]);
+
+    // Low transposition: r0-slot[i] ↔ BR_lo[i] (the rd↔BR₀ swap), gated on s1.
+    let mut gates: Vec<Iso> = (0..w)
+        .map(|i| gate_at(n, &[s1, r0 + i, br_lo + i], fredkin_prim()))
+        .collect();
+    // High transposition: s0-slot[i] ↔ BR_hi[i] (the rs↔BR₁ swap), gated on the
+    // SAME predicate. Disjoint from the low swap → the pair is an involution.
+    gates.extend((0..wc).map(|i| gate_at(n, &[s1, s0 + i, br_hi + i], fredkin_prim())));
+
+    on_fields_l(layout, &fields, gates)
 }
 
 fn swapbr_instr(layout: &Layout) -> Iso {
     // A-0 (BLOCKER-2 fix): route rd over reg∪scratch.
-    predicated(
-        layout,
-        &r_pred(0b1000),
-        with_target(layout, R_RD, swapbr_core(layout)),
-    )
+    let core = with_target(layout, R_RD, swapbr_core(layout));
+    // W_BR-b: at w_br=16 ONLY, fetch r[rs] into the s0-slot (like
+    // `with_two_regs`) so swapbr_core's high transposition can pair r[rs] with
+    // BR_hi. The fetch bracket ADDS cells, so it is gated on `br_fields()==2` —
+    // at w_br=8 the block is EXACTLY the shipped `predicated(with_target(R_RD,
+    // swapbr_core))` (rs=0, no BR-hi gate), byte-identical (the golden guards
+    // this).
+    let inner = if layout.br_fields() >= 2 {
+        let fetch_rs = fetch_operand(layout, R_RS);
+        Iso::seq(fetch_rs.clone(), Iso::seq(core, Iso::sym(fetch_rs)))
+    } else {
+        core
+    };
+    predicated(layout, &r_pred(0b1000), inner)
 }
 
 /// ADDI core on [r0-slot, s0, IR_b0, s1] (A-0): CNOT-mask the imm8

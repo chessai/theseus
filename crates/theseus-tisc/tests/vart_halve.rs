@@ -61,7 +61,7 @@ use theseus_core::prim::{enumerate_values, PrimDef};
 use theseus_core::{Iso, Type};
 use theseus_tisc::compile::{
     compile_with_metadata, marshal, run_on_cpu_fast, run_rom_on_cpu, unmarshal,
-    value_to_leaf_bytes_pub, CompileError,
+    value_to_leaf_bytes_pub,
 };
 use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
@@ -337,21 +337,22 @@ fn vart_t3_real_cpu_sampled() {
 // ── T-reject: one bit wider (K=4,HB=1) exceeds iter_len ≤ 128 ────────
 
 #[test]
-fn vart_reject_over_cap() {
-    // K=4, HB=1 → iter_len 133 > 128 come-from cap; must be rejected (the probe
-    // sweep confirms K=3,HB=1 lowers and K=4,HB=1 does not). Pins the boundary
-    // WITHOUT weakening any guard.
+fn vart_k4_now_lowers_at_wbr16() {
+    // W_BR-b: K=4,HB=1 (narrow iter_len = body+10 = 133 > 128) previously
+    // REJECTED. It now LOWERS via the two-byte (w_br=16) come-from — iter_len =
+    // body + LOOP_OVERHEAD_WIDE (14) = 137 (MINOR-C: NOT 133). This flips the
+    // former reject→run WITHOUT weakening any guard: the narrow w_br=8 cap
+    // (iter_len ≤ 128) is untouched; the loop is lifted to w_br=16 whose cap is
+    // 32768. The full authority (fast oracle + real CPU) is in
+    // `wbr_b_comefrom.rs`.
     let (body, u_ty, _carrier) = build_v2_body_sized(4, 1);
     let iso = Iso::trace(u_ty, body);
-    let err = compile_with_metadata(&iso).expect_err("K=4,HB=1 must exceed iter_len cap");
-    match &err {
-        CompileError::Deferred(msg) => {
-            assert!(
-                msg.contains("iter_len"),
-                "expected an iter_len come-from-cap rejection, got Deferred: {msg}"
-            );
-        }
-        other => panic!("expected CompileError::Deferred(iter_len...), got: {other}"),
-    }
-    eprintln!("over-cap reject (K=4,HB=1): {err}");
+    let lowered =
+        compile_with_metadata(&iso).expect("K=4,HB=1 must LOWER at w_br=16 (W_BR-b)");
+    assert_eq!(lowered.w_br, 16, "K=4 lifts to the two-byte come-from");
+    assert_eq!(
+        lowered.loop_terms[0].iter_len, 137,
+        "iter_len = body + LOOP_OVERHEAD_WIDE(14) = 137 (NOT 133)"
+    );
+    eprintln!("K=4,HB=1 now lowers at w_br=16, iter_len=137 ✓");
 }

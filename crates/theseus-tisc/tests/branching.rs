@@ -97,7 +97,7 @@ fn taken_branch_with_come_from() {
 
     let mut prog: Vec<Instr> = vec![
         Instr::Xori { rd: 0, imm: delta }, // 0: load offset
-        Instr::Swapbr { rd: 0 },           // 1: branch (BR ← δ)
+        Instr::Swapbr { rd: 0, rs: 0 },           // 1: branch (BR ← δ)
     ];
     // Pad with NOPs (ADDI r0, 0 = word 0x0000... actually we want zero words)
     // Actually, we need real NOP instructions. word 0 = ADDI r0, 0 which
@@ -108,7 +108,7 @@ fn taken_branch_with_come_from() {
         // may not be 0 here). Let's use XORI r7, 0 which is always identity.
         prog.push(Instr::Xori { rd: 7, imm: 0 });
     }
-    prog.push(Instr::Swapbr { rd: 0 }); // 5: come-from (BR ← 0)
+    prog.push(Instr::Swapbr { rd: 0, rs: 0 }); // 5: come-from (BR ← 0)
     prog.push(Instr::Subi { rd: 0, imm: delta }); // 6: clear witness
     prog.push(Instr::Addi { rd: 1, imm: 0x42 }); // 7: prove arrival
 

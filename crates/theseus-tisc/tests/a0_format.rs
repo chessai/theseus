@@ -46,7 +46,7 @@ fn all_variants() -> Vec<Instr> {
             rt: 6,
         },
         Instr::Xchg { rd: 3, sx: 5 },
-        Instr::Swapbr { rd: 2 },
+        Instr::Swapbr { rd: 2, rs: 0 },
         Instr::Mexch { rd: 1, addr: 3 },
         Instr::MexchReg { rd: 2, ra: 5 },
         Instr::Addi { rd: 0, imm: 0xFF },

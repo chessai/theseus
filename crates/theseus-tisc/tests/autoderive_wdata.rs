@@ -296,8 +296,8 @@ fn blocker1_swapbr_program_pins_full_w_data() {
     // shape Trace / forward-skip emit.
     let control_rom = vec![
         Instr::Addi { rd: 0, imm: 0xF6 }, // δu-style control byte (≥ 0x80)
-        Instr::Swapbr { rd: 0 },
-        Instr::Swapbr { rd: 0 },
+        Instr::Swapbr { rd: 0, rs: 0 },
+        Instr::Swapbr { rd: 0, rs: 0 },
     ];
     let layout = derive_full_layout(&iso, &control_rom);
     assert_eq!(

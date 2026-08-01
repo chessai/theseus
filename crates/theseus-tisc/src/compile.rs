@@ -431,6 +431,19 @@ const MAX_LEAVES_LOOP: usize = 4;
 /// inclusive of both SWAPBRs). 5 before body + 5 after body = 10.
 const LOOP_OVERHEAD: usize = 10;
 
+/// W_BR-b: the WIDE (w_br=16, two-byte come-from) per-iteration overhead
+/// (MINOR-C). The two-byte δu adds FOUR in-span instructions to the narrow
+/// bracket: at the bottom `ADDI temp_hi, δu_hi` + `CSWAP ctrl, temp_hi, rc`
+/// (the hi mint + route), and at the top `CSWAP ctrl, rb, temp_hi` +
+/// `SUBI temp_hi, δu_hi` (the hi catch + burn). So LOOP_OVERHEAD 10 → 14. δu
+/// MUST be minted from `body_len + LOOP_OVERHEAD_WIDE` (F2 emitted-span rule).
+const LOOP_OVERHEAD_WIDE: usize = 14;
+
+/// W_BR-b: the wide branch-register width (two-byte come-from). At w_pc=w_br=16
+/// the PC update is a pure translation, so the wide back-jump reach is 2^15
+/// (`iter_len ≤ 32768`, the F5 policy cap keeping "backward ⟺ bit 15 set").
+const W_BR16: usize = 16;
+
 /// First spillable scratch index (s0/s1 are decoder-reserved).
 const SCRATCH_SPILL_BASE: u8 = 2;
 
@@ -999,6 +1012,37 @@ fn has_inner_control(instrs: &[Instr]) -> bool {
     instrs.iter().any(|i| matches!(i, Instr::Swapbr { .. }))
 }
 
+/// W_BR-b (F4/MINOR-D SAFETY): under a w_br=16 program, EVERY SWAPBR runs on the
+/// two-transposition datapath — it swaps r[rd]↔BR₀ AND r[rs]↔BR₁. A SWAPBR with
+/// `rs = 0` (the w_br=8 single-transposition sentinel: skip-block branch/come-from
+/// or an ≤128-span loop's narrow come-from) would, at w_br=16, additionally
+/// route r[0]↔BR₁ — corrupting BR's high byte with r0's contents and wild-jumping.
+///
+/// The full "global skip-block pair" (every skip block gets a zeroed hi partner)
+/// is W_BR-c's job (it also picks w_br per loop). W_BR-b proves the wide loop
+/// come-from in ISOLATION; a program that MIXES a wide loop with any narrow
+/// (`rs=0`) SWAPBR is REJECTED here rather than silently corrupted. `vart_halve`
+/// (a pure single wide Trace) emits only `rs != 0` SWAPBRs, so it is unaffected.
+fn guard_no_narrow_swapbr_under_wide(
+    instrs: &[Instr],
+    needs_w_br16: bool,
+) -> Result<(), CompileError> {
+    if needs_w_br16
+        && instrs
+            .iter()
+            .any(|i| matches!(i, Instr::Swapbr { rs: 0, .. }))
+    {
+        return Err(CompileError::Deferred(
+            "program mixes a w_br=16 (two-byte come-from) loop with a narrow \
+             (rs=0) SWAPBR (skip block / ≤128-span come-from); the global \
+             skip-block pair discipline is deferred to W_BR-c — reject, don't \
+             corrupt (W_BR-b F4)"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn emit_skip_block(
     ctrl_reg: u8,
     body_instrs: &[Instr],
@@ -1064,14 +1108,14 @@ fn emit_skip_block(
         });
     }
 
-    // Branch: SWAPBR rb
-    out.push(Instr::Swapbr { rd: rb });
+    // Branch: SWAPBR rb (w_br=8 single-transposition form; rs=0)
+    out.push(Instr::Swapbr { rd: rb, rs: 0 });
 
     // Body
     out.extend_from_slice(body_instrs);
 
     // Come-from: SWAPBR rb (clears BR, captures offset into rb)
-    out.push(Instr::Swapbr { rd: rb });
+    out.push(Instr::Swapbr { rd: rb, rs: 0 });
 
     // Cleanup: reverse the CSWAP + SUBI
     if skip_when_set {
@@ -2947,6 +2991,12 @@ pub struct Lowered {
     /// For a single-level loop this is `[CostTree { k_max, iter_len, inner: [] }]`
     /// and reproduces the exact old `B`.
     pub loop_terms: Vec<CostTree>,
+    /// W_BR-b: the branch-register width the program's come-from arithmetic
+    /// requires — 8 (default, byte-identical) or 16 (a loop/skip whose ROM span
+    /// exceeded the 8-bit back-jump reach used the two-byte come-from). The
+    /// derived [`Layout`] must carry this `w_br` so the decoder emits the
+    /// two-transposition SWAPBR and the fast/real sims sign-extend from it.
+    pub w_br: usize,
 }
 
 impl Lowered {
@@ -2984,10 +3034,14 @@ pub fn compile_with_metadata(iso: &Iso) -> Result<Lowered, CompileError> {
     let ctx = Ctx::new(n);
     let mut meta = LowerMeta::default();
     let (instrs, _final_ctx) = lower(iso, &ctx, &mut meta)?;
+    // W_BR-b F4: reject a narrow (rs=0) SWAPBR under a w_br=16 program.
+    guard_no_narrow_swapbr_under_wide(&instrs, meta.needs_w_br16)?;
     Ok(Lowered {
         instrs,
         forward_skip_total: meta.forward_skip_total,
         loop_terms: meta.loop_terms,
+        // W_BR-b: 16 iff any loop/skip minted a two-byte come-from, else 8.
+        w_br: if meta.needs_w_br16 { 16 } else { 8 },
     })
 }
 
@@ -3023,10 +3077,14 @@ pub fn compile_with_metadata_resident(iso: &Iso, resident: usize) -> Result<Lowe
     let ctx = Ctx::new_resident(n, resident);
     let mut meta = LowerMeta::default();
     let (instrs, _final_ctx) = lower(iso, &ctx, &mut meta)?;
+    // W_BR-b F4: reject a narrow (rs=0) SWAPBR under a w_br=16 program.
+    guard_no_narrow_swapbr_under_wide(&instrs, meta.needs_w_br16)?;
     Ok(Lowered {
         instrs,
         forward_skip_total: meta.forward_skip_total,
         loop_terms: meta.loop_terms,
+        // W_BR-b: 16 iff any loop/skip minted a two-byte come-from, else 8.
+        w_br: if meta.needs_w_br16 { 16 } else { 8 },
     })
 }
 
@@ -3088,7 +3146,20 @@ pub fn derive_layout(instrs: &[Instr]) -> Layout {
     } else {
         max_named_reg
     };
-    Layout::for_program_facts(uses_mem, max_named_reg)
+    let base = Layout::for_program_facts(uses_mem, max_named_reg);
+    // W_BR-b: a ROM that contains a two-transposition SWAPBR (rs != 0 = a named
+    // hi-word partner) is a w_br=16 program — its come-from mints a two-byte δu
+    // that only lands correctly when the datapath swaps BOTH BR words and adds a
+    // 16-bit offset. Detect it structurally from the ROM so `run_rom_on_cpu`
+    // (which has no `iso`) runs the wide netlist. A w_br=8 ROM (every Swapbr rs=0)
+    // keeps w_br=8, byte-identical.
+    let wide = instrs
+        .iter()
+        .any(|i| matches!(i, Instr::Swapbr { rs, .. } if *rs != 0));
+    Layout {
+        w_br: if wide { W_BR16 } else { base.w_br },
+        ..base
+    }
 }
 
 /// Derive the FULL per-program [`Layout`] (B-2.1c auto-derive): the
@@ -3250,6 +3321,12 @@ struct LowerMeta {
     /// Trace merges its body's `loop_terms` into the outer node's `inner`
     /// (see `lower_trace`), so the top-level `LowerMeta` carries the full tree.
     loop_terms: Vec<CostTree>,
+    /// W_BR-b: `true` if any Trace/skip block at this level (or nested) minted a
+    /// two-byte (w_br=16) come-from — i.e. its ROM span exceeded the 8-bit
+    /// back-jump reach (iter_len > 128). The whole program's layout must then
+    /// run at `w_br=16` (the interpreter/decoder honor the wide come-from). A
+    /// program with only ≤128-span loops keeps `w_br=8` (byte-identical).
+    needs_w_br16: bool,
 }
 
 /// Right-associate a left-nested `Seq` chain so that idiom recognizers
@@ -3824,6 +3901,13 @@ fn lower_trace(
         occ: body_occ,
         reusable_aux: ctx.reusable_aux,
     })?;
+    // W_BR-b: snapshot the occ AFTER the 4-aux frame + carrier are marked. If
+    // this loop turns out WIDE (iter_len > 128 ⇒ two-byte come-from), the +1
+    // `temp_hi` aux (net-+1 register, F3/MINOR-B) is drawn from what remains
+    // free here — disjoint from the carrier and the {rc,rb,temp,ctrl} frame.
+    // `temp_hi` lives ONLY in the come-from bracket (outside body_instrs), so it
+    // need not be occ-marked into the body.
+    let post_frame_occ = body_occ;
 
     // SOUNDNESS / byte-identity assert (A-5 review check §2.3): for the canonical
     // single-level Trace the carrier occupies regs 0..=max_carrier_reg
@@ -3922,7 +4006,23 @@ fn lower_trace(
     }
 
     let body_len = body_instrs.len();
-    let iter_len = body_len + LOOP_OVERHEAD;
+
+    // ── W_BR-b: decide the come-from width for THIS loop ────────────────
+    // At w_br=8 the come-from bracket has LOOP_OVERHEAD=10 instructions and the
+    // back-jump offset δu = 256−iter_len must have its top bit (bit 7) set ⇒
+    // iter_len ≤ 128. A loop whose narrow span would exceed 128 lifts to the
+    // TWO-BYTE come-from (w_br=16): a bigger bracket (LOOP_OVERHEAD=14, F2's
+    // measured +4 in-span instructions: +ADDI temp_hi, +CSWAP hi at the bottom;
+    // +CSWAP hi, +SUBI temp_hi at the top) whose δu = 65536−iter_len is minted
+    // across TWO registers and swapped into the 2-field BR. The cap then lifts
+    // 128 → 32768 (design F5; kept as a policy invariant).
+    let iter_len_narrow = body_len + LOOP_OVERHEAD; // LOOP_OVERHEAD = 10
+    let wide = iter_len_narrow > (1 << (W_BR - 1)); // > 128 ⇒ needs w_br=16
+    // LOOP_OVERHEAD 10→14 AND spine 4→6 at w_br=16 (MINOR-C). δu is minted from
+    // the ACTUAL emitted iter_len (F2: minting from the narrow overhead would
+    // land at Ltop+4 with no SWAPBR → every wide loop walks off on iteration 1).
+    let loop_overhead = if wide { LOOP_OVERHEAD_WIDE } else { LOOP_OVERHEAD };
+    let iter_len = body_len + loop_overhead;
 
     // ── Trajectory-derived exact k_max ────────────────────────────────
     // Walk the lowered body (via exec_instr — the same byte-semantics the
@@ -4012,7 +4112,9 @@ fn lower_trace(
     // A-3: the feasibility bound is the FULL tree cost (ROM footprint of one
     // straight-line pass + all extra iterations, inner loops multiplied through
     // k_max), not just `spine + k_max·iter_len` which ignored nested cost.
-    let spine = 4; // prologue(2) + epilogue(2)
+    // W_BR-b (MINOR-C): spine 4→6 at w_br=16 (prologue/epilogue each gain the
+    // δu_hi ADDI/SUBI). δu is minted from the ACTUAL emitted span (F2).
+    let spine = if wide { 6 } else { 4 }; // prologue + epilogue
     let this_wcet = spine + iter_len + cost_node.extra();
     // A-6.4 widen-PC: the per-Trace step budget now fits the 16-bit PC
     // (PC_ADDR_SPACE = 2^W_PC), not 256 — this is the cap the widen lifts.
@@ -4022,117 +4124,162 @@ fn lower_trace(
             this_wcet, PC_ADDR_SPACE, k_max, iter_len, spine
         )));
     }
-    // A-6.4 come-from constraint: the backward-jump offset δu = 256 −
-    // iter_len is minted into an 8-bit register and SIGN-EXTENDED into the
-    // 16-bit PC (W_BR = 8, design §5). Sign-extension makes δu *negative*
-    // (a genuine backward jump) only when its top bit is set, i.e.
-    // iter_len ≤ 128. A loop body with iter_len > 128 would sign-extend to
-    // a forward offset and diverge — reject it (a wider BR / two-byte δu
-    // mint is the follow-up, design §3.4). k_max·iter_len (= B) is NOT
-    // bounded by this — only a single loop's *ROM span* is.
-    if iter_len > (1 << (W_BR - 1)) {
+    // Come-from constraint (F5): at w_pc=w_br=16 the PC update `x ↦ x+c` is a
+    // pure translation so ANY iter_len ≤ 65535 lands, but we KEEP `iter_len ≤
+    // 32768` as a policy invariant (future-proofs w_pc>w_br + keeps "backward ⟺
+    // bit 15 set" honest). At w_br=8 (narrow) the sext DOES bind: δu = 256−iter_len
+    // must have bit 7 set ⇒ iter_len ≤ 128. `wide` was chosen above so the
+    // NARROW cap only applies to narrow loops; a wide loop is capped at 32768.
+    let cap = if wide { 1 << (W_BR16 - 1) } else { 1 << (W_BR - 1) };
+    if iter_len > cap {
         return Err(CompileError::Deferred(format!(
-            "Trace iter_len {} exceeds the sign-extended BR back-jump reach {} \
-             (W_BR={}); loop ROM span too large for an 8-bit come-from offset (A-6.4 §3.4)",
+            "Trace iter_len {} exceeds the come-from back-jump reach {} \
+             (w_br={}); loop ROM span too large (A-6.4 §3.4 / W_BR-b)",
             iter_len,
-            1 << (W_BR - 1),
-            W_BR
+            cap,
+            if wide { W_BR16 } else { W_BR }
         )));
     }
 
-    // ── Compute δu ─────────────────────────────────────────────────
-    // After Lend (SWAPBR rb at offset iter_len-1 from Ltop):
-    //   PC += sext(δu) + 1  (A-6.4: BR is sign-extended into the 16-bit PC).
-    // Want PC = Ltop again ⇒ sext(δu) + 1 = −(iter_len − 1), i.e.
-    //   sext(δu) = −iter_len (a backward jump). With δu = 256 − iter_len
-    //   (8-bit, top bit set since iter_len ≤ 128 per the guard above),
-    //   sext(δu) = −iter_len exactly (mod 2^W_PC). So δu is COMPUTED and
-    //   minted BYTE-IDENTICALLY to the 8-bit-PC design — only the adder's
-    //   sign-extension makes it reach across the wider PC.
-    let delta_u: u8 = (256usize.wrapping_sub(iter_len) & 0xFF) as u8;
+    // W_BR-b: at w_br=16 the come-from needs a 5th aux register `temp_hi`
+    // (net +1, F3/MINOR-B). Draw it from the registers still free after the
+    // carrier + 4-aux frame. The FIT GATE (MINOR-B): a wide loop's carrier must
+    // leave a register for temp_hi — equivalently `carrier_reg_budget = NUM_REGS
+    // − 5`. `vart_halve` K=4,HB=1 has n_input+1 = 3 ≤ 3, frame = tag+2 inputs+5
+    // aux = 8/8 (zero slack). W_BR-c's derive picks w_br=16 ONLY when this fits.
+    let temp_hi: u8 = if wide {
+        // Enforce the −5 carrier budget explicitly (not by hope): tag + live
+        // inputs + 4 aux + temp_hi ≤ NUM_REGS.
+        let wide_budget = NUM_REGS - 5;
+        if n_input + 1 > wide_budget {
+            return Err(CompileError::Deferred(format!(
+                "wide (w_br=16) Trace tag+input needs {} registers but the \
+                 carrier budget is {wide_budget} (NUM_REGS−5, +1 for temp_hi) (W_BR-b MINOR-B)",
+                n_input + 1
+            )));
+        }
+        let mut free_hi = (0..NUM_REGS as u8)
+            .filter(|r| post_frame_occ.is_free(Location::Reg(*r)));
+        match free_hi.next() {
+            Some(r) => r,
+            None => {
+                return Err(CompileError::Deferred(
+                    "wide (w_br=16) Trace needs a free register for temp_hi but \
+                     none remain (carrier+4-aux frame full — reject, don't alias) (W_BR-b F3)"
+                        .into(),
+                ));
+            }
+        }
+    } else {
+        0 // unused at w_br=8
+    };
 
     // ── Register assignment (§3, A-5 occ-aware frame) ──────────────────
-    // The body_ctx has tag at body_homes[0] = Reg(tag_reg_idx). The four aux
-    // {rc, rb, temp, ctrl} were drawn OCC-AWARELY above (`allocate_aux_frame`)
-    // *before* the body was lowered, and occ-marked into `body_ctx.occ` so a
-    // nested Trace draws a disjoint frame. `allocate_aux_frame` already
-    // guarantees all four are distinct in-register slots disjoint from the
-    // carrier and any sibling/outer live data — no positional `max_carrier_reg+1`
-    // and no register-file overflow check needed here (it rejected up front).
     let tag_reg: u8 = tag_reg_idx;
 
-    // ── Emit the skeleton ──────────────────────────────────────────
-    let mut instrs = vec![
-        // Prologue (2 instructions):
-        Instr::Xori {
-            rd: tag_reg,
-            imm: 1,
-        }, // inject Right (a→u+a)
-        Instr::Addi {
-            rd: temp,
-            imm: delta_u,
-        }, // mint token
-        // Ltop: SWAPBR rc
-        Instr::Swapbr { rd: rc },
-        // Join-dispatch: CSWAP ctrl, rc, temp
-        Instr::Cswap {
-            rd: ctrl,
-            rs: rc,
-            rt: temp,
-        },
-        // Burn token: SUBI temp, δu
-        Instr::Subi {
-            rd: temp,
-            imm: delta_u,
-        },
-        // Uncompute ctrl from tag (top): XOR ctrl, tag; XORI ctrl, 1
-        Instr::Xor {
-            rd: ctrl,
-            rs: tag_reg,
-        },
-        Instr::Xori { rd: ctrl, imm: 1 },
-    ];
+    let mut instrs: Vec<Instr>;
+    if !wide {
+        // ── w_br=8 narrow bracket (byte-identical to the shipped design) ──
+        // δu = 256 − iter_len (8-bit two's-complement; bit 7 set since
+        // iter_len ≤ 128). sext_{16}(δu) = −iter_len (mod 2^16).
+        let delta_u: u8 = (256usize.wrapping_sub(iter_len) & 0xFF) as u8;
 
-    // Body
-    instrs.extend_from_slice(&body_instrs);
+        instrs = vec![
+            // Prologue (2):
+            Instr::Xori { rd: tag_reg, imm: 1 }, // inject Right
+            Instr::Addi { rd: temp, imm: delta_u }, // mint token
+            // Ltop: SWAPBR rc
+            Instr::Swapbr { rd: rc, rs: 0 },
+            // Join-dispatch: CSWAP ctrl, rc, temp
+            Instr::Cswap { rd: ctrl, rs: rc, rt: temp },
+            // Burn token: SUBI temp, δu
+            Instr::Subi { rd: temp, imm: delta_u },
+            // Uncompute ctrl from tag (top)
+            Instr::Xor { rd: ctrl, rs: tag_reg },
+            Instr::Xori { rd: ctrl, imm: 1 },
+        ];
+        instrs.extend_from_slice(&body_instrs);
+        // Compute ctrl from tag (bottom): ctrl := ¬tag
+        instrs.push(Instr::Xor { rd: ctrl, rs: tag_reg });
+        instrs.push(Instr::Xori { rd: ctrl, imm: 1 });
+        // Mint token: ADDI temp, δu
+        instrs.push(Instr::Addi { rd: temp, imm: delta_u });
+        // Route: CSWAP ctrl, temp, rb  (continue: rb=δu · exit: temp=δu)
+        instrs.push(Instr::Cswap { rd: ctrl, rs: temp, rt: rb });
+        // Lend: SWAPBR rb
+        instrs.push(Instr::Swapbr { rd: rb, rs: 0 });
+        // Epilogue (2):
+        instrs.push(Instr::Subi { rd: temp, imm: delta_u }); // burn (exit path)
+        instrs.push(Instr::Xori { rd: tag_reg, imm: 1 }); // strip Right
+    } else {
+        // ── w_br=16 wide bracket (REVISION-2 emission spec) ──────────────
+        // δu = 65536 − iter_len (16-bit two's-complement; bit 15 set since
+        // iter_len ≤ 32768). At w_pc=w_br=16 sext is a pure add, so
+        // PC += δu + 1 = PC − iter_len + 1 lands back at Ltop.
+        // Aux frame {rc, rb, temp, ctrl, temp_hi}; δu_lo = δu & 0xFF,
+        // δu_hi = δu >> 8. rb/rc are cross-paired hi-carriers (each the other's
+        // hi partner across the back-edge); temp_hi is the staged/burned hi copy.
+        let delta_u: u16 = (65536usize.wrapping_sub(iter_len) & 0xFFFF) as u16;
+        let du_lo: u8 = (delta_u & 0xFF) as u8;
+        let du_hi: u8 = (delta_u >> 8) as u8;
 
-    // Compute ctrl from tag (bottom): XOR ctrl, tag; XORI ctrl, 1
-    // ctrl := ¬tag (1 = continue [Left], 0 = exit [Right])
-    instrs.push(Instr::Xor {
-        rd: ctrl,
-        rs: tag_reg,
-    });
-    instrs.push(Instr::Xori { rd: ctrl, imm: 1 });
+        // SAFETY (W_BR-b): rs=0 is the w_br=8 SWAPBR sentinel (single
+        // transposition). The wide come-from names rb/rc as SWAPBR hi partners
+        // (rs field), so BOTH must be nonzero, else the hi transposition
+        // silently degrades to "no partner" and the come-from mis-jumps. The
+        // aux frame draws above the tag (tag = lowest free reg = r0 for the
+        // canonical single-level Trace), so rb,rc ≥ 1 in practice; reject rather
+        // than assume. (temp_hi/temp/ctrl are never SWAPBR operands, so they may
+        // be any register.)
+        if rb == 0 || rc == 0 {
+            return Err(CompileError::Deferred(format!(
+                "wide (w_br=16) come-from needs rb,rc != r0 (r0 aliases the SWAPBR \
+                 rs=0 single-transposition sentinel) but rb={rb}, rc={rc} (W_BR-b)"
+            )));
+        }
 
-    // Mint token: ADDI temp, δu
-    instrs.push(Instr::Addi {
-        rd: temp,
-        imm: delta_u,
-    });
+        instrs = vec![
+            // Prologue (3): inject Right + mint BOTH token bytes.
+            Instr::Xori { rd: tag_reg, imm: 1 },
+            Instr::Addi { rd: temp, imm: du_lo },
+            Instr::Addi { rd: temp_hi, imm: du_hi },
+            // ── Ltop / re-entry (7) ──
+            // SWAPBR(rc,rb): swap(rc,BR₀); swap(rb,BR₁). On re-entry BR=(δu_lo,
+            // δu_hi) → rc=δu_lo, rb=δu_hi, BR=0.
+            Instr::Swapbr { rd: rc, rs: rb },
+            // CSWAP ctrl,rc,temp   (temp=δu_lo)
+            Instr::Cswap { rd: ctrl, rs: rc, rt: temp },
+            // CSWAP ctrl,rb,temp_hi (temp_hi=δu_hi)
+            Instr::Cswap { rd: ctrl, rs: rb, rt: temp_hi },
+            // Burn BOTH token bytes.
+            Instr::Subi { rd: temp, imm: du_lo },
+            Instr::Subi { rd: temp_hi, imm: du_hi },
+            // Uncompute ctrl from tag (top).
+            Instr::Xor { rd: ctrl, rs: tag_reg },
+            Instr::Xori { rd: ctrl, imm: 1 },
+        ];
+        instrs.extend_from_slice(&body_instrs);
+        // ── Lend / continue (7) ──
+        // Compute ctrl := ¬tag (bottom).
+        instrs.push(Instr::Xor { rd: ctrl, rs: tag_reg });
+        instrs.push(Instr::Xori { rd: ctrl, imm: 1 });
+        // Mint BOTH token bytes.
+        instrs.push(Instr::Addi { rd: temp, imm: du_lo });
+        instrs.push(Instr::Addi { rd: temp_hi, imm: du_hi });
+        // Route: CSWAP ctrl,temp,rb (rb=δu_lo); CSWAP ctrl,temp_hi,rc (rc=δu_hi).
+        instrs.push(Instr::Cswap { rd: ctrl, rs: temp, rt: rb });
+        instrs.push(Instr::Cswap { rd: ctrl, rs: temp_hi, rt: rc });
+        // Lend SWAPBR(rb,rc): swap(rb,BR₀); swap(rc,BR₁) → BR=(δu_lo,δu_hi).
+        instrs.push(Instr::Swapbr { rd: rb, rs: rc });
+        // Epilogue (3): burn BOTH token bytes (exit path) + strip Right.
+        instrs.push(Instr::Subi { rd: temp, imm: du_lo });
+        instrs.push(Instr::Subi { rd: temp_hi, imm: du_hi });
+        instrs.push(Instr::Xori { rd: tag_reg, imm: 1 });
 
-    // Route: CSWAP ctrl, temp, rb
-    // continue: rb=δu, temp=0 · exit: rb=0, temp=δu
-    instrs.push(Instr::Cswap {
-        rd: ctrl,
-        rs: temp,
-        rt: rb,
-    });
-
-    // Lend: SWAPBR rb
-    // continue: BR=δu → PC jumps back to Ltop · exit: BR=0 → fall through
-    instrs.push(Instr::Swapbr { rd: rb });
-
-    // Epilogue (2 instructions):
-    // Burn token (exit path): SUBI temp, δu
-    instrs.push(Instr::Subi {
-        rd: temp,
-        imm: delta_u,
-    });
-    // Strip Right: XORI tag, 1
-    instrs.push(Instr::Xori {
-        rd: tag_reg,
-        imm: 1,
-    });
+        // W_BR-b: this program's layout must run at w_br=16 (the decoder emits
+        // the two-transposition SWAPBR; the sims sign-extend from 16). Bubble up.
+        meta.needs_w_br16 = true;
+    }
 
     // ── Record metadata ────────────────────────────────────────────
     // The loop's backward bracket contributes 0 to forward skip distance.
@@ -4142,6 +4289,8 @@ fn lower_trace(
     // a Σ-fold — a parked PC can land in ANY forward-skip region regardless of
     // which arm ran, so we sum, never max).
     meta.forward_skip_total += body_meta.forward_skip_total;
+    // W_BR-b: a nested wide loop forces the whole program to w_br=16 too.
+    meta.needs_w_br16 |= body_meta.needs_w_br16;
     // A-3: push the cost-tree node (with its inner children merged) so the
     // top-level `Lowered` carries the full nesting structure.
     meta.loop_terms.push(cost_node);
@@ -4632,8 +4781,26 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
     // zero under system_step), so this is a pure machinery-drop, not a
     // semantic change. The `init.mem == 0` guard keeps a resident program
     // whose (partial) instr slice happens to emit no Mexch off this path.
+    // W_BR-b: a ROM containing a two-transposition SWAPBR (rs != 0) is a
+    // w_br=16 program and must run on the wide netlist (`step_with` at
+    // w_br=16 + `encode_with`/`decode_with` marshalling both BR bytes). A
+    // w_br=8 ROM keeps the shipped `step(&rom)` + default-encode path exactly
+    // (byte-identical), so every existing caller is unchanged.
+    let rom_wide = instrs
+        .iter()
+        .any(|i| matches!(i, Instr::Swapbr { rs, .. } if *rs != 0));
     let mem_quiescent = init.mem.iter().all(|&m| m == 0);
-    let final_state = if is_cpu_only(instrs) && mem_quiescent {
+    let final_state = if is_cpu_only(instrs) && mem_quiescent && rom_wide {
+        // Wide (w_br=16) CPU-only run: default layout except w_br widened to 16.
+        let layout = Layout { w_br: W_BR16, ..Layout::default() };
+        let step_iso = crate::step::step_with(&layout, &rom);
+        let mut cur = init.encode_with(&layout);
+        for _ in 0..budget {
+            cur = eval_fn(&step_iso, cur, &mut fuel)
+                .map_err(|e| CompileError::Deferred(format!("CPU eval failed: {e:?}")))?;
+        }
+        StateVals::decode_with(&layout, &cur)
+    } else if is_cpu_only(instrs) && mem_quiescent {
         let step_iso = crate::step::step(&rom);
         let mut cur = init.encode();
         for _ in 0..budget {
@@ -4788,6 +4955,26 @@ pub fn pc_update(pc: u16, br: u8) -> u16 {
     pc.wrapping_add(sext).wrapping_add(1)
 }
 
+/// W_BR-b: the `w_br`-parameterized end-of-step PC update, matching
+/// `step::pc_add_br_with` at the given `w_br`. `PC += sext_{w_pc}(BR) + 1 mod
+/// 2^16`. The datapath sign-extends the `w_br`-bit BR into the 16-bit PC:
+/// at w_br=8 this is `sext` from bit 7 (a 2's-complement 8-bit offset — the
+/// shipped `pc_update`); at w_br=16 BR is already full-width so `sext` is the
+/// IDENTITY (a pure add — F5/Q3: the extension arm is dead code, no bit-15
+/// special case). This MUST match the datapath or the fast-sim oracle diverges.
+#[inline]
+pub fn pc_update_w_br(pc: u16, br: u16, w_br: usize) -> u16 {
+    let off: u16 = if w_br >= 16 {
+        // Full-width: no extension (identity), pure add.
+        br
+    } else {
+        // sext from bit (w_br-1) into 16 bits.
+        let shift = 16 - w_br as u32;
+        (((br << shift) as i16) >> shift) as u16
+    };
+    pc.wrapping_add(off).wrapping_add(1)
+}
+
 /// Execute one TISC-1 instruction on the machine state (direct simulation).
 pub fn exec_instr(instr: Instr, state: &mut StateVals) {
     // A-0 (BLOCKER-2 fix): rd/rs/rt are operand indices over reg∪scratch
@@ -4852,12 +5039,22 @@ pub fn exec_instr(instr: Instr, state: &mut StateVals) {
             state.operand_set(rd, mv);
             state.mem[addr] = rv;
         }
-        Instr::Swapbr { rd } => {
-            // W_BR-a: `state.br` is now u16, but the interpreter keeps 8-bit
-            // BR semantics (byte-identical) — swap the reg with BR's low byte.
-            // The two-byte come-from swap is W_BR-b.
+        Instr::Swapbr { rd, rs: _ } => {
+            // W_BR-a: `state.br` is now u16, but the DEFAULT (w_br=8)
+            // interpreter keeps 8-bit BR semantics (byte-identical) — swap the
+            // reg with BR's low byte only. The two-byte come-from swap (which
+            // also touches BR's high byte via rs) is the w_br=16 path in
+            // `exec_instr_w_br` (W_BR-b F4). MINOR-3: the 8-bit path hard-asserts
+            // BR's high byte stays 0 so a stray wide BR here is caught.
+            debug_assert_eq!(
+                state.br >> 8,
+                0,
+                "exec_instr (8-bit Swapbr path) saw a wide BR {:#06x}; \
+                 a w_br=16 program must run via exec_instr_w_br (MINOR-3)",
+                state.br
+            );
             let rv = state.operand_get(rd);
-            state.operand_set(rd, state.br as u8);
+            state.operand_set(rd, (state.br & 0xFF) as u8);
             state.br = u16::from(rv);
         }
         Instr::Addi { rd, imm } => {
@@ -4875,6 +5072,30 @@ pub fn exec_instr(instr: Instr, state: &mut StateVals) {
         Instr::Rotri { rd, imm } => {
             state.operand_set(rd, state.operand_get(rd).rotate_right((imm & 7) as u32));
         }
+    }
+}
+
+/// W_BR-b: execute one instruction honoring the branch-register width `w_br`.
+///
+/// Identical to [`exec_instr`] for every op EXCEPT `Swapbr`, which at w_br=16
+/// performs the TWO-transposition come-from swap on the model side:
+///   swap(r[rd], BR_lo) ; swap(r[rs], BR_hi)
+/// (disjoint register slots and BR words → self-inverse). At w_br=8 it defers to
+/// [`exec_instr`]'s single-byte swap (with its MINOR-3 hi-byte-zero assert).
+pub fn exec_instr_w_br(instr: Instr, state: &mut StateVals, w_br: usize) {
+    match instr {
+        Instr::Swapbr { rd, rs } if w_br >= 16 => {
+            // Two disjoint transpositions: rd↔BR_lo, rs↔BR_hi.
+            let br_lo = (state.br & 0xFF) as u8;
+            let br_hi = (state.br >> 8) as u8;
+            let rd_v = state.operand_get(rd);
+            let rs_v = state.operand_get(rs);
+            // Write the register halves out of BR, and BR out of the registers.
+            state.operand_set(rd, br_lo);
+            state.operand_set(rs, br_hi);
+            state.br = u16::from(rd_v) | (u16::from(rs_v) << 8);
+        }
+        other => exec_instr(other, state),
     }
 }
 
@@ -4896,6 +5117,9 @@ pub fn run_on_cpu_fast(iso: &Iso, input: &Value) -> Result<Value, CompileError> 
     let rom = assemble(&lowered.instrs)
         .map_err(|e| CompileError::Deferred(format!("assemble failed: {e}")))?;
     let budget = lowered.wcet();
+    // W_BR-b: honor the program's come-from width (8 = byte-identical shipped
+    // path; 16 = two-byte come-from + full-width PC add).
+    let w_br = lowered.w_br;
 
     let mut state = marshal(input, &in_ty);
 
@@ -4905,10 +5129,10 @@ pub fn run_on_cpu_fast(iso: &Iso, input: &Value) -> Result<Value, CompileError> 
         let word = if pc < rom.len() { rom[pc] } else { 0 };
         // Decode
         if let Some(instr) = crate::asm::decode(word) {
-            exec_instr(instr, &mut state);
+            exec_instr_w_br(instr, &mut state, w_br);
         }
-        // PC update: PC += BR + 1
-        state.pc = pc_update(state.pc, state.br as u8);
+        // PC update: PC += sext_{w_br}(BR) + 1
+        state.pc = pc_update_w_br(state.pc, state.br, w_br);
     }
 
     Ok(unmarshal(&state, &out_ty))

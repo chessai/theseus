@@ -1128,9 +1128,9 @@ fn mdw_t2b_park_liveness_skip_tightness() {
     // (b) at extra step 253 (total 257 = PC wraps to 1), corruption occurs.
     let instrs = vec![
         Instr::Addi { rd: 0, imm: 1 }, // r0 += 1
-        Instr::Swapbr { rd: 1 },       // open skip
+        Instr::Swapbr { rd: 1, rs: 0 },       // open skip
         Instr::Addi { rd: 0, imm: 1 }, // skip body: r0 += 1
-        Instr::Swapbr { rd: 1 },       // close skip
+        Instr::Swapbr { rd: 1, rs: 0 },       // close skip
     ];
     let rom = assemble(&instrs).unwrap();
     let rom_len = rom.len();
@@ -1303,7 +1303,7 @@ fn mdw_t5_p3_terminal_s0_nonzero() {
 fn mdw_t5_p1_terminal_br_nonzero() {
     // Hand-built ROM: a single Swapbr{rd:0} with r0=5, BR=0.
     // After execution: r0=0, BR=5 → terminal BR != 0 → P1 fires.
-    let instrs = vec![Instr::Swapbr { rd: 0 }];
+    let instrs = vec![Instr::Swapbr { rd: 0, rs: 0 }];
     let mut init = StateVals {
         regs: [0; NUM_REGS],
         pc: 0,
@@ -1458,12 +1458,12 @@ fn scratch_operand_swapbr_runs_on_real_ring() {
     let delta: u8 = 3;
     let target = delta as usize + 1; // = 4 (PC after the branch SWAPBR)
     let mut instrs: Vec<Instr> = vec![
-        Instr::Swapbr { rd: 10 }, // 0: branch — BR ← s2(=δ), s2 ← 0
+        Instr::Swapbr { rd: 10, rs: 0 }, // 0: branch — BR ← s2(=δ), s2 ← 0
     ];
     while instrs.len() < target {
         instrs.push(Instr::Xori { rd: 7, imm: 0 }); // NOP filler (identity)
     }
-    instrs.push(Instr::Swapbr { rd: 10 }); // 4: come-from — BR ← 0, s2 ← δ
+    instrs.push(Instr::Swapbr { rd: 10, rs: 0 }); // 4: come-from — BR ← 0, s2 ← δ
     instrs.push(Instr::Addi { rd: 1, imm: 0x42 }); // 5: arrival proof
 
     // The encoder must now ACCEPT the scratch-rd SWAPBR (the relaxation).

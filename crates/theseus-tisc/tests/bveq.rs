@@ -1019,7 +1019,7 @@ fn bveq_perf_poc() {
 fn bveq_reject_non_register_pure() {
     let non_pure = vec![
         Instr::Xchg { rd: 0, sx: 2 },
-        Instr::Swapbr { rd: 0 },
+        Instr::Swapbr { rd: 0, rs: 0 },
         Instr::Mexch { rd: 0, addr: 0 },
         Instr::MexchReg { rd: 0, ra: 1 },
     ];
