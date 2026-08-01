@@ -106,3 +106,82 @@ implement before the design-review clears the arithmetic.
   already full-width — confirm the sext code is a no-op, not a subtle off-by-one.)
 - Q4: the come-from `δu` for a FORWARD skip block (`compile.rs:1020`) uses the same
   BR — does W_BR-b's two-byte mint apply symmetrically to skip blocks, or only loops?
+
+---
+
+## REVISION 1 (post Fable design-review — FIX-DESIGN-FIRST)
+
+The design-review RE-DERIVED and CONFIRMED the arithmetic (δu = 65536−iter_len; the
+cap ≤ 32768; sext is a pure add at w_pc=w_br=16 — the fan-out arm is dead code, no
+bit-15 special case; the two-transposition SWAPBR is a genuine involution and
+W_BR-a's chain is the diagnosed 3-cycle). But it found 4 MAJOR design flaws around
+the arithmetic. This revision addresses each; implementation must follow the REVISED
+design, and a quick re-review of the revised bracket trace precedes coding.
+
+**F1 (ISA — the SWAPBR second operand). ADOPT `Instr::Swapbr { rd, rs }`.** The
+two-transposition swap `swap(rb_lo,BR₀); swap(rb_hi,BR₁)` needs TWO register
+operands; today `Swapbr{rd}` encodes one and decode drops rs/rt (asm.rs:389,450).
+Use the existing `rs` instruction field for the hi register. The decoder's Group-A
+`fetch_rs` already swap-routes `r[rs]` into the s0 slot for SWAPBR words
+(decoder.rs:1271), so gated Fredkins `s0-slot ↔ BR₁` complete the pairing
+reversibly. REQUIRED for the revision: (a) `asm.rs` encode/decode round-trip the rs
+field for opcode 0b1000; (b) the interpreter `Swapbr` arm swaps both (rd↔BR_lo,
+rs↔BR_hi); (c) at w_br=8 `rs` is unused (rs=0) and the decode/emit is
+BYTE-IDENTICAL (the golden guards this). NOTE this makes SWAPBR a 2-register op at
+w_br=16 GLOBALLY (see F4).
+
+**F2 (the silent off-by-4 — δu must be minted from the EMITTED span).** The 16-bit
+bracket adds in-span instructions (per the review: top +CSWAP +SUBI, bottom +ADDI
++CSWAP), so `LOOP_OVERHEAD` 10→14 and the out-of-span spine 4→6 AT w_br=16. `iter_len
+= body_len + LOOP_OVERHEAD` feeds δu = 65536−iter_len; minting δu from the pre-widen
+overhead lands at Ltop+4 (no SWAPBR there) → BR never absorbed → PC walks off, every
+wide loop, iteration 1. FIX: make LOOP_OVERHEAD/spine `w_br`-dependent (10/4 at
+w_br=8, 14/6 at w_br=16), compute δu from the ACTUAL emitted iter_len, and keep the
+`debug_assert_eq!(instrs.len(), spine + iter_len)` — it must hold at the new
+constants (this assert is the F2 tripwire).
+
+**F3 (register frame — cross-paired +1, with a fit check).** The token passes
+through THREE carriers (temp mint/burn, rb route→Lend, rc catch→Ltop), so a naïve
+hi-partner each is +3 (7 aux → does NOT fit NUM_REGS=8 with tag+carrier). ADOPT the
+review's cross-paired scheme: Lend pair `(rb, rc)`, Ltop pair `(rc, rb)` — each is
+the other's hi partner, both provably 0 at every swap on entry/continue/exit
+(review traced fwd+bwd; closes with BR=0 and all aux terminal-zero) — plus ONE new
+`temp_hi` for the staged/burned copy (temp_hi must be distinct from the rb-pair, else
+δu_hi reaches BR on the exit path). Net +1 aux register. FIT CHECK (required, not
+asserted-by-hope): at +1, a wide loop needs 5 aux + tag + carrier ≤ 8 → carrier ≤ 2
+leaves. `vart_halve` K=4,HB=1 carrier = [tag,v,h] = 3 leaves → **compute the exact
+count**; if it doesn't fit at +1, W_BR-c's derive must not pick w_br=16 for it (gate
+on frame fit, like derive_w_pc gates on the guards). `allocate_aux_frame` draws
+lowest-free with NO adjacency guarantee — the cross-paired scheme must NOT assume
+rb/rc adjacency.
+
+**F4 (skip blocks — the pair discipline is GLOBAL). Extend emit_skip_block.** At
+w_br=16 EVERY SWAPBR swaps a register pair with (BR₀,BR₁), including
+`emit_skip_block`'s branch + come-from SWAPBRs, and wide-loop bodies CONTAIN skip
+blocks. A skip SWAPBR paired with a non-zero hi register wild-jumps: e.g. fall-through
+(ctrl=0) leaves `temp=dist` → BR₁=dist → `PC += (dist<<8)+1`. FIX: at w_br=16 every
+skip block needs a hi partner register PROVABLY 0 at swap time on ALL paths (+1
+zeroed aux for body ≤ 127; full two-byte δu staging only when dist > 255). The cap
+constant change at compile.rs:1020 is necessary but INSUFFICIENT. Even iter_len ≤ 128
+loops inside a w_br=16 program need the full pair mint (δu_hi = 0xFF ≠ 0). So the
+pair discipline attaches to the LAYOUT (w_br=16), not to the loop-vs-skip
+distinction.
+
+**F5 (cap rationale — fix the reasoning, keep the bound).** At w_pc=w_br=16, `x ↦
+x+c mod 2^16` is a pure translation, so ANY iter_len ≤ 65535 lands correctly — the
+top-bit ("backward ⟺ bit 15 set") condition is NOT arithmetically binding here (it
+only bites when w_pc > w_br). KEEP `iter_len ≤ 32768` as a policy invariant
+(future-proofs w_pc>w_br + keeps "backward ⟺ top bit set" honest), but correct the
+design's stated rationale so no one later "fixes" the guard believing the sext makes
+it load-bearing at w_br=16.
+
+**F6 (interpreter layout threading).** `pc_update(pc, br: u8)` and `exec_instr` are
+layout-free (compile.rs:4786,4855); the k_max trajectory walk (compile.rs:3928) runs
+on `exec_instr`. Thread `w_br` (or the layout) into the fast sim + pc_update so they
+carry the 16-bit BR + sext from w_br; keep the MINOR-3 hard asserts on the 8-bit path.
+
+**Re-review + implementation order.** A quick Fable re-review of THIS revised bracket
+(the cross-paired frame trace + the `Swapbr{rd,rs}` round-trip + the emitted-span δu)
+precedes coding. Then implement in the F-order (ISA first: `Swapbr{rd,rs}` + golden;
+then the widened bracket + emitted-span δu; then the global skip pair; then interpreter
+w_br). W_BR-c's derive gates w_br=16 on the F3 frame-fit.
