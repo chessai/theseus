@@ -1,5 +1,18 @@
 # W_BR-b — the two-byte come-from δu (RUN-correct W_BR=16) — design (advisor, 2026-07-31)
 
+> **⚠️ IMPLEMENTATION STATUS (2026-08-01): IN PROGRESS on branch `wbr-b-comefrom`
+> — NOT merged.** This design (through REVISION 2) is GO and the come-from
+> ARITHMETIC was implemented + proven correct (Fable impl-review FIX-THEN-SHIP;
+> exhaustive adder + involution + `vart_halve` K4 reject→lower + fast-oracle==eval +
+> byte-identity golden all green; MAJOR-1/2/3 fixed). BUT the full authority caught a
+> **wide-step-NETLIST bug**: `w_br16_step_type_checks` SeqMismatches — the wide
+> `swapbr_instr` decode (`fetch_rs ; with_target(R_RD, swapbr_core) ; sym(fetch_rs)`,
+> decoder.rs ~1335) has a field-ARITY mismatch at w_br=16 (the fast oracle/interpreter
+> passed; only the netlist is malformed — fast≠real). Plus a stale test
+> (`mdd_reject_wcet_overflow`). **RESUME:** fix the wide `swapbr_instr` arity + update
+> the stale test, then re-verify via the NETLIST (not just the fast oracle) + the real
+> `system_step` authority. Full diagnosis: `docs/reviews/wbr-b-review.md` (on the branch).
+
 **Status:** advisor design from theseus-v2 `61f1c0a` (after W_BR-a merged). This is
 the HIGHEST-BAR sub-slice of the W_BR-widen line: it makes a reversible loop with
 `iter_len > 128` actually LOOP correctly on the real CPU. The come-from δu

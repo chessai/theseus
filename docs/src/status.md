@@ -1,18 +1,32 @@
-# Project status — where theseus is (2026-07-20)
+# Project status — where theseus is (2026-08-01)
 
-> **⇒ CURRENT DIRECTION (2026-07-25): TISC-2** — the redesign to run *arbitrary* well-formed
-> theseus programs (see [TISC-2 roadmap](tisc2-roadmap.md)). TISC-1's paradigm (fixed-WCET +
-> reversible park + PC-offset branching) is kept and proven; TISC-2 is a provisioning + compiler
-> + datapath redesign. **Slice A-0 (32-bit instruction word + one shared, scratch-addressable
-> operand crossbar) is validated and merge-ready** on branch `a0-instr-format`: behavior preserved
-> (`t2_real_cpu_all_8` + `t3_real_cpu_oracle` real-`system_step` `run_on_cpu==eval`; scratch-`rd`
-> works through `decode_execute`), two structural blockers found by adversarial review and fixed,
-> and it's a **net energy WIN (−11.9%, fib step_j 3.07e-9→2.71e-9)** because sharing the crossbar
-> (~40 replicated → ~3) more than pays for the wider IR. Operand-addressable scratch is the cure
-> for the register pressure that blocked the GCD (a scratch *frame* alone doesn't work — scratch
-> must be *operand-nameable*). **Next: A-1** — the 2-bit subtractive GCD ships as the first genuine
-> variable-T loop (body ~28, B=194, no widen-PC). Known backlog: lean `lower_iso` for wide-state
-> isos (the 32-bit IR inflates lowering intermediate memory; whole-domain tests OOM, `#[ignore]`'d).
+> **⇒ CURRENT DIRECTION (2026-08-01): TISC-2 — efficiency line done, variable-T frontier open.**
+> The canonical, LIVE record is the **[TISC-2 roadmap](tisc2-roadmap.md)** — read it first; this
+> block is a pointer (it supersedes the old "A-0 merge-ready / Next: A-1 GCD" text). TISC-1's
+> paradigm (fixed-WCET + reversible park + PC-offset branching) is kept and proven; TISC-2 is a
+> provisioning + compiler + datapath redesign, all merged to `chessai/theseus-v2` (tip `d364ae2`).
+>
+> **Done (merged):** A-0 (shared scratch-addressable operand crossbar, −11.9%) → the full **B-1/B-2
+> efficiency line** — shared configurable ALU (B-1, step_j −39.4%) + **per-program widths** (B-2.1
+> reduced num_regs/w_data, B-2.2 per-program PC width w_pc), all auto-derived from the source iso +
+> `Lowered`. Then the **variable-T frontier**: `vart_halve` (`fd4cfd7`) — the first NON-synthetic
+> reversible `Trace` (while-loop) program on the real CPU (2-adic valuation `v_2`; real `system_step`
+> `run_on_cpu==eval`). Then **W_BR-a** (`61f1c0a`) — BR-addressing generalized to `br_fields()`
+> (byte-identical at w_br=8), the enabling refactor for a two-byte come-from offset.
+>
+> **In progress (NOT merged) — W_BR-b** on branch `wbr-b-comefrom`: the two-byte come-from δu
+> (RUN-correct w_br=16) that lifts the `iter_len ≤ 128` loop-span cap. The come-from ARITHMETIC is
+> proven (Fable design-review + impl-review, both cleared); but the full authority caught a real
+> wide-step-NETLIST type bug (the wide `swapbr_instr` decode has a field-arity mismatch; the fast
+> oracle/interpreter passed, only the netlist is malformed — fast≠real). Resume: the roadmap's
+> W_BR-b entry + `docs/reviews/wbr-b-review.md` (on the branch).
+>
+> **Terrain note (supersedes "A-1 GCD next"):** GCD as a `Trace` does NOT lower today — not the loop
+> machinery (which is ready) but gcd2's degree-7 ANF blowing the general-synth operand-word budget
+> (44 words vs ~10 free = the widen-state / A-6.4 gap, DEFERRED). A low-degree body (`vart_halve`)
+> fits now; wide programs need W_BR (in progress); high-degree bodies (gcd2) need widen-state (later).
+> See `docs/scratch/mde-variable-t-scoping.md`. Known backlog: lean `lower_iso` for wide-state isos
+> (whole-domain tests OOM, `#[ignore]`'d).
 
 
 One-paragraph orientation for anyone (human or agent) picking this up. theseus
