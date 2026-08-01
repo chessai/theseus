@@ -1965,19 +1965,21 @@ fn mdd_reject_wcet_overflow() {
         "Trace with large carrier must be rejected (payload or register limit)"
     );
 
-    // Also test the "loop too big" reject: u = Bit, body = 126 NOPs (Seq of
+    // W_BR-b UPDATE (was a stale reject): u = Bit, body = 126 NOPs (Seq of
     // SwapSum pairs). exact-k_max: body ≡ Id ⇒ T=1, k_exact=2, k_max=min(2,3)=2.
-    // iter_len = 126 + 10 = 136, spine = 4. wcet = 4 + 2*136 = 276.
     //
-    // WIDEN-PC: the binding guard here is NO LONGER "WCET > 256". Widen-PC
-    // lifted the per-Trace step budget to PC_ADDR_SPACE = 2^16 (lower_trace),
-    // so wcet=276 is well under the ceiling — a DEAD premise. The Trace is
-    // still correctly rejected, but by the 8-bit BR back-jump reach guard:
-    // the backward-jump offset δu = 256 − iter_len is minted into an 8-bit
-    // BR (W_BR=8) and sign-extended into the 16-bit PC, so it reaches a
-    // genuine backward jump only when iter_len ≤ 128. iter_len=136 > 128
-    // sign-extends to a forward offset and diverges → rejected. (A wider
-    // two-byte δu mint is the follow-up; design §3.4.)
+    // History of this case's binding guard:
+    //   • pre-widen-PC: "WCET > 256" — DEAD (widen-PC lifted the per-Trace step
+    //     budget to PC_ADDR_SPACE = 2^16 in lower_trace).
+    //   • W_BR-a: the 8-bit BR back-jump reach guard (δu = 256 − iter_len minted
+    //     into an 8-bit BR reaches a genuine backward jump only for iter_len ≤ 128,
+    //     so the narrow iter_len 136 > 128 was REJECTED).
+    //   • W_BR-b (this change): a Trace whose narrow iter_len exceeds 128 now
+    //     auto-LIFTS to the two-byte (w_br=16) come-from (δu = 65536 − iter_len,
+    //     cap 32768) instead of rejecting — exactly as `vart_k4_now_lowers_at_wbr16`.
+    //     The narrow w_br=8 cap is UNTOUCHED; the loop is simply lifted. So this
+    //     case now LOWERS. Its wide iter_len = body(126) + LOOP_OVERHEAD_WIDE(14).
+    //     (>32768 cap coverage needs a huge body — deferred to W_BR-c per review.)
     let bit = Type::sum(Type::One, Type::One);
     let carrier_b = Type::sum(bit.clone(), Type::One);
     // Build body = 63 × Seq(SwapSum(Bit, One), SwapSum(One, Bit)) = 126 NOPs.
@@ -1992,16 +1994,15 @@ fn mdd_reject_wcet_overflow() {
         );
     }
     let iso_b = Iso::trace(bit.clone(), body_b);
-    let result_b = compile(&iso_b);
-    assert!(
-        result_b.is_err(),
-        "Trace with iter_len=136 > 128 must be rejected (BR back-jump reach)"
+    let lowered_b =
+        compile_with_metadata(&iso_b).expect("iter_len > 128 must LOWER at w_br=16 (W_BR-b)");
+    assert_eq!(
+        lowered_b.w_br, 16,
+        "narrow iter_len > 128 lifts to the two-byte come-from"
     );
-    let err_b = result_b.unwrap_err();
-    let msg_b = format!("{err_b}");
-    assert!(
-        msg_b.contains("reach") || msg_b.contains("iter_len") || msg_b.contains("BR"),
-        "expected the BR back-jump reach / iter_len guard, got: {msg_b}"
+    assert_eq!(
+        lowered_b.loop_terms[0].iter_len, 140,
+        "wide iter_len = body(126) + LOOP_OVERHEAD_WIDE(14) = 140"
     );
 }
 

@@ -469,7 +469,7 @@ fn wbr_b_real_cpu() {
 // ══════════════════════════════════════════════════════════════════════
 
 use theseus_tisc::asm::encode;
-use theseus_tisc::compile::{guard_no_narrow_swapbr_under_wide, run_rom_on_cpu};
+use theseus_tisc::compile::guard_no_narrow_swapbr_under_wide;
 
 /// rd≠rs on the two-operand SWAPBR — the 3-cycle-trap prevention. rd==rs at
 /// w_br=16 would collapse the two "disjoint" transpositions onto one register
@@ -531,4 +531,50 @@ fn wbr_wide_plus_memory_rejected() {
         "wide (w_br=16) come-from + a memory op must be rejected (no system_step_with; \
          would silently mis-jump on the narrow netlist) — deferred to W_BR-c"
     );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 6 (L20 — the wide-step NETLIST bug the full authority caught). The
+// original WIP type-checked the fast oracle (interpreter) but the wide step
+// NETLIST SeqMismatched: `fetch_operand` (and the replicated `ccnot_fetch_rt_br`)
+// lifted their operand↔s0 / r0↔BR swap over the HARDCODED default field carrier
+// (`at_fields` → NUM_FIELDS = 23, the w_br=8 count) instead of the layout's real
+// carrier. At w_br=16 the state has 24 CPU fields, so the swap was off by one
+// field and its boundary type no longer matched the layout-aware `select_operand`
+// → SeqMismatch. `swapbr_instr` is the first shared-step caller of fetch_operand
+// at w_br=16, which is why it only surfaced in W_BR-b. Fix = lift via
+// `at_fields_typed(.., &layout.cpu_field_widths())` (byte-identical at default).
+// These asserts fail (SeqMismatch) without the fix, pass with it (fast≠real, L15).
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn wbr16_wide_decoders_are_endos_on_the_netlist() {
+    use theseus_core::type_of;
+    use theseus_tisc::decoder::{decode_execute_l, instruction_l, Op};
+    use theseus_tisc::step::step_with;
+    use theseus_tisc::types::state_ty_with;
+
+    let layout = layout_w_br16();
+    let sty = state_ty_with(&layout);
+
+    // The full wide step NETLIST type-checks as an endo on the widened CpuState
+    // (this is the exact assertion `w_br16_step_type_checks` makes; duplicated
+    // here so the W_BR-b regression is co-located with the come-from tests).
+    let rom = vec![(3u32 << 25) | 1]; // ROTLI r0,#1 — content irrelevant
+    let (a, b) = type_of(&step_with(&layout, &rom)).expect("wide step must type-check");
+    assert_eq!(a, sty, "wide step input = widened CpuState");
+    assert_eq!(a, b, "wide step is an endomorphism on the widened CpuState");
+
+    // The shared decode phase (contains the wide SWAPBR + shared Ccnot/Cswap).
+    let (c, d) = type_of(&decode_execute_l(&layout)).expect("wide decode_execute must type-check");
+    assert_eq!(c, d, "wide decode_execute is an endomorphism");
+
+    // Every per-instruction decoder that TOUCHES BR (Swapbr routes rd↔BR; the
+    // replicated Ccnot/Cswap route rt↔BR) — each must be an endo at w_br=16.
+    // Xchg (no BR) is the control: it was always an endo, even before the fix.
+    for op in [Op::Swapbr, Op::Ccnot, Op::Cswap, Op::Xchg] {
+        let (x, y) = type_of(&instruction_l(&layout, op))
+            .unwrap_or_else(|e| panic!("wide {op:?} decoder must type-check, got {e:?}"));
+        assert_eq!(x, y, "wide {op:?} decoder must be an endomorphism on the netlist");
+    }
 }

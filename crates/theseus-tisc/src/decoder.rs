@@ -101,7 +101,6 @@
 use theseus_core::{Iso, Type};
 use theseus_netlist::{prim_from_bits, CellKind};
 
-use crate::addressing::at_fields;
 use crate::plumbing::{
     at_wire, flatten, fredkin_prim, gate_at, not_iso, rot_transpositions, seq_balanced, seq_list,
 };
@@ -840,8 +839,10 @@ fn gated_rotl_gates_w(
 /// fixed s0 slot). Exact inverse restores both; zero cells beyond the
 /// two crossbar traversals.
 ///
-/// B-2.1a: `at_fields` moves a `word8()` (control-width) field, and
+/// B-2.1a: the swap moves a `word8()` (control-width) field, and
 /// `select_operand` routes over `layout.num_regs`; both derive from `layout`.
+/// W_BR-b: the swap is lifted via `at_fields_typed(.., &layout.cpu_field_widths())`
+/// (the layout's real field carrier), not the default-carrier `at_fields`.
 fn fetch_operand(layout: &Layout, src: RegSel) -> Iso {
     // A-0 (BLOCKER-2 fix): route over reg∪scratch (the full 16-way
     // crossbar), not the 8-way register-only tree. A register operand
@@ -849,9 +850,21 @@ fn fetch_operand(layout: &Layout, src: RegSel) -> Iso {
     // inert and behaviour is identical to the old `select_reg`; a scratch
     // operand (idx 8..16) brings s[idx-8] to the fixed slot `operand_field(0)`.
     let sel = select_operand_l(layout, src, |i| operand_field_l(layout, i));
-    let swap = at_fields(
+    // B-2.1/W_BR-b: lift the operand↔s0 swap over the ACTUAL per-layout field
+    // carrier (`cpu_field_widths()`), NOT the hardcoded-default `at_fields`
+    // (which fixes the carrier at `NUM_FIELDS` = 23, the w_br=8 count). At a
+    // widened layout (w_br=16 → 24 CPU fields) the default carrier is off by a
+    // field, so `at_fields` mis-lifts and the swap's boundary type no longer
+    // matches the layout-aware `sel` → SeqMismatch (this is exactly the wide-
+    // SWAPBR netlist bug: swapbr_instr is the first shared-path caller of
+    // fetch_operand at w_br=16). At `Layout::default()` `cpu_field_widths() ==
+    // [8; NUM_FIELDS]`, so `at_fields_typed(op, idx, &that) == at_fields(op,
+    // idx)` EXACTLY — byte-identical (the replicated-path tests + energy golden
+    // guard the default path).
+    let swap = crate::addressing::at_fields_typed(
         Iso::SwapProd(word8(), word8()),
         &[operand_field_l(layout, 0), layout.scratch_field(0)],
+        &layout.cpu_field_widths(),
     );
     Iso::seq(sel.clone(), Iso::seq(swap, Iso::sym(sel)))
 }
@@ -1060,9 +1073,16 @@ fn cswap_instr(layout: &Layout) -> Iso {
 /// crossbar (but inside/beside `fetch_rs`, disjoint slots).
 fn ccnot_fetch_rt_br(layout: &Layout) -> Iso {
     let sel_rt = select_operand_l(layout, R_RT, |i| operand_field_l(layout, i));
-    let swap_br = at_fields(
+    // B-2.1/W_BR-b: same latent carrier bug as `fetch_operand` — lift the
+    // r0-slot↔BR swap over the ACTUAL per-layout field carrier, not the
+    // hardcoded-default `at_fields`. This replicated Ccnot/Cswap fetch is not on
+    // the shared step path (the step uses `shared_fetch_rt_br_gated`), but it is
+    // exercised by `instruction_l(Op::Ccnot/Cswap)` and would SeqMismatch at
+    // w_br=16 exactly as fetch_operand did. Byte-identical at Layout::default().
+    let swap_br = crate::addressing::at_fields_typed(
         Iso::SwapProd(word8(), word8()),
         &[layout.reg_field(0), layout.br_field()],
+        &layout.cpu_field_widths(),
     );
     Iso::seq(sel_rt.clone(), Iso::seq(swap_br, Iso::sym(sel_rt)))
 }

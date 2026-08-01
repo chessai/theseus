@@ -110,3 +110,57 @@ path + byte-identity + the MAJOR-1/2/3 fixes are sound; the wide DECODER NETLIST
 a real type bug that must be fixed (careful decoder work) + the stale test updated,
 then the FULL authority + the REAL `system_step` authority (netlist path) must pass.
 The branch `wbr-b-comefrom` holds the WIP; this is the resume point.
+
+---
+
+## RESOLUTION (advisor, 2026-08-01) — the netlist bug fixed; NOT the come-from
+
+The full-authority BLOCKER was diagnosed to ground truth (not the review's paper
+hypothesis) by type-checking each step phase and each per-instruction decoder in
+isolation at w_br=16. **The review's guess ("s0-slot contention in the come-from
+wiring") was WRONG.** The come-from wiring is entirely innocent:
+
+- `swapbr_core` (the two-transposition come-from) type-checks as a clean endo. ✓
+- `with_target(R_RD, swapbr_core)` type-checks as a clean endo. ✓
+- **`fetch_operand(R_RS)` itself SeqMismatches at w_br=16** (off by exactly one
+  field) — and it has nothing to do with the come-from.
+
+**Root cause.** `fetch_operand` (decoder.rs) lifted its operand↔s0 swap with the
+non-layout-aware `at_fields(op, idx)` = `at_fields_n(op, idx, NUM_FIELDS)`, where
+`NUM_FIELDS` is the **hardcoded default** (23, the w_br=8 CPU-field count). At
+w_br=16 the state has 24 CPU fields, so the swap was lifted over a 23-field carrier
+while the layout-aware `select_operand_l` used the real 24-field carrier — the two
+boundary types differ by one field → SeqMismatch. This is a latent B-2.1-class
+defect (a lift that should have been width-parameterized but wasn't). It never
+surfaced because the SHARED step path uses the layout-aware `fetch_rs_fmt_gated`;
+**`swapbr_instr` is the first shared-step caller of `fetch_operand` at w_br=16**,
+which is why only W_BR-b exposed it. The identical defect existed in
+`ccnot_fetch_rt_br` (the replicated Ccnot/Cswap fetch — off the step path, but it
+made `instruction_l(Op::Ccnot/Cswap)` SeqMismatch at w_br=16 too).
+
+**Fix.** Lift both swaps over the layout's real carrier —
+`at_fields_typed(op, idx, &layout.cpu_field_widths())` — instead of the default
+`at_fields`. At `Layout::default()` `cpu_field_widths() == [8; NUM_FIELDS]`, so
+`at_fields_typed(op, idx, &that) ≡ at_fields(op, idx)` EXACTLY → byte-identical on
+the default path (the energy golden + replicated-path tests guard it). The unused
+`at_fields` import was dropped. **No change to the come-from arithmetic, δu mint,
+SWAPBR involution, or the fit-gate** — all of which the impl-review already cleared.
+
+**Also fixed (latent, would have failed the authority anyway):** the committed
+`wbr_b_comefrom.rs` had a duplicate `run_rom_on_cpu` import (header + TEST 5) — the
+test binary never compiled. Removed the redundant re-import.
+
+**Tests (L20):**
+- `w_br16_step_type_checks` (wbr_a_fields.rs) — the exact test that caught it: red
+  before the fix (SeqMismatch), green after. ✓
+- NEW `wbr16_wide_decoders_are_endos_on_the_netlist` (wbr_b_comefrom.rs TEST 6) —
+  co-locates the regression with the come-from tests: asserts the wide step,
+  `decode_execute_l`, and each BR-touching decoder (Swapbr/Ccnot/Cswap, with Xchg as
+  the no-BR control) are endos on the widened netlist. ✓
+- `mdd_reject_wcet_overflow` (compile.rs) — stale reject updated: the 126-NOP /
+  iter_len case now asserts it LOWERS at w_br=16 with iter_len = body(126) +
+  LOOP_OVERHEAD_WIDE(14) = 140 (verified). The Nat32 large-carrier reject stays. ✓
+
+**Remaining gates before merge:** full heavy authority (SOLO) + the REAL
+`system_step` authority (netlist path) + a fresh-context Fable adversarial review of
+THIS fix (the netlist wiring), then rebase onto v2 + FF-merge.
