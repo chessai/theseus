@@ -459,3 +459,76 @@ fn wbr_b_real_cpu() {
     }
     eprintln!("W_BR-b TEST 4: real system_step == eval on wide vart_halve K=4 sample, terminal quiescent ✓");
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// TEST 5 (L20 REJECT COVERAGE — Fable impl-review MAJOR-3). Every reject this
+// slice adds must ship with a test that reproduces it. The deviation-A de-scope
+// (reject a narrow SWAPBR under a w_br=16 program instead of the global
+// skip-block pair) is acceptable ONLY on the guard's airtightness — so exercise
+// it directly.
+// ══════════════════════════════════════════════════════════════════════
+
+use theseus_tisc::asm::encode;
+use theseus_tisc::compile::{guard_no_narrow_swapbr_under_wide, run_rom_on_cpu};
+
+/// rd≠rs on the two-operand SWAPBR — the 3-cycle-trap prevention. rd==rs at
+/// w_br=16 would collapse the two "disjoint" transpositions onto one register
+/// (the P2 3-cycle = silent corruption). The encoder must reject it.
+#[test]
+fn wbr_swapbr_rd_eq_rs_rejected() {
+    assert!(
+        encode(Instr::Swapbr { rd: 2, rs: 2 }).is_err(),
+        "SWAPBR rd==rs must be an AliasedOperands encode error (else the two \
+         transpositions collapse to a 3-cycle = silent mis-swap)"
+    );
+    // Distinct operands encode fine; rs=0 (the narrow sentinel) is allowed.
+    assert!(encode(Instr::Swapbr { rd: 2, rs: 3 }).is_ok());
+    assert!(encode(Instr::Swapbr { rd: 2, rs: 0 }).is_ok());
+}
+
+/// The deviation-A guard: under a w_br=16 program, a narrow (rs=0) SWAPBR is
+/// REJECTED (not run on the wide decoder, which would swap r0↔BR₁ and corrupt).
+#[test]
+fn wbr_guard_narrow_under_wide_rejected() {
+    let wide = Instr::Swapbr { rd: 1, rs: 2 }; // two-transposition (rs≠0)
+    let narrow = Instr::Swapbr { rd: 3, rs: 0 }; // single-transposition sentinel
+
+    // wide + narrow mix under a w_br=16 program → REJECT.
+    assert!(
+        guard_no_narrow_swapbr_under_wide(&[wide, narrow], true).is_err(),
+        "a narrow SWAPBR under a w_br=16 program must be rejected (skip-pair deferred to W_BR-c)"
+    );
+    // A narrow SWAPBR alone under a w_br=16 program (e.g. a ≤128 come-from or a
+    // skip block) also rejects.
+    assert!(guard_no_narrow_swapbr_under_wide(&[narrow], true).is_err());
+    // Pure-wide (only rs≠0) under w_br=16 → OK (this is vart_halve's shape).
+    assert!(guard_no_narrow_swapbr_under_wide(&[wide], true).is_ok());
+    // Narrow SWAPBRs under a w_br=8 program (needs_w_br16=false) → OK (unchanged).
+    assert!(guard_no_narrow_swapbr_under_wide(&[narrow], false).is_ok());
+}
+
+/// MAJOR-2 reject: a wide (rs≠0) come-from with a MEMORY-using program falls
+/// (pre-fix) into the narrow `system_step` arm (w_br=8) → wide SWAPBRs run as
+/// single transpositions → mis-jump. It must REJECT (deferred to W_BR-c), not run.
+#[test]
+fn wbr_wide_plus_memory_rejected() {
+    // A ROM that is NOT cpu-only (Mexch) AND wide (Swapbr rs≠0).
+    let instrs = vec![
+        Instr::Mexch { rd: 0, addr: 0 }, // memory op → not cpu-only
+        Instr::Swapbr { rd: 1, rs: 2 },  // wide come-from (rs≠0)
+    ];
+    let init = StateVals {
+        regs: [0u8; NUM_REGS],
+        pc: 0,
+        br: 0,
+        ir: 0,
+        scratch: [0; NUM_SCRATCH],
+        mem: [0; MEM_WORDS], // quiescent → forces the else-if rom_wide reject, not a mem assert
+    };
+    let res = run_rom_on_cpu(&instrs, init, 2, 0, theseus_eval::eval);
+    assert!(
+        res.is_err(),
+        "wide (w_br=16) come-from + a memory op must be rejected (no system_step_with; \
+         would silently mis-jump on the narrow netlist) — deferred to W_BR-c"
+    );
+}

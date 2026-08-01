@@ -1023,7 +1023,11 @@ fn has_inner_control(instrs: &[Instr]) -> bool {
 /// come-from in ISOLATION; a program that MIXES a wide loop with any narrow
 /// (`rs=0`) SWAPBR is REJECTED here rather than silently corrupted. `vart_halve`
 /// (a pure single wide Trace) emits only `rs != 0` SWAPBRs, so it is unaffected.
-fn guard_no_narrow_swapbr_under_wide(
+/// Exposed `pub` for W_BR-b reject-testing (L20): the deviation-A de-scope
+/// (reject a narrow SWAPBR under a w_br=16 program instead of implementing the
+/// global skip-block pair) is acceptable ONLY if this guard is exercised by a
+/// test that reproduces its reject. See `tests/wbr_b_comefrom.rs`.
+pub fn guard_no_narrow_swapbr_under_wide(
     instrs: &[Instr],
     needs_w_br16: bool,
 ) -> Result<(), CompileError> {
@@ -4808,6 +4812,22 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
                 .map_err(|e| CompileError::Deferred(format!("CPU eval failed: {e:?}")))?;
         }
         StateVals::decode(&cur)
+    } else if rom_wide {
+        // W_BR-b MAJOR-2 (Fable impl-review): a wide (w_br=16) come-from with a
+        // MEMORY-using or non-quiescent program would fall into the `system_step`
+        // arm below, which runs at Layout::default() (w_br=8) — there is no
+        // `system_step_with`, so the wide two-transposition SWAPBRs would execute
+        // as single transpositions → BR₁ never loaded → mis-jump (the terminal
+        // BR≠0 check is only probabilistic once PC wraps mod 2^16). Wide + memory
+        // is deferred to W_BR-c; REJECT (loud) rather than run wide on the narrow
+        // netlist (same philosophy as guard_no_narrow_swapbr_under_wide).
+        return Err(CompileError::Deferred(
+            "run_rom_on_cpu: wide (w_br=16, two-byte come-from) loop with memory \
+             (non-CPU-only or non-quiescent init.mem) is deferred to W_BR-c — no \
+             system_step_with exists; would silently mis-jump on the narrow netlist \
+             (W_BR-b MAJOR-2)"
+                .into(),
+        ));
     } else {
         let step_iso = crate::step::system_step(&rom);
         let mut cur = encode_system(&init);
@@ -5187,6 +5207,25 @@ pub fn run_on_cpu_fast_resident(
     }
 
     let lowered = compile_with_metadata_resident(iso, resident)?;
+    // W_BR-b MAJOR-1 (Fable impl-review): this resident fast-sim is NARROW
+    // (exec_instr + pc_update at w_br=8). A wide (rs≠0) come-from run here would
+    // execute the two-transposition SWAPBR as a single transposition → BR₁ never
+    // loaded → silent mis-jump with NO terminal check. Resident implies a memory
+    // program, and wide-come-from + memory is deferred to W_BR-c, so REJECT
+    // (loud) rather than run wide on the narrow interpreter (same philosophy as
+    // guard_no_narrow_swapbr_under_wide and the run_rom_on_cpu wide-memory reject).
+    if lowered
+        .instrs
+        .iter()
+        .any(|i| matches!(i, Instr::Swapbr { rs, .. } if *rs != 0))
+    {
+        return Err(CompileError::Deferred(
+            "run_on_cpu_fast_resident: wide (w_br=16, two-byte come-from) loop with \
+             resident memory is deferred to W_BR-c — the resident fast-sim is narrow \
+             and would silently mis-jump (W_BR-b MAJOR-1)"
+                .into(),
+        ));
+    }
     let rom = assemble(&lowered.instrs)
         .map_err(|e| CompileError::Deferred(format!("assemble failed: {e}")))?;
     let budget = lowered.wcet();
