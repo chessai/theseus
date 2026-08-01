@@ -137,7 +137,7 @@ fn assert_pc_carrier(layout: &Layout) {
 /// `w_ctl` (e.g. 12) would under-count the BR carrier and silently route the
 /// high BR bits onto a neighboring field. This restores loud failure at every
 /// BR-builder entry. No valid layout (w_br ∈ {8, 16}, w_ctl = 8) trips it.
-fn assert_br_carrier(layout: &Layout) {
+pub(crate) fn assert_br_carrier(layout: &Layout) {
     assert!(
         layout.br_fields() >= 1 && layout.w_br == layout.br_fields() * layout.w_ctl,
         "BR carrier invariant violated: w_br={} is not a positive multiple of w_ctl={} \

@@ -637,7 +637,10 @@ impl StateVals {
             push_u8_bits(&mut all_bits, r);
         }
         push_u8_bits(&mut all_bits, self.pc as u8); // PC_lo
-        debug_assert_eq!(self.br >> 8, 0, "encode: default carrier has one 8-bit BR field");
+        // MINOR-3: HARD assert (not debug_assert) — the default carrier has one
+        // 8-bit BR field, so a >8-bit BR must fail LOUDLY (in release too) rather
+        // than silently truncate once W_BR-b lets wide BR values into the model.
+        assert_eq!(self.br >> 8, 0, "encode: default carrier has one 8-bit BR field");
         push_u8_bits(&mut all_bits, self.br as u8); // BR (8-bit)
         push_ir_bits(&mut all_bits, self.ir); // IR_b0..IR_b3 (32-bit)
         for &s in &self.scratch {
@@ -885,7 +888,9 @@ pub fn encode_composite(s: &StateVals) -> Value {
         push_u8_bits(&mut cpu_bits, r);
     }
     push_u8_bits(&mut cpu_bits, s.pc as u8); // PC_lo
-    debug_assert_eq!(s.br >> 8, 0, "encode_composite: default carrier has one 8-bit BR field");
+    // MINOR-3: HARD assert — loud failure (release too) on a >8-bit BR reaching
+    // the single-field composite carrier, rather than a silent `as u8` truncation.
+    assert_eq!(s.br >> 8, 0, "encode_composite: default carrier has one 8-bit BR field");
     push_u8_bits(&mut cpu_bits, s.br as u8); // BR (8-bit)
     push_ir_bits(&mut cpu_bits, s.ir);
     for &sc in &s.scratch {

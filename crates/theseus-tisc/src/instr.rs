@@ -484,19 +484,27 @@ pub fn swapbr(rd: usize) -> Iso {
     at_fields(swap_words_iso(), &[reg_field(rd), BR_FIELD])
 }
 
-/// W_BR-a: layout-parameterized [`swapbr`]. SWAPBR must move the FULL
-/// `w_br`-bit come-from offset, so at `w_br=16` (`br_fields()==2`) it swaps
-/// r[rd] with BOTH BR words, not just the low byte. At the default
+/// W_BR-a: layout-parameterized [`swapbr`] — **ADDRESSING ONLY**. At the default
 /// (`br_fields()==1`) this is exactly the single-word swap `swapbr()` builds
-/// (byte-identical). The register is `w_data`(=8)-wide; how a two-byte offset
-/// is minted into a one-byte register is W_BR-b (this is pure addressing).
+/// (byte-identical). This slice's purpose is to prove the `br_fields()`-driven
+/// FIELD ADDRESSING type-checks at `w_br=16`; it does NOT define correct
+/// two-byte come-from SEMANTICS.
+///
+/// ⚠️ W_BR-b TRAP (Fable W_BR-a MINOR-1): at `br_fields()>1` the sequential
+/// `swap(reg,BR₀); swap(reg,BR₁)` below is a **3-cycle** (reg←BR₁, BR₀←reg_old,
+/// BR₁←BR₀), NOT an involution and NOT a correct full-offset swap — an 8-bit
+/// register cannot hold a 16-bit offset, so "swap the reg with both BR words"
+/// is not even well-posed. Pendulum SWAPBR self-inverseness (which reverse
+/// execution relies on) is VIOLATED here for `br_fields()>1`. Zero production
+/// callers (test-only; the runtime path uses `swapbr_core`, kept low-word-only).
+/// **W_BR-b must redesign the reversible two-byte come-from move from scratch —
+/// do NOT reuse this chain on any run path.**
 pub fn swapbr_with(layout: &Layout, rd: usize) -> Iso {
-    // Swap the register word with each BR word in turn (self-inverse chain;
-    // exactly one SwapProd at the default, so byte-identical to `swapbr()`).
-    // `at_fields_n` routes over this layout's CPU field count. For
-    // br_fields()>1 the reg is swapped with each BR word sequentially so all
-    // BR words move through the register slot — the offset SEMANTICS are
-    // W_BR-b; this only fixes the ADDRESSING (which fields participate).
+    // MINOR-2: fail loudly on a non-`w_ctl`-multiple `w_br` (defense-in-depth,
+    // mirrors `pc_add_br_with`). ADDRESSING stub — see the ⚠️ above: at
+    // br_fields()>1 this is a 3-cycle, not a correct/self-inverse offset swap.
+    // Byte-identical to `swapbr()` at the default (br_fields()==1 → one SwapProd).
+    crate::step::assert_br_carrier(layout);
     let n = layout.num_cpu_fields();
     let reg = layout.reg_field(rd);
     let mut iso: Option<Iso> = None;
