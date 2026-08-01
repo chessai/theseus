@@ -185,3 +185,69 @@ carry the 16-bit BR + sext from w_br; keep the MINOR-3 hard asserts on the 8-bit
 precedes coding. Then implement in the F-order (ISA first: `Swapbr{rd,rs}` + golden;
 then the widened bracket + emitted-span δu; then the global skip pair; then interpreter
 w_br). W_BR-c's derive gates w_br=16 on the F3 frame-fit.
+
+---
+
+## REVISION 2 (post re-review — GO FOR IMPLEMENTATION, with 4 pinned conditions)
+
+Re-review verdict: **GO**. It traced the full δu/register flow against the real
+w_br=8 bracket (compile.rs:4060–4140) extended by F2's counts, and confirmed: the
+cross-paired frame is genuinely **+1** (temp_hi) and **fits exactly 8/8** for
+`vart_halve` K=4,HB=1; `Swapbr{rd,rs}` round-trips + is byte-identical at w_br=8.
+Implement from THIS spec, not the F3 prose (which the re-review found self-contradictory).
+
+### THE EMISSION SPEC (MINOR-A — use this trace, NOT the F3 prose)
+The F3 sentence "both rb,rc provably 0 at every swap" is LITERALLY FALSE at the Lend
+swap on the continue path — rb=δu_lo, rc=δu_hi there (that IS the delivery). The
+correct w_br=16 bracket (aux frame {rc, rb, temp, ctrl, temp_hi}; δu_lo=δu&0xFF,
+δu_hi=δu>>8):
+- **Continue, bottom (ctrl=1):** `ADDI temp,δu_lo; ADDI temp_hi,δu_hi;
+  CSWAP ctrl,temp,rb` (rb=δu_lo, temp=0); `CSWAP ctrl,temp_hi,rc` (rc=δu_hi,
+  temp_hi=0). **Lend `SWAPBR(rb,rc)`** = swap(rb,BR₀); swap(rc,BR₁) →
+  BR=(δu_lo,δu_hi), rb=rc=0. (δu_hi reaches BR₁ **through rc**, the bottom
+  hi-carrier — NOT through temp_hi.)
+- **Re-entry at Ltop:** BR=(δu_lo,δu_hi), rb=rc=0. **`SWAPBR(rc,rb)`** →
+  rc=δu_lo, rb=δu_hi, BR=0. `CSWAP ctrl,rc,temp` (temp=δu_lo);
+  `CSWAP ctrl,rb,temp_hi` (temp_hi=δu_hi); `SUBI temp,δu_lo; SUBI temp_hi,δu_hi`
+  → all aux 0 before the body.
+- **Exit (ctrl=0):** CSWAPs don't fire; rb=rc=0 → the 2-field swap is a no-op; BR
+  stays 0; epilogue SUBIs burn temp/temp_hi.
+- **First entry:** BR=0, rc=rb=0 → no-op; ctrl=0 → top CSWAPs don't fire; prologue
+  mint burned by the top SUBIs.
+rb/rc live-windows are position-disjoint (rb: bottom-CSWAP→Lend as lo-carrier, then
+Ltop→top-CSWAP as hi-catcher; rc mirrors), so each is the other's hi partner → net
++1 register (temp_hi). Closes with BR=0 + all aux terminal-zero on every path.
+
+### PINNED CONDITIONS
+- **MINOR-B (rd≠rs — mandatory):** `Swapbr{rd,rs}` MUST enforce rd≠rs (apply
+  `check_distinct`, as other ops do) — rd==rs at w_br=16 collapses the two disjoint
+  transpositions onto one register = the P2 3-cycle trap reborn. Also `operand_locs()`
+  must include rs (rs=0 doesn't move the num_regs bound). Encode `r_word(0b1000,rd,rs,0)`;
+  decode already extracts rs; at w_br=8 emit rs=0 (bit-identical). The decoder adds gated
+  Fredkins `s0-slot↔BR₁` under `br_fields()==2` ONLY (w_br=8 netlist unchanged).
+- **MINOR-B (fit gate):** `carrier_reg_budget = NUM_REGS − 4` → `NUM_REGS − 5` at
+  w_br=16 (vart_halve K=4: n_input+1=3 ≤ 3 still passes; frame = tag+2 inputs+5 aux =
+  8/8, zero slack). W_BR-c's derive picks w_br=16 ONLY when the frame fits this budget.
+- **MINOR-C (iter_len/spine constants):** LOOP_OVERHEAD 10→14 AND the separate
+  hardcoded `this_wcet` `spine = 4` → 6 at w_br=16 (compile.rs — grep both). `vart_halve`
+  K=4,HB=1 iter_len is **137** (not 133) under LOOP_OVERHEAD=14 — pin all goldens/reject
+  bounds at 137. The `debug_assert_eq!(instrs.len(), spine+iter_len)` is the drift tripwire.
+- **MINOR-D (skip-dist gate):** at w_br=16 a zeroed hi partner + a SINGLE 8-bit Addi
+  handles dist ≤ 255 (positive 16-bit); dist > 255 needs full two-byte staging. The
+  skip-dist gate must match the staging actually emitted (don't let the cap constant admit
+  dist ≤ 32767 while only a single Addi is emitted).
+- The 4 SWAPBR emission sites (grep-confirmed): `lower_trace` Ltop/Lend (≈4076/4123) +
+  `emit_skip_block` branch/come-from (≈1068/1074). The Swapbr-scan at compile.rs≈4550 must
+  recognize the 2-operand form (mechanical).
+
+### IMPLEMENTATION ORDER (F-order; each guarded)
+1. **ISA:** `Swapbr{rd,rs}` (encode/decode round-trip + rd≠rs + operand_locs + the
+   gated `s0-slot↔BR₁` decoder Fredkins under br_fields()==2). Gate: byte-identity golden
+   green (w_br=8, rs=0) + a decode round-trip test.
+2. **Bracket:** the REVISION-2 emission trace + emitted-span δu + LOOP_OVERHEAD/spine
+   constants (w_br-dependent). Gate: the debug_assert tripwire + w_br=8 byte-identical.
+3. **Global skip pair** at w_br=16 (emit_skip_block hi partner). 
+4. **Interpreter** w_br threading (Swapbr 2-field swap + pc_update 16-bit BR + sext).
+Then the AUTHORITY (mirror B-2.2b): exhaustive adder + P2 involution + **real
+run_on_cpu==eval on vart_halve K=4 (iter_len=137) reject→run** + byte-identity golden.
+Full L19/L20/L21: Fable impl-review + advisor real authority before merge.
