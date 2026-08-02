@@ -26,6 +26,19 @@
 //! Everything else — StepEngine, concrete-PC body composition, the come-from /
 //! re-entry glue, trip-count bound, negative controls — is REUSED from the
 //! vart_halve template, adapted to mde_spill's carrier + body function.
+//!
+//! ── PROVEN vs ARGUED (parity with the vart_halve template) ─────────────────
+//! PROVEN symbolically (whole carrier domain, real netlist): L1 body ≡
+//! mde_walk_bytes (spilled Scratch(2) as carrier), L2 come-from BR-router + aux
+//! exit + GAP-A PC landing, L0/L0-BASE re-entry welds — the FIELD-COMPLETE
+//! per-iteration relation, each with a NEGATIVE CONTROL (body, spill-is-carrier,
+//! mutated-ROM, come-from, re-entry, aux-exit) proving the asserts have teeth.
+//! ARGUED (same legs the template leaves argued): the tag∈{0,1} canonical carrier
+//! domain (case-split faithful at every real iteration boundary), the induction
+//! FRAME (iterating the field-complete per-iteration relation reproduces eval's
+//! fixpoint — a math induction, not a hidden unroll), and the PROLOGUE/EPILOGUE
+//! legs (marshal→first Ltop, done-exit→unmarshal) — anchored by the fast/heavy
+//! run_rom_on_cpu==eval + quiescence bootstrap, not lemma-covered here.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -1530,4 +1543,93 @@ fn invariant_negative_control_come_from_mde_spill() {
         assert!(br_out[b] == not_tag.and(&du), "sanity: true δu·[tag==0] must match");
     }
     eprintln!("NEG-2 come-from [mde_spill]: real BR ≡ δu·[tag==0], ≠ {{inverted, unconditional}} — teeth.");
+}
+
+/// NEG-4 (L0 re-entry, template parity): a BROKEN L0 exit expectation must DIFFER
+/// from the real glue output — so the re-entry lemma's welding asserts have teeth
+/// (a glue that landed in the WRONG state would be caught). Two wrong
+/// expectations: (a) wrong exit PC (the glue does NOT fall through to BODY_START),
+/// and (b) wrong aux (ctrl != 0 at exit ⇒ L1's entry invariant violated). Reuses
+/// the tractable w_pc=8 continue-leg composition.
+#[test]
+fn invariant_negative_control_re_entry_mde_spill() {
+    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let (body, u_ty, _carrier) = build_walk_body();
+    let iso = Iso::trace(u_ty, body);
+    let geom = compile_loop_geom(&iso);
+    let cf = read_come_from(&geom);
+    let vs = BddVariableSet::new_anonymous(n_vars(&layout));
+    let (out, _peak) =
+        compose_re_entry_from(&layout, &geom, &vs, re_entry_sv(&layout, &geom, &cf, &vs));
+    let zero = vs.mk_false();
+    let one = vs.mk_true();
+
+    // (a) WRONG exit PC: the real glue must NOT land anywhere but BODY_START.
+    let got_pc = read_concrete_pc(&out, &layout);
+    assert_ne!(
+        got_pc,
+        Some(BODY_START + 1),
+        "NEG-4 L0: real glue exit PC matched a WRONG landing (BODY_START+1) — no teeth"
+    );
+    assert_eq!(got_pc, Some(BODY_START), "sanity: real glue lands on BODY_START");
+
+    // (b) WRONG aux: the real ctrl at exit must NOT be 1 (it must be 0 = L1's
+    // entry invariant). A glue that left ctrl=1 would break re-entry silently.
+    let ctrl_out = out_field_bits(&out, &layout, layout.reg_field(cf.ctrl));
+    let wrong_ctrl_is_one = (0..W).all(|b| ctrl_out[b] == if b == 0 { one.clone() } else { zero.clone() });
+    assert!(
+        !wrong_ctrl_is_one,
+        "NEG-4 L0: real glue exit ctrl matched the WRONG value 1 — L0 welding has no teeth"
+    );
+    for b in 0..W {
+        assert!(ctrl_out[b] == zero, "sanity: real glue exit ctrl == 0 (L1 entry invariant)");
+    }
+    eprintln!("NEG-4 L0 re-entry [mde_spill]: real glue lands ctrl=0 @BODY_START, ≠ {{wrong PC, ctrl=1}} — teeth.");
+}
+
+/// NEG-5 (L2 aux-exit, template parity): a BROKEN come-from AUX-EXIT expectation
+/// must DIFFER from the real bracket output — so the per-branch aux pin (the
+/// PRECONDITION L0 starts from) has teeth. Two wrong expectations:
+///   (a) ctrl = tag (NOT tag^1): the real route sets ctrl = ¬tag on bit 0.
+///   (b) temp = 0 unconditionally: the real exit keeps temp = δu on the EXIT
+///       branch (tag0=1). A wrong pin here would corrupt L0's entry precondition.
+#[test]
+fn invariant_negative_control_aux_exit_mde_spill() {
+    let layout = Layout::default(); // w_pc=16 (matches L2's real run)
+    let (body, u_ty, _carrier) = build_walk_body();
+    let iso = Iso::trace(u_ty, body);
+    let geom = compile_loop_geom(&iso);
+    let cf = read_come_from(&geom);
+    let vs = BddVariableSet::new_anonymous(n_vars(&layout));
+    let nf = n_fields(&layout);
+    let (out, _peak) = compose_come_from(&layout, &geom, &cf, &vs);
+
+    let tag_in = field_bits(&vs, nf, layout.reg_field(cf.tag));
+    let not_tag = tag_in[0].not();
+    let ctrl_out = out_field_bits(&out, &layout, layout.reg_field(cf.ctrl));
+    let temp_out = out_field_bits(&out, &layout, layout.reg_field(cf.temp));
+    let zero = vs.mk_false();
+
+    // (a) WRONG ctrl spec: ctrl == tag (bit 0 = tag[0], not ¬tag[0]).
+    let differs_ctrl = (0..W).any(|b| ctrl_out[b] != tag_in[b]);
+    assert!(
+        differs_ctrl,
+        "NEG-5 aux-exit: real ctrl must DIFFER from the WRONG 'ctrl=tag' spec — no teeth"
+    );
+
+    // (b) WRONG temp spec: temp == 0 unconditionally (ignores the exit-branch δu).
+    let differs_temp = (0..W).any(|b| temp_out[b] != zero);
+    assert!(
+        differs_temp,
+        "NEG-5 aux-exit: real temp must DIFFER from the WRONG 'temp=0 always' spec — no teeth"
+    );
+
+    // sanity: the TRUE specs DO match (ties teeth to the right targets).
+    for b in 0..W {
+        let want_ctrl = if b == 0 { not_tag.clone() } else { tag_in[b].clone() };
+        assert!(ctrl_out[b] == want_ctrl, "sanity: true ctrl = tag^1 must match");
+        let du_bit = if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
+        assert!(temp_out[b] == tag_in[0].and(&du_bit), "sanity: true temp = δu·[tag0==1] must match");
+    }
+    eprintln!("NEG-5 aux-exit [mde_spill]: real ctrl≡tag^1, temp≡δu·[tag0==1], ≠ {{ctrl=tag, temp=0}} — teeth.");
 }

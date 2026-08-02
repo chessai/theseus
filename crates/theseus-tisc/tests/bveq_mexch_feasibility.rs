@@ -13,11 +13,16 @@
 //! MEXCHR postcondition SPEC, plus a multi-revolution composition:
 //!   PIECE 1  single-step: eval_bdd(system_step / MEXCHR) output field BDDs
 //!            == { reg[rd]' = MUX(addr, mem[*]) ; mem[j]' = ite(addr==j,
-//!            reg[rd], mem[j]) ; every other reg + s0 identity ; bus quiescent }
+//!            reg[rd], mem[j]) ; every other reg + s0 identity ; bus quiescent ;
+//!            BR/IR/s1..s7 == 0 ; PC == pc+1 (field-complete weld) }
 //!            over the WHOLE symbolic domain (reg[rd], reg[ra], all mem bytes).
 //!   PIECE 2  multi-revolution: compose system_step over a branchless 2-MEXCHR
 //!            ROM (concrete PC per step) and assert the composed output ≡ the
 //!            sequential exchange spec + terminal bus quiescence, all-inputs.
+//!            The field-complete weld (BR/IR/s1..s7==0, PC==pc+1) and the
+//!            terminal bus quiescence are asserted on the RAW netlist output of
+//!            each step BEFORE re-pinning (which force-zeroes those fields) — so
+//!            they are genuine whole-domain netlist checks, not vacuous.
 //! Reality anchor: a concrete `theseus_eval` bootstrap of the same ROM ==
 //! hand-computed exchange. Teeth: 3 single-step negative controls (no-write /
 //! no-read / wrong-address) + 1 composition control, all DETECTED; and the
@@ -699,6 +704,65 @@ fn assert_s0_identity(map: &VarMap, out: &SV) {
     }
 }
 
+// ── CPU field indices (mirror decode_out_sv / build_system_init_param) ──
+//   regs 0..NUM_REGS-1, PC_lo=NUM_REGS(=8), BR=9, IR bytes=10..13,
+//   s0=14, s1..s7=15..21, PC_hi=NUM_CPU_FIELDS-1(=22).
+const PC_LO_CPU_FIELD: usize = NUM_REGS; // 8
+const BR_CPU_FIELD: usize = NUM_REGS + 1; // 9
+const IR0_CPU_FIELD: usize = NUM_REGS + 2; // 10
+const PC_HI_CPU_FIELD: usize = NUM_CPU_FIELDS - 1; // 22
+
+/// WHOLE-DOMAIN weld-completeness assert on a RAW (pre-re-pin) step output.
+/// A MEXCHR miscompile that leaks address-dependent garbage into BR / IR /
+/// s1..s7 would otherwise be MASKED by `repin_between_steps` (which force-zeroes
+/// those fields). Asserting them on the raw netlist output over the whole
+/// symbolic domain, BEFORE re-pinning, is a genuine netlist check.
+///   BR == 0, all 4 IR bytes == 0, s1..s7 == 0, PC (lo AND hi) == `expect_pc`.
+/// (s0 restoration + regs/mem exchange are checked by the postcondition specs;
+/// this closes the field-completeness gap for the non-data CPU fields.)
+fn assert_weld_fields_clean(map: &VarMap, out: &SV, expect_pc: usize) {
+    let vs = map.bdd_vars();
+    let zero = vs.mk_false();
+
+    // BR == 0 (whole domain).
+    for (b, bit) in out_cpu_bits(out, BR_CPU_FIELD).iter().enumerate() {
+        assert_eq!(
+            *bit, zero,
+            "MEXCHR WELD: BR bit {b} not 0 over the whole domain (branch-field leak)"
+        );
+    }
+    // IR (all 4 bytes) == 0 (whole domain).
+    for k in 0..4 {
+        for (b, bit) in out_cpu_bits(out, IR0_CPU_FIELD + k).iter().enumerate() {
+            assert_eq!(
+                *bit, zero,
+                "MEXCHR WELD: IR byte {k} bit {b} not 0 over the whole domain (IR leak)"
+            );
+        }
+    }
+    // s1..s7 == 0 (whole domain). s0 is checked separately (assert_s0_identity).
+    for s in 1..NUM_SCRATCH {
+        for (b, bit) in out_cpu_bits(out, S0_CPU_FIELD + s).iter().enumerate() {
+            assert_eq!(
+                *bit, zero,
+                "MEXCHR WELD: scratch s{s} bit {b} not 0 over the whole domain (scratch leak)"
+            );
+        }
+    }
+    // PC (lo AND hi) == expect_pc, as concrete constants (whole domain).
+    let assert_pc_byte = |field: usize, want: u8, name: &str| {
+        for (b, bit) in out_cpu_bits(out, field).iter().enumerate() {
+            let want_bit = if (want >> b) & 1 == 1 { vs.mk_true() } else { zero.clone() };
+            assert_eq!(
+                *bit, want_bit,
+                "MEXCHR WELD: PC {name} bit {b} != {want} (datapath PC output wrong)"
+            );
+        }
+    };
+    assert_pc_byte(PC_LO_CPU_FIELD, (expect_pc & 0xFF) as u8, "lo");
+    assert_pc_byte(PC_HI_CPU_FIELD, ((expect_pc >> 8) & 0xFF) as u8, "hi");
+}
+
 /// Assert the bus is symbolically quiescent (every bus bit is the constant 0
 /// BDD for ALL inputs). The symbolic analogue of ring.bus_quiescent().
 fn assert_bus_quiescent(map: &VarMap, out: &SV) {
@@ -729,6 +793,9 @@ fn single_step_whole_domain(rd: u32, ra: u32) -> (usize, f64) {
 
     assert_mexch_postcondition(&map, &m.out, rd as usize, ra as usize);
     assert_s0_identity(&map, &m.out);
+    // Field-complete the weld on the RAW output: BR/IR/s1..s7 == 0, PC == 0+1.
+    // (walk_mexchr_s0z builds the init at PC=0 via build_system_init.)
+    assert_weld_fields_clean(&map, &m.out, 1);
     assert_bus_quiescent(&map, &m.out);
     (m.peak_nodes, m.walk_s)
 }
@@ -889,8 +956,12 @@ fn repin_between_steps(out: &SV, next_pc: u8, vs: &BddVariableSet) -> SV {
 }
 
 /// Compose R MEXCHR steps symbolically over a branchless ROM, concrete PC each
-/// step. Returns (final_out, peak_nodes, total_secs).
-fn compose_mexchr_rom(map: &VarMap, rom: &[u32]) -> (SV, usize, f64) {
+/// step. Returns (repinned_final, raw_final_out, peak_nodes, total_secs).
+///
+/// `raw_final_out` is the LAST step's netlist output BEFORE `repin_between_steps`
+/// zeroes its non-data fields — the caller asserts terminal bus quiescence on
+/// THIS (a re-pinned SV has bus force-zeroed ⇒ the assert would be vacuous).
+fn compose_mexchr_rom(map: &VarMap, rom: &[u32]) -> (SV, SV, usize, f64) {
     let vs = map.bdd_vars();
     let t0 = Instant::now();
     // Build the iso from the FULL ROM so fetch at each concrete PC selects the
@@ -899,6 +970,7 @@ fn compose_mexchr_rom(map: &VarMap, rom: &[u32]) -> (SV, usize, f64) {
     let iso: Iso = system_step(rom);
     let mut cur = build_init_at_pc(map, 0);
     let mut peak = 0usize;
+    let mut raw_final = cur.clone();
     for pc in 0..rom.len() {
         let mut ctx = WalkCtx::new();
         let out = eval_bdd(&iso, cur, vs, &mut ctx)
@@ -945,10 +1017,15 @@ fn compose_mexchr_rom(map: &VarMap, rom: &[u32]) -> (SV, usize, f64) {
                 "compose: s0 not restored to 0 (bit {b}) after step pc={pc} — workspace leak"
             );
         }
+        // FIELD-COMPLETE WELD (MAJOR-B): assert BR/IR/s1..s7 == 0 and PC (lo+hi)
+        // == pc+1 on the RAW step output — a MEXCHR leak into those fields would
+        // otherwise be MASKED by repin_between_steps. Whole symbolic domain.
+        assert_weld_fields_clean(map, &out, pc + 1);
+        raw_final = out.clone();
         cur = repin_between_steps(&out, (pc + 1) as u8, vs);
     }
     let secs = t0.elapsed().as_secs_f64();
-    (cur, peak, secs)
+    (cur, raw_final, peak, secs)
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -1104,7 +1181,7 @@ fn mexchr_whole_domain_proof() {
             // ORIGINAL symbolic reg2/reg4 at both steps (checkable closed form).
             let rom = vec![mexchr_word(1, 2), mexchr_word(3, 4)];
             let map = VarMap::new(EXTENDED_NUM_OPERANDS).unwrap();
-            let (out, peak, secs) = compose_mexchr_rom(&map, &rom);
+            let (out, raw_final, peak, secs) = compose_mexchr_rom(&map, &rom);
             max_peak = max_peak.max(peak);
 
             // Compose the whole-domain spec by APPLYING step0 then step1 to the
@@ -1114,7 +1191,10 @@ fn mexchr_whole_domain_proof() {
             // two exchanges are INDEPENDENT unless they alias the same mem word;
             // the spec below models the exact ite/MUX chain including aliasing.
             assert_two_step_exchange(&map, &out, (1, 2), (3, 4));
-            assert_bus_quiescent(&map, &out);
+            // MAJOR-A: assert terminal bus quiescence on the RAW final-step output
+            // (before re-pinning force-zeroes the bus) — a genuine netlist check
+            // over the whole symbolic domain, not the vacuous re-pinned constant.
+            assert_bus_quiescent(&map, &raw_final);
 
             eprintln!(
                 "  2-step ROM [MEXCHR r1,r2 ; MEXCHR r3,r4] composed symbolically: final state ≡ \

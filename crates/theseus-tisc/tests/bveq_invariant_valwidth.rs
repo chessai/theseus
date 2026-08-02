@@ -214,16 +214,18 @@ fn explore_iter_rom_geometry() {
 //
 // The reduce body uses MexchReg, which PANICS in the CPU-only decode_execute_l.
 // So we walk the MONOLITHIC `system_step(rom)` Iso — an Iso over
-//   ((CpuState, MemState), BusMsg)  = ((24 cpu fields, 4 mem fields), 3 bus)
-// = 31 Word8 fields, structured Pair(Pair(cpu, mem), bus) — via `eval_bdd`, with
+//   ((CpuState, MemState), BusMsg)  = ((23 cpu fields, 4 mem fields), 3 bus)
+// = 30 Word8 fields, structured Pair(Pair(cpu, mem), bus) — via `eval_bdd`, with
 // NO fetch short-circuit (system_step is a single Iso, not a phase list).
+// (NUM_CPU_FIELDS = 8 regs + PC_lo + BR + 4 IR + 8 scratch + PC_hi = 23 at the
+// default layout w_pc=16/w_br=8; the types.rs "=24" docstring is stale.)
 //
 // system_step takes NO layout (fixed default: w_pc=16, w_br=8, 8 regs, 8 scratch,
-// 4 mem, 3 bus). We use a bit-interleaved varmap over the 31 SYSTEM fields:
+// 4 mem, 3 bus). We use a bit-interleaved varmap over the 30 SYSTEM fields:
 //   var(field f, bit b) = b*NSYS + f.
 // ══════════════════════════════════════════════════════════════════════════
 
-const NSYS: usize = NUM_CPU_FIELDS + MEM_WORDS + NUM_BUS_FIELDS; // 24+4+3 = 31
+const NSYS: usize = NUM_CPU_FIELDS + MEM_WORDS + NUM_BUS_FIELDS; // 23+4+3 = 30
 
 // Fixed default-layout field indices (system_step is default-layout).
 const PC_LO: usize = NUM_REGS; // 8
@@ -1162,6 +1164,14 @@ fn invariant_composition_lemma_reduce_d3() {
     let rom = assemble(&lowered.instrs).expect("assemble");
     let n_instrs = lowered.instrs.len();
     assert_eq!(n_instrs, 24, "reduce_flat(2,3) must be 24 instrs");
+    // The STATIC-TRIP-COUNT premise (no induction, D-1 physical copies): an Iter
+    // contributes NO loop_terms (only Trace/Fold do). If this ever becomes
+    // non-empty the composition-over-copies argument (vs induction) is invalid.
+    assert!(
+        lowered.loop_terms.is_empty(),
+        "COMPOSITION premise: Iter must yield EMPTY loop_terms (got {}) — static composition invalid",
+        lowered.loop_terms.len()
+    );
     let rr = reduce_regs(d);
     let wb = w as usize;
     let vs = BddVariableSet::new_anonymous(n_vars_sys());
@@ -1250,6 +1260,52 @@ fn invariant_composition_lemma_reduce_d3() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// MARSHAL-ENCODING ANCHOR (always-on) — the PREMISE the COMPOSITION lemma's
+// case-split rests on.
+//
+// `invariant_composition_lemma_reduce_d3` enumerates the combos {(0,0,0),
+// (1,0,0),(1,1,0)} and CLAIMS these cover all REACHABLE counter states. That is
+// only true if `marshal_resident` encodes Nat_d as LEADING-ONES in r0..r_{d-1}
+// (k leading 1-tags, the rest 0). Previously this was checked ONLY by the
+// `#[ignore]` `diag_reduce_layout` — so a change to the marshal encoding could
+// leave the composition tests green while they proved UNREACHABLE combos. This
+// always-on test pins the premise: for each k, marshal_resident(input).regs[0..d]
+// is exactly the k-leading-ones prefix (r0..r_{k-1}=1, r_k..r_{d-1}=0).
+// ══════════════════════════════════════════════════════════════════════════
+#[test]
+fn invariant_marshal_encodes_leading_ones() {
+    let w = 2u8;
+    for d in [2usize, 3] {
+        let ty = carrier_ty(w, d);
+        for k in 0..d {
+            let input = make_reduce_input(k, 1, 2, (k % 2) as u8, 3, 1, d);
+            let st = marshal_resident(&input, &ty, 2);
+            for i in 0..d {
+                let want = if i < k { 1u8 } else { 0u8 };
+                assert_eq!(
+                    st.regs[i], want,
+                    "MARSHAL-ENCODING d={d} k={k}: tag reg r{i} = {} (expected leading-ones \
+                     prefix {want}); the COMPOSITION lemma's reachable-combos case-split is \
+                     INVALID if this premise breaks",
+                    st.regs[i]
+                );
+            }
+        }
+        // TEETH: the k-leading-ones prefix is DISTINCT across k (so the assert is
+        // load-bearing, not a constant). Distinct k ⇒ distinct tag prefix.
+        let ty2 = carrier_ty(w, d);
+        let p0 = marshal_resident(&make_reduce_input(0, 1, 2, 0, 3, 1, d), &ty2, 2).regs[0..d].to_vec();
+        let p1 = marshal_resident(&make_reduce_input(1, 1, 2, 1, 3, 1, d), &ty2, 2).regs[0..d].to_vec();
+        assert_ne!(p0, p1, "MARSHAL-ENCODING d={d}: k=0 and k=1 tag prefixes collapse — teeth vacuous");
+        eprintln!("  marshal-encoding d={d}: regs[0..{d}] == k-leading-ones for k=0..{}", d - 1);
+    }
+    eprintln!(
+        "MARSHAL-ENCODING ANCHOR: Nat_d marshals as leading-ones in r0..r_{{d-1}} — the \
+         premise the COMPOSITION reachable-combos case-split rests on."
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // L3-analog — REALITY ANCHOR (fast, always-on). For d=2 and d=3, on a handful of
 // concrete inputs spanning k=0..d-1, assert run_rom_fast == eval. Seconds. Ties
 // the symbolic lemmas to the real machine's semantics.
@@ -1295,7 +1351,7 @@ fn invariant_reality_anchor_reduce() {
 //
 // GO. The method extends. Measured (reduce_flat, w=2, w_pc=16 default layout):
 //   * SPIKE / L1 BODY (memory ring): the 6-instr MexchReg body walked through the
-//     monolithic `system_step` (CPU+Mem+Bus, 31 fields, 248 vars) with symbolic
+//     monolithic `system_step` (CPU+Mem+Bus, 30 fields, 240 vars) with symbolic
 //     carrier stays TINY — MAX peak 9 BDD nodes, ~1.6 s/step (~8-16 s total). The
 //     cost is the un-short-circuited fetch-mux gate count, NOT BDD growth. The
 //     MEMORY RING IS TRACTABLE — this was the crux risk and it is cleared.
