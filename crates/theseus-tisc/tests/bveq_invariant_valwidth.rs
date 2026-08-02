@@ -800,12 +800,12 @@ fn read_skip_block(rom_instrs: &[Instr], copy_start: usize) -> SkipBlock {
         ref o => panic!("skip[+1] must be Cswap ctrl,rb,temp, got {o:?}"),
     };
     assert!(
-        matches!(rom_instrs[copy_start + 2], Instr::Swapbr { rd } if rd as usize == rb),
+        matches!(rom_instrs[copy_start + 2], Instr::Swapbr { rd, .. } if rd as usize == rb),
         "skip[+2] must be Swapbr rb, got {:?}",
         rom_instrs[copy_start + 2]
     );
     assert!(
-        matches!(rom_instrs[copy_start + 9], Instr::Swapbr { rd } if rd as usize == rb),
+        matches!(rom_instrs[copy_start + 9], Instr::Swapbr { rd, .. } if rd as usize == rb),
         "skip[+9] must be Swapbr rb (come-from), got {:?}",
         rom_instrs[copy_start + 9]
     );

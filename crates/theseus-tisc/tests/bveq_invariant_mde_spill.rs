@@ -806,7 +806,7 @@ fn read_come_from(geom: &LoopGeom) -> ComeFrom {
             assert_eq!(rs as usize, temp, "CSWAP temp mismatch");
             let rb = rt as usize;
             match instrs[geom.lend_pc] {
-                Instr::Swapbr { rd } => assert_eq!(rd as usize, rb, "Lend SWAPBR rb mismatch"),
+                Instr::Swapbr { rd, .. } => assert_eq!(rd as usize, rb, "Lend SWAPBR rb mismatch"),
                 ref o => panic!("Lend must be SWAPBR rb, got {o:?}"),
             }
             // The come-from tag register must be the carrier tag (Reg(TAG_REG)).
@@ -1025,7 +1025,7 @@ fn invariant_come_from_lemma_mde_spill() {
 
 fn read_rc(geom: &LoopGeom) -> usize {
     match geom.lowered_instrs[LTOP] {
-        Instr::Swapbr { rd } => rd as usize,
+        Instr::Swapbr { rd, .. } => rd as usize,
         ref o => panic!("Ltop must be SWAPBR rc, got {o:?}"),
     }
 }
