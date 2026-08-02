@@ -644,15 +644,6 @@ fn wd_state(ir: u32, rd_val: u8, rs_val: u8) -> StateVals {
     }
 }
 
-/// Representative rd (destination) values swept against the FULL 256-value
-/// 2nd-operand domain: edge cases (0x00/0xFF), alternating (0xAA/0x55),
-/// sign/carry boundaries (0x80/0x7F/0x01), and an arbitrary byte. Combined
-/// with the exhaustive operand sweep, this exercises every adder carry
-/// chain, every rotate amount (0..8), and every xor bit-lane, plus the
-/// destination edge cases — the whole-domain bar for a byte ALU without the
-/// intractable 256×256 full `decode_execute` eval (~0.3s/eval).
-const WD_RD_VALS: [u8; 8] = [0x00, 0xFF, 0xAA, 0x55, 0x80, 0x7F, 0x01, 0x13];
-
 /// Hoisted isolated UNIVERSAL shared block (built once). B1.3: this is the
 /// `shared_alu_block` (reg+imm + Ccnot + Cswap); the other decode blocks
 /// (xchg/swapbr) are the identity for these opcodes, so the isolated block
@@ -662,98 +653,16 @@ fn wd_unified_ctx() -> &'static Iso {
     CTX.get_or_init(decoder::shared_alu_block_for_measurement)
 }
 
-/// Whole-domain equivalence for one opcode: the ISOLATED unified reg+imm
-/// block == standalone `instruction(op)`. To keep tree-eval tractable
-/// (~0.1s/eval) while covering the whole byte datapath, we take the UNION
-/// of three axis-sweeps rather than the full 256×256 cartesian product:
-///   (a) FULL 2nd-operand sweep (0..256) at rd = 0xAA — every adder carry
-///       chain, every rotate amount (0..8), every xor/immediate bit-lane;
-///   (b) FULL rd sweep (0..256) at operand = 0xAA — every destination byte;
-///   (c) the 8×8 edge-corner grid (`WD_RD_VALS` × `WD_RD_VALS`) — cross
-///       terms at 0x00/0xFF/0xAA/0x55/0x80/0x7F/0x01/0x13.
-/// = 256 + 256 + 64 ≈ 576 pairs/op (deduped), ~1 min/op. `cap` (<256)
-/// shrinks (a)/(b) to `0..cap` for a fast smoke run.
-///
-/// The other decode blocks (ccnot/cswap/xchg/swapbr) are the identity for
-/// reg+imm opcodes, so the isolated block == `instruction(op)` is a valid
-/// whole-domain equivalence for the unified datapath (the FULL decoder is
-/// exercised end-to-end by the fib run_on_cpu==eval + config-exclusion).
-fn wd_equiv_op(op: Op, ir: u32, is_imm: bool, cap: usize) {
-    let unified = wd_unified_ctx();
-    let refer = decoder::instruction(op);
-    let t0 = std::time::Instant::now();
-    let mut checked = 0usize;
-
-    let mut check = |rd_val: u8, op2: usize| {
-        let ir2 = if is_imm {
-            (ir & !0xFF) | (op2 as u32) // I-format: immediate byte
-        } else {
-            ir
-        };
-        let rs_val = if is_imm { 0x5A } else { op2 as u8 };
-        let s = wd_state(ir2, rd_val, rs_val);
-        let g_uni = eval_state("wd/unified", unified, &s);
-        let g_ref = eval_state("wd/ref", &refer, &s);
-        assert_eq!(
-            g_uni, g_ref,
-            "{op:?} whole-domain mismatch at rd_val={rd_val:#04x} op2={op2:#04x}\n \
-             unified={g_uni:?}\n ref={g_ref:?}"
-        );
-    };
-
-    let n = cap.min(256);
-    // (a) full operand sweep at rd = 0xAA.
-    for op2 in 0..n {
-        check(0xAA, op2);
-        checked += 1;
-    }
-    // (b) full rd sweep at operand = 0xAA (0xAA=170 < 256, valid immediate).
-    for rd in 0..n {
-        check(rd as u8, 0xAA);
-        checked += 1;
-    }
-    // (c) edge-corner grid.
-    for &rd in &WD_RD_VALS {
-        for &o in &WD_RD_VALS {
-            check(rd, o as usize);
-            checked += 1;
-        }
-    }
-    eprintln!("B1.2 wd-equiv {op:?}: {checked} pairs OK in {:?}", t0.elapsed());
-}
-
-/// Domain cap for the two full sweeps. Default 256 (whole byte domain per
-/// axis). Override with `B12_WD_CAP=N` (<256) for a fast smoke run.
-fn wd_cap() -> usize {
-    std::env::var("B12_WD_CAP")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(256)
-}
-
-#[test]
-fn b12_whole_domain_equiv_arith() {
-    let cap = wd_cap();
-    // The adder + its adjoint, both formats (the 4→1 adder collapse).
-    wd_equiv_op(Op::Add, r_ins(0b0000, WD_RD, WD_RS, 0), false, cap);
-    wd_equiv_op(Op::Sub, r_ins(0b0001, WD_RD, WD_RS, 0), false, cap);
-    wd_equiv_op(Op::Addi, i_ins(0b000, WD_RD, 0), true, cap);
-    wd_equiv_op(Op::Subi, i_ins(0b001, WD_RD, 0), true, cap);
-}
-
-#[test]
-fn b12_whole_domain_equiv_logic_rot() {
-    let cap = wd_cap();
-    // xor (both formats) + the 4→1 rotator collapse (fwd/rev, both formats).
-    wd_equiv_op(Op::Xor, r_ins(0b0010, WD_RD, WD_RS, 0), false, cap);
-    wd_equiv_op(Op::Xori, i_ins(0b010, WD_RD, 0), true, cap);
-    wd_equiv_op(Op::Rotl, r_ins(0b0100, WD_RD, WD_RS, 0), false, cap);
-    wd_equiv_op(Op::Rotr, r_ins(0b0101, WD_RD, WD_RS, 0), false, cap);
-    wd_equiv_op(Op::Rotli, i_ins(0b011, WD_RD, 0), true, cap);
-    wd_equiv_op(Op::Rotri, i_ins(0b100, WD_RD, 0), true, cap);
-    // Exch (R-only, still served by the unified block's exch sub-block).
-    wd_equiv_op(Op::Exch, r_ins(0b0011, WD_RD, WD_RS, 0), false, cap);
-}
+// ── RETIRED (GO-rollout) → tests/decoder_bveq.rs ────────────────────
+// `b12_whole_domain_equiv_arith` / `b12_whole_domain_equiv_logic_rot`
+// (via `wd_equiv_op`, ~576 simulated (rd, op2) pairs/op ≈ 1 min/op) proved the
+// shared reg+imm ALU block ≡ `instruction(op)` by SIMULATION. RETIRED into
+// `decoder_bveq::decoder_bveq_whole_domain`, which walks the WIRED
+// `decode_execute` SYMBOLICALLY (concrete IR word, symbolic operands) and
+// proves each opcode ≡ the INDEPENDENT `bveq::instr_semantics` over the WHOLE
+// 2^8-per-operand domain in ~0.5s/op — a strict superset of the sample grid
+// (whole domain, not 576 pts) AND checked against an independent oracle rather
+// than `instruction(op)` (so a mis-dispatch cannot hide). ~53 min → ~24 s.
 
 /// Config mutual-exclusion + fmt A-source discrimination: for every opcode
 /// word (R and I families, all 4/3 low opcode bits, both fmt values), the
@@ -864,80 +773,18 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
 // fetch is inert for reg+imm ops (config-gated off).
 // ══════════════════════════════════════════════════════════════════════
 
-/// Whole-domain equivalence for a 3-operand op (Ccnot/Cswap): the isolated
-/// universal `shared_alu_block` == standalone `instruction(op)`. Sweeps a
-/// grid of (rd, rs, rt) *register indices* (distinct, per encode's P1) and,
-/// for each index triple, a set of value assignments covering edge/dense
-/// bytes and — for Cswap — both control polarities (rd[0]=0/1).
-fn wd_equiv_3op(op: Op, opcode: u32) {
-    let unified = wd_unified_ctx();
-    let refer = decoder::instruction(op);
-    let t0 = std::time::Instant::now();
-    let mut checked = 0usize;
-
-    // Distinct (rd, rs, rt) register-index triples exercising non-trivial
-    // crossbar routing (low/mid/high, reg∪scratch not needed for op equiv).
-    let triples: [(u32, u32, u32); 5] = [
-        (0, 1, 2),
-        (4, 1, 2), // rd=r4 (bit0 varies with value); mid regs
-        (1, 3, 5),
-        (7, 2, 6), // high rd
-        (3, 6, 0), // rt=r0 (the reg+imm "unused rt" slot as a real operand)
-    ];
-    // Value assignments per (rd,rs,rt): pick values so Cswap sees both
-    // polarities (rd even/odd) and Ccnot sees dense AND products.
-    let vals: [(u8, u8, u8); 8] = [
-        (0x00, 0xFF, 0xAA),
-        (0x01, 0xFF, 0xAA), // rd[0]=1 → Cswap taken
-        (0x02, 0x55, 0x0F), // rd[0]=0 → Cswap not-taken
-        (0x03, 0xAA, 0x55),
-        (0xFF, 0x12, 0x34),
-        (0x80, 0xFF, 0xFF),
-        (0x7F, 0xC3, 0x3C),
-        (0xAB, 0x0F, 0xF0),
-    ];
-
-    for &(rd, rs, rt) in &triples {
-        let ir = r_ins(opcode, rd, rs, rt);
-        for &(dv, sv, tv) in &vals {
-            let mut regs = [0x13, 0x24, 0x35, 0x46, 0x57, 0x68, 0x79, 0x8A];
-            regs[rd as usize] = dv;
-            regs[rs as usize] = sv;
-            regs[rt as usize] = tv;
-            let s = StateVals {
-                regs,
-                pc: 0x42,
-                br: 0x99,
-                ir,
-                scratch: [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
-                mem: [0; MEM_WORDS],
-            };
-            let g_uni = eval_state("wd3/unified", unified, &s);
-            let g_ref = eval_state("wd3/ref", &refer, &s);
-            assert_eq!(
-                g_uni, g_ref,
-                "{op:?} 3-op mismatch: rd=r{rd}({dv:#04x}) rs=r{rs}({sv:#04x}) \
-                 rt=r{rt}({tv:#04x})\n unified={g_uni:?}\n ref={g_ref:?}"
-            );
-            checked += 1;
-        }
-    }
-    eprintln!("B1.3 wd-equiv-3op {op:?}: {checked} cases OK in {:?}", t0.elapsed());
-}
-
-/// B1.3: Ccnot (R 0b1011, byte-parallel rd^=rs&rt) through the universal
-/// bracket == `instruction(Op::Ccnot)`, sweeping rd/rs/rt indices+values.
-#[test]
-fn b13_whole_domain_equiv_ccnot() {
-    wd_equiv_3op(Op::Ccnot, 0b1011);
-}
-
-/// B1.3: Cswap (R 0b0110, conditional swap rs↔rt gated rd[0]) through the
-/// universal bracket == `instruction(Op::Cswap)`, both polarities.
-#[test]
-fn b13_whole_domain_equiv_cswap() {
-    wd_equiv_3op(Op::Cswap, 0b0110);
-}
+// ── RETIRED (GO-rollout) → tests/decoder_bveq.rs ────────────────────
+// `b13_whole_domain_equiv_ccnot` / `_cswap` (via `wd_equiv_3op`, 40 simulated
+// register-value cases/op) proved the 3-operand shared block ≡
+// `instruction(op)` by SIMULATION. RETIRED into
+// `decoder_bveq::decoder_bveq_whole_domain`: Ccnot / Cswap are walked with
+// concrete IR words (multiple selector triples) and symbolic operand VALUES,
+// proved ≡ the INDEPENDENT `bveq::instr_semantics` over the WHOLE operand
+// domain — a strict superset of the 40-case grid (Cswap both polarities +
+// Ccnot's full AND product are all inside a single symbolic walk). The
+// SCRATCH-operand routing tooth (`b13_cswap_scratch_operand_equiv`, below) and
+// `blocker2_ccnot_uses_scratch_operand` remain, since instr_semantics has no
+// scratch-frame; they stay as fast concrete teeth.
 
 /// B1.3 (Fable Unit-2 MINOR-3): Cswap with a SCRATCH operand (rt=s2, idx 10)
 /// through the universal bracket == `instruction(Op::Cswap)` — closes the
@@ -977,39 +824,12 @@ fn b13_cswap_scratch_operand_equiv() {
     }
 }
 
-/// B1.3 EXHAUSTIVE Ccnot lane check: fix distinct rd/rs/rt indices and
-/// sweep the FULL 256 rs-values × a few rd/rt so every AND lane + xor
-/// target combination is exercised against the reference.
-#[test]
-fn b13_ccnot_full_rs_sweep() {
-    let unified = wd_unified_ctx();
-    let refer = decoder::instruction(Op::Ccnot);
-    let ir = r_ins(0b1011, 3, 5, 1); // rd=r3, rs=r5, rt=r1
-    for rd_val in [0x00u8, 0xFF, 0xAA, 0x5A] {
-        for rt_val in [0x00u8, 0xFF, 0xAA, 0x3C] {
-            for rs in 0..256usize {
-                let mut regs = [0x13, 0x24, 0x35, 0x46, 0x57, 0x68, 0x79, 0x8A];
-                regs[3] = rd_val;
-                regs[5] = rs as u8;
-                regs[1] = rt_val;
-                let s = StateVals {
-                    regs,
-                    pc: 0x42,
-                    br: 0x99,
-                    ir,
-                    scratch: [0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
-                    mem: [0; MEM_WORDS],
-                };
-                let g_uni = eval_state("ccnot-sweep/uni", unified, &s);
-                let g_ref = eval_state("ccnot-sweep/ref", &refer, &s);
-                assert_eq!(
-                    g_uni, g_ref,
-                    "Ccnot lane mismatch rd={rd_val:#04x} rs={rs:#04x} rt={rt_val:#04x}"
-                );
-            }
-        }
-    }
-}
+// ── RETIRED (GO-rollout) → tests/decoder_bveq.rs ────────────────────
+// `b13_ccnot_full_rs_sweep` simulated 4096 pts (256 rs-values × 4 rd × 4 rt)
+// of the Ccnot lane against `instruction(op)` — the single biggest decoder-sim
+// hog. RETIRED: `decoder_bveq::decoder_bveq_whole_domain` proves Ccnot's
+// r[rd]^=r[rs]&r[rt] over ALL 2^8 operand values symbolically in one walk
+// (every AND lane + xor target simultaneously), against instr_semantics.
 
 /// B1.3 s0-restoration tooth: after a full decode+execute of an op that
 /// uses the s0-workspace decode, s0 (the decoder-reserved operand buffer)
