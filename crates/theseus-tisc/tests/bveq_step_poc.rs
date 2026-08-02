@@ -39,8 +39,9 @@ use biodivine_lib_bdd::{Bdd, BddVariableSet};
 use theseus_core::{Iso, Type};
 
 use theseus_tisc::bveq_netlist::{eval_bdd, extract_field, extract_word8_bdds, WalkCtx, SV};
+use theseus_tisc::compile::pc_update;
 use theseus_tisc::step::{pc_add_br_with, pc_inc_with};
-use theseus_tisc::types::{state_ty_with, Layout, W};
+use theseus_tisc::types::{state_ty_with, Layout, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH, W};
 
 // ══════════════════════════════════════════════════════════════════════════
 // Symbolic CpuState construction
@@ -380,6 +381,115 @@ fn prove_pc_update(layout: &Layout) -> f64 {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
+// pc_inc ALONE — the isolated `+1` half (subsumes step.rs::pc_inc_exhaustive).
+//
+// `pc_inc_with(&layout)` ≡ `PC' = (PC + 1) mod 2^w_pc` over the WHOLE PC domain,
+// with the carry crossing the PC_lo→PC_hi field boundary (w_pc=16) and s1 scratch
+// restored. This gives the +1 half its OWN whole-domain authority (rather than
+// only implicitly inside the composite pc_add_br;pc_inc). Negative control: a
+// spec that DROPS the +1 (PC' = PC) must be detected as inequivalent.
+// ══════════════════════════════════════════════════════════════════════════
+
+/// Walk `pc_inc_with(&layout)` alone on an all-symbolic state.
+fn walk_pc_inc(layout: &Layout) -> (SV, BddVariableSet, f64) {
+    let iso: Iso = pc_inc_with(layout);
+    let vs = BddVariableSet::new_anonymous(n_vars(layout));
+    let sv_in = symbolic_state_sv(layout, &vs);
+    let t0 = Instant::now();
+    let mut ctx = WalkCtx::new();
+    let out = eval_bdd(&iso, sv_in, &vs, &mut ctx)
+        .unwrap_or_else(|e| panic!("eval_bdd FAILED on pc_inc @ w_pc={}: {e}", layout.w_pc));
+    let elapsed = t0.elapsed().as_secs_f64();
+    (out, vs, elapsed)
+}
+
+/// Prove `pc_inc_with(&layout)` ≡ `(PC + 1) mod 2^w_pc` over the whole domain,
+/// with a teeth-check negative control (drop the +1).
+fn prove_pc_inc(layout: &Layout) -> f64 {
+    let nf = n_fields(layout);
+    let (out, vs, elapsed) = walk_pc_inc(layout);
+
+    let pc_in: Vec<Bdd> = {
+        let mut v = field_bits(&vs, nf, layout.pc_field());
+        if layout.pc_fields() >= 2 {
+            v.extend(field_bits(&vs, nf, layout.pc_hi_field()));
+        }
+        v
+    };
+
+    // PC' ≡ PC + 1.
+    let spec_pc = ripple_plus_one(&pc_in, &vs);
+    let out_pc = out_pc_bits(&out, layout);
+    for i in 0..layout.w_pc {
+        assert!(
+            out_pc[i] == spec_pc[i],
+            "w_pc={}: pc_inc output bit {i} != (PC + 1) spec",
+            layout.w_pc
+        );
+    }
+
+    // NEGATIVE CONTROL: a spec that drops the +1 (PC' = PC) must DIFFER.
+    let differs = (0..layout.w_pc).any(|i| out_pc[i] != pc_in[i]);
+    assert!(
+        differs,
+        "w_pc={}: NEG pc_inc must DIFFER from an identity (drop-+1) spec — the oracle has TEETH",
+        layout.w_pc
+    );
+
+    // BR / s0 / s1 and every non-PC field preserved (no stray write; s1 is the
+    // pc_inc carry scratch and must be restored to its symbolic input).
+    let touched_pc = [
+        layout.pc_field(),
+        if layout.pc_fields() >= 2 { layout.pc_hi_field() } else { usize::MAX },
+    ];
+    for f in 0..nf {
+        if touched_pc.contains(&f) {
+            continue;
+        }
+        // s0/s1 entered as CONSTANT 0 (pinned by symbolic_state_sv); the rest
+        // are symbolic. Either way, pc_inc must return each field to its input.
+        let f_in = if is_pinned_zero(layout, f) {
+            vec![vs.mk_false(); W]
+        } else {
+            field_bits(&vs, nf, f)
+        };
+        let f_out = out_field_bits(&out, layout, f);
+        for i in 0..W {
+            assert!(
+                f_out[i] == f_in[i],
+                "w_pc={}: pc_inc field {f} bit {i} not preserved (stray write / carry not restored)",
+                layout.w_pc
+            );
+        }
+    }
+
+    elapsed
+}
+
+#[test]
+fn bveq_pc_inc_wpc8() {
+    let layout = Layout { w_pc: 8, ..Layout::default() };
+    assert_eq!(layout.pc_fields(), 1, "w_pc=8 must have exactly 1 PC field");
+    let secs = prove_pc_inc(&layout);
+    eprintln!(
+        "BVEQ POC [w_pc=8]: pc_inc == (PC + 1) mod 2^8 over the FULL 2^8 PC domain \
+         [regs/IR/scratch SYMBOLIC] — proved SYMBOLICALLY in {secs:.4} s (+ TEETH: != drop-+1)."
+    );
+}
+
+#[test]
+fn bveq_pc_inc_wpc16() {
+    let layout = Layout::default();
+    assert_eq!(layout.w_pc, 16, "default layout is w_pc=16");
+    let secs = prove_pc_inc(&layout);
+    eprintln!(
+        "BVEQ POC [w_pc=16]: pc_inc == (PC + 1) mod 2^16 over the FULL 2^16 PC domain \
+         [PC_lo→PC_hi carry; s1 carry-scratch restored] — proved SYMBOLICALLY in {secs:.4} s \
+         (brute-force baseline: step.rs::pc_inc_exhaustive_all_16bit over 2^16; + TEETH: != drop-+1)."
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // The headline tests.
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -410,6 +520,120 @@ fn bveq_pc_update_wpc16() {
          2^24 (PC,BR) domain [regs/IR/s2..s7 also SYMBOLIC; s0/s1 pinned 0 per decoder convention] — proved SYMBOLICALLY in \
          {secs:.4} s (brute-force baseline: ~HOURS over 2^24). BDD time is domain-size \
          INDEPENDENT (≈ flat vs w_pc=8)."
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// CONCRETE BOOTSTRAP — the REALITY ANCHOR.
+//
+// The BVEQ proof above is the whole-domain authority, but it trusts `eval_bdd`
+// and the ripple-carry BDD spec. This section runs a handful of representative
+// + boundary (PC, BR) pairs through the REAL `theseus_eval::eval` (the concrete
+// interpreter the shipped CPU runs) on the SAME `pc_add_br_with;pc_inc_with`
+// iso, and asserts the concrete result equals the `pc_update` spec byte-for-byte
+// — plus BR/s0/s1 preservation and the ADJOINT recovering the input. This ties
+// the symbolic model to reality: a bug in eval_bdd or the BDD spec that happened
+// to make the symbolic sides agree with each other would still be caught here,
+// because eval is an independent oracle. This is NOT the coverage (the BDD is);
+// it is O(dozens) of inputs = sub-second. Ported from the retired b22b/step.rs
+// exhaustive loops (which this file's BVEQ proof now subsumes as authority).
+// ══════════════════════════════════════════════════════════════════════════
+
+const EVAL_FUEL: u64 = 8_000_000_000;
+
+/// A distinctive CpuState for the bootstrap: nonzero regs/IR and a nonzero
+/// scratch tail (s2..) so any stray write outside the PC/BR/s0/s1 region shows
+/// up as a mismatch. s0=s1=0 per the decoder scratch convention the adder needs.
+fn boot_state(pc: u16, br: u8) -> StateVals {
+    let mut regs = [0u8; NUM_REGS];
+    regs[0] = 0x2A;
+    regs[1] = 0xC3;
+    regs[NUM_REGS - 1] = 0x5A;
+    let mut scratch = [0u8; NUM_SCRATCH];
+    scratch[2] = 0xDE;
+    scratch[3] = 0xAD;
+    StateVals {
+        regs,
+        pc,
+        br: u16::from(br),
+        ir: 0xDEAD_BEEF,
+        scratch,
+        mem: [0u8; MEM_WORDS],
+    }
+}
+
+fn eval_boot(layout: &Layout, iso: &Iso, s: &StateVals) -> StateVals {
+    let mut fuel = EVAL_FUEL;
+    let ev = theseus_eval::eval(iso, s.encode_with(layout), &mut fuel)
+        .unwrap_or_else(|e| panic!("bootstrap eval failed: {e:?}"));
+    StateVals::decode_with(layout, &ev)
+}
+
+/// Run the boundary (PC, BR) grid through the REAL eval and check against the
+/// `pc_update` spec, BR/s0/s1 preservation, no stray writes, and the adjoint.
+fn concrete_bootstrap(layout: &Layout, pcs: &[u16], brs: &[u8]) {
+    let iso: Iso = Iso::seq(pc_add_br_with(layout), pc_inc_with(layout));
+    let back = Iso::sym(iso.clone());
+    for &br in brs {
+        for &pc in pcs {
+            let s = boot_state(pc, br);
+            let got = eval_boot(layout, &iso, &s);
+
+            // PC' == (PC + sext(BR) + 1) mod 2^w_pc, computed by the shipped
+            // `pc_update` helper (masked to w_pc for the w_pc=8 layout).
+            let mask: u16 = if layout.w_pc >= 16 { u16::MAX } else { (1u16 << layout.w_pc) - 1 };
+            let expected_pc = pc_update(pc & mask, br) & mask;
+            assert_eq!(
+                got.pc, expected_pc,
+                "w_pc={}: real eval PC' != pc_update spec (pc={pc:#06x} br={br:#04x})",
+                layout.w_pc
+            );
+            // BR preserved (read-only control); s0/s1 restored to 0.
+            assert_eq!(got.br, u16::from(br), "w_pc={}: BR preserved (pc={pc:#06x} br={br:#04x})", layout.w_pc);
+            assert_eq!(got.scratch[0], 0, "w_pc={}: s0 restored (pc={pc:#06x} br={br:#04x})", layout.w_pc);
+            assert_eq!(got.scratch[1], 0, "w_pc={}: s1 restored (pc={pc:#06x} br={br:#04x})", layout.w_pc);
+            // No stray write outside PC/BR/s0/s1: regs, IR, scratch[2..] identical.
+            assert_eq!(got.regs, s.regs, "w_pc={}: regs untouched (pc={pc:#06x} br={br:#04x})", layout.w_pc);
+            assert_eq!(got.ir, s.ir, "w_pc={}: IR untouched (pc={pc:#06x} br={br:#04x})", layout.w_pc);
+            assert_eq!(&got.scratch[2..], &s.scratch[2..], "w_pc={}: scratch tail untouched", layout.w_pc);
+
+            // ADJOINT: sym(pc_add_br;pc_inc) subtracts (PC - sext(BR) - 1) and
+            // recovers the exact input — the reversibility half of ADR-0034.
+            let rec = eval_boot(layout, &back, &got);
+            assert_eq!(rec, s, "w_pc={}: adjoint must recover input (pc={pc:#06x} br={br:#04x})", layout.w_pc);
+        }
+    }
+}
+
+#[test]
+fn bveq_pc_update_bootstrap_wpc8() {
+    let layout = Layout { w_pc: 8, ..Layout::default() };
+    assert_eq!(layout.pc_fields(), 1, "w_pc=8 must have exactly 1 PC field");
+    // Carry / sign boundaries on the 8-bit PC and BR.
+    let pcs: Vec<u16> = [0u8, 1, 0x7F, 0x80, 0xFE, 0xFF].iter().map(|&x| u16::from(x)).collect();
+    let brs = [0u8, 1, 7, 8, 0x7F, 0x80, 0xF6, 0xFF];
+    concrete_bootstrap(&layout, &pcs, &brs);
+    eprintln!(
+        "BVEQ bootstrap [w_pc=8]: real theseus_eval on pc_add_br;pc_inc == pc_update spec over \
+         {} boundary (PC,BR) pairs [BR/s0/s1 preserved, adjoint recovers input] — the reality anchor.",
+        pcs.len() * brs.len()
+    );
+}
+
+#[test]
+fn bveq_pc_update_bootstrap_wpc16() {
+    let layout = Layout::default();
+    assert_eq!(layout.w_pc, 16, "default layout is w_pc=16");
+    // 16-bit carry boundaries (inter-byte carry 0x00FF→0x0100, full wrap) crossed
+    // with sign-boundary BR values (incl. top-bit-set = negative sext backward jump).
+    let pcs = [0u16, 0x00FF, 0x0100, 0x7FFF, 0x8000, 0xFFFF, 0x1234];
+    let brs = [0u8, 1, 0x7F, 0x80, 0xF6, 0xFF];
+    concrete_bootstrap(&layout, &pcs, &brs);
+    eprintln!(
+        "BVEQ bootstrap [w_pc=16]: real theseus_eval on pc_add_br;pc_inc == pc_update spec over \
+         {} boundary (PC,BR) pairs [inter-byte carry + sext backward-jump; BR/s1 preserved, adjoint \
+         recovers input] — the reality anchor.",
+        pcs.len() * brs.len()
     );
 }
 

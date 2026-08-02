@@ -11,12 +11,15 @@
 //! encoded state — proves the field addressing at `w_pc=8` is alias-free.
 //! That is this file's job.
 //!
-//! TEST 1 — the mechanized ADR-0034 adder identity at k=8, EXHAUSTIVE over
-//! all 2^16 (PC, BR) pairs: `(pc_add_br_with ; pc_inc_with)(&w_pc8)` realizes
-//! `PC' = (PC + sext(BR) + 1) mod 2^8`. At w_pc=8, BR is already 8-bit so
-//! sext(BR) is the identity → the oracle is `(PC + BR + 1) mod 256`, the
-//! OLDEST proven case (the pre-widen 8-bit PC). Also checks BR/s0/s1 are
-//! preserved and the ADJOINT subtracts.
+//! TEST 1 — the mechanized ADR-0034 adder identity at k=8. The WHOLE-DOMAIN
+//! authority is now the SYMBOLIC BDD proof `tests/bveq_step_poc.rs`
+//! (`bveq_pc_update_wpc8`, ~0.1 s vs the retired 2^16 brute-force ~387 s);
+//! what remains here is the concrete REALITY-ANCHOR bootstrap over a boundary
+//! (PC, BR) grid run through the REAL `theseus_eval::eval` on the w_pc=8 layout:
+//! `(pc_add_br_with ; pc_inc_with)(&w_pc8)` realizes `PC' = (PC + BR + 1) mod
+//! 256` (sext identity at w_pc=8), with BR/s0/s1 preserved and the ADJOINT
+//! subtracting — pinning the hand-built w_pc=8 layout's alias-freedom against
+//! the interpreter.
 //!
 //! TEST 2 — real end-to-end CPU runs at `w_pc=8` via
 //! `run_rom_on_cpu_with(&w_pc8, ...)` on small CPU-only programs that EXERCISE
@@ -101,20 +104,37 @@ fn eval_wpc8(layout: &Layout, iso: &Iso, s: &StateVals) -> StateVals {
     StateVals::decode_with(layout, &ev)
 }
 
+// ── RETIRED: the 2^16 brute-force sweep (~387 s) that once lived here. ──
+//
+// TIER-A speedup: the WHOLE-DOMAIN authority for `pc_add_br_with;pc_inc_with`
+// ≡ (PC + sext(BR) + 1) mod 2^w_pc is now the SYMBOLIC BDD proof in
+// `tests/bveq_step_poc.rs` (`bveq_pc_update_wpc8` + negative controls),
+// which proves the SAME identity over the full (PC,BR) domain — and MORE, with
+// regs/IR/scratch held SYMBOLIC — in ~0.1 s (was 387 s over 2^16 = ~4000×), in
+// the FAST tier. That is now the single authority; there is no duplicate slow
+// sweep. What remains here is the concrete REALITY-ANCHOR bootstrap: a boundary
+// (PC,BR) grid through the REAL `theseus_eval::eval` on the w_pc=8 layout,
+// asserting PC'/BR/s0/s1/no-stray-write + the adjoint. (The bveq_step_poc file
+// carries the identical bootstrap; this one additionally pins the w_pc=8
+// hand-built layout's alias-freedom against the real interpreter.)
+
 #[test]
-fn adr0034_split_add_exhaustive_wpc8() {
+fn adr0034_split_add_bootstrap_wpc8() {
     let layout = layout_w_pc8();
     // The end-of-step PC update as the hardware computes it at w_pc=8:
     // pc_add_br ; pc_inc, both at the reduced (1-PC-field) layout.
     let iso = Iso::seq(pc_add_br_with(&layout), pc_inc_with(&layout));
+    let back = Iso::sym(iso.clone());
 
+    // Boundary (PC,BR) grid: carry (0xFE/0xFF), sign (0x7F/0x80), and the
+    // negative-sext backward-jump BR values (top bit set). sext(BR) is identity
+    // at w_pc=8 ⇒ PC' = (PC + BR + 1) mod 256.
     let mut checked: u64 = 0;
-    for br in 0u8..=255 {
-        for pc in 0u8..=255 {
+    for &br in &[0u8, 1, 7, 8, 0x7F, 0x80, 0xF6, 0xFF] {
+        for &pc in &[0u8, 1, 0x7F, 0x80, 0xFE, 0xFF] {
             let s = wpc8_state(pc, br);
             let got = eval_wpc8(&layout, &iso, &s);
 
-            // sext(BR) is identity at w_pc=8 ⇒ PC' = (PC + BR + 1) mod 256.
             let expected_pc = pc.wrapping_add(br).wrapping_add(1);
             assert_eq!(
                 got.pc,
@@ -123,18 +143,10 @@ fn adr0034_split_add_exhaustive_wpc8() {
                  (expected (PC+BR+1) mod 256 = {expected_pc:#04x}, got {:#06x})",
                 got.pc
             );
-            // The high byte of the 16-bit PC field MUST stay 0 at w_pc=8: PC
-            // only occupies one word, so decode reads no PC_hi — but a bit
-            // leaking above bit 7 would corrupt a NEIGHBORING field, caught by
-            // the field-preservation checks below.
             assert!(got.pc < 256, "w_pc=8 PC must fit in 8 bits");
-
-            // BR is a read-only control ⇒ preserved. s0/s1 restored to 0.
             assert_eq!(got.br, u16::from(br), "BR preserved: pc={pc:#04x} br={br:#04x}");
             assert_eq!(got.scratch[0], 0, "s0 restored: pc={pc:#04x} br={br:#04x}");
             assert_eq!(got.scratch[1], 0, "s1 restored: pc={pc:#04x} br={br:#04x}");
-            // No stray write outside the PC/BR/s0/s1 region: regs, IR, and the
-            // rest of scratch must be byte-identical to entry.
             assert_eq!(got.regs, s.regs, "regs untouched: pc={pc:#04x} br={br:#04x}");
             assert_eq!(got.ir, s.ir, "IR untouched: pc={pc:#04x} br={br:#04x}");
             assert_eq!(
@@ -143,32 +155,20 @@ fn adr0034_split_add_exhaustive_wpc8() {
                 "scratch[2..] untouched: pc={pc:#04x} br={br:#04x}"
             );
 
-            checked += 1;
-        }
-    }
-    assert_eq!(checked, 1 << 16, "must cover all 2^16 (PC,BR) pairs");
-
-    // ── ADJOINT: sym(pc_add_br;pc_inc) subtracts (PC - sext(BR) - 1). ──
-    // Sampled over carry / sign boundaries (the forward pass already proved
-    // the map exhaustively; the adjoint check witnesses the sym recovers the
-    // input on the interesting pairs — the reversibility half of ADR-0034).
-    let back = Iso::sym(iso.clone());
-    for &br in &[0u8, 1, 7, 8, 0x7F, 0x80, 0xF6, 0xFF] {
-        for &pc in &[0u8, 1, 0x7F, 0x80, 0xFE, 0xFF] {
-            let s = wpc8_state(pc, br);
-            let fwd = eval_wpc8(&layout, &iso, &s);
-            let rec = eval_wpc8(&layout, &back, &fwd);
+            // ADJOINT: sym subtracts (PC - sext(BR) - 1) and recovers the input.
+            let rec = eval_wpc8(&layout, &back, &got);
             assert_eq!(
                 rec, s,
                 "w_pc=8 adjoint must recover input: pc={pc:#04x} br={br:#04x}"
             );
+            checked += 1;
         }
     }
 
     eprintln!(
-        "B-2.2b TEST 1: ADR-0034 split-add EXHAUSTIVE at w_pc=8 — {checked} \
-         (PC,BR) pairs == (PC+BR+1) mod 256 (sext=identity), BR/s0/s1 preserved, \
-         adjoint recovers input ✓"
+        "B-2.2b TEST 1 (bootstrap): ADR-0034 split-add reality-anchor at w_pc=8 — {checked} \
+         boundary (PC,BR) pairs == (PC+BR+1) mod 256 (sext=identity), BR/s0/s1 preserved, \
+         adjoint recovers input ✓ (whole-domain authority = bveq_step_poc::bveq_pc_update_wpc8)"
     );
 }
 

@@ -372,24 +372,17 @@ fn pc_inc_sampled() {
     }
 }
 
-#[test]
-#[ignore = "authoritative exhaustive pc_inc over all 2^16 PC values; run via --ignored"]
-fn pc_inc_exhaustive_all_16bit() {
-    // ADR-0034 A-6.4: pc_inc computes (PC+1) mod 2^W_PC for EVERY 16-bit
-    // PC, with the carry crossing the PC_lo→PC_hi field boundary and s1
-    // scratch restored. The mechanized re-proof of the +1 half.
-    let iso = pc_inc();
-    for pc in 0..=u16::MAX {
-        let s = st(regs_b(), pc);
-        let got = eval_state("pc_inc/all", &iso, &s);
-        let mut expected = s.clone();
-        expected.pc = pc.wrapping_add(1);
-        assert_eq!(
-            got, expected,
-            "pc_inc: pc={pc:#06x} (carry scratch must restore)"
-        );
-    }
-}
+// ── RETIRED: the 2^16 brute-force pc_inc sweep (Tier-A speedup). ──
+//
+// ADR-0034 A-6.4: `pc_inc` computes (PC+1) mod 2^W_PC for EVERY 16-bit PC, with
+// the carry crossing the PC_lo→PC_hi field boundary and s1 scratch restored.
+// The WHOLE-DOMAIN authority for this is now the SYMBOLIC BDD proof
+// `tests/bveq_step_poc.rs::bveq_pc_inc_wpc16` (proves `pc_inc_with(&default)` ≡
+// (PC+1) mod 2^16 over the full domain in ~0.1 s, with a drop-+1 negative
+// control and field-preservation, vs the retired 2^16 loop). The fast reality
+// anchor `pc_inc_sampled` (above) still ties eval to the spec at carry
+// boundaries; `bveq_step_poc::bveq_pc_update_bootstrap_wpc16` adds the eval-level
+// anchor for the full pc_add_br;pc_inc composite.
 
 // ══════════════════════════════════════════════════════════════════════
 // 1b. ADR-0034 A-6.4 re-proof: the split-field PC update is exactly
@@ -427,30 +420,20 @@ fn adr0034_split_add_sampled() {
     }
 }
 
-#[test]
-#[ignore = "authoritative EXHAUSTIVE ADR-0034 split-add re-proof (2^16 PC × 2^8 BR = 16.7M); run via --ignored"]
-fn adr0034_split_add_exhaustive() {
-    // The full mechanized ADR-0034 re-proof at W_PC=16, W_BR=8:
-    //   (pc_add_br ; pc_inc)(PC,BR) == (PC + sext(BR) + 1) mod 2^W_PC
-    // for ALL PC ∈ [0,2^16), BR ∈ [0,2^8). The carry crosses the byte
-    // boundary and never leaks above bit 15; BR is preserved; s1 restored.
-    // Bijectivity of x ↦ x + c (mod 2^k) is translation on Z/2^k, so the
-    // A-map is a bijection at any width — this test is the WITNESS that the
-    // split-field implementation realizes exactly that map.
-    let iso = pc_update_iso();
-    for br in 0..=u8::MAX {
-        for pc in 0..=u16::MAX {
-            let mut s = st(regs_b(), pc);
-            s.br = u16::from(br);
-            let got = eval_state("split_add/all", &iso, &s);
-            let expected = theseus_tisc::compile::pc_update(pc, br);
-            assert_eq!(
-                got.pc, expected,
-                "split-add mismatch: pc={pc:#06x} br={br:#04x}"
-            );
-        }
-    }
-}
+// ── RETIRED: the 2^24 brute-force split-add re-proof (was HOURS; Tier-A). ──
+//
+// The full mechanized ADR-0034 re-proof at W_PC=16, W_BR=8 —
+//   (pc_add_br ; pc_inc)(PC,BR) == (PC + sext(BR) + 1) mod 2^W_PC
+// for ALL PC ∈ [0,2^16), BR ∈ [0,2^8) (2^24 = 16.7M pairs, HOURS by
+// simulation) — is now the SYMBOLIC BDD proof
+// `tests/bveq_step_poc.rs::bveq_pc_update_wpc16` + `bveq_pc_update_negative_control_wpc16`
+// (drop-+1, zero-extend-BR, carry-less-byte-split teeth). It proves the SAME
+// identity over the WHOLE (PC,BR) domain — and MORE, with regs/IR/scratch held
+// SYMBOLIC — in ~0.15 s, domain-size-independent, in the FAST tier. The fast
+// reality anchors `adr0034_split_add_sampled` (above, eval vs pc_update at
+// boundaries) and `bveq_step_poc::bveq_pc_update_bootstrap_wpc16` tie the
+// symbolic model back to the real interpreter. This is the single authority; no
+// duplicate slow sweep remains.
 
 // ══════════════════════════════════════════════════════════════════════
 // 2. The full step: lower once (rom1), verify samples
