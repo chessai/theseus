@@ -79,58 +79,29 @@ fn state_bits_shrinks_at_w_data_4() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 2. Whole-domain per-op equivalence at w_data=4 (the teeth)
+// 2. Whole-domain per-op equivalence at w_data=4 — RETIRED (GO-rollout)
 // ══════════════════════════════════════════════════════════════════════
 //
-// For EVERY 4-bit operand pair (a, b) ∈ 2^4 × 2^4, the w_data=4 netlist must
-// compute the RIGHT Add / Xor result mod 2^4. A mixed-width addressing bug
-// (a field mis-offset) misaligns the operand/target wires and corrupts the
-// result — this whole-domain sweep is what catches it. run_rom_on_cpu_with
-// lowers `step_with(&poc_layout, rom)` over the mixed-width carrier and runs
-// the real step, so this is the datapath, not a helper in isolation.
-
-fn run4(prog: &[Instr], a: u8, b: u8) -> StateVals {
-    let layout = poc_layout();
-    let init = state_with_regs(&[a, b]);
-    run_rom_on_cpu_with(&layout, prog, init, prog.len(), 0, theseus_eval::eval)
-        .unwrap_or_else(|e| panic!("w_data=4 run failed for a={a} b={b}: {e}"))
-}
-
-#[test]
-fn whole_domain_add_at_w_data_4() {
-    let prog = vec![Instr::Add { rd: 0, rs: 1 }]; // r0 += r1
-    for a in 0u8..16 {
-        for b in 0u8..16 {
-            let got = run4(&prog, a, b);
-            let want_r0 = (a + b) & 0x0F; // 4-bit add mod 16
-            assert_eq!(
-                got.regs[0], want_r0,
-                "Add r0+=r1 at w_data=4: a={a} b={b} → got r0={} want {want_r0}",
-                got.regs[0]
-            );
-            assert_eq!(got.regs[1], b, "Add: r1 (rs) must be preserved (a={a} b={b})");
-        }
-    }
-    eprintln!("whole-domain Add at w_data=4: all 256 (a,b) pairs == (a+b) mod 16 ✓");
-}
-
-#[test]
-fn whole_domain_xor_at_w_data_4() {
-    let prog = vec![Instr::Xor { rd: 0, rs: 1 }]; // r0 ^= r1
-    for a in 0u8..16 {
-        for b in 0u8..16 {
-            let got = run4(&prog, a, b);
-            let want_r0 = a ^ b; // both < 16 → result < 16
-            assert_eq!(
-                got.regs[0], want_r0,
-                "Xor r0^=r1 at w_data=4: a={a} b={b} → got r0={} want {want_r0}",
-                got.regs[0]
-            );
-            assert_eq!(got.regs[1], b, "Xor: r1 (rs) must be preserved (a={a} b={b})");
-        }
-    }
-    eprintln!("whole-domain Xor at w_data=4: all 256 (a,b) pairs == a^b ✓");
-}
+// The brute-force reduced-width sweeps here (`whole_domain_{add,xor,sub,exch,
+// ccnot,cswap}`, `whole_domain_imm`, `whole_domain_rotl_rotr`,
+// `whole_domain_rotli_rotri` — every point of 16×16 / 16³ run through the REAL
+// mixed-width step, the bulk of the ~2.27 h reduced-width sim baseline) are
+// RETIRED into `tests/b21c_bveq.rs`. ALL were SINGLE combinational straight-line
+// instructions (PC concrete, no BR / no loop → inside eval_bdd's fragment), so
+// each is now proved SYMBOLICALLY: one `eval_bdd` walk of `step_with(&poc_layout,
+// [instr])` with symbolic 4-bit registers ≡ its mixed-width ripple/xor/rotate
+// spec over the WHOLE 2^4-per-operand domain (a superset of the sample grids),
+// with a concrete-`theseus_eval` reality-anchor bootstrap + a negative control.
+// The mixed-width datapath (field offsets, pred base, barrel stages) is still
+// what is walked — the retirement changes the ORACLE (symbolic whole-domain),
+// not the system under test. ~2.27 h portion → ~23 s.
+//
+// KEPT here (fast, not brute-force sweeps): `state_bits_shrinks_at_w_data_4`,
+// `pred_base_is_w_data_plus_w_ctl_not_2_w_data` (structural pins),
+// `add_xor_kernel_run_on_cpu_eq_eval_at_w_data_4` (a 3-instr end-to-end
+// run_on_cpu==eval on 6 points), and `scratch_operand_ccnot_at_w_data_4`
+// (7-point mixed-width reg↔scratch crossbar routing tooth — the symbolic walk
+// is register-only, so this concrete scratch-routing check stays).
 
 // ══════════════════════════════════════════════════════════════════════
 // 3. run_on_cpu == eval on the add/xor kernel at w_data=4 (end-to-end)
@@ -237,220 +208,28 @@ fn pred_base_is_w_data_plus_w_ctl_not_2_w_data() {
     );
 }
 
-/// B-2.1c review MAJOR-2: the IMMEDIATE datapath (`imm_to_a`, LIVE + ¬fmt-gated
-/// in the shared ALU block) at `w_data=4`. Every other w4 test is R-format, so
-/// Addi/Subi/Xori at reduced w_data were UNCOVERED despite "reg+imm" being the
-/// POC scope (the L15 "correct by reading" trap). Whole-domain over rd-value ×
-/// 4-bit immediate — all 16×16 per op == the 4-bit arithmetic. (Immediates are
-/// ≤ 15, valid for w_data=4; the imm ≥ 2^w_data masking is a separate MINOR.)
-#[test]
-fn whole_domain_imm_at_w_data_4() {
-    for x in 0u8..16 {
-        for a in 0u8..16 {
-            let got = run4(&[Instr::Addi { rd: 0, imm: x }], a, 0);
-            assert_eq!(
-                got.regs[0],
-                (a + x) & 0x0F,
-                "Addi #{x} at w4: a={a} → r0={} want {}",
-                got.regs[0],
-                (a + x) & 0x0F
-            );
-
-            let got = run4(&[Instr::Xori { rd: 0, imm: x }], a, 0);
-            assert_eq!(
-                got.regs[0],
-                a ^ x,
-                "Xori #{x} at w4: a={a} → r0={} want {}",
-                got.regs[0],
-                a ^ x
-            );
-
-            let got = run4(&[Instr::Subi { rd: 0, imm: x }], a, 0);
-            assert_eq!(
-                got.regs[0],
-                a.wrapping_sub(x) & 0x0F,
-                "Subi #{x} at w4: a={a} → r0={} want {}",
-                got.regs[0],
-                a.wrapping_sub(x) & 0x0F
-            );
-        }
-    }
-    eprintln!("whole-domain Addi/Subi/Xori at w_data=4: all 16×16 per op == 4-bit arithmetic ✓");
-}
+// RETIRED (GO-rollout): `whole_domain_imm_at_w_data_4` (Addi/Subi/Xori, 16×16
+// each) → `b21c_bveq::b21c_bveq_whole_domain` (symbolic, whole 2^4 domain).
 
 // ══════════════════════════════════════════════════════════════════════
-// 5. B-2.1c-2 — the REMAINING ops whole-domained at w_data=4
+// 5. B-2.1c-2 — the REMAINING ops whole-domained at w_data=4 — RETIRED
 // ══════════════════════════════════════════════════════════════════════
+//
+// `whole_domain_{sub,exch,rotl_rotr,rotli_rotri,ccnot,cswap}_at_w_data_4`
+// (Sub/Exch 256 pts, Rotl/Rotr/Rotli/Rotri 16×16, Ccnot/Cswap 16³=4096 pts
+// each — the reduced-width hogs) are RETIRED into `b21c_bveq`. Each was a single
+// straight-line combinational instruction, now proved symbolically over the
+// whole operand domain (Cswap: both control polarities inside one walk; Ccnot:
+// the full 4-bit AND product; Rotl/Rotr: both barrel stages). The remaining
+// text below documents what the retired section covered:
 //
 // B-2.1c-1 (the POC) proved Add/Xor/imm at w_data=4. The `shared_alu_block`
 // wired-decode path ALREADY builds EVERY op at reduced w_data (`exch_core_at`,
 // `rotl_core_at`, `ccnot_core_at`, `cswap_core_at`, Sub = adder adjoint), but
-// only Add/Xor/imm were exercised. This section whole-domains the rest against
+// only Add/Xor/imm were exercised. This section whole-domained the rest against
 // the 4-bit arithmetic reference — the teeth for the untested cores (the
 // rotator's log2(w) barrel stages at w_data=4, the 3-operand controls that
 // could land on an always-zero s0/s1 high bit, and Sub/Exch).
-
-/// 4-bit left-rotate of `v` (low nibble) by `k` (mod 4).
-fn rotl4(v: u8, k: u32) -> u8 {
-    let v = (v & 0x0F) as u32;
-    let k = k % 4;
-    (((v << k) | (v >> ((4 - k) % 4))) & 0x0F) as u8
-}
-
-/// 4-bit right-rotate of `v` (low nibble) by `k` (mod 4).
-fn rotr4(v: u8, k: u32) -> u8 {
-    rotl4(v, (4 - (k % 4)) % 4)
-}
-
-#[test]
-fn whole_domain_sub_at_w_data_4() {
-    // Sub = the adder's adjoint (CFG_ADD_REV) at reduced width: r0 -= r1 mod 16.
-    let prog = vec![Instr::Sub { rd: 0, rs: 1 }];
-    for a in 0u8..16 {
-        for b in 0u8..16 {
-            let got = run4(&prog, a, b);
-            let want = a.wrapping_sub(b) & 0x0F;
-            assert_eq!(
-                got.regs[0], want,
-                "Sub r0-=r1 at w_data=4: a={a} b={b} → got r0={} want {want}",
-                got.regs[0]
-            );
-            assert_eq!(got.regs[1], b, "Sub: r1 (rs) preserved (a={a} b={b})");
-        }
-    }
-    eprintln!("whole-domain Sub at w_data=4: all 256 (a,b) == (a-b) mod 16 ✓");
-}
-
-#[test]
-fn whole_domain_exch_at_w_data_4() {
-    // Exch swaps r0,r1 as 4-bit words (the operand-space Fredkin at reduced w).
-    let prog = vec![Instr::Exch { rd: 0, rs: 1 }];
-    for a in 0u8..16 {
-        for b in 0u8..16 {
-            let got = run4(&prog, a, b);
-            assert_eq!(got.regs[0], b, "Exch: r0 must become b (a={a} b={b}) got {}", got.regs[0]);
-            assert_eq!(got.regs[1], a, "Exch: r1 must become a (a={a} b={b}) got {}", got.regs[1]);
-        }
-    }
-    eprintln!("whole-domain Exch at w_data=4: all 256 (a,b) swap correctly ✓");
-}
-
-#[test]
-fn whole_domain_rotl_rotr_at_w_data_4() {
-    // Rotl/Rotr: the barrel rotator at w_data=4 uses log2(4)=2 shift stages.
-    // The shift amount is r[rs] read at s0's low 2 bits → effectively `rs & 3`
-    // = `rs & (w_data-1)` (a 4-bit rotate, NOT `rs & 7`). Whole-domain over
-    // value × shift-amount (all 16×16); r1 (rs) supplies the shift.
-    for a in 0u8..16 {
-        for k in 0u8..16 {
-            let gotl = run4(&[Instr::Rotl { rd: 0, rs: 1 }], a, k);
-            let wantl = rotl4(a, k as u32);
-            assert_eq!(
-                gotl.regs[0], wantl,
-                "Rotl r0 by r1 at w4: a={a} k={k} (eff {}) → got {} want {wantl}",
-                k & 3, gotl.regs[0]
-            );
-
-            let gotr = run4(&[Instr::Rotr { rd: 0, rs: 1 }], a, k);
-            let wantr = rotr4(a, k as u32);
-            assert_eq!(
-                gotr.regs[0], wantr,
-                "Rotr r0 by r1 at w4: a={a} k={k} (eff {}) → got {} want {wantr}",
-                k & 3, gotr.regs[0]
-            );
-        }
-    }
-    eprintln!("whole-domain Rotl/Rotr at w_data=4: all 16×16 == 4-bit rotate (amt = k & 3) ✓");
-}
-
-#[test]
-fn whole_domain_rotli_rotri_at_w_data_4() {
-    // Rotli/Rotri: immediate barrel rotate. The shift amount is the immediate
-    // masked to s0's low 2 bits at w_data=4 (imm & (w_data-1)=imm & 3), NOT
-    // imm & 7 — verify the immediate shift-field masking is w_data-correct.
-    for a in 0u8..16 {
-        for imm in 0u8..16 {
-            let gotl = run4(&[Instr::Rotli { rd: 0, imm }], a, 0);
-            let wantl = rotl4(a, imm as u32);
-            assert_eq!(
-                gotl.regs[0], wantl,
-                "Rotli #{imm} at w4: a={a} (eff {}) → got {} want {wantl}",
-                imm & 3, gotl.regs[0]
-            );
-
-            let gotr = run4(&[Instr::Rotri { rd: 0, imm }], a, 0);
-            let wantr = rotr4(a, imm as u32);
-            assert_eq!(
-                gotr.regs[0], wantr,
-                "Rotri #{imm} at w4: a={a} (eff {}) → got {} want {wantr}",
-                imm & 3, gotr.regs[0]
-            );
-        }
-    }
-    eprintln!("whole-domain Rotli/Rotri at w_data=4: all 16×16 == 4-bit rotate (amt = imm & 3) ✓");
-}
-
-/// Ccnot at w_data=4: `r0 ^= r1 & r2`, 4-bit-parallel. rt (r2) rides in BR
-/// (w_ctl=8) zero-extended to its low w_data bits — verify the 3-operand path
-/// + BR restoration (run_rom_on_cpu_with hard-fails if terminal BR != 0). Full
-/// 3-operand domain 16³ = 4096. Operands must be distinct (assembler rejects
-/// aliases): rd=0, rs=1, rt=2.
-#[test]
-fn whole_domain_ccnot_at_w_data_4() {
-    let prog = vec![Instr::Ccnot { rd: 0, rs: 1, rt: 2 }];
-    for a in 0u8..16 {
-        for b in 0u8..16 {
-            for c in 0u8..16 {
-                let init = state_with_regs(&[a, b, c]);
-                let got = run_rom_on_cpu_with(
-                    &poc_layout(), &prog, init, prog.len(), 0, theseus_eval::eval,
-                )
-                .unwrap_or_else(|e| panic!("Ccnot w4 run failed a={a} b={b} c={c}: {e}"));
-                let want = a ^ (b & c);
-                assert_eq!(
-                    got.regs[0], want,
-                    "Ccnot r0^=r1&r2 at w4: a={a} b={b} c={c} → got {} want {want}",
-                    got.regs[0]
-                );
-                assert_eq!(got.regs[1], b, "Ccnot: r1 preserved (a={a} b={b} c={c})");
-                assert_eq!(got.regs[2], c, "Ccnot: r2 preserved (a={a} b={b} c={c})");
-            }
-        }
-    }
-    eprintln!("whole-domain Ccnot at w_data=4: all 4096 (a,b,c) == a^(b&c), BR restored ✓");
-}
-
-/// Cswap at w_data=4: swap r1,r2 (4-bit words) gated on r0[0]. Both polarities
-/// (r0[0]=0 → identity; r0[0]=1 → swap). rt rides in BR zero-extended. Full
-/// 3-operand domain 16³. rd=0, rs=1, rt=2 (distinct).
-#[test]
-fn whole_domain_cswap_at_w_data_4() {
-    let prog = vec![Instr::Cswap { rd: 0, rs: 1, rt: 2 }];
-    for a in 0u8..16 {
-        for b in 0u8..16 {
-            for c in 0u8..16 {
-                let init = state_with_regs(&[a, b, c]);
-                let got = run_rom_on_cpu_with(
-                    &poc_layout(), &prog, init, prog.len(), 0, theseus_eval::eval,
-                )
-                .unwrap_or_else(|e| panic!("Cswap w4 run failed a={a} b={b} c={c}: {e}"));
-                let (want1, want2) = if a & 1 == 1 { (c, b) } else { (b, c) };
-                assert_eq!(
-                    got.regs[1], want1,
-                    "Cswap r1↔r2 iff r0[0] at w4: a={a} b={b} c={c} → r1 got {} want {want1}",
-                    got.regs[1]
-                );
-                assert_eq!(
-                    got.regs[2], want2,
-                    "Cswap r1↔r2 iff r0[0] at w4: a={a} b={b} c={c} → r2 got {} want {want2}",
-                    got.regs[2]
-                );
-                assert_eq!(got.regs[0], a, "Cswap: r0 (control) preserved (a={a} b={b} c={c})");
-            }
-        }
-    }
-    eprintln!("whole-domain Cswap at w_data=4: all 4096 both polarities correct, BR restored ✓");
-}
 
 // ══════════════════════════════════════════════════════════════════════
 // 6. B-2.1c-2 — a SCRATCH operand at w_data=4 (mixed-width crossbar)
