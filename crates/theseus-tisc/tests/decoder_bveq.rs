@@ -57,13 +57,13 @@
 use std::time::Instant;
 
 use theseus_tisc::asm::{self, Instr};
-use theseus_tisc::bveq::{expr_to_bdd, instr_semantics, BITS};
+use theseus_tisc::bveq::{expr_to_bdd, instr_semantics, VarMap, BITS};
 use theseus_tisc::bveq_netlist::{
     build_cpu_init, eval_bdd, extended_varmap, extract_field, extract_word8_bdds, needs_s0_pinned,
-    sv_flatten, sv_word8_symbolic, WalkCtx, OP_BR, OP_S0,
+    sv_flatten, sv_word8_const, sv_word8_symbolic, WalkCtx, EXTENDED_NUM_OPERANDS, OP_BR, OP_S0,
 };
 use theseus_tisc::decoder::{self, Op};
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_CPU_FIELDS, NUM_REGS, W};
+use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_CPU_FIELDS, NUM_REGS, NUM_SCRATCH, W};
 
 // ── big-stack: Iso trees + adjoint() recursion overflow the 2 MiB worker ──
 fn big_stack<F, R>(f: F) -> R
@@ -125,12 +125,73 @@ fn assert_word8_identity(sv: &theseus_tisc::bveq_netlist::SV, entry: &theseus_ti
     }
 }
 
+/// VarMap operand base for the s2..s7 SYMBOLIC scratch words (MINOR: catch a
+/// spurious scratch read/write). Appended AFTER the 14 standard extended
+/// operands (regs 0-7, s0 8, BR 9, mem 10-13). `RegTransfer`/`instr_semantics`
+/// only reference register operands (0-7), so these extra operands never appear
+/// in the expected BDDs — but they DO appear in the wired-decoder output if the
+/// decode path spuriously reads/writes s2.., which the identity assertion catches.
+const OP_S2_BASE: usize = EXTENDED_NUM_OPERANDS; // 14
+/// Number of DATA scratch words s2..s7 made symbolic.
+const N_SYM_SCRATCH: usize = NUM_SCRATCH - 2; // 6 (s2..s7)
+/// Wider VarMap: 14 standard operands + 6 for s2..s7.
+fn scratch_symbolic_varmap() -> VarMap {
+    VarMap::new(EXTENDED_NUM_OPERANDS + N_SYM_SCRATCH).expect("scratch-symbolic VarMap")
+}
+
+/// Right-nested product SV from a slice (mirrors bveq_netlist::sv_right_nested,
+/// which is private).
+fn sv_right_nested(svs: &[theseus_tisc::bveq_netlist::SV]) -> theseus_tisc::bveq_netlist::SV {
+    let mut sv = svs[svs.len() - 1].clone();
+    for head in svs[..svs.len() - 1].iter().rev() {
+        sv = theseus_tisc::bveq_netlist::SV::pair(head.clone(), sv);
+    }
+    sv
+}
+
+/// Like `build_cpu_init`, but s2..s7 are SYMBOLIC (from operands OP_S2_BASE..)
+/// instead of pinned to 0 — so a spurious scratch read (output depends on s2..)
+/// or write (output != symbolic input) is caught by the identity assertion.
+/// s0/s1 stay CONTROL (pinned per `pin_s0`/convention).
+fn build_cpu_init_scratch_symbolic(map: &VarMap, word: u32, pin_s0: bool) -> theseus_tisc::bveq_netlist::SV {
+    use theseus_tisc::bveq_netlist::SV;
+    let vs = map.bdd_vars();
+    let mut fields: Vec<SV> = Vec::with_capacity(NUM_CPU_FIELDS);
+    // r0-r7 symbolic
+    for i in 0..NUM_REGS {
+        fields.push(sv_word8_symbolic(map, i));
+    }
+    fields.push(sv_word8_const(0, vs)); // PC_lo = 0
+    fields.push(sv_word8_symbolic(map, OP_BR)); // BR symbolic
+    for byte in 0..4 {
+        fields.push(sv_word8_const((word >> (8 * byte)) as u8, vs)); // IR bytes
+    }
+    // s0 (control) — pinned or symbolic
+    if pin_s0 {
+        fields.push(sv_word8_const(0, vs));
+    } else {
+        fields.push(sv_word8_symbolic(map, OP_S0));
+    }
+    fields.push(sv_word8_const(0, vs)); // s1 (control) = 0
+    // s2..s7 (DATA scratch) SYMBOLIC.
+    for j in 0..N_SYM_SCRATCH {
+        fields.push(sv_word8_symbolic(map, OP_S2_BASE + j));
+    }
+    fields.push(sv_word8_const(0, vs)); // PC_hi (field 22) = 0
+    assert_eq!(fields.len(), NUM_CPU_FIELDS, "cpu init field count");
+    sv_right_nested(&fields)
+}
+
 /// The heart of the authority: walk the WIRED `decode_execute` on the concrete
 /// IR word for `instr` (operand VALUES symbolic), and prove the register
 /// outputs equal the INDEPENDENT `instr_semantics(instr)` over the whole
-/// symbolic domain, plus the full frame (PC / BR / IR / s0..s7) is preserved.
+/// symbolic domain, plus the full frame (PC_lo / PC_hi / BR / IR / s0..s7) is
+/// preserved — s2..s7 SYMBOLIC and asserted IDENTITY.
 fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
-    let map = extended_varmap();
+    // Wider map: 14 standard operands + 6 for symbolic s2..s7. Both the walk
+    // input AND `expr_to_bdd` use THIS map, so the comparison stays sound (the
+    // register expressions reference only operands 0-7, unchanged in meaning).
+    let map = scratch_symbolic_varmap();
     let vs = map.bdd_vars();
     let word = asm::encode(instr).unwrap_or_else(|e| panic!("{label}: encode: {e}"));
     // s0 = 0 on entry is the shared-decoder CONVENTION: unlike the per-op
@@ -142,7 +203,7 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
     // restored to 0 on exit.
     let pin_s0 = true;
     let _ = needs_s0_pinned(&instr);
-    let init_sv = build_cpu_init(&map, word, pin_s0);
+    let init_sv = build_cpu_init_scratch_symbolic(&map, word, pin_s0);
 
     // THE WIRED DECODER — full shared-crossbar dispatch, not the per-op iso.
     let iso = decoder::decode_execute();
@@ -167,9 +228,10 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
         }
     }
 
-    // Frame: PC=0 (decode_execute does not touch PC), BR/s0 restored,
-    // IR preserved (concrete word), s1..s7 = 0 (ancilla clean).
-    assert_word8_zero(extract_field(&out_sv, 8, NUM_CPU_FIELDS), vs, &format!("{label}: PC"));
+    // Frame: PC_lo=0 (decode_execute does not touch PC), BR/s0 restored,
+    // IR preserved (concrete word), s1 = 0, s2..s7 = identity (symbolic in),
+    // PC_hi (field 22) = 0 (MAJOR-3: a stray write into PC_hi was invisible).
+    assert_word8_zero(extract_field(&out_sv, 8, NUM_CPU_FIELDS), vs, &format!("{label}: PC_lo"));
     let br_entry = sv_word8_symbolic(&map, OP_BR);
     assert_word8_identity(extract_field(&out_sv, 9, NUM_CPU_FIELDS), &br_entry, &format!("{label}: BR"));
     for byte in 0..4 {
@@ -186,9 +248,22 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
         let s0_entry = sv_word8_symbolic(&map, OP_S0);
         assert_word8_identity(extract_field(&out_sv, 14, NUM_CPU_FIELDS), &s0_entry, &format!("{label}: s0"));
     }
-    for i in 1..8 {
-        assert_word8_zero(extract_field(&out_sv, 14 + i, NUM_CPU_FIELDS), vs, &format!("{label}: s{i}"));
+    // s1 (control) = 0.
+    assert_word8_zero(extract_field(&out_sv, 15, NUM_CPU_FIELDS), vs, &format!("{label}: s1"));
+    // s2..s7: SYMBOLIC input must be restored to IDENTITY (a spurious scratch
+    // read/write — invisible when s2.. was pinned to 0 — is caught here).
+    for j in 0..N_SYM_SCRATCH {
+        let s_entry = sv_word8_symbolic(&map, OP_S2_BASE + j);
+        assert_word8_identity(
+            extract_field(&out_sv, 16 + j, NUM_CPU_FIELDS),
+            &s_entry,
+            &format!("{label}: s{} (symbolic scratch identity)", j + 2),
+        );
     }
+    // MAJOR-3: PC_hi is field 22 (NUM_CPU_FIELDS=23, build_cpu_init puts PC_hi
+    // there); a stray write into it was previously unasserted (invisible).
+    assert_eq!(NUM_CPU_FIELDS, 23, "field layout: NUM_CPU_FIELDS must be 23 (PC_hi at 22)");
+    assert_word8_zero(extract_field(&out_sv, 22, NUM_CPU_FIELDS), vs, &format!("{label}: PC_hi"));
     walk_s
 }
 
@@ -206,31 +281,47 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
 fn decoder_bveq_whole_domain() {
     // Selector configs per op: distinct rd/rs/rt indices exercising crossbar
     // routing (low / mid / high; rs=0 carry corner; both 3-op arrangements).
-    let configs: Vec<(Instr, &str)> = vec![
-        (Instr::Add { rd: 0, rs: 1 }, "Add(0,1)"),
-        (Instr::Add { rd: 1, rs: 0 }, "Add(1,0)-rs=0"),
-        (Instr::Add { rd: 3, rs: 5 }, "Add(3,5)"),
-        (Instr::Sub { rd: 0, rs: 1 }, "Sub(0,1)"),
-        (Instr::Sub { rd: 3, rs: 5 }, "Sub(3,5)"),
-        (Instr::Xor { rd: 0, rs: 1 }, "Xor(0,1)"),
-        (Instr::Xor { rd: 6, rs: 7 }, "Xor(6,7)"),
-        (Instr::Exch { rd: 0, rs: 1 }, "Exch(0,1)"),
-        (Instr::Exch { rd: 2, rs: 7 }, "Exch(2,7)"),
-        (Instr::Rotl { rd: 1, rs: 3 }, "Rotl(1,3)"),
-        (Instr::Rotl { rd: 0, rs: 1 }, "Rotl(0,1)"),
-        (Instr::Rotr { rd: 5, rs: 2 }, "Rotr(5,2)"),
-        (Instr::Cswap { rd: 0, rs: 1, rt: 2 }, "Cswap(0,1,2)"),
-        (Instr::Cswap { rd: 4, rs: 3, rt: 6 }, "Cswap(4,3,6)"),
-        (Instr::Ccnot { rd: 0, rs: 1, rt: 2 }, "Ccnot(0,1,2)"),
-        (Instr::Ccnot { rd: 5, rs: 3, rt: 7 }, "Ccnot(5,3,7)"),
-        (Instr::Addi { rd: 0, imm: 42 }, "Addi(0,42)"),
-        (Instr::Addi { rd: 3, imm: 255 }, "Addi(3,255)"),
-        (Instr::Subi { rd: 2, imm: 100 }, "Subi(2,100)"),
-        (Instr::Xori { rd: 5, imm: 0xFF }, "Xori(5,0xFF)"),
-        (Instr::Xori { rd: 0, imm: 1 }, "Xori(0,1)"),
-        (Instr::Rotli { rd: 2, imm: 3 }, "Rotli(2,3)"),
-        (Instr::Rotri { rd: 7, imm: 5 }, "Rotri(7,5)"),
+    let mut configs: Vec<(Instr, String)> = vec![
+        (Instr::Add { rd: 0, rs: 1 }, "Add(0,1)".into()),
+        (Instr::Add { rd: 1, rs: 0 }, "Add(1,0)-rs=0".into()),
+        (Instr::Add { rd: 3, rs: 5 }, "Add(3,5)".into()),
+        (Instr::Sub { rd: 0, rs: 1 }, "Sub(0,1)".into()),
+        (Instr::Sub { rd: 3, rs: 5 }, "Sub(3,5)".into()),
+        (Instr::Xor { rd: 0, rs: 1 }, "Xor(0,1)".into()),
+        (Instr::Xor { rd: 6, rs: 7 }, "Xor(6,7)".into()),
+        (Instr::Exch { rd: 0, rs: 1 }, "Exch(0,1)".into()),
+        (Instr::Exch { rd: 2, rs: 7 }, "Exch(2,7)".into()),
+        (Instr::Rotl { rd: 1, rs: 3 }, "Rotl(1,3)".into()),
+        (Instr::Rotl { rd: 0, rs: 1 }, "Rotl(0,1)".into()),
+        (Instr::Rotr { rd: 5, rs: 2 }, "Rotr(5,2)".into()),
+        (Instr::Cswap { rd: 0, rs: 1, rt: 2 }, "Cswap(0,1,2)".into()),
+        (Instr::Cswap { rd: 4, rs: 3, rt: 6 }, "Cswap(4,3,6)".into()),
+        (Instr::Ccnot { rd: 0, rs: 1, rt: 2 }, "Ccnot(0,1,2)".into()),
+        (Instr::Ccnot { rd: 5, rs: 3, rt: 7 }, "Ccnot(5,3,7)".into()),
     ];
+
+    // ── IMMEDIATE bit-lane coverage (MAJOR-2) ───────────────────────────
+    // The retired sims swept the FULL immediate byte (256 values at w8). The
+    // original BVEQ configs pinned 1-2 arbitrary imms (Addi{42,255}, Subi{100})
+    // that do NOT distinguish imm bit-lanes — a bit1↔bit3 imm-lane cross is
+    // invisible. Restore lane coverage: the one-hots {1,2,4,8,16,32,64,128}
+    // exercise every imm bit-lane INDEPENDENTLY, plus two binary-signature
+    // values (0xAA=10101010, 0xCC=11001100) cross lanes. The operand VALUES are
+    // already symbolic, so this single axis (the immediate) is what needs the
+    // sweep; each (op, imm) walk still covers the WHOLE 2^8 operand domain.
+    let imm_lane_set: [u8; 10] = [1, 2, 4, 8, 16, 32, 64, 128, 0xAA, 0xCC];
+    for &imm in &imm_lane_set {
+        configs.push((Instr::Addi { rd: 0, imm }, format!("Addi(0,{imm:#04x})")));
+        configs.push((Instr::Subi { rd: 2, imm }, format!("Subi(2,{imm:#04x})")));
+        configs.push((Instr::Xori { rd: 5, imm }, format!("Xori(5,{imm:#04x})")));
+    }
+    // Rotli/Rotri imm is a rotate AMOUNT masked to `& 7` (3 effective bits), so
+    // amounts {0..=7} are EXHAUSTIVE over the whole effective-amount domain —
+    // every amount lane exercised, nothing hidden.
+    for imm in 0u8..=7 {
+        configs.push((Instr::Rotli { rd: 2, imm }, format!("Rotli(2,{imm})")));
+        configs.push((Instr::Rotri { rd: 7, imm }, format!("Rotri(7,{imm})")));
+    }
 
     big_stack(move || {
         let t_all = Instant::now();
@@ -242,8 +333,10 @@ fn decoder_bveq_whole_domain() {
             eprintln!("  {label}: walk {:.0} ms", w * 1e3);
         }
         eprintln!(
-            "DECODER-BVEQ whole-domain: {} configs, wired decode_execute ≡ instr_semantics over the \
-             WHOLE symbolic operand domain (superset of the retired sim grids); total {:.2}s \
+            "DECODER-BVEQ whole-domain: {} configs, wired decode_execute ≡ instr_semantics — \
+             SUPERSET on the operand-value axis (WHOLE 2^8-per-operand domain vs the retired sim \
+             grids) and LANE-COMPLETE on the immediate axis (one-hots {{1,2,4,8,16,32,64,128}} + \
+             signatures {{0xAA,0xCC}}, rotate amounts 0..=7 exhaustive); total {:.2}s \
              (decoder.rs sim baseline: ~53 min).",
             configs.len(),
             t_all.elapsed().as_secs_f64()
@@ -407,6 +500,28 @@ fn decoder_bveq_negative_control() {
         let differs = (0..BITS).any(|b| out2_r0[b] != out_r0[b]);
         assert!(differs, "NEG: Add word must decode differently from Xor word (teeth)");
 
-        eprintln!("DECODER-BVEQ negative control: wired decode ≠ {{Add-semantics, Add-word}} — teeth.");
+        // WRONG-3 (MAJOR-3 teeth): the real decode leaves PC_hi (field 22) = 0.
+        // A stray write into PC_hi (e.g. a copy of r0) would leave it != 0. Prove
+        // the new PC_hi assertion has TEETH: the true PC_hi output (const 0)
+        // DIFFERS from a stray-copy-of-r0 candidate on the domain where r0 != 0.
+        let pc_hi_out = extract_word8_bdds(extract_field(&out_sv, 22, NUM_CPU_FIELDS));
+        let f = vs.mk_false();
+        for (i, b) in pc_hi_out.iter().enumerate() {
+            assert!(*b == f, "sanity: real PC_hi bit {i} must be 0");
+        }
+        let stray_r0 = extract_word8_bdds(&sv_word8_symbolic(&map, 0)); // r0 symbolic in
+        let pc_hi_differs = (0..BITS).any(|b| pc_hi_out[b] != stray_r0[b]);
+        assert!(
+            pc_hi_differs,
+            "NEG PC_hi: a stray PC_hi=r0 write must DIFFER from the real PC_hi=0 (teeth)"
+        );
+        let r0_nonzero = stray_r0.iter().fold(f.clone(), |acc, b| acc.or(b));
+        assert!(
+            r0_nonzero.sat_witness().is_some(),
+            "NEG PC_hi: stray-copy witness (r0 != 0) must be satisfiable"
+        );
+
+        eprintln!("DECODER-BVEQ negative control: wired decode ≠ {{Add-semantics, Add-word}}; \
+                   real PC_hi=0 ≠ a stray PC_hi=r0 write — teeth (incl. MAJOR-3 PC_hi).");
     });
 }

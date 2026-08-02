@@ -100,8 +100,9 @@ fn build_state<F: Fn(usize) -> SV>(layout: &Layout, mk: F) -> SV {
     for f in (0..nf - 1).rev() {
         sv = SV::pair(mk(f), sv);
     }
-    // Sanity: it must structurally match state_ty_with(layout).
-    debug_assert!(matches_type(&sv, layout));
+    // Sanity: it must structurally match state_ty_with(layout). HARD assert (a
+    // carrier-shape misalignment must fault even under --release).
+    assert!(matches_type(&sv, layout), "build_state: SV shape != state_ty_with(layout)");
     sv
 }
 
