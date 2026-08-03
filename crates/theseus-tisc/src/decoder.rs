@@ -1638,6 +1638,10 @@ pub fn decode_execute_ops(ops: &[Op]) -> Iso {
 ///
 /// Swapbr / Ccnot / Cswap / Xchg stay separate (their brackets differ --
 /// see `decode_execute_shared`).
+///
+/// MEASUREMENT-ONLY: the pre-B1.3 reg+imm block, reachable only via
+/// `reg_imm_shared_for_measurement`. The wired decoder uses `shared_alu_block`.
+#[cfg(feature = "measurement")]
 fn reg_imm_shared(layout: &Layout) -> Iso {
     let fetch_rs = fetch_rs_fmt_gated(layout);
     let inner = with_target(layout, R_RD, reg_imm_alu(layout));
@@ -1768,6 +1772,9 @@ fn imm_to_a(layout: &Layout) -> Iso {
 /// cores). Kept ONLY so `poc_b11_shared_alu_measure` can lower it and
 /// report the Group-A-portion delta vs the shared configurable ALU
 /// (`group_a_shared`). NOT wired into the decoder.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn group_a_pre_b11_for_measurement() -> Iso {
     let l = &Layout::default();
     let cores = seq_balanced(vec![
@@ -1786,6 +1793,9 @@ pub fn group_a_pre_b11_for_measurement() -> Iso {
 /// group_a_alu_view())` -- the register-only fold (no imm A-source, no
 /// I-format config lines), kept so the B1.1 Group-A-portion Δ is still
 /// reproducible after the unification.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn group_a_shared_for_measurement() -> Iso {
     let l = &Layout::default();
     with_two_regs(l, R_RD, R_RS, group_a_alu_view(l))
@@ -1794,16 +1804,22 @@ pub fn group_a_shared_for_measurement() -> Iso {
 /// B1.2 measurement hook: the UNIFIED reg+imm block (was group_a_shared +
 /// group_b_shared). Its balanced cell mass vs (B1.1 group_a + group_b) is
 /// the apples-to-apples "did we remove the group_b block" number.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn reg_imm_shared_for_measurement() -> Iso {
     reg_imm_shared(&Layout::default())
 }
 
 /// B1.3 measurement/equiv hook: the UNIVERSAL 3-operand shared block
-/// (reg+imm + Ccnot + Cswap). Its balanced mass vs the pre-B1.3 (reg_imm
-/// 185864 + ccnot 75520 + cswap 63770) is the "did the two private
+/// (reg+imm + Ccnot + Cswap). Its balanced mass vs the pre-B1.3 sum of the
+/// separate reg_imm, ccnot, and cswap blocks is the "did the two private
 /// crossbars collapse" number; it is also the isolated block the B1.3
 /// whole-domain equiv test evaluates (all other blocks -- xchg/swapbr -- are
 /// the identity for reg+imm/ccnot/cswap opcodes).
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn shared_alu_block_for_measurement() -> Iso {
     shared_alu_block(&Layout::default())
 }
@@ -1811,6 +1827,9 @@ pub fn shared_alu_block_for_measurement() -> Iso {
 /// B1.2 measurement hook: the pre-B1.2 group_b (5 per-op predicated
 /// immediate cores under one shared sel_rd), so its balanced mass can be
 /// summed with B1.1's group_a for the removal comparison. NOT wired.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn group_b_pre_b12_for_measurement() -> Iso {
     let l = &Layout::default();
     let sel_rd = select_operand(R_RD, operand_field);
@@ -1828,6 +1847,9 @@ pub fn group_b_pre_b12_for_measurement() -> Iso {
 /// each block's BALANCED cell mass can be measured individually. This
 /// grounds the B-1 re-sequencing decision -- where the un-shared *routing*
 /// mass actually lives (the controlled ops each carry a PRIVATE crossbar).
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn decode_blocks_for_measurement() -> Vec<(&'static str, Iso)> {
     let l = &Layout::default();
     vec![
@@ -2060,6 +2082,10 @@ fn alu_config_decode_families(layout: &Layout, include_i: bool) -> Iso {
 /// adjoint gated on `CFG_ROT_REV` (`Iso::sym` of the config-wired forward
 /// block, so the whole reverse block still carries the config line as its
 /// per-gate control).
+///
+/// MEASUREMENT-ONLY: reachable only through `reg_imm_shared`. The wired
+/// decoder's ALU cores live inside `shared_alu_block`.
+#[cfg(feature = "measurement")]
 fn reg_imm_alu(layout: &Layout) -> Iso {
     let imm = imm_to_a(layout);
     let decode = alu_config_decode(layout);
@@ -2161,7 +2187,8 @@ fn cswap_core_at(layout: &Layout, cfg: usize) -> Iso {
 /// six cores don't consume (they're computed + uncomputed, unused here), so
 /// this is no longer bit-identical to the pre-B1.2 `group_a_alu` -- treat the
 /// number as indicative, not exact. Measurement-only; NOT wired into the
-/// decoder (the wired path is `reg_imm_alu` inside `shared_alu_block`).
+/// decoder (the wired ALU path is `shared_alu_block`).
+#[cfg(feature = "measurement")]
 fn group_a_alu_view(layout: &Layout) -> Iso {
     let decode = alu_config_decode_families(layout, false);
     let core = seq_balanced(vec![

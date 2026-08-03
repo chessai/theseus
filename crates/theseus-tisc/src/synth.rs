@@ -592,14 +592,15 @@ const NUM_OPERAND_LOCS: usize = 16;
 /// and ≥16 would panic `operand_get`). Returns `Err(MalformedSpec)` -- a
 /// verification-time reject, not a ROM-time panic (MINOR-3).
 fn check_operand_legal(what: &str, op: u8) -> Result<(), SynthError> {
-    // MEASUREMENT-ONLY relaxation: `transcribe_word_bennett_peak_measure` raises the
-    // operand cap for the duration of its call (thread-local) so an over-budget body
-    // can PLACE for length/peak COUNTING using the future widen-state scratch slots
-    // (idx 16..=19). Production (the flag unset) keeps the strict `NUM_OPERAND_LOCS`
-    // cap → behavior is byte-identical off the measurement path. The reserved s0/s1
-    // (8/9) are rejected regardless. Bodies emitted under the relaxed cap are NOT
-    // executable (`exec_instr` panics at idx ≥ 16).
-    let cap = RELAXED_OPERAND_CAP.with(|c| c.get());
+    // The operand cap is the strict machine cap `NUM_OPERAND_LOCS` in
+    // production. Under the `measurement` feature it may be RAISED for the
+    // duration of `transcribe_word_bennett_peak_measure` (thread-local) so an
+    // over-budget body can PLACE for length/peak COUNTING using the future
+    // widen-state scratch slots (idx 16..=19); behavior is byte-identical off
+    // the measurement path. The reserved s0/s1 (8/9) are rejected regardless.
+    // Bodies emitted under the relaxed cap are NOT executable (exec_instr
+    // panics at idx >= 16).
+    let cap = current_operand_cap();
     if (op as usize) >= cap {
         return Err(SynthError::MalformedSpec {
             detail: format!("{what} operand {op} is out of range (≥{cap})"),
@@ -616,6 +617,23 @@ fn check_operand_legal(what: &str, op: u8) -> Result<(), SynthError> {
     Ok(())
 }
 
+/// Current exclusive upper bound for operand-index legality. In production this
+/// is the strict machine cap `NUM_OPERAND_LOCS` (=16). Under the `measurement`
+/// feature it reads the thread-local cap, which is raised only inside
+/// `transcribe_word_bennett_peak_measure`.
+#[cfg(not(feature = "measurement"))]
+#[inline]
+fn current_operand_cap() -> usize {
+    NUM_OPERAND_LOCS
+}
+
+#[cfg(feature = "measurement")]
+#[inline]
+fn current_operand_cap() -> usize {
+    RELAXED_OPERAND_CAP.with(|c| c.get())
+}
+
+#[cfg(feature = "measurement")]
 thread_local! {
     /// Exclusive upper bound for operand-index legality. Defaults to the strict
     /// machine cap `NUM_OPERAND_LOCS` (=16). Raised ONLY inside
@@ -627,15 +645,18 @@ thread_local! {
 /// RAII guard that raises `RELAXED_OPERAND_CAP` for the duration of a
 /// MEASUREMENT-ONLY word-Bennett placement and restores it on drop (even on the
 /// early-return `?` paths). Production code never constructs this guard.
+#[cfg(feature = "measurement")]
 struct RelaxedOperandCap {
     prev: usize,
 }
+#[cfg(feature = "measurement")]
 impl RelaxedOperandCap {
     fn new(cap: usize) -> Self {
         let prev = RELAXED_OPERAND_CAP.with(|c| c.replace(cap));
         RelaxedOperandCap { prev }
     }
 }
+#[cfg(feature = "measurement")]
 impl Drop for RelaxedOperandCap {
     fn drop(&mut self) {
         let prev = self.prev;
@@ -3426,6 +3447,9 @@ pub fn transcribe_word_bennett_peak(
 /// operand indices ≥ 16 that `exec_instr` panics on -- it is a length/peak
 /// measurement artifact, never a runnable program. The relaxation is scoped to this
 /// call: production behavior of every other entry is unchanged.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn transcribe_word_bennett_peak_measure(
     fwd: &WForward,
     bwd: &WForward,
@@ -3433,12 +3457,14 @@ pub fn transcribe_word_bennett_peak_measure(
     out_ancilla: &[u8],
     work_ops: &[u8],
 ) -> Result<(Vec<Instr>, usize), SynthError> {
-    // Relaxed cap = 200 → generous headroom (regs 0..7, scratch 10..200), still
-    // rejects the decoder-reserved s0/s1 (8/9), so the HONEST peak is measured even
-    // if it far exceeds the +4 (=18-operand) widen-state target; the caller reports
-    // whether it fits 18. The guard restores the strict cap on every exit path
-    // (including `?` early returns).
-    let _guard = RelaxedOperandCap::new(200);
+    /// Relaxed operand cap for peak measurement: generous headroom (regs 0..7,
+    /// scratch 10..MEASURE_OPERAND_CAP) that still rejects the decoder-reserved
+    /// s0/s1 (8/9), so the HONEST peak is measured even if it far exceeds the
+    /// +4 (=18-operand) widen-state target; the caller reports whether it fits 18.
+    const MEASURE_OPERAND_CAP: usize = 200;
+    // The guard restores the strict cap on every exit path (including `?`
+    // early returns).
+    let _guard = RelaxedOperandCap::new(MEASURE_OPERAND_CAP);
     transcribe_word_bennett_peak_impl(fwd, bwd, carrier_ops, out_ancilla, work_ops)
 }
 

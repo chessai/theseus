@@ -648,6 +648,7 @@ fn wd_state(ir: u32, rd_val: u8, rs_val: u8) -> StateVals {
 /// `shared_alu_block` (reg+imm + Ccnot + Cswap); the other decode blocks
 /// (xchg/swapbr) are the identity for these opcodes, so the isolated block
 /// == `instruction(op)` is a valid whole-domain equivalence.
+#[cfg(feature = "measurement")]
 fn wd_unified_ctx() -> &'static Iso {
     static CTX: OnceLock<Iso> = OnceLock::new();
     CTX.get_or_init(decoder::shared_alu_block_for_measurement)
@@ -791,6 +792,7 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
 /// coverage gap (Ccnot-scratch is covered by `blocker2_ccnot_uses_scratch_
 /// operand`, but Cswap routing an operand into the shared B-slot via the
 /// reg∪scratch crossbar had no direct tooth). Both control polarities.
+#[cfg(feature = "measurement")]
 #[test]
 fn b13_cswap_scratch_operand_equiv() {
     let unified = wd_unified_ctx();

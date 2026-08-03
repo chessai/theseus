@@ -12,6 +12,11 @@ z3-crosscheck = []
 # tier so the per-attempt maestro gate is fast; advisor runs `--features
 # heavy-tests` (single-threaded -- concurrent heavy tests OOM) before merge.
 heavy-tests = []
+# Gate internal energy-regression MEASUREMENT scaffolding (deliberately
+# non-runnable programs, decoder pre-unification hooks, and BDD-shift canary
+# helpers) out of the default public API. Enable to build/run the measurement
+# entry points and their tests: `cargo test --features measurement`.
+measurement = []
 
 [dependencies]
 theseus-core = { path = "../theseus-core" }

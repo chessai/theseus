@@ -167,9 +167,13 @@ pub fn expr_to_bdd(expr: &BvExpr, map: &VarMap) -> Result<Bdd, BveqError> {
 }
 
 /// Encode a `BvExpr` to BDD with operand indices shifted by
-/// `operand_shift` (mod `num_operands`). Used by the MAJOR-4 canary test to
+/// `operand_shift` (mod `num_operands`). Used by the mismap canary test to
 /// prove the shared-mapping discipline is load-bearing: under a shifted
 /// mapping, genuinely-equal transfers produce different BDDs.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature; it exists solely
+/// for the canary test and is not part of the default public API.
+#[cfg(feature = "measurement")]
 #[doc(hidden)]
 pub fn expr_to_bdd_shifted(
     expr: &BvExpr,
