@@ -86,7 +86,7 @@
 > a 4th payload leaf by paging a zero-init padding leaf to `Scratch(2)` across the backward jump --
 > `MAX_LEAVES_LOOP` 3→4, `n_input+1 ≤ budget` guard (live-input spill still rejected), pinned
 > `check_pattern_kleaf`/`mde_spill_walk` recognizer, whole-body paging bracket (2 `Xchg`). Highest-bar
-> `lower_trace` change: full L19/L20/L21, Fable impl-review SHIP, **real `system_step`==eval across 5
+> `lower_trace` change: full L19/L20/L21, implementation review SHIP, **real `system_step`==eval across 5
 > back-edges with the spilled leaf live** + `validate()==Ok`/eval^R. Machinery-proof (like M-D.d), not
 > yet a useful program. Reviews `docs/reviews/mde-spill-{design-review-r2,impl-review}.md`.
 > **BVEQ arc -- symbolic-BDD recognizer trust core (2026-07-21/22, tip ~`75ff066`+):** a `bveq` module
@@ -103,7 +103,7 @@
 > symbolic-prim RECOGNITION via selection-by-equiv (iterate the finite arm library, `symbolic_exec` each
 > candidate, `equiv` vs the spec-derived `RegTransfer`, first pass wins -- sound by construction) -- the
 > `Flat(8)³` wall-break payoff: a masked-accum prim is recognized to `[Ccnot]` at full `Flat(8)` with the
-> 2²⁴ table never built. Fable impl-review SHIP-WITH-FIXES (A-1 remap teeth test + E-1 admit-first doc
+> 2²⁴ table never built. implementation review SHIP-WITH-FIXES (A-1 remap teeth test + E-1 admit-first doc
 > applied, teeth-verified; `docs/reviews/bveq-slice3b-impl-review.md`). Every slice: full L19/L20/L21;
 > reviews `docs/reviews/bveq-*`; design `docs/scratch/bveq-*`. Two lessons: a worker who can't run cargo
 > can't catch a semantic bug (advisor finishes those); "tests pass" ≠ "tests have teeth" (flip-verify every
@@ -116,7 +116,7 @@
 > one byte-parallel `Ccnot` (the BVEQ-delivered masked-AND) does the χ gate for 8 Keccak rows at once.
 > Hand-composed 17-instr in-place ROM (NEVER lowers -- no recognizer/lower change). **8× bit-slicing:
 > 5.25e-9 J/row-χ.** Rev-A (garbage-free UNDER-ADJOINT -- honest; forward-only leaves ancillas dirty, an L20
-> assertion; χ is a bijection not an involution). Fable design-review BUILT a POC + caught the garbage-free
+> assertion; χ is a bijection not an involution). design review BUILT a POC + caught the garbage-free
 > error; delegated productionization verified (fast tier + heavy system-ring L19 authority, advisor-run
 > single-threaded 3/3 green). Reviews `docs/reviews/sbox-chi-design-review.md`, `docs/scratch/sbox-chi-*`.
 > **Gate tiering DONE** (`7c78692`): 23 heavy `theseus-tisc` binaries feature-gated (`heavy-tests`) by
@@ -134,7 +134,7 @@
 > `k_max=|u|+1` (full carrier cardinality -- the BINDING wall, NOT the PC) is now trajectory-derived
 > (`k_exact = max applications-to-exit + 1` via an `exec_instr` walk from every real input, `|u|+1`
 > fallback) so a large-carrier fast-exit `Trace` fits under the existing 8-bit PC with ZERO energy tax.
-> SOUNDNESS-CRITICAL `lower_trace` change -- HIGHEST BAR; Fable adversarial review SHIP (register-layout
+> SOUNDNESS-CRITICAL `lower_trace` change -- HIGHEST BAR; adversarial review SHIP (register-layout
 > attack closed by the pre-walk F-1 guard; fast oracle proven to detect park-wrap) + real-`system_step`
 > H1 authority (2/2, ~2h). The design-review had REFUTED the naive "small GCD fits today" hypothesis
 > (4 walls; widen-PC is NOT the first wall -- alone it just fits a 99.97%-park program). Reviews

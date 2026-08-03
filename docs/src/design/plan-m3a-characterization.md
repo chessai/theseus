@@ -47,13 +47,13 @@ stay owed to M3b/M5 per ADR-0032.
 ## 3. Worker/advisor split -- workers now HAVE ngspice (constraint lifted)
 
 **History (now obsolete):** workers were "blind" on ngspice -- the driven worker
-ran `claude --print --permission-mode acceptEdits` with no Bash allowlist, so a
+ran with no Bash allowlist, so a
 headless `ngspice` call was denied, and the daemon's default-shell env lacked
 ngspice on PATH. SPICE tasks thrashed (edit a netlist you can't run → fail blind →
 lose work), which forced an advisor-hand-craft-everything model.
 
 **Fixed 2026-07-11 (commit 501fd78):** two soft layers, both addressed --
-`.claude/settings.json` allowlists `Bash(ngspice:*)` (worktree checkouts inherit
+the worker settings allowlist `Bash(ngspice:*)` (worktree checkouts inherit
 it), and the default devShell now ships ngspice on PATH + the `THESEUS_NGSPICE`
 seam, so daemon-spawned workers inherit both. Verified end-to-end: a delegated
 task requiring a live ngspice run reached `verify_passed` (worker wrote a netlist,
@@ -227,8 +227,8 @@ seam). Base branch `chessai/theseus-v2`; one task per delegation.
 ## STATUS UPDATE (2026-07-11): harness self-validation COMPLETE
 All three §"Harness self-validation gates" are now green on theseus-v2:
 - RC-analytic ±5% ✓ (banked), ideal-source ✓ (banked)
-- **canonical 2LAL shift register slope −1 ✓ (NEW)** -- the last gate. Built by a
-  Fable 5 panel (4 convergent strategies) → adversarial verification (energy honest,
+- **canonical 2LAL shift register slope −1 ✓ (NEW)** -- the last gate. Built by a review panel
+  (4 convergent strategies) → adversarial verification (energy honest,
   −1 real) → synthesis: all-1s slope −0.9996 over 3 decades, data-aware terminator
   so arbitrary patterns propagate full-level with no tail burn, honest all-source
   energy sum, real non-constant-pattern test. See adiabatic.rs `two_lal_sr_*`.

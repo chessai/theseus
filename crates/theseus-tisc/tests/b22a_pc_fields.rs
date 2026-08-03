@@ -125,7 +125,7 @@ fn w_pc8_encode_decode_roundtrip() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 4. Fable MAJOR-1 regression: a non-byte-multiple w_pc fails LOUDLY.
+// 4. review MAJOR-1 regression: a non-byte-multiple w_pc fails LOUDLY.
 // ══════════════════════════════════════════════════════════════════════
 //
 // `pc_fields()` is floor division, so `w_pc=12` (w_ctl=8) gives pc_fields()=1

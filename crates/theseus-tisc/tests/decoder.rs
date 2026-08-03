@@ -728,7 +728,7 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
         mem: [0; MEM_WORDS],
     };
 
-    // Case 1 (Fable's exact word): Addi rd=r3, imm low = 0x34, with the
+    // Case 1 (the review's exact word): Addi rd=r3, imm low = 0x34, with the
     // rs-field steer bits 15..18 = 0xF (all crossbar levels incl.
     // reg↔scratch would fire if the fetch were not fmt-gated).
     // fmt bit 31 = 0 (I-format); opcode 0b000 = ADDI.
@@ -786,7 +786,7 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
 // `blocker2_ccnot_uses_scratch_operand` remain, since instr_semantics has no
 // scratch-frame; they stay as fast concrete teeth.
 
-/// B1.3 (Fable Unit-2 MINOR-3): Cswap with a SCRATCH operand (rt=s2, idx 10)
+/// B1.3 (review Unit-2 MINOR-3): Cswap with a SCRATCH operand (rt=s2, idx 10)
 /// through the universal bracket == `instruction(Op::Cswap)` -- closes the
 /// coverage gap (Ccnot-scratch is covered by `blocker2_ccnot_uses_scratch_
 /// operand`, but Cswap routing an operand into the shared B-slot via the

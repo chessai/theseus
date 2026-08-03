@@ -57,9 +57,9 @@ investigation against `ring_run.rs` to determine whether a cross-ring `BusMsg`
 exchange can preserve the closure certificate at all -- *before* any implementation.
 It is not a delegatable milestone in its current form.
 
-## 0.5 Research-spike resolution (2 independent Fable design agents)
+## 0.5 Research-spike resolution (2 independent design-review agents)
 
-Two independent Fable-tier design agents attacked the closure question from
+Two independent design-review agents attacked the closure question from
 opposite directions -- one **constructive** (design a closing two-ring bus), one
 **foundational** (prove whether closure is preservable at all). **They converged.**
 

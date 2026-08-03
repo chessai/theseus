@@ -490,7 +490,7 @@ pub fn swapbr(rd: usize) -> Iso {
 /// FIELD ADDRESSING type-checks at `w_br=16`; it does NOT define correct
 /// two-byte come-from SEMANTICS.
 ///
-/// ⚠️ W_BR-b TRAP (Fable W_BR-a MINOR-1): at `br_fields()>1` the sequential
+/// ⚠️ W_BR-b TRAP (review W_BR-a MINOR-1): at `br_fields()>1` the sequential
 /// `swap(reg,BR₀); swap(reg,BR₁)` below is a **3-cycle** (reg←BR₁, BR₀←reg_old,
 /// BR₁←BR₀), NOT an involution and NOT a correct full-offset swap -- an 8-bit
 /// register cannot hold a 16-bit offset, so "swap the reg with both BR words"

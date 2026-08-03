@@ -225,7 +225,7 @@ impl Instr {
     /// emits no memory op needs `mem_words = 0` and can run on the CPU-only
     /// `step(rom)` ring (no composite/bus machinery).
     pub fn uses_mem(&self) -> bool {
-        // EXHAUSTIVE match (Fable B-2.0b review F1): a non-exhaustive `matches!`
+        // EXHAUSTIVE match (review B-2.0b review F1): a non-exhaustive `matches!`
         // would silently classify a FUTURE mem-touching Instr variant as
         // CPU-only, routing it onto the mem-free `step` ring where its opcode
         // is a reserved identity → silent no-op divergence, no error. Listing

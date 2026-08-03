@@ -166,7 +166,7 @@ fn win_flat4_step_net_shrinks_vs_default_auto() {
         "auto (w_data=4) step_j must be lower than default (w_data=8): {sj_auto:.6e} vs {sj_def:.6e}"
     );
 
-    // Fable autoderive MAJOR-2: `rom_program_energy_auto` is the public convenience
+    // autoderive review MAJOR-2: `rom_program_energy_auto` is the public convenience
     // that derives the per-program layout + lowers `step_with(layout, rom)` in one
     // call. Prove it prices at the SAME auto layout as the manual path lowered here
     // (`net_auto`): its `step_j` must equal `rom_program_energy(iso, .., net_auto)`.
@@ -277,9 +277,9 @@ fn flat4_marshal_stays_in_nibble() {
     let _ = (max_flat_width(&iso),); // keep import used across cfgs
 }
 
-// ── BLOCKER / MAJOR regression tests (Fable autoderive review) ───────
+// ── BLOCKER / MAJOR regression tests (autoderive review) ───────
 
-/// Fable autoderive BLOCKER-1: the compiler mints CONTROL into general
+/// autoderive review BLOCKER-1: the compiler mints CONTROL into general
 /// registers (a Trace's come-from δu ≥ 0x80, forward-skip distances, via
 /// Addi+Swapbr). At w_data<8 the reduced `addi_core` masks the immediate and
 /// `swapbr` swaps only w_data BR bits → the 8-bit control offset is truncated
@@ -308,7 +308,7 @@ fn blocker1_swapbr_program_pins_full_w_data() {
     );
 }
 
-/// Fable autoderive BLOCKER-2: marshal fills registers by INPUT LEAF, so an
+/// autoderive review BLOCKER-2: marshal fills registers by INPUT LEAF, so an
 /// UNTOUCHED input leaf (an `Id`/`Times` component not named by any instr)
 /// occupies an unnamed register. `num_regs` must cover the input-leaf count, or
 /// `encode_with` drops (and asserts-nonzero-panic on) a live leaf. `Id(Flat4 ×
@@ -334,7 +334,7 @@ fn blocker2_untouched_input_leaf_covered_by_num_regs() {
     }
 }
 
-/// Fable autoderive MAJOR-1: the reduced datapath is equiv-verified only at
+/// autoderive review MAJOR-1: the reduced datapath is equiv-verified only at
 /// w_data ∈ {4,8} (B-2.1c/c-2). A Flat(2) program must FLOOR w_data at 4 (not
 /// use the never-verified w_data=2).
 #[test]

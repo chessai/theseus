@@ -1328,7 +1328,7 @@ fn mdw_t5_p1_terminal_br_nonzero() {
     );
 }
 
-/// B-2.0b (Fable review F2): keep `system_step`'s non-mem inertness under
+/// B-2.0b (adversarial review F2): keep `system_step`'s non-mem inertness under
 /// differential coverage. The MEM-drop routing sends CPU-only + mem-quiescent
 /// programs to the mem-free `step` ring, so the `system_step` emit/mem/absorb
 /// bracketing (net-identity for non-mem opcodes) otherwise loses coverage. A

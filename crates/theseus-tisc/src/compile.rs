@@ -3200,7 +3200,7 @@ pub fn derive_full_layout(iso: &Iso, instrs: &[Instr]) -> Layout {
     // (always ≥ 0x80) and forward-skip distances, staged via Addi+Swapbr. Those
     // are 8-bit control, NOT Flat(w_data) data; at a narrow `w_data` the reduced
     // `addi_core` masks the immediate and `swapbr` swaps only `w_data` BR bits →
-    // the loop/skip offset is truncated and the program diverges (Fable autoderive
+    // the loop/skip offset is truncated and the program diverges (autoderive review
     // BLOCKER-1). So a program that emits ANY Swapbr (Trace / skip block =
     // `has_inner_control`) keeps the full data-word (w_data=8); only straight-line
     // programs narrow. (Staging control into control-width fields to let loops
@@ -4813,7 +4813,7 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
         }
         StateVals::decode(&cur)
     } else if rom_wide {
-        // W_BR-b MAJOR-2 (Fable impl-review): a wide (w_br=16) come-from with a
+        // W_BR-b MAJOR-2 (implementation review): a wide (w_br=16) come-from with a
         // MEMORY-using or non-quiescent program would fall into the `system_step`
         // arm below, which runs at Layout::default() (w_br=8) -- there is no
         // `system_step_with`, so the wide two-transposition SWAPBRs would execute
@@ -5207,7 +5207,7 @@ pub fn run_on_cpu_fast_resident(
     }
 
     let lowered = compile_with_metadata_resident(iso, resident)?;
-    // W_BR-b MAJOR-1 (Fable impl-review): this resident fast-sim is NARROW
+    // W_BR-b MAJOR-1 (implementation review): this resident fast-sim is NARROW
     // (exec_instr + pc_update at w_br=8). A wide (rs≠0) come-from run here would
     // execute the two-transposition SWAPBR as a single transposition → BR₁ never
     // loaded → silent mis-jump with NO terminal check. Resident implies a memory

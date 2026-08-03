@@ -71,7 +71,7 @@ takes `max(applications-to-exit) + 1`, falling back to `|u|+1` if any trajectory
 k_exact is NEVER looser than before and is always a sound upper bound (no park-wrap). This is the
 foundational enabler for **variable-T loops** (a large-carrier fast-exit `Trace` now fits under the
 existing 8-bit PC with ZERO energy tax). SOUNDNESS-CRITICAL `lower_trace` change (a too-small budget =
-silent corruption) -- HIGHEST BAR: fresh-context Fable adversarial impl-review **SHIP** (the prime
+silent corruption) -- HIGHEST BAR: fresh-context adversarial implementation review **SHIP** (the prime
 register-layout attack is structurally closed by the pre-walk F-1 canonical-homes guard, verified with
 built composed/Times/permuted/spill/Zero Traces; the fast oracle proven to detect a `k_max−1` park-wrap),
 + the real-`system_step` H1 authority (2/2, ~2h) + compile-heavy regression 65/0. Reviews
@@ -106,7 +106,7 @@ and the reverse run zeroes them; χ is a bijection, NOT an involution). Verified
 2^5 domain ×8-packed + discriminating packing + Keccak golden + injectivity, all vs INDEPENDENT scalar/
 byte refs) + heavy tier (`#[ignore]`: system-ring L19 real-run authority, eval adjoint-reversibility,
 energy) -- advisor ran the heavy tier single-threaded (concurrent heavy tests OOM), 3/3 green @ 50.6 GB.
-Design + Fable design-review-with-POC + delegation reviews: `docs/reviews/sbox-chi-design-review.md`,
+Design + design review with POC + delegation reviews: `docs/reviews/sbox-chi-design-review.md`,
 `docs/scratch/sbox-chi-design.md`, POC `docs/scratch/chi_poc.rs.ref`. Follow-ups: Rev-B true-in-place
 χ⁻¹ cleanup; AES S-box; multi-round Keccak-f. The prior tip `604936a`
 (**BVEQ LADDER COMPLETE -- slices 1 + 2b + 2 + 3a + 3b MERGED**). slice-3b
@@ -115,7 +115,7 @@ Design + Fable design-review-with-POC + delegation reviews: `docs/reviews/sbox-c
 construction) is the payoff: a 3-operand `Flat(8)` masked-accum prim (`acc.b ^= key.b & elem.b`, the
 GF(2)⁸ bilinear op) is **recognized to `[Ccnot{rd,rs,rt}]` at full `Flat(8)` with the 2²⁴ table never
 built** (<2 s; whole `symbolic_prim` suite 24 tests incl. two Flat(8)³ recognitions in 0.12 s). Fresh-context
-Fable impl-review **SHIP-WITH-FIXES** (mechanism sound, 5 tests flip under a neutered equiv gate, TCB
+implementation review **SHIP-WITH-FIXES** (mechanism sound, 5 tests flip under a neutered equiv gate, TCB
 untouched, I1 preserved); A-1 (non-identity operand→register remap teeth test) + E-1 (admit-first contract
 doc) applied and teeth-re-verified; review `docs/reviews/bveq-slice3b-impl-review.md` (L21). This makes 3-op
 byte-width prims (the GF(2)⁸ bilinear class -- bit-sliced crypto / TP-5 S-box, GF(2) dot products, keyed
@@ -155,8 +155,8 @@ the completed byte-wide value-width ladder): a reversible `Trace` (while-loop) c
 barrier against live-input silent corruption; only a zero-init **padding** leaf may spill), and a pinned
 `check_pattern_kleaf`/`mde_spill_walk` recognizer emitting the 13-instruction walk in ONE `with_registers`
 call → the paging is a **whole-body** page-in/page-out bracket (2 `Xchg`, not per-instruction). A
-`lower_trace` change = the highest bar: full L19/L20/L21 (design → Fable design-review that RE-BUILT the
-spike → delegate → **Fable impl-review (SHIP, no BLOCKER/MAJOR)** → advisor-finish → real-CPU authority),
+`lower_trace` change = the highest bar: full L19/L20/L21 (design → design review that RE-BUILT the
+spike → delegate → **implementation review (SHIP, no BLOCKER/MAJOR)** → advisor-finish → real-CPU authority),
 reviews `docs/reviews/mde-spill-{design-review-r2,impl-review}.md`. **Authority PASS:** the real
 `system_step` CPU carries the spilled leaf (s2=1 live) across **5 backward jumps** and agrees with eval
 exactly (input 0 = 6 iterations, 4858s), plus `validate()==Ok` + run==eval^R with the ring bus-quiescent.
@@ -168,7 +168,7 @@ The prior tip `979723e` (**byte-wide value-width ladder COMPLETE** -- slices 1-4
 **Value-width slice-4 (final rung)** lifts `Ccnot` (opcode `0b1011`, redefined -- no new opcode) from
 **bit-0** to **byte-parallel** `r[rd] ^= r[rs] & r[rt]` over all 8 bits -- a `system_step` **decoder**
 change (the highest-bar work). The crux was that byte-parallel AND needs the target + BOTH control
-bytes colocated, but the decoder pins only two full bytes (r0-slot + `s0`); the Fable design review
+bytes colocated, but the decoder pins only two full bytes (r0-slot + `s0`); the design review
 BUILT the fix and settled it: **`BR` (the branch register, canonically 0 outside branches) serves as
 the second operand buffer** via a *content-agnostic swap-fetch* (BR's live value rides through r[rt]'s
 cell and is written back -- no `BR=0` assumption; `PC += BR + 1` stays exact). The core is 8 predicated
@@ -183,7 +183,7 @@ Flat(4) (the 3-operand prim table walls at Flat(8), 256³) -- the instruction's 
 proven at the dense-byte system-ring tier. Redefining `0b1011` is safe (Bit programs are bit-0-identical
 -- `dot_reduce` + 26 targets untouched-and-green; only `t_dense` flips). Another mild ISA-growth energy
 tax: the `0b1011` body grew, so **fib rose `7.23e-8 → 7.3674162103e-8 J` (+1.91%)** (`step_j`
-3.0697567543e-9; much less than f3.5's +9.15% -- no new opcode). Both reviews Fable-**built-and-verified**
+3.0697567543e-9; much less than f3.5's +9.15% -- no new opcode). Both reviews **built and verified** by the reviewer
 (the impl review independently re-ran every authority tier: system-ring, real-CPU, both goldens). Reviews
 `docs/reviews/valwidth-ccnot-*`. **The value-width arc is closed: `Flat(n)` words + XOR/Add/masked-AND
 reductions over bytes.** The prior tip `0d3ca83`:
@@ -200,7 +200,7 @@ a+b)` recognizes to `Instr::Add`; the only prim table is 65536 (2-operand). Veri
 Add whole-domain (65536), the fold-over-`Flat` spine walk whole-domain (Flat(2), 340), `sumFold` at
 D=2 whole-domain (65792 -- every carry/wrap pair) + D=3/D=4 strided with mandatory carry edge cases
 (`200+100→44`, `255+1→0`, `255·4→252`) against an **independent modular-sum reference** + real
-`system_step` (L19). Both reviews Fable-**built-and-verified** (the design review compiled the D=3
+`system_step` (L19). Both reviews **built and verified** by the reviewer (the design review compiled the D=3
 ROM and ran the carries; the impl review caught that D=4's 3-Add chain was compiled-but-never-executed
 -- now a hoisted D=4 tier). Honest limitation: the *composed* reduce's L19 authority is whole-domain at
 D=2, strided at D≥3 (Flat(8) list domain intractable). Reviews `docs/reviews/valwidth-add-*`.
@@ -219,7 +219,7 @@ cross-width `assert_eq!` on the full instruction sequence + `wcet==24`), so `B=2
 {50,25,0}%` carry over verbatim. Verified `run_on_cpu==eval` full-word at Flat(2) whole-domain
 (1536) and Flat(4) whole-domain (393k, hoist-compiled so it runs in seconds not hours), + real
 `system_step` (L19) + per-step canonicalization (`mem[0..2]` resident words stay `<2^w`). Caps at
-Flat(4) (the Flat(8) memexch table = 33.5M entries). Design + impl reviews (Fable, both recomputed
+Flat(4) (the Flat(8) memexch table = 33.5M entries). Design + impl reviews (both recomputed
 the ROM==f3 by hand) `docs/reviews/valwidth-reduce-*`. **Ladder from here:** Flat(8) `Add` reduce
 (real numeric sum, native mod-256) → byte-parallel `Ccnot` decoder second-buffer (F35-1b) for the
 full masked accumulate `acc ^= key & arr[i]`. The prior tip `00d2468`:
@@ -237,7 +237,7 @@ forever** -- the reason width-parameterization is load-bearing. This is the foun
 sequel (byte-wide computation); NEXT slices: byte-XOR reduce (Flat(4) max -- the memexch table
 walls at Flat(8)), then `Flat(8)` `Add` reduce (real numeric sum), then byte-parallel `Ccnot`
 (decoder second-buffer, F35-1b) for the full masked accumulate. Both design + impl reviews were
-Fable-BUILT-and-verified (`docs/reviews/valwidth-flat-*`). NOTE: value-width is ORTHOGONAL to
+built and verified by the reviewer (`docs/reviews/valwidth-flat-*`). NOTE: value-width is ORTHOGONAL to
 M-D.c (which is MEM_WORDS/heap width, not value width -- the roadmap previously mislabeled it).
 The prior tip `2faed16`: **f3.5 `Ccnot` instruction + TP-3 LFSR merged**, atop the M-D.b2 map+reduce pair.
 **f3.5** (`8a8d8ef`) adds the compiler's **first user-facing ISA instruction** -- a bit-0
@@ -251,7 +251,7 @@ program -- the **ISA-growth energy tax**: fib's finale moved `6.62e-8 → 7.23e-
 codegen unchanged). **TP-3** (`3b4f123`) is a width-4 Galois LFSR (x⁴+x+1) run k_max=5 via
 `iter Nat@6` (`conformance/0026-lfsr.thse`) -- the longest-yet iter + lowest-branching body,
 whole-domain oracle + a third (low-branching) park-tax curve (`B=104, T(k)=14+10k`, 0 at k=5).
-Both via full L19/L20/L21 (design → Fable design-review → delegate → Fable impl-review →
+Both via full L19/L20/L21 (design → design review → delegate → implementation review →
 advisor-finish → full-suite; reviews `docs/reviews/{f35,tp3-lfsr}-*`) -- the impl-reviews caught
 real evidence-layer defects the maestro verifier passed (f3.5's un-re-pinned ring **and** fib
 energy goldens + a vacuous decoder oracle; TP-3's dropped T(k) pin). Concurrency note (RESOLVED):
@@ -271,8 +271,8 @@ histogram `B=30, T(k)=18+4k, {40...0}%`; **f3** (`87c3f7e`) = a reversible **XOR
 `acc ⊕= arr[i]` via the borrow-swap idiom (a non-destructive indexed read -- overturning
 "memexch can't reduce"; `AssocProd` regroup is free), histogram `B=24, T(k)=12+6k, {50,25,0}%`.
 All `run_on_cpu == eval` (real `system_step`, L19) + `SystemRing` closure + `rom_program_energy_
-resident` pricing; all via full L19/L20/L21 discipline (probe → design → Fable design-review →
-delegate → Fable impl-review → advisor-finish → full-suite; reviews `docs/reviews/mdb2-*`).
+resident` pricing; all via full L19/L20/L21 discipline (probe → design → design review →
+delegate → implementation review → advisor-finish → full-suite; reviews `docs/reviews/mdb2-*`).
 M-E's `8c82630` is the prior finale.). Everything below is merged there. Since M4-v1 this branch landed the
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and -- the **current headline

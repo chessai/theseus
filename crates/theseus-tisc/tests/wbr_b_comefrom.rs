@@ -461,7 +461,7 @@ fn wbr_b_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TEST 5 (L20 REJECT COVERAGE -- Fable impl-review MAJOR-3). Every reject this
+// TEST 5 (L20 REJECT COVERAGE -- implementation review MAJOR-3). Every reject this
 // slice adds must ship with a test that reproduces it. The deviation-A de-scope
 // (reject a narrow SWAPBR under a w_br=16 program instead of the global
 // skip-block pair) is acceptable ONLY on the guard's airtightness -- so exercise

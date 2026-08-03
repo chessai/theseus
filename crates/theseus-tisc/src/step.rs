@@ -111,7 +111,7 @@ use crate::types::{Layout, W_PC};
 // `layout.w_pc`; at `Layout::default()` (w_ctl = 8, w_pc = 16) these are the
 // shipped 8·W / W_PC / 6·W / 7·W offsets, so the fetch net is byte-identical.
 
-/// B-2.2a (Fable MAJOR-1): PC must occupy a whole number of `w_ctl`-wide
+/// B-2.2a (review MAJOR-1): PC must occupy a whole number of `w_ctl`-wide
 /// fields. `pc_fields()` is **floor** division (`w_pc / w_ctl`), so a `w_pc`
 /// that is not a positive multiple of `w_ctl` (e.g. 12) would under-count the
 /// PC carrier and silently route the high PC bits onto BR/operand wires
@@ -131,7 +131,7 @@ fn assert_pc_carrier(layout: &Layout) {
     );
 }
 
-/// W_BR-a (mirror of `assert_pc_carrier`, Fable B-2.2a MAJOR-1): BR must
+/// W_BR-a (mirror of `assert_pc_carrier`, review B-2.2a MAJOR-1): BR must
 /// occupy a whole number of `w_ctl`-wide fields. `br_fields()` is **floor**
 /// division (`w_br / w_ctl`), so a `w_br` that is not a positive multiple of
 /// `w_ctl` (e.g. 12) would under-count the BR carrier and silently route the
@@ -472,7 +472,7 @@ pub fn pc_add_br() -> Iso {
 /// control-region (`w_ctl`); PC is `w_pc` bits. The zero-arg entry
 /// delegates at `Layout::default()`.
 pub fn pc_add_br_with(layout: &Layout) -> Iso {
-    assert_pc_carrier(layout); // Fable MAJOR-1: PC must occupy whole w_ctl fields
+    assert_pc_carrier(layout); // review MAJOR-1: PC must occupy whole w_ctl fields
     assert_br_carrier(layout); // W_BR-a: BR must occupy whole w_ctl fields
     let wc = layout.w_ctl;
     // B-2.2a / W_BR-a: the field list is `[PC(pc_fields words), BR(br_fields
@@ -575,7 +575,7 @@ pub fn pc_inc() -> Iso {
 /// (`w_ctl`); PC is `w_pc` bits. The zero-arg entry delegates at
 /// `Layout::default()`.
 pub fn pc_inc_with(layout: &Layout) -> Iso {
-    assert_pc_carrier(layout); // Fable MAJOR-1: PC must occupy whole w_ctl fields
+    assert_pc_carrier(layout); // review MAJOR-1: PC must occupy whole w_ctl fields
     let wc = layout.w_ctl;
     // B-2.2a: the field list is `[PC(pc_fields words), s0, s1]` =
     // `pc_fields + 2` control words. At the default (pc_fields = 2) this is

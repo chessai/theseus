@@ -5,7 +5,7 @@
 //! B-2.2a generalized the PC builders (`pc_add_br_with`/`pc_inc_with`,
 //! `fetch_fields`, `encode_with`/`decode_with`) to `layout.pc_fields()` so a
 //! hand-built `w_pc=8` layout (pc_fields()==1, no PC_hi) TYPE-CHECKS. But
-//! `type_of` cannot see intra-word wire aliasing (the Fable B-2.2a review
+//! `type_of` cannot see intra-word wire aliasing (the B-2.2a review
 //! MAJOR-1 demonstrated this: a `w_pc=12` layout type-checks yet silently
 //! routes PC bits onto BR wires). Only a REAL RUN -- evaluating the isos over
 //! encoded state -- proves the field addressing at `w_pc=8` is alias-free.
@@ -25,7 +25,7 @@
 //! `run_rom_on_cpu_with(&w_pc8, ...)` on small CPU-only programs that EXERCISE
 //! the PC adder: a taken `Swapbr` FORWARD branch, a taken BACKWARD branch that
 //! wraps through the 8-bit modulus (the two-register token-migration idiom --
-//! terminates without a loop counter, Fable MAJOR-1), high-PC `pc_inc` carries,
+//! terminates without a loop counter, review MAJOR-1), high-PC `pc_inc` carries,
 //! and straight-line steps. The core assertion: narrowing `w_pc` to 8 changes
 //! NOTHING observable -- the w_pc=8 final state equals the SAME program run at
 //! the default w_pc=16 layout, on every input. `run_rom_on_cpu_with` internally
@@ -53,7 +53,7 @@ fn layout_w_pc8() -> Layout {
     };
     // Pin the invariant the whole file rests on: PC occupies exactly ONE
     // control field at w_pc=8 (guards against a future w_ctl default change
-    // silently making this a 16-bit run -- Fable B-2.2b nit).
+    // silently making this a 16-bit run -- review B-2.2b nit).
     assert_eq!(l.pc_fields(), 1, "w_pc=8 layout must have exactly 1 PC field");
     l
 }
@@ -238,7 +238,7 @@ fn skip_block_program() -> Vec<Instr> {
 }
 
 /// A CPU-only program with a genuinely TAKEN BACKWARD branch that TERMINATES
-/// without a loop counter -- the two-register token-migration idiom (Fable
+/// without a loop counter -- the two-register token-migration idiom (review
 /// B-2.2b MAJOR-1). The branch at addr 3 jumps BACK to addr 1 (PC wraps
 /// 3 + sext(0xFD) + 1 = 257 ≡ 1 mod 256 at w_pc=8; = 0x10001 ≡ 1 mod 2^16 at
 /// w_pc=16 -- the layouts agree via sext). The token lives in r2 on pass 1 and
@@ -345,7 +345,7 @@ fn wpc8_run_equals_wpc16_forward_branch() {
 
 #[test]
 fn wpc8_run_equals_wpc16_backward_branch() {
-    // Fable B-2.2b MAJOR-1: a REAL terminating backward branch (no counter),
+    // review B-2.2b MAJOR-1: a REAL terminating backward branch (no counter),
     // via two-register token migration. This is the only run that drives a
     // backward jump WRAPPING through the modulus (3 + sext(0xFD) + 1 = 257 ≡ 1
     // mod 256 at w_pc=8; ≡ 1 mod 2^16 at w_pc=16 -- the layouts agree via sext).

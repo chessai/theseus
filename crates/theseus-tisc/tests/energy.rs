@@ -410,7 +410,7 @@ fn me_a3_golden() {
     // 4.4795055502e-8, total_j = 24·step_j. B=24/T=20 codegen UNCHANGED (step_j-
     // only change, same ROM/trace). Deterministic (per-cell sum). Behaviour is
     // proven equivalent by the whole-domain per-op equiv + fib real-CPU teeth
-    // (tests/decoder.rs) and the Fable adversarial review
+    // (tests/decoder.rs) and the adversarial review
     // (docs/reviews/b1-unit1-shared-alu-review.md, no BLOCKER).
     // (Prior widen-PC baseline was step_j 2.5259595646e-9 / total_j 6.0623029551e-8.)
     // RE-PINNED AGAIN (B-1 Unit-2, B1.3): the universal 3-operand bracket folds
@@ -419,7 +419,7 @@ fn me_a3_golden() {
     // decode_execute 441015→337459 (2.59× vs baseline), step_j 1.8664606459e-9 →
     // 1.5314006103e-9 (−17.95%), total_j 4.4795055502e-8 → 3.6753614647e-8 (=24·step_j).
     // B/T=24/20 invariant. Behaviour: whole-domain per-op equiv (11 reg+imm + Ccnot +
-    // Cswap) + s0-restoration + run_on_cpu==eval + Fable review (Unit-2).
+    // Cswap) + s0-restoration + run_on_cpu==eval + adversarial review (Unit-2).
     const GOLDEN_TOTAL_J: f64 = 3.6753614647e-8;
     const GOLDEN_STEP_J: f64 = 1.5314006103e-9;
     const GOLDEN_B: usize = 24;

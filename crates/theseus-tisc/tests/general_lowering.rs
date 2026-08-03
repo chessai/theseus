@@ -292,7 +292,7 @@ fn known_arm_still_lowers_via_fast_arm_path() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// A-6 STEP-1 FIX regression tests -- the EXACT counterexamples from the Fable
+// A-6 STEP-1 FIX regression tests -- the EXACT counterexamples from the adversarial
 // review (`docs/reviews/step1-general-lowering-review.md`). Each is a distinct
 // bug the review reproduced with real cargo; each here FAILS before the fix
 // (panic or false-reject) and PASSES after.

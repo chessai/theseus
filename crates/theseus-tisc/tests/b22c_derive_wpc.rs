@@ -253,7 +253,7 @@ mod heavy {
     // the fetch assert panicking. We drive both sides of the rom_len=128 edge.
     #[test]
     fn boundary_derived_wpc_runs_without_guard_error() {
-        // EXACTLY ON the fetch edge (Fable B-2.2c MINOR-3): 128 xors → rom_len ==
+        // EXACTLY ON the fetch edge (review B-2.2c MINOR-3): 128 xors → rom_len ==
         // 128 == 1<<(w_pc-1) at w_pc=8, the SHARPEST w_pc=8 case (rom_len 129
         // would force 16). B=128 <= 256. Must derive 8 AND run clean -- a real run
         // at the exact fetch-injectivity boundary, not just under it.

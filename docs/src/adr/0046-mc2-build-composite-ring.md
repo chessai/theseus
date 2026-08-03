@@ -98,7 +98,7 @@ that discharged the realizability obligation** (§4.5.8): Stage 1b is buildable 
 no seam rotation, no decode latch, no prologue/epilogue -- one in-revolution
 transaction order (§4.1) + a bus-quiescence certificate check. Implementation is
 staged and each stage is gated by its differential oracle **and** its closure
-certificate; it touches the ring and `step`, so it carries the CLAUDE.md
+certificate; it touches the ring and `step`, so it carries the project's
 orchestration bar (adversarial review + real integration tests, per stage).
 
 **Layer 1 implementation note (what shipped, `MEM_WORDS = 4`).** The addressed-
@@ -154,7 +154,7 @@ CPU. Per-ring closure is *not* attempted: it is provably impossible (Theorem 2.3
   projection to `eval` of the surface iso -- Prop 5.1 -- so there is nothing
   degenerate to catch). **Conjecture C1 -- the tree's whole-domain ancilla-
   cleanliness -- is discharged HERE at `N ∈ {2,4,8}`: the load-bearing risk is
-  *front-loaded*, not deferred.** Carries the full CLAUDE.md bar.
+  *front-loaded*, not deferred.** Carries the full project review bar.
 - **Stage 1 -- externalize: single-body composite ring** (closure gate). Lift
   `MemState` out of the CPU carrier and re-place the exchange as its **own iso**
   crossing a resident `BusMsg` (Lemma 3.3), so the §6 line-audit passes; run through
@@ -450,9 +450,9 @@ get `system_step` closing the certificate end-to-end, *then* scale to `{4,8}`. T
 heavy integration tests stay `#[ignore]`d (Layer-1 precedent). If the composite will
 not close the certificate at `N = 2`, **STOP and report the smallest failing state**.
 
-#### 4.5.8 H3 spike resolution (2 Fable agents -- Stage 1b is BUILDABLE)
+#### 4.5.8 H3 spike resolution (2 review agents -- Stage 1b is BUILDABLE)
 
-Two independent Fable design spikes (constructive + adversarial) **converged**: the
+Two independent design-review spikes (constructive + adversarial) **converged**: the
 H3 realizability obligation is discharged in design -- Stage 1b is buildable, with
 **no seam rotation**, **no new decode latch**, and **no prologue/epilogue**.
 
