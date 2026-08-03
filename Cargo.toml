@@ -19,23 +19,13 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/chessai/theseus"
 
-# Dependency versions are declared here as they are adopted, per ADR-0020.
-# The skeleton is deliberately dependency-free so the workspace builds
-# before any component lands. Planned (see docs/src/design/crate-map.md):
-#
-# Dependency versions are declared here as they are adopted, per ADR-0020.
-# Planned (see docs/src/design/crate-map.md):
-# ariadne-or-codespan (taste call), miette, la-arena, lasso,
-# petgraph, indexmap, rustc-hash, pretty, serde, ron, proptest, arbitrary,
-# insta, rayon, vcd, clap, tracing, tracing-subscriber, thiserror, camino,
-# splr, cadical-or-kissat bindings (via CnfSolver trait, ADR-0020 amended)
+# Dependencies are declared here as they are adopted (ADR-0020).
 [workspace.dependencies]
-logos = "0.14"
-# Adopted per ADR-0020 (both listed in the planned set): serde for derive-based
-# (de)serialization, ron for the characterization-DB / energy-artifact format
-# (the artifact contract is literally RON) — replacing hand-rolled RON text.
-serde = { version = "1", features = ["derive"] }
-ron = "0.8"
+logos = "0.14"                                    # lexer
+serde = { version = "1", features = ["derive"] }  # (de)serialization
+ron = "0.8"                                        # energy-artifact format
+thiserror = "2"                                    # error types
+clap = { version = "4", features = ["derive"] }    # CLI
 
 [workspace.lints.rust]
 unsafe_code = "deny"
