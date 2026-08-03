@@ -115,11 +115,13 @@ fn compile(prog: &FibProgram) -> (Iso, PhasedCellNetlist, Vec<bool>) {
     let iso = elaborate(&prog.source, &prog.top_name);
     let (net, ancilla_values) = lower_iso_with_ancillas(&iso).expect("lowering succeeds");
     assert_eq!(net.validate(), Ok(()), "lowered netlist validates");
-    // K3 is the largest available cell.
+    // No cell wider than K3, the largest k-CSWAP. Compare by arity, not enum
+    // order: R1 (ADR-0040) is a small 2-port CNOT cell declared after K3 but
+    // strictly smaller, so an ordering test would spuriously reject it.
     let counts = net.cell_counts();
     assert!(
-        !counts.keys().any(|k| *k > CellKind::K3),
-        "cell kind beyond K3: {counts:?}"
+        counts.keys().all(|k| k.arity() <= CellKind::K3.arity()),
+        "cell wider than K3: {counts:?}"
     );
     (iso, net, ancilla_values)
 }
