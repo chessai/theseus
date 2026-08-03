@@ -1,56 +1,114 @@
 # theseus
 
-A mature, reversible programming language in the Theseus/Π lineage, with an
-interpreter, a compiler to reversible netlists and Verilog, and a long-range
-target of adiabatic silicon.
+theseus is a reversible-computing stack: a small reversible programming
+language, a compiler that lowers it to a reversible instruction set, and a
+model of an adiabatic (energy-recovering) CPU that runs the result and reports
+what it costs in energy. The core correctness properties are proved in Lean.
 
-> Every program is a partial isomorphism. In the synthesizable fragment,
-> every program is a *total* isomorphism with a static worst-case latency —
-> by construction, not by annotation.
+Every program is a bijection -- it runs forwards and backwards. In the
+synthesizable fragment every program is a *total* bijection with a static
+worst-case running time, by construction rather than by annotation. That is
+what makes programs safe to run on reversible hardware, where information is
+never erased and so never has to pay the Landauer energy cost of erasure.
+
+```
+   .thse source
+        |
+        |   parse + type / coverage check
+        v
+   core Iso  (reversible IR)  ----------->  interpreter  (reference oracle)
+        |
+        +-----------------------------+
+        |                             |
+        v                             v
+   reversible netlist            TISC ROM
+        |                             |
+        v                             v
+   adiabatic CPU model           reversible CPU  (forwards and backwards)
+        |                             |
+        v                             v
+   energy  (joules)              output  ==  interpreter
+
+   backed by Lean 4 proofs: reversible by construction; loops terminate; branches reversible
+```
+
+## The stack
+
+- **Language.** A linearly-typed reversible language: sum and product types,
+  reversible isomorphisms, bounded iteration. Comes with a parser, a
+  type/coverage checker, and an interpreter.
+- **Compiler.** Lowers a program to a reversible cell netlist, and to TISC -- a
+  small reversible instruction set -- as a ROM that runs on a simulated
+  reversible CPU, forwards and backwards.
+- **Energy.** The adiabatic backend models per-step energy, so a compiled
+  program is measured in joules, not just checked for correctness.
+- **Proofs.** The reversibility and termination guarantees are machine-checked
+  in Lean 4 (see [Proofs](#proofs)).
+
+## How to use
+
+Everything runs inside the Nix dev shell, which pins the toolchain:
+
+    nix develop
+
+Build and test the workspace:
+
+    cargo build
+    cargo test
+
+Type-check a program:
+
+    cargo run -p theseus-cli -- check conformance/programs/0024-adder.thse
+    # ok
+
+Run an isomorphism forwards on a value (logical NOT on a bit):
+
+    cargo run -p theseus-cli -- run conformance/programs/0003-not.thse notb O
+    # I
+
+A longer one -- three Fibonacci steps, period 3 mod 2:
+
+    cargo run -p theseus-cli -- run conformance/programs/0023-fib3.thse fib3 "(I, I)"
+    # (I, I)
+
+Lower an isomorphism to a reversible netlist and check it against the interpreter:
+
+    cargo run -p theseus-cli -- lower conformance/programs/0026-lfsr.thse lfsrStep
+    # inputs: 4 rail pairs
+    # outputs: 4 rail pairs
+    # oracle: cells agree with eval on 16 inputs
+
+### Working examples
+
+`conformance/programs/` holds small, self-contained programs, each with an
+expected-output file. Good ones to read first:
+
+- `0024-adder.thse` -- a reversible half-adder built from gates by composition.
+- `0026-lfsr.thse` -- a width-4 LFSR run as a bounded loop (`iter`).
+- `0023-fib3.thse` -- a fixed-count Fibonacci iteration.
+- `0011-label-loop.thse` -- a data-dependent loop written with labels.
+
+## Proofs
+
+The `theseus-proofs/` Lean 4 project proves the core guarantees:
+
+    nix develop .#proofs
+    cd theseus-proofs && lake build
+
+- **Reversibility is a theorem, not an assumption.** Every combinator denotes a
+  bijection, and the syntactic adjoint computes its true inverse
+  (`Reversibility.lean`).
+- **Loops terminate.** A reversible loop over a finite state space exits within
+  `|state| + 1` steps (`FiniteTrace.lean`).
+- **Branches are reversible.** The come-from branch instruction is its own
+  inverse.
 
 ## Project layout
 
 | Path | Contents |
 |---|---|
-| `crates/` | Multi-crate Rust workspace (see ADR-0020 for the crate map) |
-| `docs/` | mdBook: ADRs, design document, language spec, theory notes, roadmap |
-| `docs/diagrams/` | Structurizr DSL architecture models (ADR-0021, amended) |
-| `conformance/` | Versioned, implementation-independent conformance suite (ADR-0018) |
-| `flake.nix` | Nix: fenix-pinned nightly toolchain, crane builds, dev shell (ADR-0019) |
-
-## The stack (post-pivot, ADR-0022)
-
-Two tracks, independent until they meet:
-
-- **Language track:** parser → bidirectional coverage checker →
-  interpreter → typed netlist IR → Verilog/Verilator (M1–M2).
-- **Physics track:** 2LAL cell library in Sky130 SPICE → characterization
-  DB → the slope −2 money plot (M3a).
-- **Convergence:** dual-rail lowering + energy-annotated compilation of a
-  reversible adder (M3b), then **TISC-1** — a CPU written as a single
-  theseus iso, run forward and backward, with per-clause energy
-  attribution (M4). FPGA demo floats; tape-out (M5) is optional and
-  de-risked by simulation.
-
-See `docs/src/roadmap.md` for the dependency graph, milestones, and
-parked items.
-
-## Getting started
-
-```sh
-nix develop          # toolchain + verilator/yosys/nextpnr + cargo-* tools
-cargo build          # workspace skeleton builds with zero external deps
-mdbook serve docs    # browse ADRs, design doc, spec, theory notes
-```
-
-The workspace skeleton is intentionally dependency-free; dependencies are
-introduced per-crate as components land, following ADR-0020. `flake.lock`
-is not committed in the skeleton — run `nix flake lock` once on first use.
-
-## Design discipline
-
-- Decisions are ADRs (`docs/src/adr/`), append-only, individually citable
-  as `ADR-NNNN` from code, tests, and the invariant ledger.
-- Nothing ships without the definition-of-done checklist in `CONTRIBUTING.md`.
-- The language spec is implementation-silent; the conformance suite is its
-  executable appendix.
+| `crates/` | The Rust workspace: syntax, checker, interpreter, netlist, TISC compiler, CLI. |
+| `theseus-proofs/` | Lean 4 proofs of the core properties. |
+| `conformance/` | Language-independent programs with expected outputs. |
+| `docs/` | Design docs, decision records (ADRs), the language spec, and the roadmap. |
+| `flake.nix` | Nix dev shells and pinned toolchains. |
