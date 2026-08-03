@@ -46,8 +46,9 @@ pub struct TypedNode {
     pub kind: NodeKind,
 }
 
-/// The ADR-0013 node vocabulary (v0.1 subset; `Iter` reserved for v0.2,
-/// `HandshakeLoop` for v0.2+, `Absurd` pruning is a later pass).
+/// The ADR-0013 node vocabulary. Bounded iteration is implemented
+/// (`IterLoop`/`FoldLoop`, ADR-0036/0037/0039); `HandshakeLoop` is
+/// reserved for v0.2+ and `Absurd` pruning is a later pass.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NodeKind {
     /// Sequential region, diagram order. An empty sequence is identity.
