@@ -1,6 +1,6 @@
 #![cfg(feature = "heavy-tests")]
 // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
-//! B-2.1b — per-program register-count shrink.
+//! B-2.1b -- per-program register-count shrink.
 //!
 //! This slice makes `select_operand_l`'s crossbar topology `num_regs`-parametric
 //! and plumbs a reduced `Layout` end to end (`step_with` + `encode_with`/
@@ -8,7 +8,7 @@
 //! correctness authority for the reduced crossbar plus the register-shrink
 //! measurement.
 //!
-//! (Fast-correctness authority — the advisor runs the full heavy suite +
+//! (Fast-correctness authority -- the advisor runs the full heavy suite +
 //! the byte-identity `poc_step_net_bit_identical` golden separately.)
 
 use std::sync::OnceLock;
@@ -233,7 +233,7 @@ fn reduced_run_matches_exec_and_default() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 4. MEASUREMENT — the register-shrink win (balanced cells + step_j)
+// 4. MEASUREMENT -- the register-shrink win (balanced cells + step_j)
 // ══════════════════════════════════════════════════════════════════════
 
 fn measure(layout: &Layout, rom: &[u32], label: &str) -> (usize, f64) {
@@ -327,9 +327,9 @@ fn derive_layout_pins_num_regs_when_scratch_operand_used() {
     );
 }
 
-/// B-2.1b review F2 (regression): the s0/s1 immovability invariant — NO operand
+/// B-2.1b review F2 (regression): the s0/s1 immovability invariant -- NO operand
 /// crossbar swap may touch the reserved operand-buffer s0 / config word s1 (the
-/// latter holds B-1's config one-hots) — must hold at EVERY `num_regs`. At
+/// latter holds B-1's config one-hots) -- must hold at EVERY `num_regs`. At
 /// `num_regs=2` the OLD split-level-only exclusion let a DESCENT level (operand
 /// bit 2, stride 4) fire swaps `(pos2,pos6)`/`(pos3,pos7)` = s0↔s4 / s1↔s5,
 /// displacing s0/s1 mid-instruction. The position-based exclusion skips any swap
@@ -350,11 +350,11 @@ fn reduced_crossbar_preserves_s0_s1_at_num_regs_2() {
         let got = eval_reduced(&layout, &iso, &s);
         assert_eq!(
             got.scratch[0], 0xC0,
-            "num_regs=2, selector {sel_idx}: s0 displaced — F2 invariant violated"
+            "num_regs=2, selector {sel_idx}: s0 displaced -- F2 invariant violated"
         );
         assert_eq!(
             got.scratch[1], 0xC1,
-            "num_regs=2, selector {sel_idx}: s1 (config word) corrupted — F2 invariant violated"
+            "num_regs=2, selector {sel_idx}: s1 (config word) corrupted -- F2 invariant violated"
         );
     }
     eprintln!("num_regs=2: s0/s1 immovable across all operand selectors ✓");

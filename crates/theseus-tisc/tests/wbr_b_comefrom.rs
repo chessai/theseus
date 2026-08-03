@@ -1,20 +1,20 @@
-//! W_BR-b — the two-byte come-from δu (RUN-correct w_br=16).
+//! W_BR-b -- the two-byte come-from δu (RUN-correct w_br=16).
 //!
 //! Proves the wide (w_br=16) come-from path in ISOLATION (design
 //! `docs/scratch/wbr-b-comefrom-design.md`, REVISION 2). The four authority
 //! tiers (mirror `b22b_wpc8_run.rs` at the BR width):
 //!
-//!   TEST 1 — the mechanized ADR-0034 adder identity at w_br=16, over a
+//!   TEST 1 -- the mechanized ADR-0034 adder identity at w_br=16, over a
 //!     (PC, BR) SAMPLE incl. the come-from δu values: `(pc_add_br_with(&w_br16)
 //!     ; pc_inc_with)` == `PC + BR + 1 mod 2^16` (at w_pc=w_br=16 sext is the
-//!     IDENTITY — a pure add). Plus the come-from identity `δu = 65536−iter_len`
+//!     IDENTITY -- a pure add). Plus the come-from identity `δu = 65536−iter_len`
 //!     sexts to `−iter_len` at the boundaries {128, 129, 32767, 32768}.
-//!   TEST 2 (P2 involution) — the two-transposition swap is self-inverse,
+//!   TEST 2 (P2 involution) -- the two-transposition swap is self-inverse,
 //!     EXHAUSTIVE over the 2-field BR × 2-reg domain (the model side).
-//!   TEST 3 — `vart_halve` K=4,HB=1 (previously REJECTED at iter_len>128) now
+//!   TEST 3 -- `vart_halve` K=4,HB=1 (previously REJECTED at iter_len>128) now
 //!     LOWERS at w_br=16 with iter_len=137, and `run_on_cpu_fast == eval` over
 //!     its FULL input domain (the fast oracle).
-//!   TEST 4 (#[ignore], advisor-run) — real `run_rom_on_cpu` (system_step ROM)
+//!   TEST 4 (#[ignore], advisor-run) -- real `run_rom_on_cpu` (system_step ROM)
 //!     == eval on a SAMPLE of vart_halve K=4 inputs covering distinct T +
 //!     terminal quiescence (BR/s0/s1==0).
 
@@ -46,7 +46,7 @@ fn layout_w_br16() -> Layout {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TEST 1 — mechanized ADR-0034 adder identity at w_br=16.
+// TEST 1 -- mechanized ADR-0034 adder identity at w_br=16.
 // ══════════════════════════════════════════════════════════════════════
 
 /// A w_br=16 state: 16-bit PC, 16-bit BR, s0=s1=0 (the adder scratch
@@ -161,17 +161,17 @@ fn adr0034_split_add_wbr16_sampled() {
     }
 
     eprintln!(
-        "W_BR-b TEST 1: ADR-0034 split-add at w_br=16 — {checked} (PC,BR) pairs \
+        "W_BR-b TEST 1: ADR-0034 split-add at w_br=16 -- {checked} (PC,BR) pairs \
          == (PC+BR+1) mod 2^16 (sext=identity), BR/s0/s1 preserved, adjoint \
          recovers, come-from δu lands at Ltop ✓"
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TEST 2 — P2: the two-transposition SWAPBR is an involution (model side).
+// TEST 2 -- P2: the two-transposition SWAPBR is an involution (model side).
 // ══════════════════════════════════════════════════════════════════════
 //
-// The wide SWAPBR does `swap(r[rd], BR_lo) ; swap(r[rs], BR_hi)` — two DISJOINT
+// The wide SWAPBR does `swap(r[rd], BR_lo) ; swap(r[rs], BR_hi)` -- two DISJOINT
 // transpositions, so the composition is self-inverse. Verify swap∘swap == id
 // EXHAUSTIVELY over the 2-field BR × 2-reg domain (rd, rs distinct, rd,rs != 0
 // per the SWAPBR rs=0 sentinel rule), sampled densely on the byte values.
@@ -212,7 +212,7 @@ fn wbr16_swapbr_involution_exhaustive() {
                         let mut s1 = s0.clone();
                         exec_instr_w_br(Instr::Swapbr { rd, rs }, &mut s1, w_br);
                         // The swap must actually move something (not the identity)
-                        // when the halves differ — a light non-vacuity check.
+                        // when the halves differ -- a light non-vacuity check.
                         // Second swap must return to the start (involution).
                         let mut s2 = s1.clone();
                         exec_instr_w_br(Instr::Swapbr { rd, rs }, &mut s2, w_br);
@@ -240,7 +240,7 @@ fn wbr16_swapbr_involution_exhaustive() {
     }
     eprintln!(
         "W_BR-b TEST 2: two-transposition SWAPBR involution EXHAUSTIVE over \
-         {checked} (rd,rs,rd_v,rs_v,BR) states — swap∘swap == id ✓"
+         {checked} (rd,rs,rd_v,rs_v,BR) states -- swap∘swap == id ✓"
     );
 }
 
@@ -268,7 +268,7 @@ fn pc_update_w_br_boundaries() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TEST 3 — vart_halve K=4,HB=1 now LOWERS (w_br=16) + fast oracle == eval.
+// TEST 3 -- vart_halve K=4,HB=1 now LOWERS (w_br=16) + fast oracle == eval.
 // ══════════════════════════════════════════════════════════════════════
 //
 // The reject test `vart_halve.rs::vart_reject_over_cap` pinned K=4,HB=1 as
@@ -363,7 +363,7 @@ fn wbr16_vart_halve_k4_lowers_and_fast_oracle() {
     let (body, u_ty, _carrier) = build_v2_body_sized(K, HB);
     let iso = Iso::trace(u_ty.clone(), body);
 
-    // (a) It now LOWERS (was rejected) — at w_br=16 with iter_len = 137.
+    // (a) It now LOWERS (was rejected) -- at w_br=16 with iter_len = 137.
     let lowered = compile_with_metadata(&iso)
         .expect("vart_halve K=4,HB=1 must LOWER at w_br=16 (was rejected)");
     let lt = &lowered.loop_terms[0];
@@ -402,7 +402,7 @@ fn wbr16_vart_halve_k4_lowers_and_fast_oracle() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TEST 4 — REAL system_step ROM == eval + terminal quiescence (ADVISOR-RUN).
+// TEST 4 -- REAL system_step ROM == eval + terminal quiescence (ADVISOR-RUN).
 // ══════════════════════════════════════════════════════════════════════
 //     #[ignore]: authoritative, slow. The ADVISOR runs this pre-merge; the
 //     worker does NOT. Sampled across distinct iteration counts T (bound the
@@ -461,17 +461,17 @@ fn wbr_b_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TEST 5 (L20 REJECT COVERAGE — Fable impl-review MAJOR-3). Every reject this
+// TEST 5 (L20 REJECT COVERAGE -- Fable impl-review MAJOR-3). Every reject this
 // slice adds must ship with a test that reproduces it. The deviation-A de-scope
 // (reject a narrow SWAPBR under a w_br=16 program instead of the global
-// skip-block pair) is acceptable ONLY on the guard's airtightness — so exercise
+// skip-block pair) is acceptable ONLY on the guard's airtightness -- so exercise
 // it directly.
 // ══════════════════════════════════════════════════════════════════════
 
 use theseus_tisc::asm::encode;
 use theseus_tisc::compile::guard_no_narrow_swapbr_under_wide;
 
-/// rd≠rs on the two-operand SWAPBR — the 3-cycle-trap prevention. rd==rs at
+/// rd≠rs on the two-operand SWAPBR -- the 3-cycle-trap prevention. rd==rs at
 /// w_br=16 would collapse the two "disjoint" transpositions onto one register
 /// (the P2 3-cycle = silent corruption). The encoder must reject it.
 #[test]
@@ -529,12 +529,12 @@ fn wbr_wide_plus_memory_rejected() {
     assert!(
         res.is_err(),
         "wide (w_br=16) come-from + a memory op must be rejected (no system_step_with; \
-         would silently mis-jump on the narrow netlist) — deferred to W_BR-c"
+         would silently mis-jump on the narrow netlist) -- deferred to W_BR-c"
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TEST 6 (L20 — the wide-step NETLIST bug the full authority caught). The
+// TEST 6 (L20 -- the wide-step NETLIST bug the full authority caught). The
 // original WIP type-checked the fast oracle (interpreter) but the wide step
 // NETLIST SeqMismatched: `fetch_operand` (and the replicated `ccnot_fetch_rt_br`)
 // lifted their operand↔s0 / r0↔BR swap over the HARDCODED default field carrier
@@ -560,7 +560,7 @@ fn wbr16_wide_decoders_are_endos_on_the_netlist() {
     // The full wide step NETLIST type-checks as an endo on the widened CpuState
     // (this is the exact assertion `w_br16_step_type_checks` makes; duplicated
     // here so the W_BR-b regression is co-located with the come-from tests).
-    let rom = vec![(3u32 << 25) | 1]; // ROTLI r0,#1 — content irrelevant
+    let rom = vec![(3u32 << 25) | 1]; // ROTLI r0,#1 -- content irrelevant
     let (a, b) = type_of(&step_with(&layout, &rom)).expect("wide step must type-check");
     assert_eq!(a, sty, "wide step input = widened CpuState");
     assert_eq!(a, b, "wide step is an endomorphism on the widened CpuState");
@@ -570,7 +570,7 @@ fn wbr16_wide_decoders_are_endos_on_the_netlist() {
     assert_eq!(c, d, "wide decode_execute is an endomorphism");
 
     // Every per-instruction decoder that TOUCHES BR (Swapbr routes rd↔BR; the
-    // replicated Ccnot/Cswap route rt↔BR) — each must be an endo at w_br=16.
+    // replicated Ccnot/Cswap route rt↔BR) -- each must be an endo at w_br=16.
     // Xchg (no BR) is the control: it was always an endo, even before the fix.
     for op in [Op::Swapbr, Op::Ccnot, Op::Cswap, Op::Xchg] {
         let (x, y) = type_of(&instruction_l(&layout, op))

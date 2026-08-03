@@ -1,11 +1,11 @@
-//! MEXCHR BVEQ AUTHORITY — retires the `mexch_reg` real-CPU authority for the
+//! MEXCHR BVEQ AUTHORITY -- retires the `mexch_reg` real-CPU authority for the
 //! WILDCARD case (data-dependent memory addressing + multi-revolution ring).
 //!
 //! This file has TWO tests:
-//!   * `mexchr_symbolic_feasibility_probe` — the original tractability probe
+//!   * `mexchr_symbolic_feasibility_probe` -- the original tractability probe
 //!     (kept as a measured GO record: symbolic-address MEXCHR stays tiny, 137
 //!     nodes, no blow-up).
-//!   * `mexchr_whole_domain_proof` — the FINISHED whole-domain proof (below).
+//!   * `mexchr_whole_domain_proof` -- the FINISHED whole-domain proof (below).
 //!
 //! ── The whole-domain proof (`mexchr_whole_domain_proof`) ──────────────────
 //! The probe proved symbolic==concrete `theseus_eval` AT SAMPLE POINTS. The
@@ -21,17 +21,17 @@
 //!            sequential exchange spec + terminal bus quiescence, all-inputs.
 //!            The field-complete weld (BR/IR/s1..s7==0, PC==pc+1) and the
 //!            terminal bus quiescence are asserted on the RAW netlist output of
-//!            each step BEFORE re-pinning (which force-zeroes those fields) — so
+//!            each step BEFORE re-pinning (which force-zeroes those fields) -- so
 //!            they are genuine whole-domain netlist checks, not vacuous.
 //! Reality anchor: a concrete `theseus_eval` bootstrap of the same ROM ==
 //! hand-computed exchange. Teeth: 3 single-step negative controls (no-write /
 //! no-read / wrong-address) + 1 composition control, all DETECTED; and the
 //! whole-domain equality was teeth-checked by breaking the spec's address
 //! decode (→ FAIL vs the real netlist, reverted). Peaks: single-step 11 nodes,
-//! 2-step 35 nodes — tractable.
+//! 2-step 35 nodes -- tractable.
 //!
 //! SOUNDNESS PRECONDITION (s0=0). MEXCHR uses scratch s0 as workspace and only
-//! realizes the clean exchange when it ENTERS with s0=0 — the machine's
+//! realizes the clean exchange when it ENTERS with s0=0 -- the machine's
 //! inter-step scratch invariant (the decoder restores s0=0 after every op; the
 //! same convention `needs_s0_pinned` enforces for immediates, and the
 //! invariant-POC's all-scratch-0 body entry). The proof pins s0=0 (a symbolic
@@ -40,7 +40,7 @@
 //!
 //! PROVEN vs ARGUED. PROVEN (BVEQ, all inputs): the exchange semantics
 //! (reg[rd]↔mem[reg[ra]%N]), the % mask (addr = low log2(N) bits), all-else
-//! identity, s0 restoration, symbolic bus quiescence — for single steps and
+//! identity, s0 restoration, symbolic bus quiescence -- for single steps and
 //! their straight-line composition. The mexch_reg real-CPU test additionally
 //! ran the whole SystemRing / two-body ring closure at SAMPLE points; the
 //! ring-vs-eval equivalence itself is a separate proven property. This file
@@ -63,7 +63,7 @@
 //!
 //! Run: `cargo test --features heavy-tests --test bveq_mexch_feasibility
 //!       -- --nocapture --test-threads=1`
-//! (heavy-tests gated: lowering system_step is memory-heavy — one at a time.)
+//! (heavy-tests gated: lowering system_step is memory-heavy -- one at a time.)
 //!
 //! Memory-abort guard: PEAK_NODE_ABORT caps a single output BDD; if any
 //! output bit exceeds it we record the offending phase and stop instead of
@@ -119,7 +119,7 @@ fn mexchr_word(rd: u32, ra: u32) -> u32 {
 // operands to a concrete byte (for the concrete-address measurement). Any reg
 // listed in `concrete_regs` is a constant byte; all others are symbolic.
 // Mem words are always symbolic (they are the exchanged data). BR=0, PC=0,
-// IR=0 (fetched from ROM), s0 symbolic, s1.. = 0 — same as build_system_init.
+// IR=0 (fetched from ROM), s0 symbolic, s1.. = 0 -- same as build_system_init.
 fn build_system_init_param(map: &VarMap, concrete_regs: &[(usize, u8)]) -> SV {
     let vs = map.bdd_vars();
     let concrete = |i: usize| concrete_regs.iter().find(|(r, _)| *r == i).map(|(_, v)| *v);
@@ -204,11 +204,11 @@ fn walk_mexchr(map: &VarMap, word: u32, concrete_regs: &[(usize, u8)]) -> Measur
     }
 }
 
-/// Whole-domain MEXCHR walk with s0 PINNED to 0 — the machine's inter-step
+/// Whole-domain MEXCHR walk with s0 PINNED to 0 -- the machine's inter-step
 /// scratch invariant (the decoder restores s0 to 0 after every op; the real
 /// machine is NEVER at a step boundary with s0≠0). MEXCHR uses s0 as workspace
 /// and only realizes the clean `reg[rd]↔mem[addr]` exchange when it enters at
-/// s0=0 (a symbolic s0 makes reg[rd]' depend on s0 — an unreachable state, the
+/// s0=0 (a symbolic s0 makes reg[rd]' depend on s0 -- an unreachable state, the
 /// same convention as `needs_s0_pinned` for immediates and the invariant-POC
 /// body-entry all-scratch-0). regs 0..7 + mem[*] stay fully symbolic (the whole
 /// exchanged-data domain); BR/IR/PC/bus = 0.
@@ -303,7 +303,7 @@ fn decode_out_sv(out: &SV, val: &BddValuation) -> StateVals {
     for (i, m) in memv.iter_mut().enumerate() {
         *m = read_byte(extract_field(mem, i, MEM_WORDS), val);
     }
-    // bus must be quiescent (0) — sanity read of field 0
+    // bus must be quiescent (0) -- sanity read of field 0
     let _bus0 = read_byte(extract_field(bus, 0, NUM_BUS_FIELDS), val);
     StateVals {
         regs,
@@ -436,7 +436,7 @@ fn symbolic_address_case() -> (usize, usize, f64, bool) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// Driver — all measurements sequentially (one lowering at a time).
+// Driver -- all measurements sequentially (one lowering at a time).
 // ════════════════════════════════════════════════════════════════════
 #[test]
 fn mexchr_symbolic_feasibility_probe() {
@@ -466,7 +466,7 @@ fn mexchr_symbolic_feasibility_probe() {
         eprintln!(
             "  symbolic-addr: peak={peak} nodes, total={total}, {secs:.2}s{}",
             if aborted {
-                "  [ABORTED — BLOW-UP]"
+                "  [ABORTED -- BLOW-UP]"
             } else {
                 ""
             }
@@ -481,7 +481,7 @@ fn mexchr_symbolic_feasibility_probe() {
         } else {
             eprintln!(
                 "SYMBOLIC-ADDRESS TRACTABLE: peak={peak} nodes, {secs:.2}s. \
-                 GO — direct symbolic MEXCHR proof feasible."
+                 GO -- direct symbolic MEXCHR proof feasible."
             );
         }
     });
@@ -489,7 +489,7 @@ fn mexchr_symbolic_feasibility_probe() {
 
 // ════════════════════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════════════════════
-// WHOLE-DOMAIN PROOF — promote the feasibility GO into a SOUND
+// WHOLE-DOMAIN PROOF -- promote the feasibility GO into a SOUND
 // symbolic authority that RETIRES the `mexch_reg` real-CPU test.
 // ════════════════════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════════════════════
@@ -504,7 +504,7 @@ fn mexchr_symbolic_feasibility_probe() {
 //   PIECE 1 (postcondition SPEC, the one genuinely-new obligation).
 //     Build the MEXCHR postcondition as a SYMBOLIC spec over the WHOLE input
 //     domain (symbolic reg[rd], reg[ra], and all MEM_WORDS mem bytes), and
-//     assert the netlist's output field BDDs `==` the spec bit-for-bit — i.e.
+//     assert the netlist's output field BDDs `==` the spec bit-for-bit -- i.e.
 //     BDD EQUALITY, which quantifies over EVERY assignment at once. The spec:
 //        addr    = reg[ra] mod MEM_WORDS   (= the low log2(MEM_WORDS) bits)
 //        reg[rd]' = MUX(addr, mem[0..MEM_WORDS])          (byte read)
@@ -524,11 +524,11 @@ fn mexchr_symbolic_feasibility_probe() {
 //     quiescence, over the whole symbolic data domain.
 //
 // TEETH: negative controls (wrong swap direction; mem-unchanged spec; wrong
-// address bit) must be DETECTED by the same asserts — each is teeth-checked
+// address bit) must be DETECTED by the same asserts -- each is teeth-checked
 // (break → FAIL → revert) in the driver's `NEG:` self-audit block.
 //
 // A whole-domain postcondition FAILURE on the real netlist would be a real
-// MEXCHR MISCOMPILE (not a test gap) — the asserts panic LOUDLY.
+// MEXCHR MISCOMPILE (not a test gap) -- the asserts panic LOUDLY.
 
 // ── BDD helpers ─────────────────────────────────────────────────────
 
@@ -636,30 +636,30 @@ fn mexch_spec(map: &VarMap, rd: usize, ra: usize) -> MexchSpec {
 /// every other reg + s0 identity, bus quiescent. Returns () or panics LOUDLY.
 ///
 /// `expect_correct=false` (negative control) inverts the top-level expectation:
-/// the spec must NOT hold (some assert must fire) — used to give the proof teeth.
+/// the spec must NOT hold (some assert must fire) -- used to give the proof teeth.
 fn assert_mexch_postcondition(map: &VarMap, out: &SV, rd: usize, ra: usize) {
     let vs = map.bdd_vars();
     let zero = vs.mk_false();
     let spec = mexch_spec(map, rd, ra);
 
-    // reg[rd]' == MUX(addr, mem[*])  — whole-domain BDD equality.
+    // reg[rd]' == MUX(addr, mem[*])  -- whole-domain BDD equality.
     let got_rd = out_cpu_bits(out, rd);
     for b in 0..W {
         assert_eq!(
             got_rd[b], spec.rd_out[b],
             "MEXCHR POSTCONDITION: reg[{rd}]' bit {b} != MUX(addr, mem[*]) over the whole domain \
-             — REAL MEXCHR READ MISCOMPILE"
+             -- REAL MEXCHR READ MISCOMPILE"
         );
     }
 
-    // mem[j]' == ite(addr==j, reg[rd], mem[j])  — whole-domain BDD equality.
+    // mem[j]' == ite(addr==j, reg[rd], mem[j])  -- whole-domain BDD equality.
     for j in 0..MEM_WORDS {
         let got_m = out_mem_bits(out, j);
         for b in 0..W {
             assert_eq!(
                 got_m[b], spec.mem_out[j][b],
                 "MEXCHR POSTCONDITION: mem[{j}]' bit {b} != ite(addr=={j}, reg[{rd}], mem[{j}]) \
-                 over the whole domain — REAL MEXCHR WRITE MISCOMPILE"
+                 over the whole domain -- REAL MEXCHR WRITE MISCOMPILE"
             );
         }
     }
@@ -857,7 +857,7 @@ fn bits_to_sv(bits: &[Bdd]) -> Vec<SV> {
 }
 
 /// Returns true if `assert_mexch_postcondition` PANICS (i.e. detects the
-/// corruption) — a teeth check. Runs the assert on a big stack in a catch.
+/// corruption) -- a teeth check. Runs the assert on a big stack in a catch.
 fn detects(map: &VarMap, out: &SV, rd: usize, ra: usize) -> bool {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         assert_mexch_postcondition(map, out, rd, ra);
@@ -866,7 +866,7 @@ fn detects(map: &VarMap, out: &SV, rd: usize, ra: usize) -> bool {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// PIECE 2 — multi-revolution symbolic composition (concrete PC per step).
+// PIECE 2 -- multi-revolution symbolic composition (concrete PC per step).
 // ════════════════════════════════════════════════════════════════════
 //
 // The mexch_reg authority runs `ring.run(s, 2..3)` on straight-line MEXCHR
@@ -874,7 +874,7 @@ fn detects(map: &VarMap, out: &SV, rd: usize, ra: usize) -> bool {
 // the PC concrete each step (the ROM is BRANCHLESS ⇒ the PC sequence is the
 // compile-time constant [0,1,2,...]). After R steps we assert the composed
 // output equals R sequential applications of the per-word exchange spec + a
-// terminal bus-quiescence — over the WHOLE symbolic data domain.
+// terminal bus-quiescence -- over the WHOLE symbolic data domain.
 //
 // We keep this to a hand-composed 2-word MEXCHR ROM (two different addresses)
 // so the multi-step exchange spec is closed-form and checkable. Each step is
@@ -932,7 +932,7 @@ fn repin_between_steps(out: &SV, next_pc: u8, vs: &BddVariableSet) -> SV {
         cpu_fields.push(sv_word8_const(0, vs)); // IR = 0
     }
     cpu_fields.push(sv_word8_const(0, vs)); // s0 = 0 (inter-step invariant; the
-                                            // prior step restored it — asserted by
+                                            // prior step restored it -- asserted by
                                             // the per-step spec's s0 check)
     for _ in 1..NUM_SCRATCH {
         cpu_fields.push(sv_word8_const(0, vs)); // s1..s7 = 0
@@ -959,7 +959,7 @@ fn repin_between_steps(out: &SV, next_pc: u8, vs: &BddVariableSet) -> SV {
 /// step. Returns (repinned_final, raw_final_out, peak_nodes, total_secs).
 ///
 /// `raw_final_out` is the LAST step's netlist output BEFORE `repin_between_steps`
-/// zeroes its non-data fields — the caller asserts terminal bus quiescence on
+/// zeroes its non-data fields -- the caller asserts terminal bus quiescence on
 /// THIS (a re-pinned SV has bus force-zeroed ⇒ the assert would be vacuous).
 fn compose_mexchr_rom(map: &VarMap, rom: &[u32]) -> (SV, SV, usize, f64) {
     let vs = map.bdd_vars();
@@ -1014,11 +1014,11 @@ fn compose_mexchr_rom(map: &VarMap, rom: &[u32]) -> (SV, SV, usize, f64) {
         for (b, bit) in s0_out.iter().enumerate() {
             assert_eq!(
                 *bit, zero,
-                "compose: s0 not restored to 0 (bit {b}) after step pc={pc} — workspace leak"
+                "compose: s0 not restored to 0 (bit {b}) after step pc={pc} -- workspace leak"
             );
         }
         // FIELD-COMPLETE WELD (MAJOR-B): assert BR/IR/s1..s7 == 0 and PC (lo+hi)
-        // == pc+1 on the RAW step output — a MEXCHR leak into those fields would
+        // == pc+1 on the RAW step output -- a MEXCHR leak into those fields would
         // otherwise be MASKED by repin_between_steps. Whole symbolic domain.
         assert_weld_fields_clean(map, &out, pc + 1);
         raw_final = out.clone();
@@ -1040,7 +1040,7 @@ fn mexchr_whole_domain_proof() {
 
         // ── REALITY ANCHOR: concrete theseus_eval bootstrap ─────────
         // Before the symbolic whole-domain claims, confirm the CONCRETE eval of
-        // the exact 2-word ROM matches the hand-computed exchange at a sample —
+        // the exact 2-word ROM matches the hand-computed exchange at a sample --
         // ties the symbolic spec to real machine behavior (anti-vacuity).
         eprintln!("\n-- REALITY ANCHOR: concrete theseus_eval bootstrap --");
         {
@@ -1119,7 +1119,7 @@ fn mexchr_whole_domain_proof() {
             );
             eprintln!("  [ok] real output PASSES the spec (no false alarm)");
 
-            // NEG-1: WRONG SWAP DIRECTION — leave mem[addr] holding its OLD
+            // NEG-1: WRONG SWAP DIRECTION -- leave mem[addr] holding its OLD
             // value (never write reg[rd] into it). Forge mem[0] = its input
             // (identity) instead of ite(addr==0, reg[rd], mem[0]).
             let mem0_in = bits_to_sv(&input_byte_bits(&map, OP_MEM_BASE));
@@ -1130,7 +1130,7 @@ fn mexchr_whole_domain_proof() {
             );
             eprintln!("  [teeth] NEG-1 mem-unchanged/no-write DETECTED");
 
-            // NEG-2: WRONG READ — reg[rd]' left as its OLD value (no read from
+            // NEG-2: WRONG READ -- reg[rd]' left as its OLD value (no read from
             // mem). Forge reg[rd] = its input byte (identity) instead of the MUX.
             let rd_in = bits_to_sv(&input_byte_bits(&map, rd));
             let forged2 = set_cpu_bits(&m.out, rd, rd_in);
@@ -1140,8 +1140,8 @@ fn mexchr_whole_domain_proof() {
             );
             eprintln!("  [teeth] NEG-2 reg[rd]-unchanged/no-read DETECTED");
 
-            // NEG-3: WRONG ADDRESS BIT — corrupt reg[rd]' to MUX on the WRONG
-            // address (reg[ra] with bit 0 forced, i.e. addr|1) — off-by-one addr.
+            // NEG-3: WRONG ADDRESS BIT -- corrupt reg[rd]' to MUX on the WRONG
+            // address (reg[ra] with bit 0 forced, i.e. addr|1) -- off-by-one addr.
             // Build a MUX keyed on (addr with low bit cleared → wrong word set).
             let vs = map.bdd_vars();
             let mut wrong_rd = vec![vs.mk_false(); W];
@@ -1168,7 +1168,7 @@ fn mexchr_whole_domain_proof() {
         // symbolically (concrete PC per step) and assert the composed output ≡
         // sequential exchange over the whole data domain + terminal quiescence.
         //
-        // ROM: MEXCHR r1,r8?  — must use distinct rd/ra with symbolic addrs.
+        // ROM: MEXCHR r1,r8?  -- must use distinct rd/ra with symbolic addrs.
         // We choose 3 steps with independent (rd,ra) so each step's spec is a
         // clean per-step exchange, and check the FINAL state ≡ the composed
         // per-step specs applied in order.
@@ -1192,7 +1192,7 @@ fn mexchr_whole_domain_proof() {
             // the spec below models the exact ite/MUX chain including aliasing.
             assert_two_step_exchange(&map, &out, (1, 2), (3, 4));
             // MAJOR-A: assert terminal bus quiescence on the RAW final-step output
-            // (before re-pinning force-zeroes the bus) — a genuine netlist check
+            // (before re-pinning force-zeroes the bus) -- a genuine netlist check
             // over the whole symbolic domain, not the vacuous re-pinned constant.
             assert_bus_quiescent(&map, &raw_final);
 

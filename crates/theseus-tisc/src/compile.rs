@@ -1,8 +1,8 @@
 //! M-A/M-B/M-C1 surface→TISC-1 ROM compiler (ADR-0042 + ADR-0043 + ADR-0044).
 //!
-//! Compiles the product/composition fragment of core `Iso` — plus the
+//! Compiles the product/composition fragment of core `Iso` -- plus the
 //! controlled-op idiom (general arms), data-dependent `Iter`, and bare
-//! sum operations — to TISC-1 instruction sequences. M-C1 extends the
+//! sum operations -- to TISC-1 instruction sequences. M-C1 extends the
 //! register-only M-A/M-B fragment with scratch-spill support via Xchg,
 //! raising the leaf ceiling from 8 to 14 (straight-line) or 12 (branching).
 //!
@@ -44,17 +44,17 @@ pub enum CompileError {
     /// Instruction would alias registers (rd == rs).
     AliasedRegisters { instr: String },
     /// Resident array leaves are not at the expected memory locations.
-    /// The arr leaves must home at [Mem(0), Mem(1), …, Mem(n-1)] in order;
+    /// The arr leaves must home at [Mem(0), Mem(1), ..., Mem(n-1)] in order;
     /// a composition that shifts them would silently corrupt execution.
     ResidentMisplaced(String),
     /// The bveq emission verifier rejected an instruction sequence that
-    /// enumeration accepted — a real emission bug (transposed operands,
+    /// enumeration accepted -- a real emission bug (transposed operands,
     /// wrong arm). Carries a human-readable description of the failure.
     EmissionVerificationFailed(String),
     /// The general BDD synthesizer (the prim-lowering fall-through) could lower
     /// this prim in principle, but the machine does not have enough free operand
     /// words for the ancilla + BDD node-lines it needs. This is a GRACEFUL
-    /// fall-through (widen-state / provisioning lands later — A-6.4), NOT a
+    /// fall-through (widen-state / provisioning lands later -- A-6.4), NOT a
     /// verification failure. Carries the required vs. available word counts.
     NeedsProvisioning {
         /// Human-readable prim name (for diagnostics).
@@ -76,7 +76,7 @@ impl fmt::Display for CompileError {
             CompileError::AuxRegistersExhausted { needed, available } => write!(
                 f,
                 "skip-block needs {needed} live aux register(s) but only {available} free \
-                 register slot(s) are available without aliasing live data — a graceful \
+                 register slot(s) are available without aliasing live data -- a graceful \
                  register-budget reject (per-level skip-block aux, not covered by the O(1) \
                  aux-frame reuse), NOT corruption (A-5b §2.3)"
             ),
@@ -107,7 +107,7 @@ impl fmt::Display for CompileError {
 // ── Type helpers ──────────────────────────────────────────────────────
 
 /// A "leaf" type is a type that occupies exactly one register (u8).
-/// For M-A these are: Bit = 1+1, bounded Nat = 1+(1+(…+0)), and any
+/// For M-A these are: Bit = 1+1, bounded Nat = 1+(1+(...+0)), and any
 /// sum-chain type whose values fit in a byte.
 /// Count the number of word-sized leaf fields in a type.
 ///
@@ -447,12 +447,12 @@ const W_BR16: usize = 16;
 /// First spillable scratch index (s0/s1 are decoder-reserved).
 const SCRATCH_SPILL_BASE: u8 = 2;
 
-// ── Placement (sole layout function — F-5) ──────────────────────────
+// ── Placement (sole layout function -- F-5) ──────────────────────────
 
 /// The SOLE placement function for leaf→location mapping.
 /// Trailing `resident` leaves [n-resident, n) → Mem(leaf - (n - resident)).
 /// Head leaves [0, n-resident) → Reg(0..8) then Scratch(2..8) by the existing rule.
-/// Marshal, unmarshal, and Ctx MUST all call this — no re-implemented layout (F-5).
+/// Marshal, unmarshal, and Ctx MUST all call this -- no re-implemented layout (F-5).
 fn home_of(leaf: usize, n_leaves: usize, resident: usize) -> Location {
     let head = n_leaves - resident;
     if leaf >= head {
@@ -462,7 +462,7 @@ fn home_of(leaf: usize, n_leaves: usize, resident: usize) -> Location {
         Location::Reg(leaf as u8)
     } else if leaf < 14 {
         // NOTE (M-D.e 3b): canonical leaf 8 maps here to Scratch(2) =
-        // SCRATCH_SPILL_BASE — the same slot `lower_trace` pages a spilled
+        // SCRATCH_SPILL_BASE -- the same slot `lower_trace` pages a spilled
         // loop-carrier leaf to. Unreachable under Trace at MAX_LEAVES_LOOP=4
         // (would need n_input ≥ 9), but the collision is pinned here at the
         // producer as well as at the spill site in `lower_trace`.
@@ -477,7 +477,7 @@ fn home_of(leaf: usize, n_leaves: usize, resident: usize) -> Location {
 // ── Register allocation context ──────────────────────────────────────
 
 /// Maps leaf positions to physical locations (register or scratch word).
-/// Between every instruction the machine is in canonical layout — every
+/// Between every instruction the machine is in canonical layout -- every
 /// leaf sits in its home (ADR-0044 §2.1).
 #[derive(Clone, Debug)]
 pub struct Ctx {
@@ -489,13 +489,13 @@ pub struct Ctx {
     /// A-5b (deep loop-nesting via aux REUSE): register bitmask of the enclosing
     /// Trace level(s)' aux slots `{rc, rb, temp, ctrl}` that are provably **dead
     /// across this region** (the outer loop's body). A **nested `Trace`** may
-    /// REUSE these slots for its own aux frame — they are time-disjoint from the
+    /// REUSE these slots for its own aux frame -- they are time-disjoint from the
     /// outer aux (design §2.2: the outer aux are net-zero ancillae, all 0 across
     /// the body, the come-from carried by δu-immediates + PC/BR, not a live reg).
     ///
     /// PRECISION (task constraint): this is consumed ONLY by `allocate_aux_frame`
     /// (a nested Trace's 4-aux frame). It is DELIBERATELY NOT consulted by
-    /// `allocate_aux` (skip-block aux `{rb, temp}`) — a skip-block's aux are LIVE
+    /// `allocate_aux` (skip-block aux `{rb, temp}`) -- a skip-block's aux are LIVE
     /// across its own body (`temp = body_len` during the CSWAP/SWAPBR bracket,
     /// `emit_skip_block`), so a skip-block must NEVER reuse these slots. The
     /// enclosing skip-block's OWN aux are separately marked in `occ` (R4/R5/R6),
@@ -510,7 +510,7 @@ pub struct Ctx {
 impl Ctx {
     /// Canonical home layout (ADR-0044 §2.1 + ADR-0046 §3.1):
     /// L < 8 → Reg(L); 8 ≤ L < 14 → Scratch(L − 6); 14 ≤ L < 14+N → Mem(L − 14).
-    /// Delegates to `new_resident(n_leaves, 0)` — `home_of` is the sole
+    /// Delegates to `new_resident(n_leaves, 0)` -- `home_of` is the sole
     /// placement function (I-3 / design §8(1)).
     fn new(n_leaves: usize) -> Self {
         Self::new_resident(n_leaves, 0)
@@ -541,7 +541,7 @@ impl Ctx {
     /// Split into two sub-contexts for `Times(f, g)`.
     fn split(&self, n_left: usize) -> (Ctx, Ctx) {
         // A-5b: `reusable_aux` (outer-Trace dead aux) is region-scoped, not
-        // leaf-scoped — it stays reusable for BOTH factors of a `Times` in the
+        // leaf-scoped -- it stays reusable for BOTH factors of a `Times` in the
         // body (both are inside the same outer-loop body region). Propagate to
         // both halves. The sibling OCC (F-1) still keeps each factor's live regs
         // off-limits, so a nested Trace in either factor reuses only the (dead)
@@ -583,7 +583,7 @@ impl Ctx {
 ///
 /// For each scratch-home operand, Xchg it into a spare register.
 /// For each mem-home operand, Mexch it into a spare register (the
-/// transient-squat pattern, Lemma 7.2 — the spare's leaf transiently
+/// transient-squat pattern, Lemma 7.2 -- the spare's leaf transiently
 /// squats in mem[addr] and is restored by the self-inverse Mexch).
 /// After the closure, undo the page-ins in reverse order.
 fn with_registers(
@@ -743,7 +743,7 @@ fn allocate_aux(
     }
 
     // Zero-source: displace register-home leaves into free scratch OR
-    // free memory slots (ADR-0046 §3.1 — unused marshalling-zeroed words).
+    // free memory slots (ADR-0046 §3.1 -- unused marshalling-zeroed words).
     // Use whole-machine occupancy for free-slot detection.
     enum ZeroSlot {
         Scratch(u8),
@@ -777,10 +777,10 @@ fn allocate_aux(
     if free_slots.len() < needed || displaceable.len() < needed {
         // This site has TWO distinct failure modes; report them distinctly
         // (A-5b review Finding 2):
-        //  (a) LEAF-COUNT overflow — the whole program has more leaves than the
+        //  (a) LEAF-COUNT overflow -- the whole program has more leaves than the
         //      branching budget supports (`ctx.homes.len() > MAX_LEAVES_BRANCHING`);
         //      a genuine capacity overflow → `TooManyLeaves`.
-        //  (b) AUX-REGISTER exhaustion — the program's leaves DO fit, but THIS
+        //  (b) AUX-REGISTER exhaustion -- the program's leaves DO fit, but THIS
         //      skip-block's `count` live aux regs can't be drawn without aliasing
         //      live data (per-level skip-block aux not covered by the O(1)
         //      aux-frame reuse, A-5b §2.3) → `AuxRegistersExhausted`, a graceful
@@ -845,11 +845,11 @@ fn allocate_aux(
 /// leaves, (b) any `Times` sibling's live registers, and (c) any outer loop
 /// level's live aux (for nested Trace). We achieve all three by drawing the
 /// frame from *genuinely-free* registers according to whole-machine occupancy
-/// (`ctx.occ`), never the positional `max_carrier_reg + 1` — which was safe only
+/// (`ctx.occ`), never the positional `max_carrier_reg + 1` -- which was safe only
 /// because the F-1 guard rejected every non-canonical/occupied ctx (M-D.d F-1).
 ///
 /// Returns `(frame, marked_occ)` where `frame = [rc, rb, temp, ctrl]` and
-/// `marked_occ` is `ctx.occ` with all four aux registers marked occupied — the
+/// `marked_occ` is `ctx.occ` with all four aux registers marked occupied -- the
 /// caller threads `marked_occ` into the body's `Ctx` so that an INNER Trace's
 /// `allocate_aux_frame` sees this level's aux as taken and draws a DISJOINT
 /// frame one level down. This is the "outer occ-marks its frame before lowering
@@ -857,14 +857,14 @@ fn allocate_aux(
 ///
 /// The four aux are drawn as free registers only (never scratch/mem): all four
 /// are live SWAPBR/CSWAP/ADDI operands across the whole loop bracket, so they
-/// must be register-resident — this is why we reject rather than spill when the
+/// must be register-resident -- this is why we reject rather than spill when the
 /// register file cannot host a disjoint frame (design §2.3 depth bound).
 ///
 /// **Byte-identity for the canonical single-level case.** `allocate_aux(ctx, 4,
 /// carrier_leaves)` returns the four lowest free registers in ascending order.
 /// For a canonical single-level Trace the carrier occupies registers
 /// `0..=max_carrier_reg` contiguously from 0, so the four lowest free registers
-/// are exactly `[max_carrier_reg+1, +2, +3, +4]` — byte-identical to the old
+/// are exactly `[max_carrier_reg+1, +2, +3, +4]` -- byte-identical to the old
 /// `aux_base = max_carrier_reg + 1` positional assignment. (We assert this in
 /// `lower_trace` immediately after the call.)
 fn allocate_aux_frame(ctx: &Ctx) -> Result<([u8; 4], OccSet), CompileError> {
@@ -875,13 +875,13 @@ fn allocate_aux_frame(ctx: &Ctx) -> Result<([u8; 4], OccSet), CompileError> {
     // relocate a live carrier leaf → the very corruption A-5 avoids).
     //
     // A-5b (deep loop-nesting via REUSE): a genuinely-free register (per occ) is
-    // always usable; ADDITIONALLY, a slot in `ctx.reusable_aux` — an ENCLOSING
-    // Trace level's aux, provably DEAD across this body region (design §2.2) —
+    // always usable; ADDITIONALLY, a slot in `ctx.reusable_aux` -- an ENCLOSING
+    // Trace level's aux, provably DEAD across this body region (design §2.2) --
     // may be REUSED even though it is not free-per-occ (the outer marks its aux
     // in the body occ so skip-blocks still avoid it). Reuse is time-disjoint: the
     // inner loop is a net-zero bracket that enters+exits these slots at 0, and
     // the outer never touches them across the entire inner region. This makes the
-    // aux cost O(1) in nesting depth — depth is bounded by CARRIER registers, not
+    // aux cost O(1) in nesting depth -- depth is bounded by CARRIER registers, not
     // by 4·depth aux (design §2.3). Ascending order: a genuinely-free register is
     // preferred over a reuse slot only by numeric index, preserving byte-identity
     // for the canonical single-level case (no reusable_aux ⇒ pure free draw).
@@ -892,7 +892,7 @@ fn allocate_aux_frame(ctx: &Ctx) -> Result<([u8; 4], OccSet), CompileError> {
         return Err(CompileError::Deferred(format!(
             "Trace aux frame needs 4 register slots but only {} are available \
              (carrier + sibling occupancy leaves no room, even with outer-aux \
-             reuse — nesting bounded by CARRIER registers, design §2.3/A-5b)",
+             reuse -- nesting bounded by CARRIER registers, design §2.3/A-5b)",
             candidates.len()
         )));
     }
@@ -916,7 +916,7 @@ fn allocate_aux_frame(ctx: &Ctx) -> Result<([u8; 4], OccSet), CompileError> {
 /// and `marked_regs_bitmask` is the `regs` occupancy AFTER the frame is marked
 /// (what the caller threads into a nested body). This lets the nested-aux tests
 /// construct the `Times(Trace, g)` and nested-Trace aliasing scenarios directly
-/// — the reject sites (A-4's job) still block these programs end-to-end, so the
+/// -- the reject sites (A-4's job) still block these programs end-to-end, so the
 /// frame machinery must be exercised at the allocator boundary (design §2.5).
 pub fn alloc_aux_frame_for_test(
     homes: &[u8],
@@ -1005,7 +1005,7 @@ fn ensure_reg(ctx: &Ctx, leaf: usize, exclude_regs: &[u8]) -> (u8, Vec<Instr>, V
 // (for CSWAP routing). Both must be 0 on entry and are 0 on exit.
 
 /// Returns `true` when `instrs` contains a `Swapbr`, meaning the
-/// lowered body itself uses a skip-block — doubly-nested control that
+/// lowered body itself uses a skip-block -- doubly-nested control that
 /// the current allocator cannot compile safely (reservation ordering
 /// deferred).
 fn has_inner_control(instrs: &[Instr]) -> bool {
@@ -1013,10 +1013,10 @@ fn has_inner_control(instrs: &[Instr]) -> bool {
 }
 
 /// W_BR-b (F4/MINOR-D SAFETY): under a w_br=16 program, EVERY SWAPBR runs on the
-/// two-transposition datapath — it swaps r[rd]↔BR₀ AND r[rs]↔BR₁. A SWAPBR with
+/// two-transposition datapath -- it swaps r[rd]↔BR₀ AND r[rs]↔BR₁. A SWAPBR with
 /// `rs = 0` (the w_br=8 single-transposition sentinel: skip-block branch/come-from
 /// or an ≤128-span loop's narrow come-from) would, at w_br=16, additionally
-/// route r[0]↔BR₁ — corrupting BR's high byte with r0's contents and wild-jumping.
+/// route r[0]↔BR₁ -- corrupting BR's high byte with r0's contents and wild-jumping.
 ///
 /// The full "global skip-block pair" (every skip block gets a zeroed hi partner)
 /// is W_BR-c's job (it also picks w_br per loop). W_BR-b proves the wide loop
@@ -1039,7 +1039,7 @@ pub fn guard_no_narrow_swapbr_under_wide(
         return Err(CompileError::Deferred(
             "program mixes a w_br=16 (two-byte come-from) loop with a narrow \
              (rs=0) SWAPBR (skip block / ≤128-span come-from); the global \
-             skip-block pair discipline is deferred to W_BR-c — reject, don't \
+             skip-block pair discipline is deferred to W_BR-c -- reject, don't \
              corrupt (W_BR-b F4)"
                 .into(),
         ));
@@ -1153,7 +1153,7 @@ fn emit_skip_block(
 /// prim defined by `def`, with operands homed in `operand_regs`.
 ///
 /// The DECOMPOSED CHECK (design r2):
-/// 1. `symbolic_exec(body)` — fail closed on non-register-pure / aliased / OOB.
+/// 1. `symbolic_exec(body)` -- fail closed on non-register-pure / aliased / OOB.
 /// 2. FRAME CLOSURE: non-operand registers unchanged (identity); operand
 ///    output bits depend only on operand-register input variables.
 /// 3. POINTWISE over the table: every `(in, out)` row of `def.forward`
@@ -1172,13 +1172,13 @@ pub fn bveq_verify_emission(
     // returns Ok having verified NOTHING (the f3.5 vacuous-oracle class).
     if def.forward.is_empty() {
         return Err(CompileError::EmissionVerificationFailed(format!(
-            "prim '{}': forward table is empty — cannot verify emission \
+            "prim '{}': forward table is empty -- cannot verify emission \
              (symbolic-only prims are not recognized in 3a)",
             def.forward_name
         )));
     }
 
-    // Step 1: symbolic_exec — fail closed.
+    // Step 1: symbolic_exec -- fail closed.
     let transfer = bveq::symbolic_exec(body).map_err(|e| {
         CompileError::EmissionVerificationFailed(format!(
             "symbolic_exec rejected body for '{}': {e}",
@@ -1251,7 +1251,7 @@ pub fn bveq_verify_emission(
 
         // Build input register state: operand regs get their leaf bytes,
         // all other regs are zero (they are unconstrained by step 2's closure,
-        // so any fixed value works — zero is canonical).
+        // so any fixed value works -- zero is canonical).
         let mut input_regs = [0u8; NUM_REGS];
         for (leaf_idx, &r) in operand_regs.iter().enumerate() {
             if leaf_idx < in_bytes.len() {
@@ -1564,7 +1564,7 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
     if def.forward_name == "memexch" && n_in >= 3 && n_in == n_out {
         let n_arr = n_in - 2; // number of array elements
 
-        // F-3: SEMANTIC VERIFY — check every input against memexch semantics.
+        // F-3: SEMANTIC VERIFY -- check every input against memexch semantics.
         let all_vals = enumerate_values(&def.input_ty);
         for v in &all_vals {
             let in_bytes = value_to_leaf_bytes(v, &def.input_ty);
@@ -1578,7 +1578,7 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
                 exp_bytes[0] = in_bytes[2 + idx];
                 exp_bytes[2 + idx] = d;
             } else {
-                // Index outside array — table cannot match memexch semantics
+                // Index outside array -- table cannot match memexch semantics
                 return Err(CompileError::UnrecognizedPrim(
                     "memexch semantic verify: index out of array bounds".into(),
                 ));
@@ -1597,7 +1597,7 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
             }
         }
 
-        // F-2: HOME-LAYOUT GUARD — arr leaves must be at [Mem(0), ..., Mem(n_arr-1)] in order.
+        // F-2: HOME-LAYOUT GUARD -- arr leaves must be at [Mem(0), ..., Mem(n_arr-1)] in order.
         for j in 0..n_arr {
             let leaf_idx = 2 + j; // arr leaves start at position 2
             if leaf_idx >= ctx.homes.len() || ctx.homes[leaf_idx] != Location::Mem(j as u8) {
@@ -1629,9 +1629,9 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
     // Swapbr-free 13-instruction sequence; touches ALL payload leaves
     // including the spilled leaf 4. Pinned recognizer: name-gate +
     // semantic gate (check_pattern_kleaf verifies the full forward table
-    // vs the byte map over all canonical values — a mismatch rejects).
+    // vs the byte map over all canonical values -- a mismatch rejects).
     // NOTE: check_pattern_kleaf enumerates the whole input type
-    // (exponential in leaves) — acceptable for k=5 (7 values).
+    // (exponential in leaves) -- acceptable for k=5 (7 values).
     if def.forward_name == "mde_spill_walk" && n_in == 5 && n_out == 5 {
         let vals = enumerate_values(&def.input_ty);
         if check_pattern_kleaf(
@@ -1697,10 +1697,10 @@ pub fn recognize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
 // admitted bijection `PrimDef` that fits the machine's free operand budget is
 // lowered by DETERMINISTIC wiring + transcription (table → per-output-bit ANF →
 // ROBDD → Bennett), NOT search. Large prims (e.g. gcd2, whose BDD needs 35 node
-// lines) fall through gracefully with `NeedsProvisioning` — widen-state (A-6.4)
+// lines) fall through gracefully with `NeedsProvisioning` -- widen-state (A-6.4)
 // funds them later.
 
-/// Per-leaf meaningful bit-width for a type, in canonical leaf order — the
+/// Per-leaf meaningful bit-width for a type, in canonical leaf order -- the
 /// widths `table_to_regtransfer` needs. A `Sum` tag leaf is 1 bit; payload leaves
 /// take the position-wise MAX of the two branches' widths (matching the
 /// zero-padded tag+payload marshaling of `value_to_leaf_bytes`). `Flat(n)` is `n`
@@ -1746,14 +1746,14 @@ fn leaf_widths(ty: &Type) -> Result<Vec<u8>, CompileError> {
 /// to `n_leaves` bytes.
 ///
 /// NON-PANICKING + IDENTITY-ON-JUNK (A-6 STEP-1 fix, review MAJOR-1/2a/2b):
-///   * Parsing uses `try_value_from_leaf_bytes` — a byte pattern outside the
+///   * Parsing uses `try_value_from_leaf_bytes` -- a byte pattern outside the
 ///     type's canonical domain (out-of-range `Flat` byte, junk pad byte, a tag
 ///     that selects the wrong-width branch) yields `Err`, never a panic.
 ///   * When the input bytes are NOT a canonical marshaling of an `in_ty` value,
 ///     or the (canonical) value is not in `table`, the closure returns the input
 ///     bytes UNCHANGED (identity on the junk row). The Bennett method interpolates
 ///     an exact ANF per row, so junk-row images are irrelevant to correctness on
-///     canonical inputs — the whole-domain-CANONICAL exec-verify certifies the
+///     canonical inputs -- the whole-domain-CANONICAL exec-verify certifies the
 ///     canonical rows, and the cross-check enumerates canonical values only. This
 ///     keeps every enumerated `2^Σwidths` byte row total (no panic) while leaving
 ///     the canonical behavior exactly the table.
@@ -1837,7 +1837,7 @@ fn general_synthesize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, Compi
         )));
     }
 
-    // Per-leaf widths from the TYPES (never from the table — N5 obligation).
+    // Per-leaf widths from the TYPES (never from the table -- N5 obligation).
     // The carrier register holds BOTH the input value (before) and the output
     // value (after), so the meaningful bit-width per leaf must cover BOTH
     // directions. Enumerate/emit over `widths[i] = max(in_width_i, out_width_i)`:
@@ -1884,7 +1884,7 @@ fn general_synthesize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, Compi
 
     // CROSS-CHECK bwd∘fwd == id over the CANONICAL DOMAIN (guards the Bennett
     // `bwd = fwd⁻¹` assumption at construction time). Review MAJOR-1: enumerating
-    // all `2^total_bits` raw BYTE rows falsely rejected loose Sums — a junk pad
+    // all `2^total_bits` raw BYTE rows falsely rejected loose Sums -- a junk pad
     // row parses to its canonical twin, so `bwd(fwd(junk)) == canonical != junk`
     // and the check wrongly blamed the (perfect) backward table. The correct
     // domain is the CANONICAL VALUES: iterate `enumerate_values(input_ty)` and
@@ -2019,16 +2019,16 @@ fn general_synthesize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, Compi
     // the BDD body.
     //
     // HONESTY (review Finding 4): this is NOT an independent differential of two
-    // black boxes — both transcribers consume the SAME `fwd`/`bwd` RegTransfers,
+    // black boxes -- both transcribers consume the SAME `fwd`/`bwd` RegTransfers,
     // so a `table_to_regtransfer` bug is shared. What it DOES buy: (i) exec-verify
     // runs the REAL emitted `Instr`s through `exec_instr`, so any `table_to_reg-
     // transfer` bug that makes exec ≠ table is caught by (a) alone regardless;
     // (ii) it is genuine coverage for `transcribe_bennett_general` (ANF) transcrip-
-    // tion bugs — an ANF body that mis-realizes the shared RegTransfer fails here.
+    // tion bugs -- an ANF body that mis-realizes the shared RegTransfer fails here.
     // Both bodies pass exec-verify ⇒ both realize the table on every canonical
     // input ⇒ they agree on carriers (body-vs-body agreement, via the table as the
     // shared oracle). The ANF-path skip on a wiring failure is deliberate: it is a
-    // secondary check, not a gate — the primary (a) already certified the BDD body.
+    // secondary check, not a gate -- the primary (a) already certified the BDD body.
     {
         // ANF needs its own helper bank (mask + AND-tree temps). Reuse the free
         // pool: mask + temps from the words not used as ancilla. If the ANF
@@ -2060,7 +2060,7 @@ fn general_synthesize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, Compi
                     // instr-by-instr is unnecessary: both were checked === table.)
                 }
                 Err(_) => {
-                    // ANF path could not be wired within the free bank — the BDD
+                    // ANF path could not be wired within the free bank -- the BDD
                     // exec-verify stands alone.
                 }
             }
@@ -2087,7 +2087,7 @@ fn free_operand_words(ctx: &Ctx) -> usize {
     n
 }
 
-/// Split a free-word pool into an ANF helper bank `(mask, temps)` — needs ≥ 2
+/// Split a free-word pool into an ANF helper bank `(mask, temps)` -- needs ≥ 2
 /// words (1 mask + ≥1 temp). Returns `None` if too few words remain.
 fn anf_helper_bank(free: &[u8]) -> Option<(u8, Vec<u8>)> {
     if free.len() < 2 {
@@ -2186,7 +2186,7 @@ fn verify_general_body_exec(
 /// selection compares the emitted body only against the SPEC (via `equiv`),
 /// not against the partial table. `core::admit` (which every prim passes
 /// through before it can be recognized) rejects a partial-table+spec prim
-/// whose table and spec disagree (`SpecTableMismatch`) — so a recognized
+/// whose table and spec disagree (`SpecTableMismatch`) -- so a recognized
 /// symbolic prim is always one whose table (if any) is spec-consistent, and
 /// eval's table-wins-else-spec path (interp.rs) cannot diverge from the
 /// emitted code. This function assumes that contract: it does NOT itself
@@ -2211,7 +2211,7 @@ fn selection_by_equiv(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
         let operand_regs: Vec<usize> = regs.iter().map(|&r| r as usize).collect();
 
         // Build the spec-derived RegTransfer (N5: operand_regs from the TYPE,
-        // via with_registers' leaf homes — never from the candidate body).
+        // via with_registers' leaf homes -- never from the candidate body).
         let spec_transfer = bveq::spec_to_reg_transfer(&spec.forward, &operand_regs);
 
         // Generate and try every candidate in the finite arm library.
@@ -2226,7 +2226,7 @@ fn selection_by_equiv(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, CompileErr
             if bveq::equiv(&exec_transfer, &spec_transfer, w, &operand_regs).is_ok() {
                 // Sound by construction: equiv ensures body computes the spec.
                 // Verification IS the selection (not bveq_verify_emission, which
-                // is for table prims — the empty-table hard-reject stays intact).
+                // is for table prims -- the empty-table hard-reject stays intact).
                 return Ok(body.clone());
             }
         }
@@ -2361,7 +2361,7 @@ pub fn mde_walk_bytes(b: &mut [u8]) {
     b[1] ^= b[2];
 }
 
-/// k-leaf generalization of `check_pattern_2leaf` — verify a prim's
+/// k-leaf generalization of `check_pattern_2leaf` -- verify a prim's
 /// clause table matches a pinned byte-level map over k leaves.
 fn check_pattern_kleaf(
     forward: &std::collections::BTreeMap<Value, Value>,
@@ -2516,7 +2516,7 @@ fn find_constant_1reg(
 /// F-4 CHECK: returns Err if the index type has MORE THAN `n` representable values.
 /// The op is an involution, so forward == backward and both names are "memexch" (F-8).
 ///
-/// Delegates to `memexch_prim_idx(elem_ty, elem_ty, n)` — index type equals element type.
+/// Delegates to `memexch_prim_idx(elem_ty, elem_ty, n)` -- index type equals element type.
 pub fn memexch_prim(elem_ty: &Type, n: usize) -> Result<PrimDef, CompileError> {
     memexch_prim_idx(elem_ty, elem_ty, n)
 }
@@ -2537,7 +2537,7 @@ pub fn memexch_prim_idx(elem_ty: &Type, idx_ty: &Type, n: usize) -> Result<PrimD
             "memexch_prim_idx: elem_ty must have exactly 1 leaf, got {elem_leaves}"
         )));
     }
-    // MAJOR-1: idx_ty must also be a single-leaf type — else the body hard-assumes
+    // MAJOR-1: idx_ty must also be a single-leaf type -- else the body hard-assumes
     // addr = 1 byte at offset 1; a multi-leaf idx overlaps the arr.
     let idx_leaves = num_leaves(idx_ty)?;
     if idx_leaves != 1 {
@@ -2556,7 +2556,7 @@ pub fn memexch_prim_idx(elem_ty: &Type, idx_ty: &Type, n: usize) -> Result<PrimD
     // F-4: every representable index value must be < n (so a % MEM_WORDS == a
     // for all representable a, since n <= MEM_WORDS). The tag byte a encodes
     // the thermometer depth ∈ {0, ..., idx_count-1}, not bounded by idx_count
-    // in the general case — the constraint is idx_count <= n.
+    // in the general case -- the constraint is idx_count <= n.
     if idx_count > n {
         return Err(CompileError::Deferred(format!(
             "memexch_prim_idx: index type has {idx_count} values but n={n}; \
@@ -2665,7 +2665,7 @@ fn match_controlled_idiom(iso: &Iso) -> Option<(&Type, &Type, &Type, &Type, &Iso
     Some((c1, t1, dcl, dcr, f.as_ref(), g.as_ref()))
 }
 
-/// Check if an iso is SwapSum(One, One) — i.e. NOT on Bit.
+/// Check if an iso is SwapSum(One, One) -- i.e. NOT on Bit.
 fn is_bit_not(iso: &Iso) -> bool {
     matches!(iso, Iso::SwapSum(a, b) if *a == Type::One && *b == Type::One)
 }
@@ -2786,7 +2786,7 @@ fn is_structural_identity(iso: &Iso) -> bool {
     }
 }
 
-/// Check if g = Times(SwapSum(1,1), Id(1)) — NOT on target with Id on ctrl_half.
+/// Check if g = Times(SwapSum(1,1), Id(1)) -- NOT on target with Id on ctrl_half.
 /// Also handles the form Seq(Plus(f, g), SwapSum(a, b)) which synthesize
 /// produces for a sum-swapping bijection.
 fn is_not_on_target_times_id(g: &Iso, _tgt_ty: &Type) -> bool {
@@ -2853,7 +2853,7 @@ fn is_not_iso(iso: &Iso) -> bool {
     false
 }
 
-/// Check if g = Times(SwapProd(a,b), Id(1)) — SWAP on target with Id on ctrl_half.
+/// Check if g = Times(SwapProd(a,b), Id(1)) -- SWAP on target with Id on ctrl_half.
 fn is_swap_on_target_times_id(g: &Iso, _tgt_ty: &Type) -> bool {
     if let Iso::Times(f, id) = g {
         if let Iso::SwapProd(_, _) = f.as_ref() {
@@ -2926,18 +2926,18 @@ fn numeral_count(ty: &Type) -> Option<usize> {
 /// A node in the compositional WCET **cost tree** (A-3, BLOCKER-2).
 ///
 /// Each `Trace` loop emits exactly one `CostTree` node. A node's `inner`
-/// children are the loop nodes lowered *inside* this loop's body — the ROM
+/// children are the loop nodes lowered *inside* this loop's body -- the ROM
 /// contains each inner body straight-line (once), but at run time the inner
 /// loop actually runs up to its own `k_max` times per *outer* iteration. The
 /// flat `(k_max, iter_len)` sibling list this replaces could not express that
 /// multiply, so it under-counted `B` for nested loops (outer k=4 / inner k=100
-/// / iter=12: true B ≈ 4800, flat sum ≈ 88 — a 55× under-count that lets the
+/// / iter=12: true B ≈ 4800, flat sum ≈ 88 -- a 55× under-count that lets the
 /// park guard pass a bogus budget → PC wrap → L15-class corruption).
 ///
 /// `iter_len` is the *ROM* length of one straight-line body iteration
 /// (`|body| + LOOP_OVERHEAD`); it counts each inner loop's body **once**
 /// (the ROM does). The extra dynamic cost of the inner loops is folded in
-/// separately via `k_max · Σ extra(child)` — see [`CostTree::extra`].
+/// separately via `k_max · Σ extra(child)` -- see [`CostTree::extra`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CostTree {
     /// Trajectory-derived outer iteration bound, `min(k_exact, |u| + 1)`.
@@ -2964,7 +2964,7 @@ impl CostTree {
     /// counts one straight-line pass of the body (that pass is inside
     /// `instrs.len()`), which includes one pass of every inner loop's body. On
     /// each of the `k_max` outer iterations the inner loops may run up to their
-    /// own `k_max` — so the extra work an inner loop does *beyond its one ROM
+    /// own `k_max` -- so the extra work an inner loop does *beyond its one ROM
     /// pass* (`extra(child)`) happens at most `k_max` times. `k_max` is itself an
     /// over-estimate of the true outer trajectory (min of the trajectory walk
     /// and the cardinality bound `|u|+1`), and each `extra(child)` is recursively
@@ -2996,7 +2996,7 @@ pub struct Lowered {
     /// and reproduces the exact old `B`.
     pub loop_terms: Vec<CostTree>,
     /// W_BR-b: the branch-register width the program's come-from arithmetic
-    /// requires — 8 (default, byte-identical) or 16 (a loop/skip whose ROM span
+    /// requires -- 8 (default, byte-identical) or 16 (a loop/skip whose ROM span
     /// exceeded the 8-bit back-jump reach used the two-byte come-from). The
     /// derived [`Layout`] must carry this `w_br` so the decoder emits the
     /// two-transposition SWAPBR and the fast/real sims sign-extend from it.
@@ -3011,7 +3011,7 @@ impl Lowered {
     /// `k_max` so nested loops are counted correctly (`B_fold ≥ true_B`).
     ///
     /// For a flat program (single-level loops, `inner` empty) this collapses to
-    /// the old `|instrs| + Σ (k_max − 1) · iter_len` — byte-identical `B`.
+    /// the old `|instrs| + Σ (k_max − 1) · iter_len` -- byte-identical `B`.
     pub fn wcet(&self) -> usize {
         let base = self.instrs.len();
         let loop_contribution: usize = self.loop_terms.iter().map(CostTree::extra).sum();
@@ -3109,7 +3109,7 @@ use crate::types::Layout;
 /// Scans the program for the two facts the shrink depends on:
 ///  - **memory**: does any instruction emit a Mexch/MexchReg? If not, the
 ///    program is CPU-only and `mem_words = 0` (it runs on the CPU-only
-///    `step(rom)` ring — no composite carrier, no bus).
+///    `step(rom)` ring -- no composite carrier, no bus).
 ///  - **registers**: the highest general-register operand index named
 ///    (`< NUM_REGS`). `num_regs` rounds this up to a power of two.
 ///
@@ -3118,7 +3118,7 @@ use crate::types::Layout;
 /// decodes it as `s[idx − num_regs]`. That decode is only correct at the
 /// `num_regs` the index was encoded against (the default 8). If we shrank
 /// `num_regs` while the program names a scratch operand, idx `8+s` would decode
-/// to `s[8+s − num_regs]` — the WRONG scratch word (silent misroute). So: if the
+/// to `s[8+s − num_regs]` -- the WRONG scratch word (silent misroute). So: if the
 /// program names ANY scratch operand (`loc ≥ NUM_REGS`), we DO NOT shrink the
 /// register file (`num_regs` stays 8). The register-shrink win therefore applies
 /// only to register-only programs; scratch-using programs keep the default
@@ -3138,7 +3138,7 @@ pub fn derive_layout(instrs: &[Instr]) -> Layout {
             if l < NUM_REGS {
                 max_named_reg = Some(max_named_reg.map_or(l, |m| m.max(l)));
             } else {
-                // A scratch operand (absolute index ≥ NUM_REGS) — its decode is
+                // A scratch operand (absolute index ≥ NUM_REGS) -- its decode is
                 // tied to the default register-file boundary; pin num_regs = 8.
                 uses_scratch_operand = true;
             }
@@ -3152,7 +3152,7 @@ pub fn derive_layout(instrs: &[Instr]) -> Layout {
     };
     let base = Layout::for_program_facts(uses_mem, max_named_reg);
     // W_BR-b: a ROM that contains a two-transposition SWAPBR (rs != 0 = a named
-    // hi-word partner) is a w_br=16 program — its come-from mints a two-byte δu
+    // hi-word partner) is a w_br=16 program -- its come-from mints a two-byte δu
     // that only lands correctly when the datapath swaps BOTH BR words and adds a
     // 16-bit offset. Detect it structurally from the ROM so `run_rom_on_cpu`
     // (which has no `iso`) runs the wide netlist. A w_br=8 ROM (every Swapbr rs=0)
@@ -3174,12 +3174,12 @@ pub fn derive_layout(instrs: &[Instr]) -> Layout {
 /// data width; the width lives only in the `iso`'s `Type::Flat(n)` leaves. So
 /// `w_data` MUST be derived from the iso, not the instrs. We take:
 ///
-/// - `w_data = next_pow2(max_flat_width(iso))` — the datapath rotator needs a
+/// - `w_data = next_pow2(max_flat_width(iso))` -- the datapath rotator needs a
 ///   power-of-two slot count, so the widest `Flat(n)` the program manipulates
 ///   is rounded UP to a power of two (e.g. `Flat(4)` → 4, `Flat(3)` → 4,
 ///   `Flat(5)` → 8). [`max_flat_width`] clamps to `[1,8]` and defaults to 8
 ///   when it sees no `Flat` leaf, so `w_data` is never under-reported (an
-///   under-narrow `w_data` would misroute a wide data word — silent
+///   under-narrow `w_data` would misroute a wide data word -- silent
 ///   corruption).
 /// - `num_regs`/`mem_words` from [`derive_layout`] (unchanged).
 /// - `w_ctl = 8` (Option A: the control region stays byte-wide).
@@ -3188,14 +3188,14 @@ pub fn derive_layout(instrs: &[Instr]) -> Layout {
 /// [`derive_layout`] still applies (a program naming a scratch operand keeps
 /// the full register file). For `w_data`, the operand-addressable scratch words
 /// `s2..s{num_scratch-1}` are ALREADY `w_data`-wide (`Layout::field_width`
-/// returns `w_data` for scratch fields ≥ 2), matching the registers — the
+/// returns `w_data` for scratch fields ≥ 2), matching the registers -- the
 /// operand crossbar therefore stays within one width (design Q2), so no extra
 /// `w_data` pin is needed for scratch operands. (s0/s1 are `w_ctl` and are
 /// crossbar-excluded; PC/BR/IR are `w_ctl`.)
 pub fn derive_full_layout(iso: &Iso, instrs: &[Instr]) -> Layout {
     let base = derive_layout(instrs);
 
-    // `w_data` from the source data width — BUT the compiler also mints CONTROL
+    // `w_data` from the source data width -- BUT the compiler also mints CONTROL
     // values into GENERAL REGISTERS: a Trace's come-from offset δu = 256−iter_len
     // (always ≥ 0x80) and forward-skip distances, staged via Addi+Swapbr. Those
     // are 8-bit control, NOT Flat(w_data) data; at a narrow `w_data` the reduced
@@ -3212,7 +3212,7 @@ pub fn derive_full_layout(iso: &Iso, instrs: &[Instr]) -> Layout {
         max_flat_width(iso).next_power_of_two().max(4)
     };
 
-    // BLOCKER-2: marshal fills registers by INPUT LEAF — an untouched Id/Times
+    // BLOCKER-2: marshal fills registers by INPUT LEAF -- an untouched Id/Times
     // component occupies an UNNAMED register. Sizing `num_regs` off named operands
     // alone (`derive_layout`) under-counts, so `encode_with` would drop (and
     // assert-panic on) a live input leaf. Cover the input-leaf count.
@@ -3238,12 +3238,12 @@ pub fn derive_full_layout(iso: &Iso, instrs: &[Instr]) -> Layout {
 /// fetch net needs `rom_len` distinct injective ROM addresses. So the minimum
 /// safe `w_pc` must satisfy BOTH lower bounds simultaneously:
 ///
-/// 1. **Address-space bound** — `(1 << w_pc) >= budget + s_max`. This matches the
+/// 1. **Address-space bound** -- `(1 << w_pc) >= budget + s_max`. This matches the
 ///    `run_rom_on_cpu_with` guard `budget + s_max_val <= layout.pc_addr_space()`
 ///    EXACTLY (`pc_addr_space() == 1 << w_pc`). Choosing a `w_pc` that violates
-///    it would turn a runnable program into a `Deferred` error — a correctness
-///    REGRESSION — so this bound is non-negotiable.
-/// 2. **Fetch-injectivity bound** — `rom_len <= (1 << (w_pc - 1))`. This matches
+///    it would turn a runnable program into a `Deferred` error -- a correctness
+///    REGRESSION -- so this bound is non-negotiable.
+/// 2. **Fetch-injectivity bound** -- `rom_len <= (1 << (w_pc - 1))`. This matches
 ///    the `fetch_with` assert (`rom_len <= 1 << (w_pc - 1)`, the F-2 injectivity
 ///    witness): the top PC bit partitions the address space into the ROM half and
 ///    the parked/high half, so the ROM must fit in the lower half.
@@ -3326,7 +3326,7 @@ struct LowerMeta {
     /// (see `lower_trace`), so the top-level `LowerMeta` carries the full tree.
     loop_terms: Vec<CostTree>,
     /// W_BR-b: `true` if any Trace/skip block at this level (or nested) minted a
-    /// two-byte (w_br=16) come-from — i.e. its ROM span exceeded the 8-bit
+    /// two-byte (w_br=16) come-from -- i.e. its ROM span exceeded the 8-bit
     /// back-jump reach (iter_len > 128). The whole program's layout must then
     /// run at `w_br=16` (the interpreter/decoder honor the wide come-from). A
     /// program with only ≤128-span loops keeps `w_br=8` (byte-identical).
@@ -3422,7 +3422,7 @@ fn lower_dispatch(
         | Iso::AssocRProd(_, _, _)
         | Iso::UniteProd(_)
         | Iso::UnitiProd(_) => {
-            // Zero instructions — register mapping unchanged.
+            // Zero instructions -- register mapping unchanged.
             Ok((vec![], ctx.clone()))
         }
 
@@ -3499,7 +3499,7 @@ fn lower_dispatch(
             } else {
                 Err(CompileError::Deferred(
                     "non-trivial structural sum-renaming (AssocSum/UniteSum) \
-                     — reversible-circuit lowering deferred (F7)"
+                     -- reversible-circuit lowering deferred (F7)"
                         .to_string(),
                 ))
             }
@@ -3519,7 +3519,7 @@ fn lower_dispatch(
             } else {
                 Err(CompileError::Deferred(
                     "non-trivial structural distributivity (Distrib/Factor) \
-                     — reversible-circuit lowering deferred (F7)"
+                     -- reversible-circuit lowering deferred (F7)"
                         .to_string(),
                 ))
             }
@@ -3573,20 +3573,20 @@ fn lower_data_dependent_iter(
     // MAJOR-2a TRIPWIRE (compositional-control review, Finding 2a): the body is
     // lowered ONCE here but emitted D-1 times in the guarded-unroll loop below.
     // A CostTree loop_term the body contributes (e.g. a Trace inside the Iter
-    // body) would stand for the body compiled once — but D-1 physical copies run,
+    // body) would stand for the body compiled once -- but D-1 physical copies run,
     // so `wcet()` would UNDER-COUNT the loop's cost by (D-2)·extra(node) → the
     // exact L15-class park-wrap A-3 exists to prevent. Today this is unreachable:
     // a Trace in an iter body sees displaced homes (Reg(n_counter+..)) and rejects
     // on lower_trace's canonical-input-homes guard. But that protection is an
     // accident of a DIFFERENT guard; if canonical-homes is ever relaxed this
     // becomes a live silent under-count. Snapshot loop_terms and reject-with-clear
-    // -error if the body added any — reject-don't-under-count, never leave it
+    // -error if the body added any -- reject-don't-under-count, never leave it
     // unguarded. (Contrast lower_fold_unfold, which lowers per-copy into `meta`.)
     let loop_terms_before = meta.loop_terms.len();
     let (body_instrs, body_ctx_out) = lower(body, &dctx_body, meta)?;
     if meta.loop_terms.len() != loop_terms_before {
         return Err(CompileError::Deferred(
-            "Iter body contributes a loop term (inner Trace/loop) — the guarded \
+            "Iter body contributes a loop term (inner Trace/loop) -- the guarded \
              D-1 unroll lowers the body once but runs it D-1 times, so wcet() would \
              under-count the inner loop by (D-2)·extra → park-wrap. Rejected \
              (compositional-control Finding 2a; lower per-copy before admitting)"
@@ -3597,7 +3597,7 @@ fn lower_data_dependent_iter(
     // §2.6 guarded-unroll consistency: canonical layout at body boundary.
     debug_assert_eq!(
         dctx_body.homes, body_ctx_out.homes,
-        "M-C1 §2.6: Ctx residence changed during body lowering — \
+        "M-C1 §2.6: Ctx residence changed during body lowering -- \
          frozen unroll body requires canonical layout at boundaries"
     );
 
@@ -3687,7 +3687,7 @@ fn lower_trace(
     // Trace output type `b`) would misread the tag register as a payload leaf.
     if num_leaves(&a_ty)? != num_leaves(&_b_ty)? {
         return Err(CompileError::Deferred(format!(
-            "Trace body a/b payload leaf-count mismatch ({} vs {}) — deferred (M-D.d F-5)",
+            "Trace body a/b payload leaf-count mismatch ({} vs {}) -- deferred (M-D.d F-5)",
             num_leaves(&a_ty)?,
             num_leaves(&_b_ty)?
         )));
@@ -3713,9 +3713,9 @@ fn lower_trace(
     // Guard: require a canonical AND UNSHARED context. The homes must be
     // canonical, AND the whole-machine occ must hold nothing beyond this
     // Trace's own input leaves. lower_trace hand-assigns tag/payload/aux
-    // registers WITHOUT consulting occ, so under a `Times` split — where
+    // registers WITHOUT consulting occ, so under a `Times` split -- where
     // `split` copies the full parent occ into a left half whose homes are
-    // still Reg(0..n_left) (indistinguishable from canonical) — those aux
+    // still Reg(0..n_left) (indistinguishable from canonical) -- those aux
     // registers would alias the sibling factor's live data and silently
     // clobber it (F-1: `Times(Trace, g)` produced wrong outputs that the
     // BR/s0/s1 terminal check could not see). occ ⊋ homes ⇒ reject.
@@ -3723,24 +3723,24 @@ fn lower_trace(
     // `allocate_aux_frame` below (A-5), which consults `ctx.occ` rather than the
     // positional `max_carrier_reg+1`. Under `Times(Trace, g)` the sibling g's
     // leaves are already in `ctx.occ`, so the frame is disjoint from g's live
-    // registers — the F-1 aliasing hazard is closed structurally, not by reject.
+    // registers -- the F-1 aliasing hazard is closed structurally, not by reject.
     // NOTE (design §2.4 / §8): the F-1 guard ALSO protected the k_max walk's
     // marshal==body-home equality, which requires the INPUT homes to be
-    // canonical. A-5 relaxes F-1 only for AUX placement — the input homes stay
+    // canonical. A-5 relaxes F-1 only for AUX placement -- the input homes stay
     // canonical here (body_homes[1..1+n_input] = ctx.homes, and the walk marshals
     // to the same slots). We therefore still assert the input homes are canonical
     // so the walk stays sound; only the occ/aux-aliasing half of F-1 is dropped.
     let canonical = Ctx::new(ctx.homes.len());
     if ctx.homes != canonical.homes {
         return Err(CompileError::Deferred(
-            "Trace under a non-canonical (relocated-input) context — the k_max \
+            "Trace under a non-canonical (relocated-input) context -- the k_max \
              walk's marshal==body-home equality requires canonical input homes \
              (design §2.4 / §8; A-5 relaxes only the aux/occ half of F-1)"
                 .into(),
         ));
     }
 
-    // A-4 (R1): nested Trace is now admitted — the come-from join composes
+    // A-4 (R1): nested Trace is now admitted -- the come-from join composes
     // across depth because A-5 draws each level's aux frame {rc,rb,temp,ctrl}
     // occ-awarely and occ-marks it before lowering the body, so the inner Trace
     // draws a DISJOINT frame and the outer's in-flight δu token (`temp`) is
@@ -3777,19 +3777,19 @@ fn lower_trace(
     }
 
     // ── BLOCKER FIX (compositional-control review, Finding 1): the TAG and the
-    // extra-payload PADDING are ancillae (zero at entry — the tag is XORI'd to 1
+    // extra-payload PADDING are ancillae (zero at entry -- the tag is XORI'd to 1
     // to inject Right; padding leaves are never live input), so like the four aux
     // {rc,rb,temp,ctrl} they must be drawn from GENUINELY-FREE registers per
     // `ctx.occ`, NOT the positional `Reg(n_input)` / `Reg(n_input+1+j)`. The old
     // positional rule placed the tag exactly on a `Times(Trace, g)` sibling's
     // first live leaf (`split` puts g's leaves at Reg(n_input..) yet leaves the
     // Trace's homes canonical `Reg(0..n_input)`), so the prologue `XORI tag,1`
-    // silently clobbered g's data and ran the wrong arm — invisible to the
+    // silently clobbered g's data and ran the wrong arm -- invisible to the
     // BR/s0/s1 terminal check. Drawing tag+padding occ-awarely (disjoint from
     // carriers, `Times` siblings, and outer aux) closes that aliasing
     // structurally, exactly as A-5 did for the four aux. The INPUT payload homes
     // stay canonical `Reg(0..n_input)` (the k_max walk's marshal==body-home
-    // equality requires it — only AUX/ancilla placement becomes occ-aware).
+    // equality requires it -- only AUX/ancilla placement becomes occ-aware).
     //
     // First occ-mark the canonical input payload registers so the ancilla draw
     // below cannot reuse them; the aux frame is then drawn from what remains.
@@ -3804,7 +3804,7 @@ fn lower_trace(
     let n_extra = n_carrier - 1 - n_input; // max(|u|,|a|) - |a| = max(0, |u|-|a|)
     let n_ancilla_regs = 1 + n_extra; // tag + register-resident padding
 
-    // Genuinely-free registers, ascending — the tag takes the lowest so that a
+    // Genuinely-free registers, ascending -- the tag takes the lowest so that a
     // canonical single-level Trace (no sibling/outer occupancy) recovers the old
     // positional layout tag=Reg(n_input), padding=Reg(n_input+1+j) byte-for-byte.
     let mut free_regs: Vec<u8> = (0..NUM_REGS as u8)
@@ -3823,7 +3823,7 @@ fn lower_trace(
     // A-5b: the aux frame may REUSE an enclosing Trace's dead aux
     // (`ctx.reusable_aux`, disjoint from free_regs since the outer marked them in
     // occ). Each reusable slot the frame consumes is one FEWER free register the
-    // frame needs — so the ancilla (tag/padding) may take free registers the old
+    // frame needs -- so the ancilla (tag/padding) may take free registers the old
     // rule would have reserved for the frame. This is what lets a nested Trace's
     // TAG find a register once its 4-aux frame reuses the outer frame (design
     // §2.3: aux cost O(1) in depth, depth bounded by carriers). Without this the
@@ -3842,7 +3842,7 @@ fn lower_trace(
         None => {
             return Err(CompileError::Deferred(
                 "Trace tag needs a free register but none available \
-                 (carrier + sibling + outer-aux occupancy full — reject, don't alias) \
+                 (carrier + sibling + outer-aux occupancy full -- reject, don't alias) \
                  (compositional-control Finding 1)"
                     .into(),
             ));
@@ -3860,7 +3860,7 @@ fn lower_trace(
 
     // Extra payload (carrier wider than input): occ-free register-resident where
     // possible, else zero-init padding spilled to the LOWEST free scratch slot
-    // (ascending — byte-identical to the old `SCRATCH_SPILL_BASE + spill_count`
+    // (ascending -- byte-identical to the old `SCRATCH_SPILL_BASE + spill_count`
     // positional spill for the canonical case).
     let mut free_scratch = (SCRATCH_SPILL_BASE..NUM_SCRATCH as u8)
         .filter(|s| body_occ.is_free(Location::Scratch(*s)));
@@ -3869,7 +3869,7 @@ fn lower_trace(
             body_homes.push(Location::Reg(r));
         } else if let Some(s) = free_scratch.next() {
             // M-D.e: zero-init padding leaf spills to a free scratch slot.
-            // Marshal already zeroes Scratch — no live-data relocation (F5).
+            // Marshal already zeroes Scratch -- no live-data relocation (F5).
             body_homes.push(Location::Scratch(s));
         } else {
             return Err(CompileError::Deferred(
@@ -3898,7 +3898,7 @@ fn lower_trace(
     // are already in `ctx.occ`, so the frame is disjoint from g's live regs too
     // (the F-1 aliasing hazard, now closed structurally rather than by reject).
     // A-5b: pass the INCOMING `ctx.reusable_aux` so THIS Trace's frame may itself
-    // reuse an enclosing (grandparent) Trace level's dead aux — this is what makes
+    // reuse an enclosing (grandparent) Trace level's dead aux -- this is what makes
     // depth-3+ fit: every level's frame reuses the same shared 4 slots.
     let ([rc, rb, temp, ctrl], body_occ) = allocate_aux_frame(&Ctx {
         homes: body_homes.clone(),
@@ -3908,7 +3908,7 @@ fn lower_trace(
     // W_BR-b: snapshot the occ AFTER the 4-aux frame + carrier are marked. If
     // this loop turns out WIDE (iter_len > 128 ⇒ two-byte come-from), the +1
     // `temp_hi` aux (net-+1 register, F3/MINOR-B) is drawn from what remains
-    // free here — disjoint from the carrier and the {rc,rb,temp,ctrl} frame.
+    // free here -- disjoint from the carrier and the {rc,rb,temp,ctrl} frame.
     // `temp_hi` lives ONLY in the come-from bracket (outside body_instrs), so it
     // need not be occ-marked into the body.
     let post_frame_occ = body_occ;
@@ -3917,7 +3917,7 @@ fn lower_trace(
     // single-level Trace the carrier occupies regs 0..=max_carrier_reg
     // contiguously, so the occ-aware frame MUST equal the old positional
     // assignment `[max_carrier_reg+1 .. +4]`. If this ever diverges for a
-    // single-level program the aux placement (hence the ROM) changed — a
+    // single-level program the aux placement (hence the ROM) changed -- a
     // regression. We only assert the equality when the frame is register-drawn
     // above the carrier (always, here); for nested/sibling contexts the frame is
     // *intentionally* different, which is the whole point of A-5.
@@ -3955,9 +3955,9 @@ fn lower_trace(
 
     // A-5b: mark THIS level's 4 aux frame as REUSABLE for a nested Trace in the
     // body. `body_occ` keeps the frame OCCUPIED (so skip-blocks in the body still
-    // draw disjoint aux — the load-bearing R4/R5/R6 occ-mark is untouched), but
+    // draw disjoint aux -- the load-bearing R4/R5/R6 occ-mark is untouched), but
     // `reusable_aux` additionally OFFERS the frame to a nested Trace, which enters
-    // and exits it at 0 (net-zero, time-disjoint — design §2.2). We UNION with the
+    // and exits it at 0 (net-zero, time-disjoint -- design §2.2). We UNION with the
     // incoming `ctx.reusable_aux` so a deeper Trace can reuse any ancestor's frame:
     // aux cost is O(1) in depth, depth bounded by CARRIER registers (design §2.3).
     let level_frame_mask: u8 =
@@ -3969,9 +3969,9 @@ fn lower_trace(
     };
 
     // Body must not use Swapbr (no forward skip-blocks inside loops
-    // for v1 — the safe Swapbr-free-body policy, design §4/F6).
+    // for v1 -- the safe Swapbr-free-body policy, design §4/F6).
     // A-3: lower the body into its OWN meta, then merge (see below). The old
-    // code discarded `body_meta` entirely (defect (a), BLOCKER-2) — so an inner
+    // code discarded `body_meta` entirely (defect (a), BLOCKER-2) -- so an inner
     // loop's cost tree never reached the top-level `Lowered` and `wcet()` could
     // not multiply it through this loop's `k_max`.
     let mut body_meta = LowerMeta::default();
@@ -3984,7 +3984,7 @@ fn lower_trace(
     // no PC / no back-edge), so it would simulate an inner back-edge only ONCE
     // per outer iteration (defect (b), BLOCKER-2). When the body contains inner
     // control we therefore do NOT trust the trajectory walk for the OUTER
-    // `k_max` and fall back to the cardinality bound `|u|+1` — the sound
+    // `k_max` and fall back to the cardinality bound `|u|+1` -- the sound
     // over-estimate. The inner loops' *extra* cost is folded in structurally via
     // the cost tree (`k_max · Σ extra(child)`), not via the straight-line walk.
     let body_has_inner_control =
@@ -3993,16 +3993,16 @@ fn lower_trace(
     // A-4 (R3): the Trace body may now contain forward skip-blocks (Iter/Plus
     // inside the loop) or an inner Trace. Compositional S_max is handled by the
     // A-3 Σ-fold (`meta.forward_skip_total += body_meta.forward_skip_total`
-    // below — a parked PC can land in ANY forward-skip region, so we SUM, never
+    // below -- a parked PC can land in ANY forward-skip region, so we SUM, never
     // max) and the aux frame is drawn occ-awarely by `allocate_aux_frame`
     // (A-5), which occ-marked {rc,rb,temp,ctrl} into `body_ctx.occ` BEFORE the
-    // body was lowered — so an inner loop/branch drew a DISJOINT aux frame and
+    // body was lowered -- so an inner loop/branch drew a DISJOINT aux frame and
     // did not touch this level's in-flight come-from token δu (`temp`). The
     // straight-line walk is untrusted for k_max when the body has inner control
     // (`body_has_inner_control` → cardinality-bound fallback above), so B_fold
     // stays sound. The R3 reject is therefore no longer needed.
 
-    // Guard: layout invariant — homes_in == homes_out (§3, hard error).
+    // Guard: layout invariant -- homes_in == homes_out (§3, hard error).
     if body_ctx.homes != body_ctx_out.homes {
         return Err(CompileError::Deferred(
             "Trace body violates layout invariant: homes_in != homes_out (M-D.d §3)".into(),
@@ -4029,7 +4029,7 @@ fn lower_trace(
     let iter_len = body_len + loop_overhead;
 
     // ── Trajectory-derived exact k_max ────────────────────────────────
-    // Walk the lowered body (via exec_instr — the same byte-semantics the
+    // Walk the lowered body (via exec_instr -- the same byte-semantics the
     // real CPU executes) from every real input Right(a) to compute the
     // maximum number of body applications until the tag reaches exit (Right).
     // k_exact = max(T over all inputs) + 1 (+1 safety: exit-check application).
@@ -4049,7 +4049,7 @@ fn lower_trace(
                 break;
             }
             // Set up carrier state: Right(a) = tag 1, payload = a's leaf bytes.
-            // marshal(a, a_ty) places a's leaves in Reg(0..n_input-1) — exactly
+            // marshal(a, a_ty) places a's leaves in Reg(0..n_input-1) -- exactly
             // where body_homes[1..1+n_input] maps them. Set tag register to 1.
             //
             // SOUNDNESS (impl-review A): this marshal-layout == body-home-layout
@@ -4074,7 +4074,7 @@ fn lower_trace(
                 // (Cswap tests ctrl&1, ctrl = tag^1). Safe because every lowered
                 // body maps canonical encodings to canonical encodings, so the tag
                 // is ∈ {0,1} at every iteration boundary (a tag byte ≥ 2 was already
-                // fatal under the old bound — infinite loop / wrong output).
+                // fatal under the old bound -- infinite loop / wrong output).
                 if state.regs[tag_reg_idx as usize] != 0 {
                     break;
                 }
@@ -4108,7 +4108,7 @@ fn lower_trace(
         inner: body_meta.loop_terms.clone(),
     };
 
-    // Guard: P2 — wcet + S_max must fit in 256.
+    // Guard: P2 -- wcet + S_max must fit in 256.
     // prologue(2) + iter_len + epilogue(2) = 4 + iter_len = rom_len for the Trace.
     // But the Trace might be composed with other code; P2 is checked at
     // the top level in run_on_cpu. Here we check the Trace's own
@@ -4121,7 +4121,7 @@ fn lower_trace(
     let spine = if wide { 6 } else { 4 }; // prologue + epilogue
     let this_wcet = spine + iter_len + cost_node.extra();
     // A-6.4 widen-PC: the per-Trace step budget now fits the 16-bit PC
-    // (PC_ADDR_SPACE = 2^W_PC), not 256 — this is the cap the widen lifts.
+    // (PC_ADDR_SPACE = 2^W_PC), not 256 -- this is the cap the widen lifts.
     if this_wcet > PC_ADDR_SPACE {
         return Err(CompileError::Deferred(format!(
             "Trace WCET {} exceeds PC address space {} (k_max={}, iter_len={}, spine={}) (M-D.d §5)",
@@ -4148,7 +4148,7 @@ fn lower_trace(
     // W_BR-b: at w_br=16 the come-from needs a 5th aux register `temp_hi`
     // (net +1, F3/MINOR-B). Draw it from the registers still free after the
     // carrier + 4-aux frame. The FIT GATE (MINOR-B): a wide loop's carrier must
-    // leave a register for temp_hi — equivalently `carrier_reg_budget = NUM_REGS
+    // leave a register for temp_hi -- equivalently `carrier_reg_budget = NUM_REGS
     // − 5`. `vart_halve` K=4,HB=1 has n_input+1 = 3 ≤ 3, frame = tag+2 inputs+5
     // aux = 8/8 (zero slack). W_BR-c's derive picks w_br=16 ONLY when this fits.
     let temp_hi: u8 = if wide {
@@ -4169,7 +4169,7 @@ fn lower_trace(
             None => {
                 return Err(CompileError::Deferred(
                     "wide (w_br=16) Trace needs a free register for temp_hi but \
-                     none remain (carrier+4-aux frame full — reject, don't alias) (W_BR-b F3)"
+                     none remain (carrier+4-aux frame full -- reject, don't alias) (W_BR-b F3)"
                         .into(),
                 ));
             }
@@ -4290,7 +4290,7 @@ fn lower_trace(
     // A-3: merge the body's forward-skip distance into the parent. Today the
     // body is Swapbr-free (the reject above), so this is 0; it becomes
     // load-bearing when A-4 admits Iter/Plus-under-Trace (MAJOR-5: s_max stays
-    // a Σ-fold — a parked PC can land in ANY forward-skip region regardless of
+    // a Σ-fold -- a parked PC can land in ANY forward-skip region regardless of
     // which arm ran, so we sum, never max).
     meta.forward_skip_total += body_meta.forward_skip_total;
     // W_BR-b: a nested wide loop forces the whole program to w_br=16 too.
@@ -4311,7 +4311,7 @@ fn lower_trace(
     Ok((instrs, ctx.clone()))
 }
 
-// A-4 (R1): `contains_trace` (the nested-Trace rejection predicate) deleted —
+// A-4 (R1): `contains_trace` (the nested-Trace rejection predicate) deleted --
 // nested Trace now compiles via the A-5 disjoint-frame stack.
 
 // ── M-D.a: fold/unfold over list-spine (guarded static unroll) ──────
@@ -4422,14 +4422,14 @@ fn lower_fold_unfold(
         };
 
         // A-5b FRAGILITY INVARIANT (review Finding 3): `body_ctx.occ` is
-        // `dctx.occ` UNCHANGED — this fold's OWN live aux (`rb`=aux[0],
+        // `dctx.occ` UNCHANGED -- this fold's OWN live aux (`rb`=aux[0],
         // `temp`=aux[1], drawn from `allocate_aux` above and live across every
         // layer's body copy) are NOT occ-marked here, unlike R4/R5's skip-block
         // aux (`lower_data_dependent_iter`/`lower_bare_plus`, which occ-mark
         // {rb,temp} before lowering their bodies). So a nested skip-block or
         // Trace frame draw inside `body` would NOT see {rb,temp} as taken and
         // could alias them. This is SAFE TODAY ONLY because Guard 2 below
-        // rejects any body that emits a Swapbr — no inner skip-block/Trace can
+        // rejects any body that emits a Swapbr -- no inner skip-block/Trace can
         // survive under a fold copy, so no body-side frame draw ever runs, and
         // the A-5b `reusable_aux` propagation above is dead code (protection by
         // accident of a different guard). The DAY fold admits inner control,
@@ -4439,7 +4439,7 @@ fn lower_fold_unfold(
         // Lower the body against this per-copy context.
         let (body_instrs, body_ctx_out) = lower(body, &body_ctx, meta)?;
 
-        // Guard 3: Home-preservation invariant — promoted from debug_assert
+        // Guard 3: Home-preservation invariant -- promoted from debug_assert
         // to a hard error. A body that permutes homes would corrupt the
         // outer context silently in release builds.
         if body_ctx.homes != body_ctx_out.homes {
@@ -4448,7 +4448,7 @@ fn lower_fold_unfold(
             ));
         }
 
-        // Guard 2: Refuse when the body itself contains a Swapbr — that
+        // Guard 2: Refuse when the body itself contains a Swapbr -- that
         // means the body needs an inner skip block, whose allocate_aux is
         // likewise unsound under the narrow sub-context.
         if has_inner_control(&body_instrs) {
@@ -4579,7 +4579,7 @@ fn lower_bare_plus(
 /// to its canonical home: `regs[i]` for i < 8, `scratch[i-6]` for
 /// 8 ≤ i < 14, `mem[i-14]` for 14 ≤ i < 14+MEM_WORDS.
 /// All other state fields are zeroed.
-/// Delegates to `marshal_resident(v, ty, 0)` — `home_of` is the sole
+/// Delegates to `marshal_resident(v, ty, 0)` -- `home_of` is the sole
 /// placement function (I-3 / design §8(1)).
 pub fn marshal(v: &Value, ty: &Type) -> StateVals {
     marshal_resident(v, ty, 0)
@@ -4588,7 +4588,7 @@ pub fn marshal(v: &Value, ty: &Type) -> StateVals {
 /// Unmarshal a `StateVals` back to a `Value`, reading leaf `i` from
 /// its canonical home: `regs[i]` for i < 8, `scratch[i-6]` for
 /// 8 ≤ i < 14, `mem[i-14]` for 14 ≤ i < 14+MEM_WORDS.
-/// Delegates to `unmarshal_resident(s, ty, 0)` — `home_of` is the sole
+/// Delegates to `unmarshal_resident(s, ty, 0)` -- `home_of` is the sole
 /// placement function (I-3 / design §8(1)).
 pub fn unmarshal(s: &StateVals, ty: &Type) -> Value {
     unmarshal_resident(s, ty, 0)
@@ -4600,7 +4600,7 @@ pub fn unmarshal(s: &StateVals, ty: &Type) -> Value {
 pub fn marshal_resident(v: &Value, ty: &Type, resident: usize) -> StateVals {
     let bytes = value_to_leaf_bytes(v, ty);
     let n = bytes.len();
-    // I-4: reject-don't-corrupt — panic if layout would alias resident words.
+    // I-4: reject-don't-corrupt -- panic if layout would alias resident words.
     // Only fires when resident > 0 (resident=0 has no collision risk).
     if resident > 0 {
         assert!(
@@ -4614,7 +4614,7 @@ pub fn marshal_resident(v: &Value, ty: &Type, resident: usize) -> StateVals {
         let head = n - resident;
         assert!(
             head <= 14,
-            "marshal_resident: head leaves ({head}) > 14 — would alias resident words"
+            "marshal_resident: head leaves ({head}) > 14 -- would alias resident words"
         );
     }
     let mut state = StateVals {
@@ -4639,7 +4639,7 @@ pub fn marshal_resident(v: &Value, ty: &Type, resident: usize) -> StateVals {
 /// `resident == 0` reproduces `unmarshal` bit-for-bit.
 pub fn unmarshal_resident(s: &StateVals, ty: &Type, resident: usize) -> Value {
     let n = num_leaves(ty).expect("unmarshal_resident: num_leaves");
-    // I-4: reject-don't-corrupt — panic if layout would alias resident words.
+    // I-4: reject-don't-corrupt -- panic if layout would alias resident words.
     // Only fires when resident > 0 (resident=0 has no collision risk).
     if resident > 0 {
         assert!(
@@ -4653,7 +4653,7 @@ pub fn unmarshal_resident(s: &StateVals, ty: &Type, resident: usize) -> Value {
         let head = n - resident;
         assert!(
             head <= 14,
-            "unmarshal_resident: head leaves ({head}) > 14 — would alias resident words"
+            "unmarshal_resident: head leaves ({head}) > 14 -- would alias resident words"
         );
     }
     let bytes: Vec<u8> = (0..n)
@@ -4684,16 +4684,16 @@ pub fn value_from_leaf_bytes_pub(bytes: &[u8], ty: &Type) -> (Value, usize) {
 ///
 /// Computed by pairing **consecutive** `Swapbr` instructions and summing each
 /// pair's body length = (close_index - open_index - 1). This over-approximates
-/// (counts mutually-exclusive Plus arms as both-taken) which is SOUND — but ONLY
+/// (counts mutually-exclusive Plus arms as both-taken) which is SOUND -- but ONLY
 /// when skip blocks do NOT nest.
 ///
 /// ⚠ NON-NESTING ASSUMPTION (compositional-control Finding 6): A-4 makes nested
 /// skip blocks real (branch-in-branch / skip-in-loop ROMs). For a NESTED ROM the
-/// consecutive-pairing here is WRONG — it pairs (open₁, open₂) across the gap and
+/// consecutive-pairing here is WRONG -- it pairs (open₁, open₂) across the gap and
 /// UNDER-counts the true skip distance, which would give an UNSOUND park bound.
 /// This function is a TEST-ONLY helper for hand-assembled, non-nested ROMs.
 /// Production derives s_max compositionally via the A-3 `forward_skip_total`
-/// Σ-fold (`Lowered::s_max()`), which is correct under nesting — do NOT use
+/// Σ-fold (`Lowered::s_max()`), which is correct under nesting -- do NOT use
 /// `max_skip_distance` to derive a park bound for a compiler-emitted (possibly
 /// nested) ROM.
 pub fn max_skip_distance(instrs: &[Instr]) -> usize {
@@ -4732,7 +4732,7 @@ pub fn wcet(iso: &Iso) -> Result<usize, CompileError> {
     Ok(b)
 }
 
-/// Compositional S_max for an `Iso` — forward-skip distance only.
+/// Compositional S_max for an `Iso` -- forward-skip distance only.
 pub fn s_max(iso: &Iso) -> Result<usize, CompileError> {
     let lowered = compile_with_metadata(iso)?;
     Ok(lowered.s_max())
@@ -4761,7 +4761,7 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
 
     // PARK-SAFETY GUARD (P2): parked PC must not wrap. A-6.4 widen-PC:
     // the bound is now the 16-bit PC address space (PC_ADDR_SPACE), not
-    // 256 — the whole point of the widen (B + S_max may exceed 256).
+    // 256 -- the whole point of the widen (B + S_max may exceed 256).
     if budget + s_max_val > PC_ADDR_SPACE {
         return Err(CompileError::Deferred(format!(
             "parked PC B+S_max={} exceeds PC address space {}; program cannot park by idle (M-D.w)",
@@ -4779,8 +4779,8 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
     // B-2.0b MEM-drop: a CPU-only program (no Mexch/MexchReg) with no live
     // initial memory runs on the CPU-only `step(rom)` ring over the bare
     // `state_ty()` carrier, dropping the MemState + BusMsg tensor entirely. A
-    // program that touches memory — or a resident-marshalled state with live
-    // mem words — still runs on the composite `system_step`. Both paths agree
+    // program that touches memory -- or a resident-marshalled state with live
+    // mem words -- still runs on the composite `system_step`. Both paths agree
     // on the CPU fields for a CPU-only, mem-quiescent program (mem/bus stay
     // zero under system_step), so this is a pure machinery-drop, not a
     // semantic change. The `init.mem == 0` guard keeps a resident program
@@ -4815,7 +4815,7 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
     } else if rom_wide {
         // W_BR-b MAJOR-2 (Fable impl-review): a wide (w_br=16) come-from with a
         // MEMORY-using or non-quiescent program would fall into the `system_step`
-        // arm below, which runs at Layout::default() (w_br=8) — there is no
+        // arm below, which runs at Layout::default() (w_br=8) -- there is no
         // `system_step_with`, so the wide two-transposition SWAPBRs would execute
         // as single transpositions → BR₁ never loaded → mis-jump (the terminal
         // BR≠0 check is only probabilistic once PC wraps mod 2^16). Wide + memory
@@ -4823,7 +4823,7 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
         // netlist (same philosophy as guard_no_narrow_swapbr_under_wide).
         return Err(CompileError::Deferred(
             "run_rom_on_cpu: wide (w_br=16, two-byte come-from) loop with memory \
-             (non-CPU-only or non-quiescent init.mem) is deferred to W_BR-c — no \
+             (non-CPU-only or non-quiescent init.mem) is deferred to W_BR-c -- no \
              system_step_with exists; would silently mis-jump on the narrow netlist \
              (W_BR-b MAJOR-2)"
                 .into(),
@@ -4851,7 +4851,7 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
 
 /// B-2.1b: run a compiled program on the CPU-only ring at a **reduced**
 /// [`Layout`] (fewer general registers). This is the reduced-state run
-/// authority — it lowers `step_with(&layout, rom)` over the reduced
+/// authority -- it lowers `step_with(&layout, rom)` over the reduced
 /// `state_ty_with(&layout)` carrier and marshals `StateVals` through
 /// `encode_with`/`decode_with`, so only `layout.num_regs` registers are
 /// plumbed every step. Requires a CPU-only program (`is_cpu_only`) with
@@ -4940,7 +4940,7 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
     // narrow-data (e.g. `Flat(4)`) program exercises the auto-selected w_data=4
     // datapath. A memory / non-quiescent program keeps the default-layout
     // composite path (reduced-`w_data` memory is out of scope for B-2.1c).
-    // B-2.2c: derive w_pc per program too — a small CPU-only program (B+S_max ≤
+    // B-2.2c: derive w_pc per program too -- a small CPU-only program (B+S_max ≤
     // 256, rom_len ≤ 128) auto-runs on the w_pc=8 ring; larger programs stay at
     // w_pc=16 (byte-identical default path).
     let layout = derive_full_layout_from_lowered(iso, &lowered);
@@ -4978,9 +4978,9 @@ pub fn pc_update(pc: u16, br: u8) -> u16 {
 /// W_BR-b: the `w_br`-parameterized end-of-step PC update, matching
 /// `step::pc_add_br_with` at the given `w_br`. `PC += sext_{w_pc}(BR) + 1 mod
 /// 2^16`. The datapath sign-extends the `w_br`-bit BR into the 16-bit PC:
-/// at w_br=8 this is `sext` from bit 7 (a 2's-complement 8-bit offset — the
+/// at w_br=8 this is `sext` from bit 7 (a 2's-complement 8-bit offset -- the
 /// shipped `pc_update`); at w_br=16 BR is already full-width so `sext` is the
-/// IDENTITY (a pure add — F5/Q3: the extension arm is dead code, no bit-15
+/// IDENTITY (a pure add -- F5/Q3: the extension arm is dead code, no bit-15
 /// special case). This MUST match the datapath or the fast-sim oracle diverges.
 #[inline]
 pub fn pc_update_w_br(pc: u16, br: u16, w_br: usize) -> u16 {
@@ -5061,7 +5061,7 @@ pub fn exec_instr(instr: Instr, state: &mut StateVals) {
         }
         Instr::Swapbr { rd, rs: _ } => {
             // W_BR-a: `state.br` is now u16, but the DEFAULT (w_br=8)
-            // interpreter keeps 8-bit BR semantics (byte-identical) — swap the
+            // interpreter keeps 8-bit BR semantics (byte-identical) -- swap the
             // reg with BR's low byte only. The two-byte come-from swap (which
             // also touches BR's high byte via rs) is the w_br=16 path in
             // `exec_instr_w_br` (W_BR-b F4). MINOR-3: the 8-bit path hard-asserts
@@ -5221,7 +5221,7 @@ pub fn run_on_cpu_fast_resident(
     {
         return Err(CompileError::Deferred(
             "run_on_cpu_fast_resident: wide (w_br=16, two-byte come-from) loop with \
-             resident memory is deferred to W_BR-c — the resident fast-sim is narrow \
+             resident memory is deferred to W_BR-c -- the resident fast-sim is narrow \
              and would silently mis-jump (W_BR-b MAJOR-1)"
                 .into(),
         ));
@@ -5381,7 +5381,7 @@ mod tests {
             out.regs[1], BODY as u8,
             "ctrl=0: body must run all {BODY} increments (fall-through)"
         );
-        // PC must have walked FORWARD to the end of the block and parked there —
+        // PC must have walked FORWARD to the end of the block and parked there --
         // NOT wandered backward (the F-1 corruption signature).
         assert!(
             out.pc as usize >= block.len(),

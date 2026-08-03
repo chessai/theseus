@@ -66,7 +66,7 @@ pub enum Iso {
     // ── Iter (bounded iteration, ADR-0009/ADR-0036) ─────────────
 
     /// `iter n f : n × a ↔ n × a`  (when `f : a ↔ a` and `n` is a
-    /// numeral type `1 + (1 + (… + 0))`).
+    /// numeral type `1 + (1 + (... + 0))`).
     ///
     /// Denotation: `⟦iter n f⟧ ⟨k, x⟩ = ⟨k, ⟦f⟧ᵏ x⟩` where `k` is the
     /// unary numeral `inrᵏ(inl ())` inhabiting `n`. The iteration count
@@ -75,18 +75,18 @@ pub enum Iso {
     /// `(iter n f)† = iter n (f†)`, and the backward run un-applies the
     /// body exactly `k` times. Totality is structural (ADR-0007): a
     /// value of the finite numeral type `n` encodes `k ≤ |n| − 1`, so
-    /// evaluation applies the body at most `|n| − 1` times — the bound
+    /// evaluation applies the body at most `|n| − 1` times -- the bound
     /// is read off the type, no certificate needed.
     Iter(Type, Box<Iso>),
 
     // ── Fold/Unfold (structural recursion, ADR-0009/ADR-0037) ───
 
     /// `fold l f : l × c ↔ l × c`  (when `f : b × c ↔ b × c` and `l` is
-    /// a list-spine type `1 + (b × (1 + (b × (… + 0))))` — the shape
+    /// a list-spine type `1 + (b × (1 + (b × (... + 0))))` -- the shape
     /// ADR-0035 bounded unrolling produces for `List b`).
     ///
     /// Denotation (reversible mapAccumL, head-to-tail):
-    /// `⟦fold l f⟧ ⟨[x₁ … xₖ], c₀⟩ = ⟨[y₁ … yₖ], cₖ⟩` where
+    /// `⟦fold l f⟧ ⟨[x₁ ... xₖ], c₀⟩ = ⟨[y₁ ... yₖ], cₖ⟩` where
     /// `⟨yᵢ, cᵢ⟩ = ⟦f⟧ ⟨xᵢ, cᵢ₋₁⟩`. The spine (and hence the length
     /// `k`) is preserved in the DATA, so the term is symmetric by
     /// construction: `(fold l f)† = unfold l (f†)` un-threads the
@@ -95,9 +95,9 @@ pub enum Iso {
     /// the body runs at most that many times in either direction.
     Fold(Type, Box<Iso>),
 
-    /// `unfold l f : l × c ↔ l × c` — the tail-to-head dual of
+    /// `unfold l f : l × c ↔ l × c` -- the tail-to-head dual of
     /// [`Iso::Fold`] (same spine/body typing):
-    /// `⟦unfold l f⟧ ⟨[x₁ … xₖ], dₖ⟩ = ⟨[y₁ … yₖ], d₀⟩` where
+    /// `⟦unfold l f⟧ ⟨[x₁ ... xₖ], dₖ⟩ = ⟨[y₁ ... yₖ], d₀⟩` where
     /// `⟨yᵢ, dᵢ₋₁⟩ = ⟦f⟧ ⟨xᵢ, dᵢ⟩`. Adjoint: `(unfold l f)† = fold l (f†)`.
     Unfold(Type, Box<Iso>),
 

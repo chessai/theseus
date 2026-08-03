@@ -1,27 +1,27 @@
 //! k-CSWAP adiabatic cell family (ADR-0027): the k-controlled dual-rail swap,
 //! k ∈ {0, 1, 2, 3}, in the verified 2LAL forward/reverse transmission-gate
 //! discipline of [`crate::adiabatic::two_lal_sr_netlist`], characterized at
-//! both device rungs (ADR-0032: rung 0 level-1 sandbox, rung 1 sky130 tt) —
+//! both device rungs (ADR-0032: rung 0 level-1 sandbox, rung 1 sky130 tt) --
 //! plus the **R1 rail-role swap** (ADR-0040), which is the same fabric with a
 //! different branch table (see [`CellTopo`]).
 //!
 //! # Cells
 //!
-//! * **k = 0** — the buffer/latch: a token passes through one 2LAL stage.
-//! * **k = 1** — the Fredkin gate: `(c, a, b) → (c, c?b:a, c?a:b)`.
-//! * **k = 2** — the 2-controlled swap: swap `(a, b)` iff `c1 ∧ c2`; both
+//! * **k = 0** -- the buffer/latch: a token passes through one 2LAL stage.
+//! * **k = 1** -- the Fredkin gate: `(c, a, b) → (c, c?b:a, c?a:b)`.
+//! * **k = 2** -- the 2-controlled swap: swap `(a, b)` iff `c1 ∧ c2`; both
 //!   controls pass through.
-//! * **k = 3** — the 3-controlled swap: swap `(a, b)` iff `c1 ∧ c2 ∧ c3`;
+//! * **k = 3** -- the 3-controlled swap: swap `(a, b)` iff `c1 ∧ c2 ∧ c3`;
 //!   all three controls pass through.
-//! * **R1** — the 1-controlled rail-role swap (ADR-0040): `(c, t) → (c,
+//! * **R1** -- the 1-controlled rail-role swap (ADR-0040): `(c, t) → (c,
 //!   t ⊕ c)` at value level. Line level: the target pair's two token lines
-//!   are exchanged with each other iff the control carries a `1` token —
+//!   are exchanged with each other iff the control carries a `1` token --
 //!   the same physical act as a K1 target section (a controlled exchange of
 //!   conductors' charge) routing ONE conductor pair where K1 routes two.
 //!
 //! All five are reversible and self-inverse; a controlled exchange only
 //! routes charge, so the count of active rails is invariant per token
-//! (INV-TOKEN) — for R1, exchanging the two lines of a 1-hot pair is still
+//! (INV-TOKEN) -- for R1, exchanging the two lines of a 1-hot pair is still
 //! 1-hot.
 //!
 //! # Encoding: 1-of-2 token lines (why the SR's bare rail-pair is not enough)
@@ -29,7 +29,7 @@
 //! The shift register carries a signal as one rail pair with *level*
 //! encoding: the true rail rests 0 and pulses high for a `1` token, the
 //! mirror rail rests at VDD and dips. A `0` token is the *absence* of a
-//! pulse — indistinguishable from rest. That is sufficient for the buffer,
+//! pulse -- indistinguishable from rest. That is sufficient for the buffer,
 //! whose gating is monotone, but the CSWAP routing function
 //! `a_out = (c ∧ b) ∨ (¬c ∧ a)` is non-monotone in the control: it needs a
 //! transmission gate that conducts *because* `c` is 0. Gating that TG by the
@@ -38,11 +38,11 @@
 //! a sneak charge path through the network while the successor replicas are
 //! at rest, and (b) re-arms mid-cycle when a `c = 1` token retires,
 //! reconnecting a parked internal node to a clock rail at the opposite level
-//! — a per-token, period-independent CV² dump that floors the energy curve.
+//! -- a per-token, period-independent CV² dump that floors the energy curve.
 //!
 //! The fix is the encoding ADR-0027 already implies ("NOT is a rail swap" of
-//! *token lines*): every logical signal is **two token lines** — a 1-line
-//! that pulses for a `1` token and a 0-line that pulses for a `0` token —
+//! *token lines*): every logical signal is **two token lines** -- a 1-line
+//! that pulses for a `1` token and a 0-line that pulses for a `0` token --
 //! each line being an SR-style (rail, mirror) wire pair for full TG
 //! overdrive. Every literal (`c` or `¬c`) then gates a TG from a line that
 //! **rests off**, all conduction windows are confined to the token's own
@@ -54,11 +54,11 @@
 //! The cell is a single 2LAL stage: output rails charge from clock phase
 //! `φ0` (trapezoid: rise tick 0, hold tick 1, fall tick 2, low tick 3) and
 //! mirror wires from `φ2 = ~φ0`. For an output line with branch condition
-//! `F = ⋁ᵢ (ℓᵢ₁ ∧ ℓᵢ₂ ∧ …)` (each `ℓ` a token-line literal):
+//! `F = ⋁ᵢ (ℓᵢ₁ ∧ ℓᵢ₂ ∧ ...)` (each `ℓ` a token-line literal):
 //!
 //! * **forward chain** (per branch): series TGs gated by the input literals
 //!   (controls clock-side, the data literal output-side), charging the
-//!   output wire from the ramping clock during tick 0 — inputs hold exactly
+//!   output wire from the ramping clock during tick 0 -- inputs hold exactly
 //!   then (they rise tick 3⁻, hold tick 0, fall tick 1);
 //! * **reverse chain**: a parallel TG per segment, **sharing the forward
 //!   chain's internal nodes**, gated by the *delayed copies of the same
@@ -70,12 +70,12 @@
 //!   is load-bearing: gating the data literal by the OUTPUT-line replica
 //!   instead lets an active output line switch on the reverse TG of a
 //!   branch that did NOT conduct, connecting that branch's parked internal
-//!   node to the active wire — a measured ~2.4 fJ/node period-independent
+//!   node to the active wire -- a measured ~2.4 fJ/node period-independent
 //!   charge-sharing dump on a≠b tokens (rung 0, 5 fF internal nodes).
 //!
 //!   The delayed input copies are consumer-realizable: the cell is
 //!   self-inverse, so a downstream inverse stage's outputs ARE the original
-//!   inputs one stage later — exactly the tick-2 window (for controls they
+//!   inputs one stage later -- exactly the tick-2 window (for controls they
 //!   also equal the cell's own passed-through output replicas). The bench
 //!   synthesizes them as PWL boundary sources driving gates only, exactly
 //!   like the SR's data-aware terminator.
@@ -95,7 +95,7 @@
 //!
 //! # Measurement honesty (ADR-0028 C3.3)
 //!
-//! Every source in the deck contributes to the measured `etot` — both clock
+//! Every source in the deck contributes to the measured `etot` -- both clock
 //! rails, the bulk bias, and all input/replica gate drivers (integrated
 //! separately as `ein`/`eack`: ≈ 0 at rung 0 by the zero-gate-cap
 //! idealization, real and counted at rung 1). Energy is integrated over the
@@ -137,13 +137,13 @@ impl CswapToken {
 /// Cell topology selector for the shared transmission-gate fabric: the
 /// k-CSWAP family (ADR-0027) or the R1 rail-role swap (ADR-0040). Everything
 /// but the branch table, the truth function, and the signal names is
-/// identical — same 2LAL stage, same forward/reverse TG discipline, same
+/// identical -- same 2LAL stage, same forward/reverse TG discipline, same
 /// per-literal mirrored recovery chains, same measurement policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellTopo {
     /// k-CSWAP, k ∈ {0, 1, 2, 3}.
     K(usize),
-    /// R1: the 1-controlled rail-role swap — value level `(c, t) → (c,
+    /// R1: the 1-controlled rail-role swap -- value level `(c, t) → (c,
     /// t ⊕ c)`; line level exchanges the target pair's two token lines iff
     /// the control carries a `1` token (ADR-0040 D1). The target signal is
     /// named `t` and carried in [`CswapToken::a`] (`c2`/`c3`/`b` unused).
@@ -204,7 +204,7 @@ impl CellTopo {
     /// output line measured by `vmax` (see [`CellTopo::vmax_line`]) pulses.
     fn energy_token(self) -> CswapToken {
         match self {
-            // Every control and both data high — the swap path is exercised
+            // Every control and both data high -- the swap path is exercised
             // (at k ≥ 1) and the a-output 1-line pulses.
             CellTopo::K(_) => CswapToken { c1: true, c2: true, c3: true, a: true, b: true },
             // c = 1, t = 0: the exchange branch (c₁-line ∧ t0) conducts, the
@@ -223,7 +223,7 @@ impl CellTopo {
 }
 
 /// The R1 truth function (ADR-0040 D1): the control passes through and the
-/// target value flips iff the control is 1 — `(c, t) → (c, t ⊕ c)`, i.e.
+/// target value flips iff the control is 1 -- `(c, t) → (c, t ⊕ c)`, i.e.
 /// CNOT in one cell. Self-inverse: `r1_out(r1_out(t)) == t`.
 pub fn r1_out(t: CswapToken) -> CswapToken {
     CswapToken { a: t.a ^ t.c1, ..t }
@@ -277,12 +277,12 @@ pub fn cswap_truth_tokens(k: usize) -> Vec<CswapToken> {
 }
 
 /// A token-line literal: (signal, polarity). Polarity `true` gates from the
-/// signal's 1-line, `false` from its 0-line — both rest-off by construction.
+/// signal's 1-line, `false` from its 0-line -- both rest-off by construction.
 type Lit = (&'static str, bool);
 
 /// The OR-of-ANDs branch condition for output `out_sig`'s line of polarity
 /// `pol`, over input token-line literals. Controls come first (clock-side),
-/// the data literal last (output-side) — the ordering the recovery argument
+/// the data literal last (output-side) -- the ordering the recovery argument
 /// in the module docs depends on.
 fn cswap_branches(k: usize, out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
     match (k, out_sig) {
@@ -331,7 +331,7 @@ fn cswap_branches(k: usize, out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
 /// t0_out : F = (c₁-line ∧ t1) ∨ (c₀-line ∧ t0)
 /// ```
 ///
-/// — two branches of two literals each, control literal clock-side, data
+/// -- two branches of two literals each, control literal clock-side, data
 /// literal output-side: the identical shape as a K1 target output line, with
 /// ONE routed conductor pair where K1 routes two.
 fn r1_branches(out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
@@ -342,7 +342,7 @@ fn r1_branches(out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
     }
 }
 
-/// Line base name for a signal's polarity line: `at`/`af`, `c1t`/`c1f`, …
+/// Line base name for a signal's polarity line: `at`/`af`, `c1t`/`c1f`, ...
 /// Wires are `<base>p` (rail: rests 0, pulses high) and `<base>m` (mirror:
 /// rests VDD, dips low).
 fn line(sig: &str, pol: bool) -> String {
@@ -352,7 +352,7 @@ fn line(sig: &str, pol: bool) -> String {
 /// Emit the two PWL point lists (rail, mirror) for a token line that pulses
 /// on the `true` entries of `pulses`, one token per period, at time offset
 /// `off`. `eps_ticks` nudges breakpoints off the clock corners (distinct per
-/// source pair, exactly as in the SR — solver robustness, not physics).
+/// source pair, exactly as in the SR -- solver robustness, not physics).
 fn token_line_pwl(
     pulses: &[bool],
     period_s: f64,
@@ -379,7 +379,7 @@ fn token_line_pwl(
     (p, m)
 }
 
-/// Transmission-gate channel length, µm — minimum L, same geometry as the
+/// Transmission-gate channel length, µm -- minimum L, same geometry as the
 /// verified rung-1 TG cell. Longer channels were tried (L = 0.5) to push
 /// out the rung-1 OFF-gate leakage floor, and rejected on measurement: the
 /// mid-period energy rises ~7× (R_on and gate charge grow) and the leak
@@ -441,7 +441,7 @@ pub fn cell_netlist(
     ));
     match rung {
         // Rung 0 needs the SR's artifact suppression (is=1e-18 kills the
-        // level-1 default junction leakage; gmin=1e-16 the solver shunts) —
+        // level-1 default junction leakage; gmin=1e-16 the solver shunts) --
         // model names match `DeviceRung::fet`'s rung-0 cards.
         DeviceRung::Rung0Level1 => {
             l.push(".model NM NMOS (level=1 vto=0.4 kp=200u is=1e-18)".into());
@@ -451,7 +451,7 @@ pub fn cell_netlist(
         // Rung 1: pinned sky130 tt lib + the uniform gmin policy.
         DeviceRung::Rung1Sky130 => l.push(rung.model_header()),
     }
-    // VDD is the PMOS bulk bias only — it carries no channel current.
+    // VDD is the PMOS bulk bias only -- it carries no channel current.
     l.push(format!("Vdd vdd 0 DC {vdd}"));
     // The two clock phases a single stage touches: φ0 charges the rails,
     // φ2 = ~φ0 the mirrors (φ1/φ3 belong to the neighbors).
@@ -517,12 +517,12 @@ pub fn cell_netlist(
                 let wire = format!("{obase}{suffix}");
                 for (bi, br) in brs.iter().enumerate() {
                     // Reverse literals: the same literal sequence, gated by
-                    // the delayed input copies — so a reverse branch conducts
+                    // the delayed input copies -- so a reverse branch conducts
                     // exactly iff its forward branch conducted, and every
                     // internal node's ride-down mirrors its ride-up. (Gating
                     // the data literal by the OUTPUT-line replica instead
                     // connects the parked internal node of a NON-conducting
-                    // branch to the active wire at tick 1 — a measured
+                    // branch to the active wire at tick 1 -- a measured
                     // ~2.4 fJ/node charge-sharing dump on a≠b tokens.)
                     let rev: Vec<String> =
                         br.iter().map(|&(ls, lp)| format!("r{}", line(ls, lp))).collect();
@@ -549,7 +549,7 @@ pub fn cell_netlist(
         }
     }
 
-    // Honest power sum: EVERY source contributes to ptot — clocks, bulk
+    // Honest power sum: EVERY source contributes to ptot -- clocks, bulk
     // bias, and all gate-drive boundary sources (inputs + replicas,
     // integrated separately as ein/eack so tests verify instead of assume).
     l.push("Bp0 pp0 0 V = -V(p0)*I(Vp0)".into());
@@ -900,7 +900,7 @@ mod tests {
         truth_table_rung0(3);
     }
 
-    /// R1 rail-role swap (ADR-0040): the CNOT truth table — all 4 (c, t)
+    /// R1 rail-role swap (ADR-0040): the CNOT truth table -- all 4 (c, t)
     /// combos at full dual-rail level, INV-TOKEN held, settled cycles
     /// adiabatic (same bound as the K cells).
     #[test]
@@ -966,7 +966,7 @@ mod tests {
             assert!(p.etot > 0.0, "energy must be positive: {p:?}");
             assert!(p.vmax > 0.9, "cell must do work (vmax {:.3} V)", p.vmax);
             // Gate-only boundary sources deliver ~0 at rung 0 (no gate caps)
-            // — verified, not assumed.
+            // -- verified, not assumed.
             assert!(p.ein.abs() < 1e-17 && p.eack.abs() < 1e-17, "boundary sources must be ~0: {p:?}");
         }
         let slope = curve_slope(&curve);
@@ -1098,7 +1098,7 @@ mod tests {
     //   (k2's 3-series-TG path pushes its knee ~⅓ decade higher: at
     //   T = 3.16e-9 its output only reaches 1.62 V = 0.90·VDD);
     // * above the slow end the OFF-gate subthreshold floor (~7e-10 W for
-    //   k0 at L = 0.15) takes over — the k0 curve bottoms at T ≈ 1e-6
+    //   k0 at L = 0.15) takes over -- the k0 curve bottoms at T ≈ 1e-6
     //   (1.09e-15 J) and RISES again by 3.16e-6 (2.13e-15 J), the textbook
     //   leakage knee. Measured slopes: k0 −0.93, k1 −0.88, k2 −0.87.
 

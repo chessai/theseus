@@ -114,7 +114,7 @@ fn conformance_programs() {
         let iso = match iso_result {
             Ok(iso) => iso.clone(),
             Err(errs) if errs.is_empty() => {
-                // Not elaborated — skip (deferred/unsupported).
+                // Not elaborated -- skip (deferred/unsupported).
                 eprintln!("[skip] {stem}: iso `{iso_name}` not elaborated (structural core)");
                 skipped_names.push(format!("{stem}/{iso_name}"));
                 continue;
@@ -129,15 +129,15 @@ fn conformance_programs() {
             panic!("[{stem}] iso `{iso_name}` not in env")
         });
 
-        // Guard: a delimiter drift (e.g. `|->` mistyped) makes rows empty —
+        // Guard: a delimiter drift (e.g. `|->` mistyped) makes rows empty --
         // the per-row loops would iterate zero times, a vacuous pass.
         assert!(
             !rows.is_empty(),
-            "[{stem}] fixture has zero rows — likely a delimiter problem in {}",
+            "[{stem}] fixture has zero rows -- likely a delimiter problem in {}",
             expect_path.display()
         );
 
-        // Grade each row — forward AND backward.
+        // Grade each row -- forward AND backward.
         for (lhs_str, rhs_str) in rows {
             let lhs_sv = value::parse_surface_value(lhs_str);
             let rhs_sv = value::parse_surface_value(rhs_str);
@@ -189,7 +189,7 @@ fn conformance_programs() {
         if let Some(n) = fixture.steps {
             assert!(
                 n >= 1,
-                "[{stem}] `# steps: 0` is invalid — need at least 1 step to test the OutOfFuel boundary"
+                "[{stem}] `# steps: 0` is invalid -- need at least 1 step to test the OutOfFuel boundary"
             );
             // Grant n fuel → every row Done.
             for (lhs_str, _) in rows {
@@ -260,7 +260,7 @@ fn conformance_programs() {
         .collect();
     for must in MUST_GRADE {
         // We only check that the stem was among the fixture files with
-        // .expect sidecars — the per-fixture assertions above already
+        // .expect sidecars -- the per-fixture assertions above already
         // guarantee it actually graded (not skipped).
         assert!(
             graded_stems.iter().any(|s| s == must),
@@ -295,7 +295,7 @@ fn conformance_diagnostics() {
         let stem = thse_path.file_stem().unwrap().to_str().unwrap();
 
         // Skip deferred-scope fixtures: 0009 (prim/adjoint diagnostics, T0401)
-        // — out of the M1 slice-1 static-check set.
+        // -- out of the M1 slice-1 static-check set.
         if stem == "0009-prim-mismatch" {
             eprintln!("[skip] diag {stem}: deferred scope (prim diagnostics)");
             continue;
@@ -306,7 +306,7 @@ fn conformance_diagnostics() {
             continue;
         }
 
-        // 0007-parse is a parse-error test — parse will fail, can't run check.
+        // 0007-parse is a parse-error test -- parse will fail, can't run check.
         let src = fs::read_to_string(thse_path)
             .unwrap_or_else(|e| panic!("reading {}: {e}", thse_path.display()));
         let prog = match theseus_syntax::parse(&src) {

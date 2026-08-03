@@ -7,7 +7,7 @@
 
 /// Per-bit boolean expression over w-bit operand lanes (w ≤ 8).
 ///
-/// No `Mul` variant — kept unrepresentable so BDDs stay polynomial (r2 I3).
+/// No `Mul` variant -- kept unrepresentable so BDDs stay polynomial (r2 I3).
 /// The enum makes multiply impossible by omission.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BvExpr {

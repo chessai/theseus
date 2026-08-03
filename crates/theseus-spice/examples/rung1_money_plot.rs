@@ -7,7 +7,7 @@
 //! The period axis is the pinned rung-1 characterization window
 //! (1e-8 .. 1e-5 s, ~7 log-spaced points): over it, adiabatic-TG is adiabatic
 //! (slope ≈ −0.96), PFAL falls-then-floors (floor near ~1e-6 s), and static
-//! CMOS is flat (~3.3e-12 J) — the three-family money-plot shape on sky130.
+//! CMOS is flat (~3.3e-12 J) -- the three-family money-plot shape on sky130.
 //!
 //! Run: `cargo run -p theseus-spice --example rung1_money_plot`
 //! (needs the `.#char` devShell for ngspice + the sky130 PDK). Without the PDK
@@ -21,13 +21,13 @@ use theseus_spice::bench::ngspice_available;
 
 fn main() {
     if !ngspice_available() {
-        eprintln!("note: ngspice is not installed or not on PATH — cannot generate money plot.");
+        eprintln!("note: ngspice is not installed or not on PATH -- cannot generate money plot.");
         eprintln!("Install ngspice (the .#char devShell provides it) and re-run.");
         return;
     }
     if !sky130_available() {
         eprintln!(
-            "note: sky130 PDK unavailable (THESEUS_SKY130_LIB unset/missing) — \
+            "note: sky130 PDK unavailable (THESEUS_SKY130_LIB unset/missing) -- \
              rung-1 money plot needs the .#char devShell. Skipping (exit 0)."
         );
         return;

@@ -21,7 +21,7 @@ struct Lowered {
     in_ty: theseus_core::Type,
     out_ty: theseus_core::Type,
     n_data_out: usize,
-    /// Real ancilla init values (from `lower_iso_with_ancillas`) — R1-based
+    /// Real ancilla init values (from `lower_iso_with_ancillas`) -- R1-based
     /// lowering (ADR-0040) needs these seeded correctly, not a fabricated
     /// pattern.
     ancilla_init: Vec<bool>,

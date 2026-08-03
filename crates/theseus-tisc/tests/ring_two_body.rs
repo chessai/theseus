@@ -65,13 +65,13 @@ fn eval_system_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 //   - enable on/off, addr = each of the 4 words (0,1,2,3)
 //
 // ROM layout:
-//   0: MEXCH r2, rt=2 (rd==rt, addr=2)        — F5: rd==rt, addr=2
-//   1: MEXCH r3, rt=1 (addr=1)                — F5: back-to-back at R=2 from pc=0
-//   2: MEXCH r4, rt=0 (addr=0)                — F5: addr=0
-//   3: MEXCH r5, rt=3 (addr=3)                — F5: addr=3
-//   4: ADDI r1, 5                             — F5: non-MEXCH (enable off)
-//   5: ADD r0, r1, rt=3                       — F5: non-MEXCH with nonzero IR.rt
-//   6: SWAPBR r1                              — F5: exercises BR↔reg swap + pc_add_br
+//   0: MEXCH r2, rt=2 (rd==rt, addr=2)        -- F5: rd==rt, addr=2
+//   1: MEXCH r3, rt=1 (addr=1)                -- F5: back-to-back at R=2 from pc=0
+//   2: MEXCH r4, rt=0 (addr=0)                -- F5: addr=0
+//   3: MEXCH r5, rt=3 (addr=3)                -- F5: addr=3
+//   4: ADDI r1, 5                             -- F5: non-MEXCH (enable off)
+//   5: ADD r0, r1, rt=3                       -- F5: non-MEXCH with nonzero IR.rt
+//   6: SWAPBR r1                              -- F5: exercises BR↔reg swap + pc_add_br
 
 fn f5_rom() -> Vec<u32> {
     vec![
@@ -436,7 +436,7 @@ fn per_body_ancilla_restoration() {
             assert_eq!(
                 closed, open,
                 "TwoBodyRing: run(s, {r}) != run_open(s, {r}) at sample {si} (pc={}) \
-                 — per-body ancilla restoration failed",
+                 -- per-body ancilla restoration failed",
                 start.pc
             );
         }
@@ -508,21 +508,21 @@ fn structural_line_audit() {
     let pre_net = c.two.pre().net();
     assert_eq!(
         pre_net.input_ty, cpu_bus_ty,
-        "cpu_pre input_ty must be (CpuState, BusMsg) — zero MemState ports"
+        "cpu_pre input_ty must be (CpuState, BusMsg) -- zero MemState ports"
     );
 
     // cpu_post: input_ty == (CpuState, BusMsg), n_data == 184
     let post_net = c.two.post().net();
     assert_eq!(
         post_net.input_ty, cpu_bus_ty,
-        "cpu_post input_ty must be (CpuState, BusMsg) — zero MemState ports"
+        "cpu_post input_ty must be (CpuState, BusMsg) -- zero MemState ports"
     );
 
     // mem_body: input_ty == (MemState, BusMsg), n_data == 56
     let mem_net = c.two.mem().net();
     assert_eq!(
         mem_net.input_ty, mem_bus_ty,
-        "mem_body input_ty must be (MemState, BusMsg) — zero CpuState ports"
+        "mem_body input_ty must be (MemState, BusMsg) -- zero CpuState ports"
     );
 
     // Verify n_data via the body data widths (already asserted at construction,

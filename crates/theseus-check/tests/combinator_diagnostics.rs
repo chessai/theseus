@@ -24,7 +24,7 @@ fn expect_err(src: &str, iso_name: &str) -> Vec<theseus_check::Diagnostic> {
 
 #[test]
 fn t0601_iter_counter_not_numeral() {
-    // Bit = 1+1 (not a numeral type — no 0 terminator).
+    // Bit = 1+1 (not a numeral type -- no 0 terminator).
     let src = "\
 type Bit = O | I
 iso notb : Bit <-> Bit
@@ -43,16 +43,16 @@ iso bad : Bit * Bit <-> Bit * Bit = iter Bit notb
 
 #[test]
 fn t0602_iter_body_not_endo() {
-    // swap⁺(Bit, 1) : Bit + 1 ↔ 1 + Bit — not endo.
+    // swap⁺(Bit, 1) : Bit + 1 ↔ 1 + Bit -- not endo.
     // We need an iso whose elaborated type is not A ↔ A.
-    // swp : (Bit, Bit) <-> (Bit, Bit) where the body swaps — this IS endo.
+    // swp : (Bit, Bit) <-> (Bit, Bit) where the body swaps -- this IS endo.
     // Instead, build a named iso with asymmetric type.
     //
     // Actually, this is hard to trigger from surface syntax alone because
     // named isos used as combinator bodies are elaborated from their own
     // clauses, and the core typing only sees the elaborated Iso. We need
     // a body whose CORE type is not endo. A swap like (a,b)<->(b,a) where
-    // a≠b gives SwapProd(a,b) which has type a×b ↔ b×a — not endo.
+    // a≠b gives SwapProd(a,b) which has type a×b ↔ b×a -- not endo.
     let src = "\
 type Bit = O | I
 type Nat = Zero | Succ Nat
@@ -102,7 +102,7 @@ iso bad : Nat * Bit <-> Nat * Bit = unfold Nat swp
 
 #[test]
 fn t0604_fold_body_not_endo() {
-    // Body swaps (Bit, Nat) <-> (Nat, Bit) — not endo.
+    // Body swaps (Bit, Nat) <-> (Nat, Bit) -- not endo.
     let src = "\
 type Bit = O | I
 type Nat = Zero | Succ Nat
@@ -120,7 +120,7 @@ iso bad : BitList * Nat <-> BitList * Nat = fold BitList asym
 
 #[test]
 fn t0605_fold_body_not_elem_prod() {
-    // notb : Bit <-> Bit — endo but not product-shaped.
+    // notb : Bit <-> Bit -- endo but not product-shaped.
     let src = "\
 type Bit = O | I
 type BitList = Nil | Cons (Bit * BitList)
@@ -139,7 +139,7 @@ iso bad : BitList * Bit <-> BitList * Bit = fold BitList notb
 #[test]
 fn t0606_fold_body_elem_mismatch() {
     // Spine element is Bit, but body's first product component is 1 (Unit).
-    // id(1 × Bit) : (1, Bit) <-> (1, Bit) — endo product, but elem = 1 ≠ Bit.
+    // id(1 × Bit) : (1, Bit) <-> (1, Bit) -- endo product, but elem = 1 ≠ Bit.
     let src = "\
 type Bit = O | I
 type BitList = Nil | Cons (Bit * BitList)

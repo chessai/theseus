@@ -3,7 +3,7 @@
 //! - v0.1 core is Π + `trace`, nothing else (ADR-0009): in the finite
 //!   fragment trace is total with bound ≤ |u| (ADR-0007; proof obligation
 //!   ledger entry TH-1 in the theory notes).
-//! - v0.2 adds `iter` and `fold`/`unfold` as *primitives* — totality is
+//! - v0.2 adds `iter` and `fold`/`unfold` as *primitives* -- totality is
 //!   structural, never certificate-based (ADR-0009).
 //! - Adjoint is a syntactic involution; every rewrite must commute with it
 //!   (T1 property, ADR-0016/ADR-0018).

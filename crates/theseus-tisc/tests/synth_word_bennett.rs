@@ -1,16 +1,16 @@
-//! A-6 W.1 tests — the word-level Bennett wrapper `transcribe_word_bennett`
+//! A-6 W.1 tests -- the word-level Bennett wrapper `transcribe_word_bennett`
 //! (fwd WValue → clean ancilla via the Bennett-clean idiom; swap; bwd → net-zero)
 //! plus the `WForward`/`WValue` word IR it consumes.
 //!
 //! Two verification tiers, both with teeth (a wrong `bwd` must FAIL):
-//!   * REGISTER-SYMBOLIC COMPLETE (`symbolic_exec` + `equiv`) — when carriers +
+//!   * REGISTER-SYMBOLIC COMPLETE (`symbolic_exec` + `equiv`) -- when carriers +
 //!     ancilla + work all fit in the 8 registers, verify over the WHOLE domain:
 //!     carriers ≡ fwd AND every ancilla/work register ≡ 0. Requiring the ancilla
 //!     output rows ≡ 0 (with ancilla INPUT vars zeroed) is exactly
-//!     `∀x. x ⊕ bwd(fwd(x)) = 0` ⇔ `bwd ∘ fwd = id` (also forces fwd injective) —
+//!     `∀x. x ⊕ bwd(fwd(x)) = 0` ⇔ `bwd ∘ fwd = id` (also forces fwd injective) --
 //!     a COMPLETE `bwd = fwd⁻¹` + net-zero proof. Used for swap and a 2-carrier
 //!     conditional-subtract (Select + Sub + the clean idiom).
-//!   * WHOLE-DOMAIN EXEC (`exec_instr`, registers + scratch work) — runs the body
+//!   * WHOLE-DOMAIN EXEC (`exec_instr`, registers + scratch work) -- runs the body
 //!     from every concrete carrier state with ancilla/work = 0 and asserts
 //!     carriers = fwd(x) AND every ancilla/work word returns to 0. Complete over
 //!     the byte domain; used when work needs scratch (the WLt-guarded compare).
@@ -28,7 +28,7 @@ use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 fn assert_all_encode(body: &[Instr]) {
     for (i, &ins) in body.iter().enumerate() {
         encode(ins).unwrap_or_else(|e| {
-            panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} — not assemblable")
+            panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} -- not assemblable")
         });
     }
 }
@@ -121,7 +121,7 @@ fn symbolic_complete(
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Spec 1 — pure swap (a,b) ↦ (b,a)   [register-symbolic complete]
+// Spec 1 -- pure swap (a,b) ↦ (b,a)   [register-symbolic complete]
 // ══════════════════════════════════════════════════════════════════════
 
 fn swap_fwd() -> WForward {
@@ -150,13 +150,13 @@ fn word_bennett_swap_symbolic_complete() {
     );
 }
 
-/// TEETH: a wrong bwd (identity instead of swap) must leave the ancilla ≠ 0 —
+/// TEETH: a wrong bwd (identity instead of swap) must leave the ancilla ≠ 0 --
 /// the complete symbolic check must FAIL.
 #[test]
 fn word_bennett_swap_teeth_wrong_bwd() {
     let fwd = swap_fwd();
     let wrong_bwd = WForward {
-        // identity (out_i = carrier_i) — NOT the inverse of swap.
+        // identity (out_i = carrier_i) -- NOT the inverse of swap.
         outputs: vec![(0, WValue::var(0)), (1, WValue::var(1))],
     };
     let carriers = [0u8, 1];
@@ -177,12 +177,12 @@ fn word_bennett_swap_teeth_wrong_bwd() {
     };
     assert!(
         equiv(&got0, &expected, BITS, &[0, 1, 2, 3, 4]).is_err(),
-        "wrong bwd (identity) must FAIL the complete check (ancilla ≢ 0) — teeth"
+        "wrong bwd (identity) must FAIL the complete check (ancilla ≢ 0) -- teeth"
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Spec 2 — conditional subtract (Select + Sub + the clean idiom)
+// Spec 2 -- conditional subtract (Select + Sub + the clean idiom)
 //   (g,a) ↦ (g,  g&1 ? a - g : a)          [register-symbolic complete]
 // bijection: g odd → a↦a-g (inv a+g); g even → identity.
 // ══════════════════════════════════════════════════════════════════════
@@ -216,7 +216,7 @@ fn word_bennett_cond_subtract_symbolic_complete() {
     let body = transcribe_word_bennett(&fwd, &bwd, &carriers, &ancilla, &work).expect("build");
     assert_all_encode(&body);
 
-    // Reference: g preserved; carrier1 = mux(g.bit0, a-g, a) at every bit — built
+    // Reference: g preserved; carrier1 = mux(g.bit0, a-g, a) at every bit -- built
     // by an INDEPENDENT arithmetic body (compute a-g in a spare reg, cswap-style
     // guard). We compare BDDs: the whole-domain-equal check.
     let got = symbolic_exec(&body).unwrap();
@@ -259,12 +259,12 @@ fn word_bennett_cond_subtract_teeth_wrong_bwd() {
     let ancilla_zero = (2..=3).all(|r| got0.regs[r].iter().all(|e| *e == BvExpr::Const(false)));
     assert!(
         !ancilla_zero,
-        "wrong bwd (sub instead of add) must leave ancilla ≢ 0 — teeth"
+        "wrong bwd (sub instead of add) must leave ancilla ≢ 0 -- teeth"
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Spec 3 — WLt-guarded conditional (uses emit_wlt inside a Select)
+// Spec 3 -- WLt-guarded conditional (uses emit_wlt inside a Select)
 //   (a,b,c) ↦ (a, b, c ⊕ (a<b))    a<b toggles c's bit 0.
 // A genuine bijection (SELF-INVERSE: applying twice restores c; a,b preserved).
 // The guard reads ONLY the PRESERVED carriers a,b (unlike a compare-SWAP, which
@@ -272,7 +272,7 @@ fn word_bennett_cond_subtract_teeth_wrong_bwd() {
 // WLt. a,b are IDENTITY carriers (unlisted → pass-through, no ancilla/swap); only
 // c is active. Work needs scratch (WLt = 9 temps) → whole-domain EXEC (complete).
 // The forward value is `Select{Lt(a,b), c^1, c}` (pure-XOR-top → realized STRAIGHT
-// into the clean ancilla, so peak work = the WLt chain = 9 — no value-temp).
+// into the clean ancilla, so peak work = the WLt chain = 9 -- no value-temp).
 // ══════════════════════════════════════════════════════════════════════
 
 fn ltxor_fwd() -> WForward {
@@ -390,7 +390,7 @@ fn word_bennett_ltxor_teeth_wrong_bwd() {
     }
     assert!(
         any_dirty,
-        "wrong bwd (a>b instead of a<b) must leave ancilla ≠ 0 on some input — teeth"
+        "wrong bwd (a>b instead of a<b) must leave ancilla ≠ 0 on some input -- teeth"
     );
 }
 

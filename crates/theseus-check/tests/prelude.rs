@@ -44,7 +44,7 @@ iso myNotb : Bit <-> Bit
 }
 
 /// A program that uses toffoli (and cnot) WITHOUT declaring them should
-/// parse, check clean under with_prelude, and elaborate successfully —
+/// parse, check clean under with_prelude, and elaborate successfully --
 /// proving toffoli is now in the implicit prelude.
 #[test]
 fn prelude_provides_toffoli_and_cnot() {

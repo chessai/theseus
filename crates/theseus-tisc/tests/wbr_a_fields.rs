@@ -1,4 +1,4 @@
-//! W_BR-a — the BR-addressing sites generalized to `br_fields()`.
+//! W_BR-a -- the BR-addressing sites generalized to `br_fields()`.
 //!
 //! This slice makes `pc_add_br_with`'s BR operand + field list,
 //! `encode_with`/`decode_with` BR marshalling, `instr::swapbr_with`, and the
@@ -9,7 +9,7 @@
 //!
 //! **The primary byte-identity guard lives elsewhere:** the
 //! `poc_step_net_bit_identical_across_type_repr` golden in `tests/energy.rs`
-//! lowers `step(Layout::default())` and asserts a fixed netlist fingerprint —
+//! lowers `step(Layout::default())` and asserts a fixed netlist fingerprint --
 //! it proves the DEFAULT (w_br=8) path is unchanged (no re-pin). This file
 //! proves the NEW capability: a hand-built w_br=16 layout gains exactly one BR
 //! field, type-checks, and round-trips a 16-bit BR through encode/decode. It
@@ -87,7 +87,7 @@ fn w_br16_adds_one_br_field() {
 // ══════════════════════════════════════════════════════════════════════
 // 2. `step_with(&layout_w_br16, rom)` TYPE-CHECKS (the well-formedness proof).
 //    `type_of` walks the whole step iso and verifies every Seq/Times/etc.
-//    composition's boundary types agree — this is exactly where a bad BR field
+//    composition's boundary types agree -- this is exactly where a bad BR field
 //    index or a wire-count/field-list mismatch in `pc_add_br_with` would
 //    surface, without paying for a full `lower_iso`.
 // ══════════════════════════════════════════════════════════════════════
@@ -142,7 +142,7 @@ fn w_br16_encode_decode_roundtrip_16bit_br() {
             r
         },
         pc: 0x0137,      // 16-bit PC (default w_pc=16)
-        br: 0xBEEF,      // 16-bit BR — the high byte must survive the round-trip
+        br: 0xBEEF,      // 16-bit BR -- the high byte must survive the round-trip
         ir: 0xDEAD_BEEF,
         scratch: [0; NUM_SCRATCH],
         mem: [0; MEM_WORDS],
@@ -194,7 +194,7 @@ fn default_w_br8_rejects_wide_br() {
 // ══════════════════════════════════════════════════════════════════════
 //
 // `br_fields()` is floor division, so `w_br=12` (w_ctl=8) gives br_fields()=1
-// but w_br=12 — the BR operand sext would read BR bits 8..11 off a field that
+// but w_br=12 -- the BR operand sext would read BR bits 8..11 off a field that
 // only holds 8 bits (aliasing a neighbor). The `assert_br_carrier` guard
 // (called from `pc_add_br_with`) makes that a loud panic. No valid layout
 // (w_br ∈ {8,16}) trips it.
@@ -209,7 +209,7 @@ fn non_byte_multiple_w_br_panics_add() {
     let _ = theseus_tisc::step::pc_add_br_with(&bad);
 }
 
-// A w_br=16 layout (a VALID multiple) must NOT panic — the guard is not
+// A w_br=16 layout (a VALID multiple) must NOT panic -- the guard is not
 // over-eager.
 #[test]
 fn valid_w_br16_builder_does_not_panic() {

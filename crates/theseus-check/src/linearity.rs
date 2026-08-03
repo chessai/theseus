@@ -30,8 +30,8 @@ fn collect_vars(pat: &Pattern, occ: &mut Occurrences) {
             collect_vars(b, occ);
         }
         Pattern::Paren(inner, _) => collect_vars(inner, occ),
-        // A label pattern `$ℓ p…` binds the variables of its argument patterns
-        // (the `$ℓ` tag itself binds nothing) — descend so a variable inside a
+        // A label pattern `$ℓ p...` binds the variables of its argument patterns
+        // (the `$ℓ` tag itself binds nothing) -- descend so a variable inside a
         // label, e.g. `b` in `$go (b,(O,O))`, is counted on its side. Without
         // this, label-clause variables are invisible to linearity and every
         // label loop draws spurious T0201/T0202 (the L15 "end-to-end" gap).
@@ -74,7 +74,7 @@ fn check_clause(clause: &Clause, diags: &mut Vec<Diagnostic>) {
         }
     }
 
-    // T0202: variable on one side but not the other — reported on the side
+    // T0202: variable on one side but not the other -- reported on the side
     // where it occurs.
     for (name, spans) in &left {
         if !right.contains_key(name) {
@@ -179,9 +179,9 @@ mod tests {
         }
     }
 
-    /// End-to-end guard (the L15 gap): a label variable inside `$go (b,…)` must
+    /// End-to-end guard (the L15 gap): a label variable inside `$go (b,...)` must
     /// be visible to linearity, so the FULL staged `check` reports nothing on
-    /// the `spin` label loop — otherwise the CLI pipeline never reaches E4.
+    /// the `spin` label loop -- otherwise the CLI pipeline never reaches E4.
     #[test]
     fn label_loop_variable_is_linear_end_to_end() {
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

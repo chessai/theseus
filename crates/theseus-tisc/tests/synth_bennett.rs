@@ -1,15 +1,15 @@
-//! A-6.1 tests — `transcribe_into` (fresh disjoint targets) and the Bennett
+//! A-6.1 tests -- `transcribe_into` (fresh disjoint targets) and the Bennett
 //! wrapper (`transcribe_bennett`) for the general permutation case.
 //!
 //! Two verification tiers, both with teeth:
-//!   * SYMBOLIC (`symbolic_exec` + `equiv`, all-register operands) — proves the
+//!   * SYMBOLIC (`symbolic_exec` + `equiv`, all-register operands) -- proves the
 //!     emitted gate network equals the spec as a boolean function.
-//!   * NET-ZERO / EXEC (`exec_instr`, register AND scratch ancilla) — runs the
+//!   * NET-ZERO / EXEC (`exec_instr`, register AND scratch ancilla) -- runs the
 //!     body from concrete carrier states with ancilla = 0 and asserts carriers
 //!     end at `P(x)` and EVERY ancilla word returns to 0.
 //!
 //! The symbolic path cannot model scratch (`symbolic_exec` rejects `Xchg` and
-//! operands ≥ 8), so scratch ancilla is exercised only by the exec path — which
+//! operands ≥ 8), so scratch ancilla is exercised only by the exec path -- which
 //! is exactly where net-zero must be proven anyway.
 
 use theseus_tisc::asm::{encode, Instr};
@@ -31,7 +31,7 @@ use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 fn assert_all_encode(body: &[Instr]) {
     for (i, &ins) in body.iter().enumerate() {
         encode(ins).unwrap_or_else(|e| {
-            panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} — body is not assemblable")
+            panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} -- body is not assemblable")
         });
     }
 }
@@ -45,7 +45,7 @@ fn assert_all_encode(body: &[Instr]) {
 /// WHY THIS IS COMPLETE: requiring the ancilla output rows ≡ 0 under BDD (with
 /// the ancilla INPUT vars substituted by Const(false) via `zero_out`) is exactly
 /// `∀x. x ⊕ bwd(fwd(x)) = 0` ⇔ `bwd ∘ fwd = id`, which also forces `fwd`
-/// injective — a COMPLETE `bwd = fwd⁻¹` proof, not a sample. It is the sound
+/// injective -- a COMPLETE `bwd = fwd⁻¹` proof, not a sample. It is the sound
 /// mirror the sample-only exec scratch path lacks: the scratch body is the same
 /// gate skeleton modulo operand renaming + Exch→Xchg, so verifying the register
 /// layout whole-domain discharges the wiring/inverse risk the scratch samples
@@ -111,7 +111,7 @@ fn v(r: usize, b: usize) -> BvExpr {
 }
 
 /// Substitute every `Var { operand, .. }` with `operand ∈ zero_regs` by
-/// `Const(false)` — models "the ancilla started at 0". Used by the symbolic
+/// `Const(false)` -- models "the ancilla started at 0". Used by the symbolic
 /// Bennett check (the composed body only realizes the permutation when the
 /// ancilla input is zero; symbolic_exec starts every register as a free var).
 fn zero_out(e: &BvExpr, zero_regs: &[usize]) -> BvExpr {
@@ -202,7 +202,7 @@ fn transcribe_into_teeth() {
     let (dst_ops, src_ops) = into_maps_carriers_012_ancilla_345();
     let body = transcribe_into(&spec_t, &dst_ops, &src_ops).unwrap();
     let got0 = transfer_zero_out(&symbolic_exec(&body).unwrap(), &[3, 4, 5]);
-    // Corrupted: ancilla reg3 = a ⊕ b (drop the AND) — a real difference.
+    // Corrupted: ancilla reg3 = a ⊕ b (drop the AND) -- a real difference.
     let corrupted = spec(|r, b| match r {
         3 => v(0, b).xor(v(1, b)),
         4 => v(1, b),
@@ -358,7 +358,7 @@ fn bennett_swap_netzero_register_ancilla() {
 
 #[test]
 fn bennett_swap_netzero_scratch_ancilla() {
-    // carriers regs 0,1 ; ancilla SCRATCH s2,s3 (operand idx 10,11 — s0/s1
+    // carriers regs 0,1 ; ancilla SCRATCH s2,s3 (operand idx 10,11 -- s0/s1
     // reserved). The swap step emits Xchg (reg↔scratch); exec_instr supports it.
     bennett_exec_netzero(
         &swap_fwd(),
@@ -498,7 +498,7 @@ fn bennett_duplicate_ancilla_errs() {
 }
 
 /// MAJOR-2: a carrier aliasing an ancilla word must be rejected (Bennett needs
-/// fresh scratch). Carriers `[0,1]`, ancilla `[1,3]` — carrier 1 == ancilla 0.
+/// fresh scratch). Carriers `[0,1]`, ancilla `[1,3]` -- carrier 1 == ancilla 0.
 #[test]
 fn bennett_carrier_aliases_ancilla_errs() {
     let res = transcribe_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[1, 3]);
@@ -513,7 +513,7 @@ fn bennett_carrier_aliases_ancilla_errs() {
 /// rows both targeting operand 3.
 #[test]
 fn transcribe_into_duplicate_dst_errs() {
-    // row0 = v1 (copy of reg1), row1 = v0 (copy of reg0) — both non-identity.
+    // row0 = v1 (copy of reg1), row1 = v0 (copy of reg0) -- both non-identity.
     let spec_t = spec(|r, b| match r {
         0 => v(1, b),
         1 => v(0, b),
@@ -530,7 +530,7 @@ fn transcribe_into_duplicate_dst_errs() {
 }
 
 /// MINOR-3: `transcribe_bennett` accepting decoder-reserved s0/s1 (operand 8/9)
-/// as ancilla — before the fix Ok, exec passed, but every instr fails encode.
+/// as ancilla -- before the fix Ok, exec passed, but every instr fails encode.
 /// Now reserved ancilla must return Err.
 #[test]
 fn bennett_reserved_ancilla_errs() {

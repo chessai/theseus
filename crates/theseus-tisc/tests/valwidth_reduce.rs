@@ -2,9 +2,9 @@
 //!
 //! f3's XOR reduce (xor_reduce.rs) with element type lifted from Bit to
 //! Type::Flat(w); idx STAYS Bit. memexch uses memexch_prim_idx(&Flat(w), &Bit, 2).
-//! Caps at Flat(4) (Flat(8) memexch table = 33.5M entries — infeasible).
+//! Caps at Flat(4) (Flat(8) memexch table = 33.5M entries -- infeasible).
 //!
-//! T1: emission/parametric pin — same instruction sequence for w∈{1,2,4}.
+//! T1: emission/parametric pin -- same instruction sequence for w∈{1,2,4}.
 //! T2: Flat(2) whole-domain hoist-compiled oracle.
 //! T3: Flat(4) whole-domain hoist-compiled oracle.
 //! T4: real CPU (#[ignore]).
@@ -252,7 +252,7 @@ fn decompose_output(v: &Value, w: u8) -> (usize, u8, u8, u8, u8, u8) {
 #[test]
 fn t1_emission_parametric_pin() {
     // MAJOR-1: pin that the FULL instruction sequence is identical across widths
-    // (the parametric argument — the ROM is width-independent, == f3's Bit ROM),
+    // (the parametric argument -- the ROM is width-independent, == f3's Bit ROM),
     // and that WCET==24 for every w (not just w=2 via T5).
     let mut roms: Vec<Vec<Instr>> = Vec::new();
     for w in [1u8, 2, 4] {
@@ -363,7 +363,7 @@ fn t1_emission_parametric_pin() {
         }
     }
     // Cross-w: the full ROM must be byte-identical across widths (width-independent
-    // codegen — the parametric pin the design/review F3 mandated).
+    // codegen -- the parametric pin the design/review F3 mandated).
     assert_eq!(
         roms[0], roms[1],
         "reduce ROM must be identical for Flat(1) vs Flat(2)"
@@ -544,7 +544,7 @@ fn t5_wcet_histogram() {
     assert!(park_taxes[2].abs() < 1e-10, "park_tax(2) must be 0%");
 }
 
-// ── T6: canonicalization — register bytes stay < 2^w each step ──────
+// ── T6: canonicalization -- register bytes stay < 2^w each step ──────
 
 #[test]
 fn t6_canonicalization_flat2() {
@@ -565,12 +565,12 @@ fn t6_canonicalization_flat2() {
         for _step in 0..budget {
             state = run_rom_fast(&rom, state, 1);
             // Canonicalization (MAJOR-2): every VALUE byte must stay < 2^w each step.
-            // The value leaves live in regs 0..6 (Nat_3 counter 0-2, acc, data, idx —
-            // all thermometer tags) and the resident Flat(w) words in mem[0..2] — the
+            // The value leaves live in regs 0..6 (Nat_3 counter 0-2, acc, data, idx --
+            // all thermometer tags) and the resident Flat(w) words in mem[0..2] -- the
             // latter is MexchReg's byte-wide surface and the whole point of this check
             // (marshal_resident writes resident leaves to state.mem, NOT scratch, so the
             // prior scratch[0..2] check was vacuous). regs >= 6 are iter's internal
-            // skip-block aux (e.g. the body-length jump offset) — non-canonical BY DESIGN,
+            // skip-block aux (e.g. the body-length jump offset) -- non-canonical BY DESIGN,
             // not value bytes, so they are deliberately excluded.
             for i in 0..6 {
                 assert!(
@@ -609,7 +609,7 @@ fn t6_canonicalization_real_cpu() {
     }
 }
 
-// ── MAJOR-1: negative test — multi-leaf idx rejected ────────────────
+// ── MAJOR-1: negative test -- multi-leaf idx rejected ────────────────
 
 #[test]
 fn major1_memexch_prim_idx_multi_leaf_idx_rejected() {

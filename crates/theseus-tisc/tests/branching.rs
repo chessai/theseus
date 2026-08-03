@@ -5,9 +5,9 @@
 //! Verifies that the TISC-1 step iso implements data-dependent branching
 //! as a total bijection, per ADR-0034:
 //!
-//! 1. A small program that ACTUALLY BRANCHES — loads an offset into a
+//! 1. A small program that ACTUALLY BRANCHES -- loads an offset into a
 //!    register, `SWAPBR rd` moves it into BR, and the end-of-step PC
-//!    update jumps by that offset — matches a Rust reference emulator.
+//!    update jumps by that offset -- matches a Rust reference emulator.
 //! 2. REVERSIBILITY: T forward steps then T adjoint steps return
 //!    exactly to the start state.
 //! 3. INJECTIVITY / counterexample regression: the v1 counterexample
@@ -82,12 +82,12 @@ fn ref_step(rom: &[u32], s: &StateVals) -> StateVals {
 // ══════════════════════════════════════════════════════════════════════
 //
 // Layout (addresses 0..7):
-//   0: XORI r0, δ       — load jump offset δ into r0 (r0 was 0)
-//   1: SWAPBR r0        — BR ← δ, r0 ← 0 (old BR)
+//   0: XORI r0, δ       -- load jump offset δ into r0 (r0 was 0)
+//   1: SWAPBR r0        -- BR ← δ, r0 ← 0 (old BR)
 //                          end-of-step: PC = 1 + δ + 1 = δ + 2
-//   δ+2: SWAPBR r0      — come-from: BR ← 0, r0 ← δ (witness)
-//   δ+3: SUBI r0, δ     — clear witness: r0 = 0
-//   δ+4: ADDI r1, 0x42  — prove we arrived: r1 += 0x42
+//   δ+2: SWAPBR r0      -- come-from: BR ← 0, r0 ← δ (witness)
+//   δ+3: SUBI r0, δ     -- clear witness: r0 = 0
+//   δ+4: ADDI r1, 0x42  -- prove we arrived: r1 += 0x42
 //   (other addresses: NOP via zero words)
 
 #[test]
@@ -243,7 +243,7 @@ fn ir_zero_and_scratch_after_branch() {
 
 #[test]
 fn br_zero_fall_through_is_pc_plus_one() {
-    // With BR = 0 (never set), PC += 0 + 1 = PC + 1 — bit-identical
+    // With BR = 0 (never set), PC += 0 + 1 = PC + 1 -- bit-identical
     // to v1 behavior.
     let rom = vec![
         theseus_tisc::asm::encode(Instr::Addi { rd: 1, imm: 5 }).unwrap(),

@@ -1,7 +1,7 @@
 //! Negative / failure-path tests for stable guards in theseus-tisc.
 //!
 //! These cover rejection paths that must remain correct even as the
-//! crate evolves — reserved opcodes, unrecognized prims, and
+//! crate evolves -- reserved opcodes, unrecognized prims, and
 //! addressing precondition panics.
 
 use std::collections::BTreeMap;
@@ -217,7 +217,7 @@ fn encode_operand_out_of_range() {
             val: 9
         })
     ));
-    // Legal scratch operands are s2..s7 (idx 10..16) — scratch-addressable, A-0.
+    // Legal scratch operands are s2..s7 (idx 10..16) -- scratch-addressable, A-0.
     assert!(
         encode(Instr::Add { rd: 10, rs: 0 }).is_ok(),
         "rd=10 (s2) is a valid operand"
@@ -357,7 +357,7 @@ fn encode_swapbr_operand_legality() {
     // `SwapbrRegOutOfRange` guard was removed). So the rejection variants
     // change, and a legal scratch rd now ENCODES.
 
-    // rd = 9 (= s1, decoder-reserved) is still rejected — but now as the
+    // rd = 9 (= s1, decoder-reserved) is still rejected -- but now as the
     // uniform `OperandReservedScratch`, not the old `SwapbrRegOutOfRange`.
     assert!(matches!(
         encode(Instr::Swapbr { rd: 9, rs: 0 }),
@@ -382,7 +382,7 @@ fn encode_swapbr_operand_legality() {
         Some(Instr::Swapbr { rd: 10, rs: 0 }),
         "scratch-rd SWAPBR must round-trip encode∘decode"
     );
-    // r0..r7 unaffected — a register rd still encodes.
+    // r0..r7 unaffected -- a register rd still encodes.
     assert!(encode(Instr::Swapbr { rd: 0, rs: 0 }).is_ok());
     assert!(encode(Instr::Swapbr { rd: 7, rs: 0 }).is_ok());
     // Top legal scratch operand s7 (= idx 15) encodes.
@@ -393,7 +393,7 @@ fn encode_swapbr_operand_legality() {
 fn assemble_program_too_long() {
     // A-6.4 widen-PC: the assembler cap is the PC address space (2^W_PC =
     // 65536), not the old 8-bit 256. A 257-word program (which the 8-bit PC
-    // rejected) now assembles fine — the widen-PC payoff at the assembler.
+    // rejected) now assembles fine -- the widen-PC payoff at the assembler.
     use theseus_tisc::types::PC_ADDR_SPACE;
     assert!(
         assemble(&vec![Instr::Addi { rd: 0, imm: 0 }; 257]).is_ok(),

@@ -137,7 +137,7 @@ fn read_reg(wires: &[bool], layout: &[String], names: &[String]) -> u64 {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// (a) 2-bit compositional ripple adder — exhaustive oracle (256 inputs)
+// (a) 2-bit compositional ripple adder -- exhaustive oracle (256 inputs)
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -223,7 +223,7 @@ fn two_bit_ripple_adder_exhaustive() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// (b) Fibonacci, 2-bit registers, 2 unrolled adds — exhaustive (4096)
+// (b) Fibonacci, 2-bit registers, 2 unrolled adds -- exhaustive (4096)
 // ═══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -297,14 +297,14 @@ fn fib_2bit_2adds_exhaustive_oracle() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// (c) Minimal-width Fibonacci to fib(5)=5 — 14 wires, EXHAUSTIVE (16384)
+// (c) Minimal-width Fibonacci to fib(5)=5 -- 14 wires, EXHAUSTIVE (16384)
 //
 // A uniform 3-bit / 3-add machine needs 24 wires, which is intractable:
 // not for lowering, but because theseus_check's coverage pass enumerates
 // the full value domain of every CLAUSE-defined iso, and the routing isos
 // (asc0 : 24-wire reassoc, idr22 : 22-wire identity) then require 2^24 /
 // 2^22 enumerated values (measured: 0.1s @ 14 wires, 0.5s @ 16, 2.4s @ 18,
-// 9.8s @ 20 — ~4x per +2 wires; at 24 the test blew the stack after 60s).
+// 9.8s @ 20 -- ~4x per +2 wires; at 24 the test blew the stack after 60s).
 // Sizing each register to its actual fib value (1,1,2,3,4 bits) keeps the
 // machine at 14 wires and makes the FULL domain enumerable.
 // ═══════════════════════════════════════════════════════════════════════

@@ -1,4 +1,4 @@
-//! Tests for `CellKind::R1` — the first-class rail-role-swap cell
+//! Tests for `CellKind::R1` -- the first-class rail-role-swap cell
 //! (ADR-0040 follow-up slice step 1).
 //!
 //! Verification norm: the differential oracle vs `theseus_eval` /
@@ -121,7 +121,7 @@ fn r1_balance_accepts() {
 
     let net = one_r1();
     let balanced = balance(&net).expect("balance should succeed");
-    // Single-cell netlist is already balanced — zero K0 insertions.
+    // Single-cell netlist is already balanced -- zero K0 insertions.
     assert_eq!(balanced.validate(), Ok(()));
     for x in 0..4u32 {
         let bits = bits_of_index(x, 2);

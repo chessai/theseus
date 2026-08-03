@@ -6,7 +6,7 @@
 //! loop: memexch loads arr[idx] into data, reduceStep3 applies Ccnot, memexch
 //! restores, succ advances idx.
 //!
-//! T5: masked reduce d=3 — run_on_cpu_fast == eval for key=0, key=1, mixed.
+//! T5: masked reduce d=3 -- run_on_cpu_fast == eval for key=0, key=1, mixed.
 //! T6a: park-tax histogram via rom_trace.
 //! T6b: rom_program_energy_resident (#[ignore]).
 //! T7: SystemRing closure validate()==Ok with Op::Ccnot in Op::ALL (#[ignore]).
@@ -157,7 +157,7 @@ fn dot_reduce_body() -> Iso {
     // Strategy: AssocL on key's product to get (key, data) out of (key, (data, (idx, arr))):
     //   (key, (data, idx_arr)) → use AssocL(key, data, idx_arr) → ((key, data), idx_arr)
     // Then from (acc, ((key, data), idx_arr)) → AssocL(acc, (key,data), idx_arr) → ((acc,(key,data)), idx_arr)
-    // That gives ((acc, (key, data)), (idx, arr)) — reduceStep3 on the left.
+    // That gives ((acc, (key, data)), (idx, arr)) -- reduceStep3 on the left.
 
     // inner_assocl: (key, (data, idx_arr)) → ((key, data), idx_arr)
     let inner_assocl = Iso::AssocLProd(b.clone(), b.clone(), idx_arr_ty());
@@ -310,7 +310,7 @@ fn decompose_output(v: &Value) -> (usize, u8, u8, u8, u8, u8, u8) {
     )
 }
 
-// ── T5: masked reduce d=3 — run_on_cpu_fast == eval ────────────────
+// ── T5: masked reduce d=3 -- run_on_cpu_fast == eval ────────────────
 
 #[test]
 fn t5_masked_reduce_fast_oracle() {

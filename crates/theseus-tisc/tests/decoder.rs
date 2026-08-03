@@ -17,7 +17,7 @@
 //!
 //! Sampling constraints follow the decoder's documented conventions:
 //! s0 = s1 = 0 on entry, pad bits zero, no register aliasing (the
-//! source-level legality checker's job, P1 — see decoder.rs docs).
+//! source-level legality checker's job, P1 -- see decoder.rs docs).
 
 use std::sync::OnceLock;
 
@@ -488,13 +488,13 @@ fn full_decoder_reserved_opcodes_are_identity() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// A-0 BLOCKER regression tests — MUST run THROUGH decode_execute (L20).
+// A-0 BLOCKER regression tests -- MUST run THROUGH decode_execute (L20).
 // These would have caught the two shipped BLOCKERs; the pre-A-0 fast gate
 // never exercised decode_execute, which is why they slipped through.
 // ══════════════════════════════════════════════════════════════════════
 
 /// BLOCKER-2: a scratch operand (`Ccnot r0, r1, s2`) must execute against
-/// s2 (scratch[2]), NOT r2 — proving the reg∪scratch crossbar is wired
+/// s2 (scratch[2]), NOT r2 -- proving the reg∪scratch crossbar is wired
 /// into the instruction, not just the orphaned `select_operand` iso.
 /// Runs through the full `decode_execute` iso (`light_ctx`).
 #[test]
@@ -514,7 +514,7 @@ fn blocker2_ccnot_uses_scratch_operand_through_decode_execute() {
     // If it wrongly used r2: r0 ^= 0xFF & 0x0F = 0x0F.
     let mut regs = [0u8; 8];
     regs[1] = 0xFF;
-    regs[2] = 0x0F; // the WRONG operand — must be ignored
+    regs[2] = 0x0F; // the WRONG operand -- must be ignored
     let s = StateVals {
         regs,
         pc: 0,
@@ -552,7 +552,7 @@ fn blocker1_odd_imm_iop_does_not_fire_xchg_through_decode_execute() {
     regs[7] = 0x87; // arbitrary; expect +1 = 0x88
                     // s0/s1 are the decoder-reserved operand buffer + predicate word; they
                     // MUST be 0 on decode_execute entry (the CPU maintains this between
-                    // steps — the adder uses s0 as its operand slot). Put the anti-XCHG
+                    // steps -- the adder uses s0 as its operand slot). Put the anti-XCHG
                     // sentinels in the NON-reserved words s2..s7: a spurious XCHG (the
                     // BLOCKER-1 bug) would swap r7 into scratch, dirtying one / leaving r7
                     // wrong; a clean Addi preserves all scratch.
@@ -569,7 +569,7 @@ fn blocker1_odd_imm_iop_does_not_fire_xchg_through_decode_execute() {
     assert_eq!(got.regs[7], 0x88, "Addi r7,#1: r7 must be 0x87+1=0x88");
     assert_eq!(
         got.scratch, scratch0,
-        "scratch must be untouched — a change means XCHG spuriously fired"
+        "scratch must be untouched -- a change means XCHG spuriously fired"
     );
     // Every other reg unchanged.
     for i in 0..7 {
@@ -579,7 +579,7 @@ fn blocker1_odd_imm_iop_does_not_fire_xchg_through_decode_execute() {
 }
 
 /// BLOCKER-1 (broader): an odd-imm op on a HIGH register (rd&7 collision)
-/// must still not swap. `Xori r5, #0x0B` (odd) — the pre-fix swap would
+/// must still not swap. `Xori r5, #0x0B` (odd) -- the pre-fix swap would
 /// have hit r5 ↔ s0.
 #[test]
 fn blocker1_odd_imm_xori_clean_through_decode_execute() {
@@ -607,7 +607,7 @@ fn blocker1_odd_imm_xori_clean_through_decode_execute() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// B1.2 — whole-domain per-opcode equivalence: the UNIFIED reg+imm block
+// B1.2 -- whole-domain per-opcode equivalence: the UNIFIED reg+imm block
 // (`decode_execute`) == the replicated per-op `instruction(op)`, for EVERY
 // (rd-value, 2nd-operand-value) pair, for all 11 reg+imm ops. This is the
 // §2.3 B-1 gate obligation: the shared-ALU output must match the current
@@ -660,14 +660,14 @@ fn wd_unified_ctx() -> &'static Iso {
 // `decoder_bveq::decoder_bveq_whole_domain`, which walks the WIRED
 // `decode_execute` SYMBOLICALLY (concrete IR word, symbolic operands) and
 // proves each opcode ≡ the INDEPENDENT `bveq::instr_semantics` over the WHOLE
-// 2^8-per-operand domain in ~0.5s/op — a strict superset of the sample grid
+// 2^8-per-operand domain in ~0.5s/op -- a strict superset of the sample grid
 // (whole domain, not 576 pts) AND checked against an independent oracle rather
 // than `instruction(op)` (so a mis-dispatch cannot hide). ~53 min → ~24 s.
 
 /// Config mutual-exclusion + fmt A-source discrimination: for every opcode
 /// word (R and I families, all 4/3 low opcode bits, both fmt values), the
 /// unified block must equal the standalone `instruction` of whatever op
-/// that word denotes — and reserved words must be the identity. This
+/// that word denotes -- and reserved words must be the identity. This
 /// catches config co-fire (two lines set) and fmt mis-gating (R rs-fetch
 /// firing under I-format, or imm→A firing under R-format) as a state
 /// perturbation, using ONE representative (rd,operand) per opcode word.
@@ -705,7 +705,7 @@ fn b12_config_exclusion_and_fmt_gate() {
 /// under fmt=1 drive the R-format rs crossbar) are NONZERO. Under B1.2 the
 /// rs swap-fetch is fmt-gated (`fetch_rs_fmt_gated`): for I-format (fmt=0)
 /// the r0-slot↔s0 word swap carries fmt as a control, so it is the
-/// identity — the crossbar STILL permutes registers on the way in and back
+/// identity -- the crossbar STILL permutes registers on the way in and back
 /// out (steered by whatever bits sit in the rs field, here the immediate's
 /// high bits), but the bracket is a pure self-inverse permutation and
 /// NOTHING is fetched. This test drives those steer bits to nonzero
@@ -763,7 +763,7 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// B1.3 — the universal 3-operand bracket folds Ccnot + Cswap into the
+// B1.3 -- the universal 3-operand bracket folds Ccnot + Cswap into the
 // shared block. These teeth prove: (a) the re-bracketed reg+imm route is
 // still exact (covered by the b12 whole-domain equiv above, now evaluated
 // through `shared_alu_block`); (b) Ccnot (byte-parallel rd^=rs&rt) and
@@ -780,14 +780,14 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
 // `decoder_bveq::decoder_bveq_whole_domain`: Ccnot / Cswap are walked with
 // concrete IR words (multiple selector triples) and symbolic operand VALUES,
 // proved ≡ the INDEPENDENT `bveq::instr_semantics` over the WHOLE operand
-// domain — a strict superset of the 40-case grid (Cswap both polarities +
+// domain -- a strict superset of the 40-case grid (Cswap both polarities +
 // Ccnot's full AND product are all inside a single symbolic walk). The
 // SCRATCH-operand routing tooth (`b13_cswap_scratch_operand_equiv`, below) and
 // `blocker2_ccnot_uses_scratch_operand` remain, since instr_semantics has no
 // scratch-frame; they stay as fast concrete teeth.
 
 /// B1.3 (Fable Unit-2 MINOR-3): Cswap with a SCRATCH operand (rt=s2, idx 10)
-/// through the universal bracket == `instruction(Op::Cswap)` — closes the
+/// through the universal bracket == `instruction(Op::Cswap)` -- closes the
 /// coverage gap (Ccnot-scratch is covered by `blocker2_ccnot_uses_scratch_
 /// operand`, but Cswap routing an operand into the shared B-slot via the
 /// reg∪scratch crossbar had no direct tooth). Both control polarities.
@@ -826,20 +826,20 @@ fn b13_cswap_scratch_operand_equiv() {
 
 // ── RETIRED (GO-rollout) → tests/decoder_bveq.rs ────────────────────
 // `b13_ccnot_full_rs_sweep` simulated 4096 pts (256 rs-values × 4 rd × 4 rt)
-// of the Ccnot lane against `instruction(op)` — the single biggest decoder-sim
+// of the Ccnot lane against `instruction(op)` -- the single biggest decoder-sim
 // hog. RETIRED: `decoder_bveq::decoder_bveq_whole_domain` proves Ccnot's
 // r[rd]^=r[rs]&r[rt] over ALL 2^8 operand values symbolically in one walk
 // (every AND lane + xor target simultaneously), against instr_semantics.
 
 /// B1.3 s0-restoration tooth: after a full decode+execute of an op that
 /// uses the s0-workspace decode, s0 (the decoder-reserved operand buffer)
-/// must be exactly 0 — the L15-critical invariant `imm_to_a` requires
+/// must be exactly 0 -- the L15-critical invariant `imm_to_a` requires
 /// (a dirty s0 would corrupt the NEXT instruction's immediate). Checked for
 /// every op class (reg+imm + Ccnot + Cswap) through the wired decoder.
 #[test]
 fn b13_s0_restored_to_zero() {
     let dec = light_ctx();
-    // (name, IR word) — one per op class, all through the universal bracket.
+    // (name, IR word) -- one per op class, all through the universal bracket.
     let cases: &[(&str, u32)] = &[
         ("Add", r_ins(0b0000, 3, 5, 0)),
         ("Sub", r_ins(0b0001, 2, 4, 0)),
@@ -884,7 +884,7 @@ fn b13_s0_restored_to_zero() {
 fn b13_rt_field_inert_for_reg_imm() {
     let dec = light_ctx();
     // Addi rd=r3, imm=0x34, with the rt operand field (bits 10..14) = 0x1F
-    // (all ones) — under an ungated rt→B fetch this would route r7-ish into
+    // (all ones) -- under an ungated rt→B fetch this would route r7-ish into
     // BR and corrupt state. Config-gated OFF for Addi ⇒ must be inert.
     let ir_rt: u32 = (0b000 << 25) | (3 << 20) | (0x1F << 10) | 0x34; // I-format (fmt=0)
     let s = StateVals {
@@ -919,7 +919,7 @@ fn b13_rt_field_inert_for_reg_imm() {
 }
 
 /// MINOR-4 pin: op4/op5 (the two HIGH opcode bits) are DON'T-CARE at the
-/// datapath (the predicates test only the low 4 R / low 3 I opcode bits —
+/// datapath (the predicates test only the low 4 R / low 3 I opcode bits --
 /// see decoder.rs module header, "Reserved opcodes"). This pins that
 /// documented blind-spot behavior literal-for-literal against the OLD
 /// per-op decode (`instruction(op)`): an opcode with a high bit set aliases
@@ -958,13 +958,13 @@ fn b12_high_opcode_bits_dontcare_matches_reference() {
 }
 
 /// Smoke faithfulness: one sample per opcode class to verify the
-/// balance path. Ignored by default — balance() alone takes ~50s.
+/// balance path. Ignored by default -- balance() alone takes ~50s.
 /// Per-instruction lowering (test 2) covers structural correctness;
 /// this adds simulate-level faithfulness.
 #[test]
 #[ignore = "authoritative balanced-simulate faithfulness; run via --ignored"]
 fn full_decoder_faithfulness_smoke() {
-    // Op::Add[0] + one reserved — covers the balance path.
+    // Op::Add[0] + one reserved -- covers the balance path.
     check_full("faithfulness_smoke/Add[0]", &op_samples(Op::Add)[0]);
     check_full("faithfulness_smoke/reserved[0]", &reserved_samples()[0]);
 }

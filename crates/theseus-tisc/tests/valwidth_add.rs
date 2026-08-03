@@ -7,7 +7,7 @@
 //! addInto : (a, b) ↦ (a, a+b mod 256) over Flat(8)×Flat(8).
 //! Add is Flat(8)-only (at Flat(w<8), a+b overflows Flat(w) → uncanonical).
 //!
-//! T1: emission pin — D=3 and D=4 compile; pin full ROM at D=3, wcet=20.
+//! T1: emission pin -- D=3 and D=4 compile; pin full ROM at D=3, wcet=20.
 //! T-bare: bare addInto compiles to [Add{rd:1,rs:0}]; whole-domain 65536.
 //! T-foldstruct: fold over Flat(2) spine with xorInto; whole-domain 340.
 //! T-sum-D2: sumFold at D=2 whole-domain 65792; independent mod-sum ref.
@@ -107,7 +107,7 @@ fn xor_prim_def(w: u8) -> PrimDef {
 }
 
 /// Build a list-spine value from a slice of element bytes.
-/// list_spine_ty(Flat(w), D) — elements are innermost-first:
+/// list_spine_ty(Flat(w), D) -- elements are innermost-first:
 ///   nil = Left(Unit)
 ///   cons(h, t) = Right(Pair(thermo(h), t))
 /// Panics if elems.len() >= D (spine can hold at most D-1 elements).
@@ -189,7 +189,7 @@ fn extract_list_elems(v: &Value, d: usize) -> Vec<u8> {
                 let Value::Pair(h, t) = inner.as_ref() else {
                     panic!("expected Pair in cons, got {inner:?}");
                 };
-                // h is thermo(byte) — decode by counting Rights
+                // h is thermo(byte) -- decode by counting Rights
                 let mut byte = 0u8;
                 let mut hc = h.as_ref();
                 loop {
@@ -546,7 +546,7 @@ fn t_sum_d3_strided() {
         }
     }
 
-    // len-0 (empty) list: sweep ALL 256 acc0 — the inactive-skip path must
+    // len-0 (empty) list: sweep ALL 256 acc0 -- the inactive-skip path must
     // preserve acc for every value (acc-dependent-corruption corner, Finding 5).
     for acc0 in 0u16..256 {
         let input = sum_fold_input(&[], acc0 as u8, d);
@@ -566,7 +566,7 @@ fn t_sum_d3_strided() {
 }
 
 // ── T-sum-D4: 3-element chain (D=4), edge cases + strided, HOISTED ─────
-// Finding 8 (MAJOR): D=4 was only compiled/Add-counted, never EXECUTED — a
+// Finding 8 (MAJOR): D=4 was only compiled/Add-counted, never EXECUTED -- a
 // bug confined to the third fold copy would pass every other test. Run it.
 #[test]
 fn t_sum_d4_strided() {
@@ -678,7 +678,7 @@ fn t_neg_flat4_add_rejected() {
     let mut forward = BTreeMap::new();
     let mut backward = BTreeMap::new();
 
-    // Forward: (a, b) ↦ (a, thermo(a+b)) — HONEST, a+b can exceed 15.
+    // Forward: (a, b) ↦ (a, thermo(a+b)) -- HONEST, a+b can exceed 15.
     for v in &vals {
         let bytes = value_to_leaf_bytes_pub(v, &ty);
         let a = bytes[0];
@@ -688,7 +688,7 @@ fn t_neg_flat4_add_rejected() {
         forward.insert(v.clone(), fwd_val);
     }
 
-    // Backward: (a, c) ↦ (a, thermo(c - a)) — only for c >= a within Flat(4).
+    // Backward: (a, c) ↦ (a, thermo(c - a)) -- only for c >= a within Flat(4).
     for v in &vals {
         let bytes = value_to_leaf_bytes_pub(v, &ty);
         let a = bytes[0];

@@ -14,7 +14,7 @@ principle: **the syntax should make reversal look cheap**, because it is.
   linear variables per side, every variable on both sides; symmetric
   coverage errors with witnesses.
 - **No guards in v0.1.** A guard is information consumed forward that must
-  be recomputable from the right side backward — a semantic condition.
+  be recomputable from the right side backward -- a semantic condition.
   v0.2+ option documented: guards admitted only when the checker verifies
   the predicate is determined by each side independently.
 - **Labels:** original-Theseus-style `$name pattern` pseudo-constructors
@@ -26,9 +26,9 @@ principle: **the syntax should make reversal look cheap**, because it is.
   alias); iso body is clauses or an expression, `where` for local isos.
 - **Prims:** `prim add8 : (U8,U8) <-> (U8,U8) = "theseus.arith.add8"`.
 - **Literals** via a blessed stdlib (`U1/U2/U4/U8/U16`, fixed
-  little-endian-pair representation) — the choice lives in library code.
+  little-endian-pair representation) -- the choice lives in library code.
 - **Reserved now:** `fold`, `unfold`, `for` (v0.2 total combinators).
-- **Flavor:** ML/Haskell-style, layout-insensitive — the notation should
+- **Flavor:** ML/Haskell-style, layout-insensitive -- the notation should
   look like the math it is, and paper↔code correspondence has real value.
 
 ## Alternatives rejected

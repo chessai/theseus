@@ -276,7 +276,7 @@ fn comb(kind: CombKind, ty_name: &str, body: Expr) -> Expr {
 
 #[test]
 fn adr0038_combinator_is_an_expression_atom() {
-    // `iter Nat f ; g` = `(iter Nat f) ; g` — the form binds tighter than
+    // `iter Nat f ; g` = `(iter Nat f) ; g` -- the form binds tighter than
     // every infix operator.
     assert_eq!(
         body_shape("iter Nat f ; g"),

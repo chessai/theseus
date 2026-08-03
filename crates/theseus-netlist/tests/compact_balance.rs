@@ -96,7 +96,7 @@ fn compact_matches_materialized_reconvergent_skew_1() {
         let balanced_out = simulate(&balanced, &bits).unwrap().outputs;
         assert_eq!(compact_out, balanced_out, "outputs disagree on {v:?}");
         // Also matches original (unbalanced) sim would produce if it
-        // were balanced — here via core eval as the oracle.
+        // were balanced -- here via core eval as the oracle.
         let mut fuel = 10_000u64;
         let expected = theseus_eval::eval(&iso, v.clone(), &mut fuel).unwrap();
         assert_eq!(compact_out, bits_of(&expected, &out_ty).unwrap());
@@ -247,7 +247,7 @@ fn compact_matches_materialized_multi_cell() {
 #[test]
 fn compact_delays_equalize_arrivals() {
     // For each cell, verify that (arrival + delay) is the same for all
-    // input ports — i.e. the compact delays make every cell tick-exact.
+    // input ports -- i.e. the compact delays make every cell tick-exact.
     let (typed_net, _) = reconvergent_with_skew(3);
     let original = lower(&typed_net).unwrap();
     let compact = balance_compact(&original).unwrap();

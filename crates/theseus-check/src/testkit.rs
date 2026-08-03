@@ -1,4 +1,4 @@
-//! Conformance test harness (public — sibling stages call it from their tests).
+//! Conformance test harness (public -- sibling stages call it from their tests).
 //!
 //! This module provides:
 //! * [`repo_root`] and fixture collectors over `conformance/`;
@@ -18,7 +18,7 @@
 //!   value; `clauses` compared as a set; `side`/`variable`/`name` by equality).
 //!   Keys *not* listed by the expected block are unconstrained.
 //! * **Extra** reported diagnostics (not matching any expected block) are
-//!   tolerated only if they share the [`Code`] of some expected block — and,
+//!   tolerated only if they share the [`Code`] of some expected block -- and,
 //!   for side-carrying codes, also the [`Side`]. Any other extra is a failure.
 
 use std::collections::BTreeSet;

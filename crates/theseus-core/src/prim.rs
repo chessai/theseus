@@ -3,7 +3,7 @@
 //!
 //! A `prim` supplies a pair of finite functions. It is admitted **only if
 //! the pair are mutual inverses**: `backward ∘ forward = id_A` and
-//! `forward ∘ backward = id_B` over the finite domains — not merely that
+//! `forward ∘ backward = id_B` over the finite domains -- not merely that
 //! each is individually bijective.
 
 use crate::bvexpr::BvExpr;
@@ -65,7 +65,7 @@ pub fn enumerate_values(ty: &Type) -> Vec<Value> {
             let card = 1usize << n;
             (0..card)
                 .map(|k| {
-                    // Right^k(Left(Unit)) — same thermometer encoding as numeral_ty
+                    // Right^k(Left(Unit)) -- same thermometer encoding as numeral_ty
                     let mut v = Value::left(Value::Unit);
                     for _ in 0..k {
                         v = Value::right(v);
@@ -93,7 +93,7 @@ pub struct SpecTransfer {
 
 /// A symbolic prim spec: a `(forward, backward)` pair of `SpecTransfer`.
 ///
-/// Both directions are mandatory because `adjoint()` is total and infallible —
+/// Both directions are mandatory because `adjoint()` is total and infallible --
 /// a symbolic prim MUST carry a constructive inverse so adjoint can swap them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrimSpec {
@@ -148,7 +148,7 @@ pub enum AdmitError {
     BackwardOfForward { input: Value },
     /// `forward(backward(w)) ≠ w`.
     ForwardOfBackward { input: Value },
-    /// The prim has a symbolic spec but no table — core::admit cannot certify
+    /// The prim has a symbolic spec but no table -- core::admit cannot certify
     /// bijectivity (no BDD machinery here). The caller should use
     /// `bveq::admit_symbolic` in theseus-tisc instead.
     SymbolicOnly,
@@ -172,7 +172,7 @@ pub enum AdmitError {
 ///
 /// **Pre-checks** (before any enumeration):
 /// - F3: validates the symbolic spec against the prim's types.
-/// - F2: arithmetic domain-cardinality precheck — rejects symbolic prims
+/// - F2: arithmetic domain-cardinality precheck -- rejects symbolic prims
 ///   with an incomplete table (the partial-table+spec hang bypass).
 /// - Symbolic-only (table empty, spec present) → `SymbolicOnly`.
 ///

@@ -5,19 +5,19 @@
 //!
 //! The axes (see [`crate::adiabatic`] for the device-level definitions and
 //! the discovered PDK mapping):
-//! * **Vt** — [`Sky130Vt`] `{std, lvt, hvt}` (hvt is PMOS-only on sky130's
-//!   1.8 V core family; lvt PMOS is L ≥ 0.35 µm — both recorded, not hidden);
-//! * **body** — [`BodyConfig`] `{body-to-rail, deep-n-well}` (DNW = NMOS in
+//! * **Vt** -- [`Sky130Vt`] `{std, lvt, hvt}` (hvt is PMOS-only on sky130's
+//!   1.8 V core family; lvt PMOS is L ≥ 0.35 µm -- both recorded, not hidden);
+//! * **body** -- [`BodyConfig`] `{body-to-rail, deep-n-well}` (DNW = NMOS in
 //!   an isolated, source-tied p-well plus the PDK's parasitic isolation
 //!   junction stack);
-//! * **load** — [`tg_load_axis`] `{min, 4×, 16×}` with min = 62.5 fF so the
+//! * **load** -- [`tg_load_axis`] `{min, 4×, 16×}` with min = 62.5 fF so the
 //!   16× point is the canonical 1 pF the pre-matrix cell used.
 //!
 //! Per (variant, load) the driver sweeps energy-per-op vs power-clock period
-//! (every source integrated over the settled cycle — [`TgVariantPoint`]),
+//! (every source integrated over the settled cycle -- [`TgVariantPoint`]),
 //! keys the sweep into the DB as `adiabatic-tg@{vt}-{body}+c{load}f`, fits
 //! the ADR-0028 model per key, and runs the five-gate admission on the
-//! variant's own devices — reusing the just-measured sweep as the gate-5
+//! variant's own devices -- reusing the just-measured sweep as the gate-5
 //! scaling evidence so nothing is simulated twice.
 //!
 //! Scope note: this module is the *machinery* plus a bounded demonstration
@@ -87,12 +87,12 @@ impl TgMatrixResult {
 ///
 /// The (variant, load) cells run **concurrently, one worker thread per
 /// cell** (each simulation is its own `ngspice -b` subprocess, and ~35 s of
-/// every rung-1 sim is ngspice parsing the sky130 lib — the matrix is
+/// every rung-1 sim is ngspice parsing the sky130 lib -- the matrix is
 /// embarrassingly parallel, and running it serially would turn the bounded
 /// demo into an hour). Results are assembled back in deterministic
 /// (variant, load) axis order, so the DB build stays byte-deterministic.
 ///
-/// Rung-1 sky130 only — gate callers on [`crate::adiabatic::sky130_available`]
+/// Rung-1 sky130 only -- gate callers on [`crate::adiabatic::sky130_available`]
 /// (and ngspice). `periods` must be ascending with ≥ 5 points (the gate-5
 /// fit minimum; 3 points fit the 3-parameter model exactly and prove
 /// nothing).
@@ -172,7 +172,7 @@ mod tests {
 
     /// The bounded W5 demonstration: the full 6-variant (Vt × body) grid ×
     /// the 3-point load axis on the adiabatic TG buffer, over a modest
-    /// 5-point ramp sweep (the gate-5 minimum — this is the demo, not the
+    /// 5-point ramp sweep (the gate-5 minimum -- this is the demo, not the
     /// spec's ≥5-points/decade production grid).
     ///
     /// Asserts, from the REAL measurements (values recorded in the report
@@ -185,10 +185,10 @@ mod tests {
     ///   (measured 8.2e-15 < 1.22e-14 < 1.82e-14 J);
     /// * body effect cost (std and hvt): deep-n-well (source-tied NMOS body)
     ///   dissipates LESS than body-to-rail (measured std 1.04e-14 vs
-    ///   1.22e-14 J) — the ADR-0024 "what does body effect cost a sky130
+    ///   1.22e-14 J) -- the ADR-0024 "what does body effect cost a sky130
     ///   T-gate" number. lvt is NOT asserted directionally: its body-effect
     ///   gain is small enough that the DNW well parasitics roughly cancel it
-    ///   (measured +4% — recorded, not asserted);
+    ///   (measured +4% -- recorded, not asserted);
     /// * the DNW well shift is visible in the VDD-rail term: evdd(dnw) >
     ///   evdd(b2r) at every Vt (the isolation stack's junction bookkeeping
     ///   flows through the DNW tap; measured ≈ +3.5e-18 J/cycle).
@@ -206,7 +206,7 @@ mod tests {
         // inside the rung-1 adiabatic window at EVERY load. (A first run
         // used the canonical-cell admission sweep starting at 3.16e-9 s;
         // at the 16× = 1 pF load that fastest point sits on the finite-ramp
-        // knee — the output reached only 1.61 V = 89% of VDD — so the demo
+        // knee -- the output reached only 1.61 V = 89% of VDD -- so the demo
         // sweep starts a step slower and full swing is asserted at every
         // point instead of special-casing the knee.)
         let periods = [1e-8, 3.16e-8, 1e-7, 3.16e-7, 1e-6];
@@ -232,7 +232,7 @@ mod tests {
                 e.admission.admitted()
             );
             eprintln!("{}", e.admission.summary());
-            // Every variant must actually do work at every swept period —
+            // Every variant must actually do work at every swept period --
             // no vacuous curves in the DB.
             for p in &e.points {
                 assert!(
@@ -286,7 +286,7 @@ mod tests {
         );
 
         // (d) Body-effect cost (std, hvt): DNW source-tied body beats
-        // body-to-rail. (lvt: recorded only — see doc comment.)
+        // body-to-rail. (lvt: recorded only -- see doc comment.)
         for vt in [Sky130Vt::Std, Sky130Vt::Hvt] {
             let (b2r, dnw) =
                 (etot(vt, BodyConfig::BodyToRail, mid), etot(vt, BodyConfig::DeepNWell, mid));

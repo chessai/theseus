@@ -33,7 +33,7 @@ fn fredkin_iso() -> Iso {
     Iso::Prim(Box::new(def))
 }
 
-/// `(Reg(1) on 3 bits) ; fredkin` — 3 K0 buffers then 1 K1: the smallest
+/// `(Reg(1) on 3 bits) ; fredkin` -- 3 K0 buffers then 1 K1: the smallest
 /// composite with a mixed by-kind breakdown, tick-balanced by
 /// construction (all three bits buffer in lockstep).
 fn composite_net() -> theseus_netlist::PhasedCellNetlist {
@@ -174,7 +174,7 @@ fn energy_ascent_fredkin_end_to_end() {
     eprintln!("── energy ascent: fredkin @ rung0 ──\n{report}");
 
     // The composite (3 K0 + 1 K1) costs the fredkin plus exactly three
-    // fitted K0s — additivity is definitional in the static report
+    // fitted K0s -- additivity is definitional in the static report
     // (C3.2's *empirical* validation vs whole-block SPICE is TH-E1,
     // a later slice).
     let comp = composite_net();

@@ -1,4 +1,4 @@
-# ADR-0027: Cell library — one parameterized cell
+# ADR-0027: Cell library -- one parameterized cell
 
 **Status:** Accepted
 
@@ -16,7 +16,7 @@ of controlled swaps; permutations are wiring (ADR-0014).
   deliberate cap; whether deep prims prefer one 2-CSWAP or decomposed
   1-CSWAP networks is a *measured* answer, not doctrine.
 - **B4.2** Registry prims must be expressible as CSWAP networks. No
-  compute–uncompute ancilla macros in v1 (garbage-freedom means we never
+  compute-uncompute ancilla macros in v1 (garbage-freedom means we never
   need Bennett scratch; admitting it forfeits token conservation).
   Relaxable with a wake condition.
 - **B4.3** Cell contract: phase role, validity-window obligations
@@ -29,13 +29,13 @@ of controlled swaps; permutations are wiring (ADR-0014).
 
 ## Structural payoffs (recorded because they carry design weight)
 1. **Token conservation:** a controlled swap only routes charge; the
-   count of high rails is invariant per tick — a free integrity
+   count of high rails is invariant per tick -- a free integrity
    invariant asserted by the phased-sim (INV-TOKEN), physical cousin of
    ADR-0012.
 2. **Self-inverse cells** maximize C2.5's plausibility: every cell is
    literally its own adjoint network.
 3. **Linearity abolishes data fanout:** the compiled netlist has *no
-   data fanout at all* — only control fanout (loads, priced by the DB,
+   data fanout at all* -- only control fanout (loads, priced by the DB,
    managed by buffer trees). Type-system hygiene turned physical-design
    discipline.
 
@@ -43,5 +43,5 @@ of controlled swaps; permutations are wiring (ADR-0014).
 Internal staging of k-CSWAP (control hold times vs target transit;
 whether it composes with 2LAL buffer discipline without internal
 phases) is exactly C2.6's deferred arithmetic. If characterization
-reveals internal ticks, it becomes a macro-cell — latency numbers
+reveals internal ticks, it becomes a macro-cell -- latency numbers
 change, architecture doesn't. First question the bench answers.

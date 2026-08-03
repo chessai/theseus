@@ -1,10 +1,10 @@
-//! B-2.0b — per-program minimal-layout derivation + MEM-drop + reduced-reg
+//! B-2.0b -- per-program minimal-layout derivation + MEM-drop + reduced-reg
 //! non-default-layout probe.
 //!
 //! FAST tier (no heavy lowering): derivation unit tests, CPU-only-routing
 //! `run_on_cpu == eval` correctness on a small program, `run_on_cpu_fast ==
 //! eval` regression, and the FIRST exercise of a non-default `Layout` (a
-//! reduced `num_regs` / `mem_words = 0` `state_ty_with` lowering) — the
+//! reduced `num_regs` / `mem_words = 0` `state_ty_with` lowering) -- the
 //! probe that surfaces any hardcoded-8 in 0a's parameterization.
 //!
 //! The heavy MEM-drop energy delta (`step` vs `system_step` balanced
@@ -88,7 +88,7 @@ fn derive_reg_rounding_and_clamp() {
     );
     // Scratch operand (idx 10 = s2) is an ABSOLUTE index (num_regs + s); its
     // decode is tied to the default register-file boundary, so its presence
-    // PINS num_regs = 8 rather than misrouting at a reduced num_regs — even
+    // PINS num_regs = 8 rather than misrouting at a reduced num_regs -- even
     // though only r0 is named as a register (B-2.1b derive_layout scratch
     // safety; review F1).
     assert_eq!(
@@ -124,7 +124,7 @@ fn reduced_layout_state_ty_is_well_formed() {
     // round-trip a zero value through bits_of to confirm the type is a
     // well-formed right-nested product of the right width.
     let card = cardinality_u64(&ty);
-    // cardinality = 2^(state_bits) — but that overflows u64 for 152 bits, so
+    // cardinality = 2^(state_bits) -- but that overflows u64 for 152 bits, so
     // instead check the bit-length via a concrete zero inhabitant.
     let _ = card; // (cardinality is astronomically large; not asserted)
     let zero = theseus_netlist::value_from_bits(&ty, &vec![false; reduced.state_bits()])

@@ -49,9 +49,9 @@ fn eval_system_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
 // ══════════════════════════════════════════════════════════════════════
 
 /// ROM with MEXCHR instructions:
-///   0: ADDI r2, 2        — set r2 = 2 (addr for MEXCHR)
-///   1: MEXCHR r1, r2     — reg[1] ↔ mem[reg[2] % 4] = mem[2]
-///   2: SUBI r6, 0x11     — non-MEXCH op
+///   0: ADDI r2, 2        -- set r2 = 2 (addr for MEXCHR)
+///   1: MEXCHR r1, r2     -- reg[1] ↔ mem[reg[2] % 4] = mem[2]
+///   2: SUBI r6, 0x11     -- non-MEXCH op
 fn mexchr_rom() -> Vec<u32> {
     vec![
         i_ins(0, 2, 0x02),      // 0: ADDI r2, 2
@@ -61,9 +61,9 @@ fn mexchr_rom() -> Vec<u32> {
 }
 
 /// ROM exercising MEXCHR with reg[ra] ≥ MEM_WORDS (tests the % mask):
-///   0: ADDI r3, 0x07     — set r3 = 7 (≥ MEM_WORDS=4, wraps to addr 3)
-///   1: MEXCHR r0, r3     — reg[0] ↔ mem[7 % 4] = mem[3]
-///   2: MEXCH r4, 1       — immediate MEXCH for comparison
+///   0: ADDI r3, 0x07     -- set r3 = 7 (≥ MEM_WORDS=4, wraps to addr 3)
+///   1: MEXCHR r0, r3     -- reg[0] ↔ mem[7 % 4] = mem[3]
+///   2: MEXCH r4, 1       -- immediate MEXCH for comparison
 fn mexchr_wrap_rom() -> Vec<u32> {
     vec![
         i_ins(0, 3, 0x07),      // 0: ADDI r3, 7
@@ -73,10 +73,10 @@ fn mexchr_wrap_rom() -> Vec<u32> {
 }
 
 /// ROM mixing MEXCH and MEXCHR (both address sources coexist):
-///   0: ADDI r2, 1        — set r2 = 1
-///   1: MEXCH r3, 0       — MEXCH r3, mem[0] (immediate)
-///   2: MEXCHR r4, r2     — MEXCHR r4, mem[r2%4] = mem[1] (register)
-///   3: ADDI r5, 0x33     — non-MEXCH
+///   0: ADDI r2, 1        -- set r2 = 1
+///   1: MEXCH r3, 0       -- MEXCH r3, mem[0] (immediate)
+///   2: MEXCHR r4, r2     -- MEXCHR r4, mem[r2%4] = mem[1] (register)
+///   3: ADDI r5, 0x33     -- non-MEXCH
 fn mixed_rom() -> Vec<u32> {
     vec![
         i_ins(0, 2, 0x01),      // 0: ADDI r2, 1
@@ -390,7 +390,7 @@ fn certificate_weakening_mexchr_aliased() {
     // actually mutate reg[1], causing the addr cancel to fail.
     assert!(
         !ring.bus_quiescent(&start),
-        "bus_quiescent should be FALSE for malformed MEXCHR with ra==rd — \
+        "bus_quiescent should be FALSE for malformed MEXCHR with ra==rd -- \
          this documents the certificate weakening: bus-quiescence now holds \
          only for ASSEMBLER-LEGAL ROMs"
     );
@@ -399,7 +399,7 @@ fn certificate_weakening_mexchr_aliased() {
 /// All MEXCHR checks in ONE sequential #[test]: each heavy check lowers the
 /// large system_step netlist; running them as separate concurrent tests
 /// (default cargo threads) exhausts memory (SIGKILL). Sequencing caps peak
-/// memory at one lowering — same pattern as ring_two_body_timing.
+/// memory at one lowering -- same pattern as ring_two_body_timing.
 #[test]
 fn mexchr_all_sequential() {
     bus_quiescent_with_mexchr();

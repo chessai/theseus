@@ -1,15 +1,15 @@
 //! Core Π → typed netlist canonicalization (ADR-0014).
 //!
 //! Flattens monoid layers, absorbs units (`1` under ×, `0` under +), and
-//! turns every structural combinator into `Permute(monoid, σ)` — the
+//! turns every structural combinator into `Permute(monoid, σ)` -- the
 //! netlist IR never contains a raw swap or assoc. `sym` is eliminated up
 //! front via the syntactic adjoint (it denotes the inverse and carries no
 //! runtime cost).
 //!
 //! TODO(ADR-0014): fuse *adjacent* Permutes by permutation composition
 //! (O(n), Mac Lane coherence makes the result canonical). Not needed for
-//! correctness of the dual-rail lowering — back-to-back Permutes each
-//! lower to zero cells — so it waits for the QoR pass.
+//! correctness of the dual-rail lowering -- back-to-back Permutes each
+//! lower to zero cells -- so it waits for the QoR pass.
 
 use theseus_core::{adjoint, is_numeral_ty, list_spine_elem_ty, Iso, Type, TypeError};
 
@@ -27,11 +27,11 @@ fn block_swap_sigma(la: usize, lb: usize) -> Vec<usize> {
 /// on ill-typed terms.
 ///
 /// The produced node always satisfies [`TypedNode::validate`], and its
-/// boundary types are exactly `type_of(iso)` — checked by tests over the
+/// boundary types are exactly `type_of(iso)` -- checked by tests over the
 /// combinator vocabulary.
 ///
 /// Complexity: O(n) in the iso size. Boundary types are derived
-/// bottom-up from leaf constructors — `type_of` is never called
+/// bottom-up from leaf constructors -- `type_of` is never called
 /// recursively at interior nodes, avoiding the O(n²) re-derivation
 /// that the naive per-node `type_of` approach produces on deep chains.
 pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
@@ -44,7 +44,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
         Iso::Sym(_) => unreachable!("handled above"),
 
         // ── Identity ────────────────────────────────────────────────
-        // type_of(Id(a)) is (a, a) — O(1), no subtree walk.
+        // type_of(Id(a)) is (a, a) -- O(1), no subtree walk.
         Iso::Id(a) => {
             let input = a.clone();
             let output = a.clone();
@@ -59,7 +59,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
         }
 
         // ── Seq: recurse into children, derive boundary types from
-        // their TypedNodes — no type_of on the whole subtree. ────────
+        // their TypedNodes -- no type_of on the whole subtree. ────────
         Iso::Seq(f, g) => {
             let fn_ = canonicalize(f)?;
             let gn = canonicalize(g)?;
@@ -263,7 +263,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
         }
         Iso::Trace(u, f) => {
             let body = canonicalize(f)?;
-            // Derive trace boundary types from body's types — same
+            // Derive trace boundary types from body's types -- same
             // validation as type_of but using already-computed types.
             let a = match &body.input {
                 Type::Sum(u1, a) if u1.as_ref() == u => a.as_ref().clone(),

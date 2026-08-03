@@ -69,7 +69,7 @@ pub fn infer_iso_labels(
     }
 
     // H1: labels that appeared but whose carrier could not be inferred
-    // must produce a diagnostic — never silently vanish.
+    // must produce a diagnostic -- never silently vanish.
     for name in &label_order {
         if !label_carriers.contains_key(name) {
             if let Some(&(side, span)) = first_occurrence.get(name) {

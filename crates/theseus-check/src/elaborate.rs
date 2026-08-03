@@ -1,7 +1,7 @@
 //! Elaboration: surface [`IsoDecl`] → core [`Iso`].
 //!
 //! Supported today:
-//! * `= expr` bodies — recursive translation to core combinators
+//! * `= expr` bodies -- recursive translation to core combinators
 //!   (`;`→[`Iso::Seq`], `*`→[`Iso::Times`], `+`→[`Iso::Plus`], `~e`→[`Iso::sym`],
 //!   a name → the referenced iso, elaborated).
 //! * clause bodies whose denotation is a single structural combinator:
@@ -32,7 +32,7 @@ use crate::env::{self, Env, Inj};
 
 type ElabResult = Result<Iso, Vec<Diagnostic>>;
 
-/// The "not elaborated (unsupported in the structural core)" sentinel — an empty
+/// The "not elaborated (unsupported in the structural core)" sentinel -- an empty
 /// error vector, matching the crate convention (no `T0xxx` diagnostic applies).
 fn unsupported() -> ElabResult {
     Err(Vec::new())
@@ -113,7 +113,7 @@ fn elab_expr(
         }
         // v0.2 combinator forms (ADR-0038): `iter T f`, `fold T f`,
         // `unfold T f`. The TYPE argument lowers via the env (a recursive
-        // nominal type gets its ADR-0035 bounded unrolling — a numeral or
+        // nominal type gets its ADR-0035 bounded unrolling -- a numeral or
         // list-spine core type); the body elaborates as an ordinary iso
         // expression. The result is gated on the CORE typing judgment
         // (ADR-0036/0037: counter-is-numeral, spine-is-list, body-is-endo,
@@ -167,7 +167,7 @@ fn elab_expr(
 ///   body type = `b × lower(A)`.
 ///
 /// Returns `None` when the iso signature is unavailable or doesn't match the
-/// expected shape — the caller falls back to normal (failing) elaboration.
+/// expected shape -- the caller falls back to normal (failing) elaboration.
 fn infer_combinator_id_body(
     kind: &CombKind,
     core_ty: &CoreType,
@@ -191,7 +191,7 @@ fn infer_combinator_id_body(
 }
 
 fn elab_clauses(cs: &[Clause], lhs_ty: &SurfType, rhs_ty: &SurfType, env: &Env) -> ElabResult {
-    // 1. Identity — every clause maps a pattern to itself.
+    // 1. Identity -- every clause maps a pattern to itself.
     if !cs.is_empty() && cs.iter().all(|c| pattern_eq(&c.lhs, &c.rhs)) {
         return Ok(Iso::Id(env.lower(lhs_ty)));
     }
@@ -388,7 +388,7 @@ fn match_bind_args(
             if let Some(ty) = payload_ty {
                 match_bind_inner(value, single, ty, env, bindings)
             } else {
-                // Nullary — only var patterns can match here.
+                // Nullary -- only var patterns can match here.
                 if let Pattern::Var(n) = strip_paren_pat(single) {
                     bindings.insert(n.text.clone(), value.clone());
                     true
@@ -463,7 +463,7 @@ fn instantiate_args(
             if let Some(ty) = payload_ty {
                 instantiate(single, bindings, ty, env)
             } else {
-                // No payload type — try as variable.
+                // No payload type -- try as variable.
                 if let Pattern::Var(n) = strip_paren_pat(single) {
                     bindings.get(&n.text).cloned()
                 } else {
@@ -713,7 +713,7 @@ fn elab_clauses_label(
             if let Some(bindings) = match_bind_extended(v, &c.lhs, lhs_ty, labels, env) {
                 let Some(output) = instantiate_extended(&c.rhs, &bindings, rhs_ty, labels, env) else {
                     // Matched LHS but RHS instantiation failed (e.g. unbound
-                    // variable). Abort immediately — do not fall through to
+                    // variable). Abort immediately -- do not fall through to
                     // later clauses, matching compute_bijection's behaviour.
                     return unsupported();
                 };
@@ -728,7 +728,7 @@ fn elab_clauses_label(
     }
 
     // 5. Synthesize a core iso realizing the body bijection Φ. For a real
-    //    label loop (any body that mixes tags — which is every iterating
+    //    label loop (any body that mixes tags -- which is every iterating
     //    loop), the Prim fallback is the EXPECTED path; structural (demux)
     //    synthesis succeeding is a degenerate-case bonus. The Prim body is
     //    denotationally correct (eval looks it up; it is mutual-inverse by
@@ -742,7 +742,7 @@ fn elab_clauses_label(
                 phi.iter().map(|(k, v)| (v.clone(), k.clone())).collect();
             // Full admissibility guard (ADR-0013): verify the (forward,
             // backward) pair are mutual inverses over the finite domains.
-            // This is strictly stronger than the old len-check — it also
+            // This is strictly stronger than the old len-check -- it also
             // catches Φ outputs that fall outside the codomain type.
             let def = theseus_core::PrimDef {
                 forward_name: format!("<trace-body:{iso_name}>"),
@@ -1264,7 +1264,7 @@ mod tests {
         let dom_ty = prod_ty(nat_ty(), bit_ty());
         assert_eq!(enumerate_values(&env.lower(&dom_ty)).len(), 8);
         assert_roundtrip_whole_domain(&env, &f, &dom_ty);
-        // Semantic pin: ⟦iter n f⟧⟨k, x⟩ = ⟨k, fᵏ(x)⟩ — the k-fold body
+        // Semantic pin: ⟦iter n f⟧⟨k, x⟩ = ⟨k, fᵏ(x)⟩ -- the k-fold body
         // application, checked against the Iter node's own body.
         let Iso::Iter(_, body) = &f else { unreachable!() };
         for k in 0..4usize {
@@ -1302,7 +1302,7 @@ mod tests {
         assert!(matches!(&f, Iso::Unfold(..)), "expected Unfold, got {f:?}");
         let dom_ty = prod_ty(bitlist_ty(), bit_ty());
         assert_roundtrip_whole_domain(&env, &f, &dom_ty);
-        // Order sensitivity: [I, O] with acc O shifts LEFT to [O, O] / acc I —
+        // Order sensitivity: [I, O] with acc O shifts LEFT to [O, O] / acc I --
         // distinct from fold-with-swap (which would shift right to [O, I]).
         let cons = |h: Value, t: Value| Value::right(Value::pair(h, t));
         let nil = Value::left(Value::Unit);
@@ -1317,7 +1317,7 @@ mod tests {
     fn surface_combinator_illtyped_arguments_rejected() {
         // The core typing gate (ADR-0036/0037) must refuse combinators whose
         // TYPE argument does not lower to the right shape.
-        // Bit lowers to 1+1 — not a numeral type (no 0 terminator).
+        // Bit lowers to 1+1 -- not a numeral type (no 0 terminator).
         let src_iter = "type Bit = O | I\n\
                         iso notb : Bit <-> Bit\n| O <-> I\n| I <-> O\n\
                         iso bad : Bit * Bit <-> Bit * Bit = iter Bit notb\n";
@@ -1329,7 +1329,7 @@ mod tests {
             "iter over a non-numeral type must not elaborate"
         );
 
-        // Nat lowers to a numeral type — not a list spine.
+        // Nat lowers to a numeral type -- not a list spine.
         let src_fold = "type Bit = O | I\ntype Nat = Zero | Succ Nat\n\
                         iso swp : Bit * Bit <-> Bit * Bit\n| (a, b) <-> (b, a)\n\
                         iso bad2 : Nat * Bit <-> Nat * Bit = fold Nat swp\n";
@@ -1364,7 +1364,7 @@ mod tests {
         //   | $go p <-> p
         //
         // $go's payload type is Bit, but clause 1's RHS `$go (b, b)` produces
-        // a (Bit, Bit) payload — Φ maps boundary values into ill-typed carrier
+        // a (Bit, Bit) payload -- Φ maps boundary values into ill-typed carrier
         // entries. The admit() guard must catch this.
         let src = "type Bit = O | I\niso bad : Bit <-> Bit\n  | b <-> $go (b, b)\n  | $go p <-> p\n";
         let prog = theseus_syntax::parse(src).expect("parses");

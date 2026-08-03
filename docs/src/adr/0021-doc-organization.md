@@ -10,7 +10,7 @@ roadmap material need homes with the right change disciplines.
 Five documents split **by change discipline**: ADRs (append-only; context
 and rejected alternatives preserved; `Supersedes:` links; numbers are
 permanent citable identifiers), design document (living, normative for
-implementation, no memory — *what is true*), language specification
+implementation, no memory -- *what is true*), language specification
 (versioned with the language, RFC-2119, **implementation-silent**, error
 catalog = `--explain` source of truth, conformance suite as executable
 appendix), theory notes (living commentary **with a proof-obligation

@@ -6,7 +6,7 @@ A well-formed iso denotes a partial isomorphism between its types;
 Clause evaluation: a value matching clause `p <-> q` under substitution θ
 maps to `q[θ]`; coverage guarantees the clause and θ are unique, in both
 directions. Labels: evaluation over the label-extended sum, iterating
-until a non-label value is produced — this is exactly `trace` evaluation on
+until a non-label value is produced -- this is exactly `trace` evaluation on
 the elaborated body (ADR-0009; `theory/coverage-bijectivity-labels.md`).
 
 **Finite dialect:** every program is total; label loops terminate within
@@ -20,13 +20,13 @@ quantity in a finite-dialect program: **`trace` body applications**.
 
 ### What one fuel unit is (and is not)
 
-> **One fuel unit is charged per `trace` body application** — one evaluation
+> **One fuel unit is charged per `trace` body application** -- one evaluation
 > of a traced term `Φ` on the current loop state (the `t := Φ(s)` step of the
 > loop below). Equivalently at the surface: **one per label step.**
 
-All other core formers — `id`, `sym`, `;`, `+`, `×`, the structural
+All other core formers -- `id`, `sym`, `;`, `+`, `×`, the structural
 isomorphisms (`swap⁺`/`swapˣ`, `assoc*`, `unite*`/`uniti*`, `distrib`/`factor`),
-and a single `prim` application — evaluate **without consuming fuel**. They are
+and a single `prim` application -- evaluate **without consuming fuel**. They are
 inductively total over a finite value (each recurses on strictly smaller
 value/term structure and cannot diverge), so they need no budget to guarantee
 termination; charging them would make the budget depend on the *elaborated term
@@ -34,15 +34,15 @@ shape* rather than on the program's semantic loop count, breaking the identity
 below. This supersedes any per-combinator-node accounting: node-counting is at
 most an internal debugging aid, never the normative unit.
 
-Consequences of the unit choice — the identities the rest of the toolchain
+Consequences of the unit choice -- the identities the rest of the toolchain
 relies on:
 
 * A **plain** iso (no `trace`) costs **0 fuel**: it is a single structural pass
   and completes at any budget `≥ 0`.
 * A single **label loop** `trace Φ` with carrier `u` costs at most **`|u| + 1`**
-  fuel — one entry application plus at most `|u|` fed-back iterations (TH-1's
+  fuel -- one entry application plus at most `|u|` fed-back iterations (TH-1's
   bound; `|u|` is the WCET *iteration* count, `|u|+1` the *application*/fuel
-  count — do not conflate the two units).
+  count -- do not conflate the two units).
 * **`Done` within fuel = the static bound**, for every finite-dialect program
   (the contract `spec/test-spec-m1.md` already asserts, now with a defined
   unit): granting fuel `≥` the program's static bound guarantees `Done`.
@@ -51,11 +51,11 @@ relies on:
 
 An evaluator MUST return exactly one of:
 
-- `Done(value)` — evaluation completed; `value` has the target type.
-- `OutOfFuel { steps_taken }` — the budget was exhausted mid-loop;
+- `Done(value)` -- evaluation completed; `value` has the target type.
+- `OutOfFuel { steps_taken }` -- the budget was exhausted mid-loop;
   `steps_taken` equals the initial fuel (the budget hit zero only after that
   many body applications). The field is intentionally redundant with the
-  initial fuel — it exists so a caller that did not retain the budget can still
+  initial fuel -- it exists so a caller that did not retain the budget can still
   report it; an evaluator MUST NOT put a different count here.
 
 and MUST be deterministic: identical `(iso, input, fuel)` yields identical
@@ -87,7 +87,7 @@ loop:
         inl(w) => s := inl(w)   -- feed the u-state back and iterate
 ```
 
-The carrier `u` occupies the **left** (`inl`) summand — the fed-back loop
+The carrier `u` occupies the **left** (`inl`) summand -- the fed-back loop
 state; the boundary `a`/`b` is the **right** (`inr`) summand. (This is the
 orientation `theory/coverage-bijectivity-labels.md` elaborates labels into, so
 no reshuffle is needed between elaboration and evaluation.)
@@ -100,10 +100,10 @@ the inverse (TH-1 mutual-inverse).
 ### Fuel charging, and the program static bound
 
 Fuel is charged **once per body application, at every trace nesting depth,
-against the one global budget** — the `charge 1 fuel` above is the *only* place
+against the one global budget** -- the `charge 1 fuel` above is the *only* place
 fuel decrements. A single global counter realizes composition with no per-trace
 bookkeeping; `steps_taken` on `OutOfFuel` is the total body-application count
-across all depths (and equals the initial fuel — see below).
+across all depths (and equals the initial fuel -- see below).
 
 The **static bound** `B(·)` of a core term is the upper bound on total fuel
 charges it can incur, a structural recurrence:
@@ -120,13 +120,13 @@ B(Trace(u, Φ))       = (|u| + 1) · (1 + B(Φ))
 
 The `Trace` case is the load-bearing one: a loop performs at most `|u|+1` body
 applications, and **each** application charges 1 (its own `charge 1 fuel`) *plus*
-`B(Φ)` for evaluating the body — hence `(|u|+1)·(1 + B(Φ))`, **not** `(|u|+1)·|u'|`.
+`B(Φ)` for evaluating the body -- hence `(|u|+1)·(1 + B(Φ))`, **not** `(|u|+1)·|u'|`.
 (Charging `(|u|+1)·|u'|` under-grants and `OutOfFuel`s a total program: the outer
 loop's own `|u|+1` charges are dropped.) A program's granted fuel is `B` of its
 elaborated core term. Corollaries:
 
 * A single label loop with structural body: `B = (|u|+1)·(1+0) = |u|+1`. ✓
-* Sequential composition `f ; g` (e.g. `= spin ; spin`): `B(f) + B(g)` — a
+* Sequential composition `f ; g` (e.g. `= spin ; spin`): `B(f) + B(g)` -- a
   **sum**, `9 + 9 = 18`, not a product.
 * A loop nesting a loop (`u` outer, `u'` inner, structural otherwise):
   `(|u|+1)·(1 + (|u'|+1)) = (|u|+1)·(|u'|+2)`.
@@ -145,7 +145,7 @@ For a finite-dialect label loop the compiler reports a **WCET note**
 (ADR-0007): `≤ |u|` iterations, where `|u| = Σ_ℓ |U_ℓ|` is the size of the
 label state space (`theory/coverage-bijectivity-labels.md`). The fuel a program
 is *granted* is `B` of its elaborated term (per loop, the application count
-`|u|+1`, composed by the recurrence above), never the iteration count —
+`|u|+1`, composed by the recurrence above), never the iteration count --
 granting only `|u|` would `OutOfFuel` on the exit application of a maximal
 (Hamiltonian) loop. Report the
 bound as `≤`, never `=`: it is exact over the *class* of carriers, not
@@ -156,8 +156,8 @@ reports `≤ 8`).
 
 All items below have been implemented in the label slice:
 
-1. ~~`EvalError::OutOfFuel` to carry `steps_taken`~~ — **done**: `OutOfFuel { steps_taken: u64 }`, where `steps_taken` equals the initial fuel granted.
-2. ~~A `B(·)` pass over the elaborated term~~ — **done**: `static_bound` in `crates/theseus-eval/src/interp.rs` implements the recurrence above.
-3. ~~A conformance-harness rule/fixture key that grants exactly `B` and asserts `Done`~~ — **done**: the `# fuel-bound:` and `# steps:` fixture keys in the conformance harness (`crates/theseus-cli/tests/conformance.rs`) grant the static bound and assert `Done`, and grant one less to assert `OutOfFuel { steps_taken }` with the correct count.
+1. ~~`EvalError::OutOfFuel` to carry `steps_taken`~~ -- **done**: `OutOfFuel { steps_taken: u64 }`, where `steps_taken` equals the initial fuel granted.
+2. ~~A `B(·)` pass over the elaborated term~~ -- **done**: `static_bound` in `crates/theseus-eval/src/interp.rs` implements the recurrence above.
+3. ~~A conformance-harness rule/fixture key that grants exactly `B` and asserts `Done`~~ -- **done**: the `# fuel-bound:` and `# steps:` fixture keys in the conformance harness (`crates/theseus-cli/tests/conformance.rs`) grant the static bound and assert `Done`, and grant one less to assert `OutOfFuel { steps_taken }` with the correct count.
 
 The interpreter charges fuel as specified: structural formers are free, `Trace` charges one unit per body application against the single global budget.

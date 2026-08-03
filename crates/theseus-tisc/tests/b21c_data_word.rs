@@ -1,6 +1,6 @@
 #![cfg(feature = "heavy-tests")]
 // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge.
-//! B-2.1c — per-program reduced DATA-WORD width (`w_data`), POC slice.
+//! B-2.1c -- per-program reduced DATA-WORD width (`w_data`), POC slice.
 //!
 //! This slice makes `state_ty_with` MIXED-width (DATA fields = `w_data`,
 //! CONTROL fields = `w_ctl = 8`, per Option A) and threads a per-field width
@@ -9,7 +9,7 @@
 //! boundary). The tests here are the FAST correctness authority for the
 //! narrowed `w_data=4` datapath.
 //!
-//! (Fast-correctness authority — the advisor runs the full heavy suite +
+//! (Fast-correctness authority -- the advisor runs the full heavy suite +
 //! the byte-identity `poc_step_net_bit_identical` golden separately.)
 
 use theseus_tisc::asm::Instr;
@@ -79,12 +79,12 @@ fn state_bits_shrinks_at_w_data_4() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 2. Whole-domain per-op equivalence at w_data=4 — RETIRED (GO-rollout)
+// 2. Whole-domain per-op equivalence at w_data=4 -- RETIRED (GO-rollout)
 // ══════════════════════════════════════════════════════════════════════
 //
 // The brute-force reduced-width sweeps here (`whole_domain_{add,xor,sub,exch,
 // ccnot,cswap}`, `whole_domain_imm`, `whole_domain_rotl_rotr`,
-// `whole_domain_rotli_rotri` — every point of 16×16 / 16³ run through the REAL
+// `whole_domain_rotli_rotri` -- every point of 16×16 / 16³ run through the REAL
 // mixed-width step, the bulk of the ~2.27 h reduced-width sim baseline) are
 // RETIRED into `tests/b21c_bveq.rs`. ALL were SINGLE combinational straight-line
 // instructions (PC concrete, no BR / no loop → inside eval_bdd's fragment), so
@@ -93,14 +93,14 @@ fn state_bits_shrinks_at_w_data_4() {
 // spec over the WHOLE 2^4-per-operand domain (a superset of the sample grids),
 // with a concrete-`theseus_eval` reality-anchor bootstrap + a negative control.
 // The mixed-width datapath (field offsets, pred base, barrel stages) is still
-// what is walked — the retirement changes the ORACLE (symbolic whole-domain),
+// what is walked -- the retirement changes the ORACLE (symbolic whole-domain),
 // not the system under test. ~2.27 h portion → ~23 s.
 //
 // KEPT here (fast, not brute-force sweeps): `state_bits_shrinks_at_w_data_4`,
 // `pred_base_is_w_data_plus_w_ctl_not_2_w_data` (structural pins),
 // `add_xor_kernel_run_on_cpu_eq_eval_at_w_data_4` (a 3-instr end-to-end
 // run_on_cpu==eval on 6 points), and `scratch_operand_ccnot_at_w_data_4`
-// (7-point mixed-width reg↔scratch crossbar routing tooth — the symbolic walk
+// (7-point mixed-width reg↔scratch crossbar routing tooth -- the symbolic walk
 // is register-only, so this concrete scratch-routing check stays).
 
 // ══════════════════════════════════════════════════════════════════════
@@ -169,7 +169,7 @@ fn add_xor_kernel_run_on_cpu_eq_eval_at_w_data_4() {
 //
 // The finding the refactor fixes (design Q3/Q6.5): under the OLD uniform
 // `pred3(w) = 2·w_data` the ALU core's predicate control would land at wire
-// `2·w_data = 8` — which at w_data=4 is s0's bit 0 (the OPERAND word), NOT
+// `2·w_data = 8` -- which at w_data=4 is s0's bit 0 (the OPERAND word), NOT
 // s1's bit 0 (the predicate). The correct mixed-width predicate base is
 // `w_data + w_ctl = 12`. A whole-domain Add that is correct for EVERY (a,b)
 // can only hold if the predicate control reads the real s1-bit-0 (which the
@@ -183,7 +183,7 @@ fn pred_base_is_w_data_plus_w_ctl_not_2_w_data() {
     let poc = poc_layout();
     // The std core addresses [r0(w_data), s0(w_ctl), s1(w_ctl)]: the predicate
     // (s1) base MUST be w_data + w_ctl, and this must differ from 2·w_data
-    // whenever w_data != w_ctl — the exact mixed-width hazard.
+    // whenever w_data != w_ctl -- the exact mixed-width hazard.
     let tgt0 = 0;
     let opd0 = poc.field_width(poc.reg_field(0)); // = w_data
     let pred0 = poc.field_width(poc.reg_field(0)) + poc.field_width(poc.scratch_field(0));
@@ -194,7 +194,7 @@ fn pred_base_is_w_data_plus_w_ctl_not_2_w_data() {
         pred0,
         2 * poc.w_data,
         "the OLD uniform pred3=2·w_data would MISPLACE the predicate onto s0 \
-         (operand word) at w_data<w_ctl — this is the mixed-width bug"
+         (operand word) at w_data<w_ctl -- this is the mixed-width bug"
     );
     // At the default layout the two coincide (byte-identity).
     let d = Layout::default();
@@ -212,12 +212,12 @@ fn pred_base_is_w_data_plus_w_ctl_not_2_w_data() {
 // each) → `b21c_bveq::b21c_bveq_whole_domain` (symbolic, whole 2^4 domain).
 
 // ══════════════════════════════════════════════════════════════════════
-// 5. B-2.1c-2 — the REMAINING ops whole-domained at w_data=4 — RETIRED
+// 5. B-2.1c-2 -- the REMAINING ops whole-domained at w_data=4 -- RETIRED
 // ══════════════════════════════════════════════════════════════════════
 //
 // `whole_domain_{sub,exch,rotl_rotr,rotli_rotri,ccnot,cswap}_at_w_data_4`
 // (Sub/Exch 256 pts, Rotl/Rotr/Rotli/Rotri 16×16, Ccnot/Cswap 16³=4096 pts
-// each — the reduced-width hogs) are RETIRED into `b21c_bveq`. Each was a single
+// each -- the reduced-width hogs) are RETIRED into `b21c_bveq`. Each was a single
 // straight-line combinational instruction, now proved symbolically over the
 // whole operand domain (Cswap: both control polarities inside one walk; Ccnot:
 // the full 4-bit AND product; Rotl/Rotr: both barrel stages). The remaining
@@ -227,12 +227,12 @@ fn pred_base_is_w_data_plus_w_ctl_not_2_w_data() {
 // wired-decode path ALREADY builds EVERY op at reduced w_data (`exch_core_at`,
 // `rotl_core_at`, `ccnot_core_at`, `cswap_core_at`, Sub = adder adjoint), but
 // only Add/Xor/imm were exercised. This section whole-domained the rest against
-// the 4-bit arithmetic reference — the teeth for the untested cores (the
+// the 4-bit arithmetic reference -- the teeth for the untested cores (the
 // rotator's log2(w) barrel stages at w_data=4, the 3-operand controls that
 // could land on an always-zero s0/s1 high bit, and Sub/Exch).
 
 // ══════════════════════════════════════════════════════════════════════
-// 6. B-2.1c-2 — a SCRATCH operand at w_data=4 (mixed-width crossbar)
+// 6. B-2.1c-2 -- a SCRATCH operand at w_data=4 (mixed-width crossbar)
 // ══════════════════════════════════════════════════════════════════════
 //
 // Scratch operands use ABSOLUTE indices (s2 = idx 10), decoded via
@@ -240,7 +240,7 @@ fn pred_base_is_w_data_plus_w_ctl_not_2_w_data() {
 // (derive_layout pins num_regs=8 whenever a scratch operand is named, else
 // idx 10 misroutes to s6). Unlike num_regs, a scratch operand does NOT need to
 // pin w_data: s2..s7 are ALREADY w_data in the mixed-width state (Q1), so the
-// operand crossbar is w_data-homogeneous (Q2 — reg↔scratch swaps stay within
+// operand crossbar is w_data-homogeneous (Q2 -- reg↔scratch swaps stay within
 // one width). This test uses `w_data=4, num_regs=8` and a scratch rt (s2=idx10)
 // to prove the s2 operand routes + computes correctly at the reduced datapath.
 
@@ -256,7 +256,7 @@ fn scratch_op_layout() -> Layout {
 
 #[test]
 fn scratch_operand_ccnot_at_w_data_4() {
-    // Ccnot r0, r1, s2  — rt is a SCRATCH operand (s2 = idx 10), a w_data word
+    // Ccnot r0, r1, s2  -- rt is a SCRATCH operand (s2 = idx 10), a w_data word
     // in the mixed-width state. The crossbar must route s2 into the operand
     // path and the 3-operand Ccnot core must compute r0 ^= r1 & s2 at 4 bits.
     let prog = vec![Instr::Ccnot { rd: 0, rs: 1, rt: 10 }];

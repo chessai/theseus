@@ -1,11 +1,11 @@
 //! Symbolic netlist walk: proves `netlist(instr) ≡ instr_semantics(instr)`
 //! at full Flat(8) via BDD walk of the decoder's instruction netlist.
 //!
-//! # Trust core (NEW — a bug here makes the netlist reconciliation vacuous)
+//! # Trust core (NEW -- a bug here makes the netlist reconciliation vacuous)
 //!
 //! - `eval_bdd`: symbolic Iso interpreter (mirrors `theseus_eval::eval`)
 //! - Gate BDD synthesis from `PrimDef::forward` truth tables (MAJOR-4)
-//! - Extended `VarMap` (regs + s0 + BR + mem) — the ONE TCB mapping
+//! - Extended `VarMap` (regs + s0 + BR + mem) -- the ONE TCB mapping
 //!
 //! Defended by: walk-vs-`run_rom_on_cpu` bootstrap (T2), negative controls,
 //! the convention-pinning test (T1), and the full-`system_step` authority tier.
@@ -25,7 +25,7 @@ use crate::types::{MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_REGS, W};
 /// Number of operands in the extended VarMap: 8 regs + s0 + BR + 4 mem.
 pub const EXTENDED_NUM_OPERANDS: usize = NUM_REGS + 1 + 1 + MEM_WORDS; // 14
 
-/// VarMap operand index for scratch word s0 (CpuState field 14 — A-0
+/// VarMap operand index for scratch word s0 (CpuState field 14 -- A-0
 /// 32-bit IR shifted the scratch base 12 → 14).
 pub const OP_S0: usize = NUM_REGS; // 8
 
@@ -210,7 +210,7 @@ struct GateTable {
 
 /// Synthesize a gate's truth table from its `PrimDef::forward` map.
 ///
-/// Uses `bits_of` on the admission-checked `forward` map — the identical
+/// Uses `bits_of` on the admission-checked `forward` map -- the identical
 /// table `theseus_eval::eval` runs (MAJOR-4: no hand-written gate BDDs).
 fn synthesize_gate(def: &theseus_core::PrimDef) -> Result<GateTable, NetlistWalkError> {
     let in_vals = enumerate_values(&def.input_ty);
@@ -370,7 +370,7 @@ pub fn eval_bdd(
 
         Iso::UnitiProd(_) => Ok(SV::pair(SV::Unit, sv)),
 
-        // SwapSum(One, One) = bit NOT (structural case, not a prim — MAJOR-4).
+        // SwapSum(One, One) = bit NOT (structural case, not a prim -- MAJOR-4).
         Iso::SwapSum(a, b) => match (a, b) {
             (Type::One, Type::One) => match sv {
                 SV::Bit(bdd) => Ok(SV::Bit(bdd.not())),
@@ -457,7 +457,7 @@ pub fn build_cpu_init(map: &VarMap, ir_word: u32, pin_s0_zero: bool) -> SV {
     fields.push(sv_word8_const((ir_word >> 8) as u8, vs));
     fields.push(sv_word8_const((ir_word >> 16) as u8, vs));
     fields.push(sv_word8_const((ir_word >> 24) as u8, vs));
-    // Field 14: s0 — symbolic or pinned to 0 for Addi/Subi
+    // Field 14: s0 -- symbolic or pinned to 0 for Addi/Subi
     // (unpredicated immediate mask requires s0=0)
     if pin_s0_zero {
         fields.push(sv_word8_const(0, vs));
@@ -485,7 +485,7 @@ pub fn build_cpu_init(map: &VarMap, ir_word: u32, pin_s0_zero: bool) -> SV {
 pub fn build_system_init(map: &VarMap, pin_s0_zero: bool) -> SV {
     let vs = map.bdd_vars();
 
-    // CpuState (NUM_CPU_FIELDS fields — A-0 32-bit IR, A-6.4 PC_hi appended)
+    // CpuState (NUM_CPU_FIELDS fields -- A-0 32-bit IR, A-6.4 PC_hi appended)
     let mut cpu_fields = Vec::with_capacity(NUM_CPU_FIELDS);
     for i in 0..NUM_REGS {
         cpu_fields.push(sv_word8_symbolic(map, i));

@@ -24,7 +24,7 @@
 //!   `rd == rs` is non-injective (or deviates: the swap-fetch datapath
 //!   preserves the target and trashes s0), so it is a hard error.
 //!   CSWAP requires rd, rs, rt pairwise distinct.
-//! - **XCHG may not name s0 or s1** — the decoder reserves s0 as the
+//! - **XCHG may not name s0 or s1** -- the decoder reserves s0 as the
 //!   operand buffer and s1 as the predicate/carry scratch.
 //!
 //! [`decode`] is the inverse (for round-trip checks and listings);
@@ -66,7 +66,7 @@ pub enum AsmError {
     RegOutOfRange { which: &'static str, val: u8 },
     /// An operand names decoder-reserved scratch s0 (idx 8) or s1 (idx 9)
     /// as an rd/rs/rt operand. s0 is the operand/immediate buffer and s1
-    /// the predicate/carry scratch — routing them into the datapath
+    /// the predicate/carry scratch -- routing them into the datapath
     /// mid-instruction corrupts decode. Legal scratch operands are
     /// s2..s7 (idx 10..15). `which` is "rd"/"rs"/"rt".
     OperandReservedScratch { which: &'static str, val: u8 },
@@ -194,7 +194,7 @@ pub enum Instr {
     ///
     /// W_BR-b: two register operands for the two-byte come-from swap. At
     /// w_br=8 `rs = 0` (unused sentinel) and the swap is the single
-    /// transposition `swap(r[rd], BR₀)` — byte-identical to the shipped
+    /// transposition `swap(r[rd], BR₀)` -- byte-identical to the shipped
     /// one-operand `Swapbr`. At w_br=16 `rs` names the hi-word partner and
     /// the swap is TWO disjoint transpositions `swap(r[rd],BR₀);
     /// swap(r[rs],BR₁)` (an involution; `rd != rs` enforced by `encode`).
@@ -266,10 +266,10 @@ impl Instr {
             | Instr::Rotr { rd, rs } => vec![rd, rs],
             Instr::Cswap { rd, rs, rt } | Instr::Ccnot { rd, rs, rt } => vec![rd, rs, rt],
             // Xchg names a register operand (rd) + a raw scratch slot (sx,
-            // NOT a crossbar operand — excluded here; it bounds num_scratch).
+            // NOT a crossbar operand -- excluded here; it bounds num_scratch).
             Instr::Xchg { rd, .. } => vec![rd],
             // W_BR-b: rs is the hi-word swap partner (0 = unused at w_br=8;
-            // rs=0 doesn't move the num_regs bound — MINOR-B).
+            // rs=0 doesn't move the num_regs bound -- MINOR-B).
             Instr::Swapbr { rd, rs } => vec![rd, rs],
             // Mexch: rd is a register operand; addr is a mem index.
             Instr::Mexch { rd, .. } => vec![rd],
@@ -317,7 +317,7 @@ fn r_word(opcode: u32, rd: u8, rs: u8, rt: u8) -> Result<u32, AsmError> {
 
 /// Build a 32-bit I-format word (A-0). `rd` is a 5-bit `reg ∪ scratch`
 /// index; `imm` occupies the low 20 bits (only the low 8 are used by
-/// the current I-ops — the high 12 are zero-extended headroom for A-2).
+/// the current I-ops -- the high 12 are zero-extended headroom for A-2).
 fn i_word(opc: u32, rd: u8, imm: u8) -> Result<u32, AsmError> {
     check_operand("rd", rd)?;
     // imm is currently 8-bit; zero-extend into the 20-bit I-field.
@@ -339,7 +339,7 @@ fn check_distinct(name: &'static str, rd: u8, rs: u8) -> Result<(), AsmError> {
 /// Encode one instruction as its 32-bit ROM word (A-0).
 ///
 /// Returns `Err(AsmError)` on out-of-range operands, aliased register
-/// operands, or XCHG naming the decoder-reserved scratch words s0/s1 —
+/// operands, or XCHG naming the decoder-reserved scratch words s0/s1 --
 /// all programs the datapath isos do not implement faithfully.
 pub fn encode(instr: Instr) -> Result<u32, AsmError> {
     match instr {
@@ -397,9 +397,9 @@ pub fn encode(instr: Instr) -> Result<u32, AsmError> {
         // `OperandReservedScratch`) and idx ≥16 (`RegOutOfRange`).
         // W_BR-b (MINOR-B): the two-transposition come-from swap needs
         // `rd != rs`, else the two disjoint transpositions collapse onto one
-        // register — the P2 3-cycle trap. `rs == 0` is the w_br=8 sentinel
+        // register -- the P2 3-cycle trap. `rs == 0` is the w_br=8 sentinel
         // (no hi partner; single transposition), which must stay byte-identical
-        // (`Swapbr{rd:0}` still encodes 0x9000_0000) — so the distinctness guard
+        // (`Swapbr{rd:0}` still encodes 0x9000_0000) -- so the distinctness guard
         // fires ONLY when a real hi partner (rs != 0) is named.
         Instr::Swapbr { rd, rs } => {
             if rs != 0 {
@@ -434,7 +434,7 @@ pub fn encode(instr: Instr) -> Result<u32, AsmError> {
 /// nonzero spare bits (which `encode` never emits).
 ///
 /// MAJOR-3 (decode/datapath agreement): `decode_execute`'s predicates
-/// test only the **low 4** opcode bits (R) / **low 3** (I) — widening
+/// test only the **low 4** opcode bits (R) / **low 3** (I) -- widening
 /// them to the full 6-bit opcode is DEFERRED (it needs the s1-convention
 /// rework: `pred_compute` caps at 5 controls / 3 chain-scratch bits, and
 /// s1 bit 4 already holds CSWAP's control copy, so 6 opcode bits + fmt =
@@ -445,7 +445,7 @@ pub fn encode(instr: Instr) -> Result<u32, AsmError> {
 /// `assemble` is the sole ROM source), so no emitted ROM can contain one.
 /// To keep `decode` (hence the fast sim) from silently DISAGREEING with
 /// the datapath on hand-crafted words, `decode` masks the opcode to the
-/// same low bits the datapath tests — so `decode` returns exactly the op
+/// same low bits the datapath tests -- so `decode` returns exactly the op
 /// the hardware would execute, never a mismatched `None`.
 pub fn decode(word: u32) -> Option<Instr> {
     let rd = ((word >> RD_SHIFT) & 0x1F) as u8; // 5-bit operand
@@ -493,7 +493,7 @@ pub fn decode(word: u32) -> Option<Instr> {
 /// The ROM must fit the PC address space (A-6.4 widen-PC: ≤ 2^W_PC = 65536
 /// words). (The narrow-fetch predicate additionally bounds the *live*
 /// address bits it can distinguish in one Word8 of scratch to `A_fetch ≤ 15`
-/// — see `step::MAX_FETCH_ROM_LEN` / `step::fetch_addr_bits` — a per-ROM
+/// -- see `step::MAX_FETCH_ROM_LEN` / `step::fetch_addr_bits` -- a per-ROM
 /// structural limit ENFORCED at fetch-build time (`step::fetch` asserts
 /// `rom.len() ≤ MAX_FETCH_ROM_LEN = 32768`; F-2), not an assembler cap.)
 ///

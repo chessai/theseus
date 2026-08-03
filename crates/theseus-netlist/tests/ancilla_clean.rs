@@ -1,12 +1,12 @@
-//! Ancilla restoration tests — ADR-0033 ring closure, updated for the
+//! Ancilla restoration tests -- ADR-0033 ring closure, updated for the
 //! garbage-free R1 synthesis (ADR-0040 phase C).
 //!
 //! # What changed (ADR-0040)
 //!
-//! The K0–K3 vocabulary has a proven parity obstruction (see
+//! The K0-K3 vocabulary has a proven parity obstruction (see
 //! [`parity_obstruction_is_real`], still checked and still true): every
-//! K-cell permutes the values on its rail pairs, so a conditional-NOT —
-//! whose parity deviation *is* its AND — could never be lowered with
+//! K-cell permutes the values on its rail pairs, so a conditional-NOT --
+//! whose parity deviation *is* its AND -- could never be lowered with
 //! all-constant ancilla outputs. The old splitter/selector
 //! multi-controlled-NOT construction paid 2 dirty pairs per instance,
 //! and the Bennett wrap ([`bennett_wrap`]) was the only way to
@@ -19,7 +19,7 @@
 //! one R1 with zero ancillas; Toffoli and every k-controlled NOT are a
 //! K1 AND-chain + one R1 + the replayed chain, restoring every scratch
 //! pair to its init on every input. The first test section verifies
-//! this zero residue over whole domains — the obstruction voided in
+//! this zero residue over whole domains -- the obstruction voided in
 //! practice.
 //!
 //! # What the Bennett machinery still does
@@ -27,9 +27,9 @@
 //! The parity law remains a theorem *about the K-cells*, and some
 //! constructs still emit K-only garbage (the TraceLoop tag
 //! duplication, the iter/fold control chains). For those,
-//! [`bennett_wrap`]'s compute–copy–uncompute discipline still turns
+//! [`bennett_wrap`]'s compute-copy-uncompute discipline still turns
 //! unbounded per-construct garbage into the fixed `2·w` boundary
-//! residue — checked below on trace-based bodies, where the plain dirt
+//! residue -- checked below on trace-based bodies, where the plain dirt
 //! grows with composition length and the wrapped residue does not.
 
 use std::collections::BTreeMap;
@@ -137,7 +137,7 @@ fn eval_oracle(iso: &Iso, v: &theseus_core::Value) -> theseus_core::Value {
 }
 
 /// Count, per input value, how many ancilla output lines differ from
-/// their init (the plain lowering's dirt), positionally — exactly the
+/// their init (the plain lowering's dirt), positionally -- exactly the
 /// ring driver's `ancilla_mismatches` semantics. Also re-checks the
 /// differential oracle on the data section.
 fn plain_dirty_max(iso: &Iso) -> (usize, usize) {
@@ -164,7 +164,7 @@ fn plain_dirty_max(iso: &Iso) -> (usize, usize) {
 
 /// The garbage-free contract (ADR-0040 phase C), checked over the
 /// whole domain: the plain lowering's data outputs match the oracle
-/// AND every ancilla output equals its init on every input — zero
+/// AND every ancilla output equals its init on every input -- zero
 /// residue, no Bennett wrap needed. Returns the ancilla port count.
 fn assert_garbage_free(iso: &Iso) -> usize {
     let (n_anc, dirty) = plain_dirty_max(iso);
@@ -293,7 +293,7 @@ fn r1_cnot_pipeline_is_composition_clean() {
 #[test]
 fn branch_conditional_not_is_garbage_free_via_r1() {
     // Plus(NOT, Id): the NOT arm is zero-cell rewiring, so Branch
-    // synthesizes a conditional NOT — now a single R1 with the tag as
+    // synthesizes a conditional NOT -- now a single R1 with the tag as
     // control (before: splitter/selector, 2 ancillas + dirt).
     let not = Iso::Prim(Box::new(prim_from_fn("not", bit(), bit(), |b| vec![!b[0]])));
     let iso = Iso::plus(not, Iso::Id(bit()));
@@ -375,7 +375,7 @@ fn bennett_residue_is_composition_independent() {
 
 #[test]
 fn bennett_trace_trivial_is_fully_clean() {
-    // trace(One, SwapSum(One,One)) : One ↔ One — w = 0, so the wrap has
+    // trace(One, SwapSum(One,One)) : One ↔ One -- w = 0, so the wrap has
     // no boundary residue at all: EVERY ancilla restored. Since the R1
     // cond-NOT rewrite even the PLAIN lowering of this one-input iso is
     // positionally clean (the tag copy exits carrying 1 against the dup
@@ -391,7 +391,7 @@ fn bennett_trace_trivial_is_fully_clean() {
 
 #[test]
 fn bennett_trace_bit_carrier_cleans_tag_dups() {
-    // trace(Bit, SwapSum(Bit, Bit)) : Bit ↔ Bit — unrolled body with
+    // trace(Bit, SwapSum(Bit, Bit)) : Bit ↔ Bit -- unrolled body with
     // controlled applications and tag-duplication garbage.
     let iso = Iso::trace(bit(), Iso::SwapSum(bit(), bit()));
     let (n_anc, plain) = plain_dirty_max(&iso);
@@ -407,12 +407,12 @@ fn bennett_trace_bit_carrier_cleans_tag_dups() {
 fn parity_obstruction_is_real() {
     // The theorem is about the K-ONLY vocabulary and it remains true:
     // every K-cell is a value-permutation of its rail pairs, and
-    // rail-role swaps are fixed per edge — so any K-only lowering
+    // rail-role swaps are fixed per edge -- so any K-only lowering
     // satisfies
     //   parity(data_out) ⊕ parity(anc_out)
     //     = parity(data_in) ⊕ parity(anc_in) ⊕ const.
     // (a) Machine-check the premise: K0..K3 permute their inputs.
-    // (Deliberately NOT R1 — R1 breaks exactly this premise, which is
+    // (Deliberately NOT R1 -- R1 breaks exactly this premise, which is
     // what makes the garbage-free lowerings above possible; see
     // tests/rail_role_swap.rs::role_swap_breaks_the_value_permutation_premise.)
     for kind in [CellKind::K0, CellKind::K1, CellKind::K2, CellKind::K3] {
@@ -429,7 +429,7 @@ fn parity_obstruction_is_real() {
 
     // (b) Hence: an iso whose data-parity deviation is non-constant
     // could NEVER have all-constant ancilla outputs in K-cells alone.
-    // CNOT is the smallest witness — and with R1 in the vocabulary the
+    // CNOT is the smallest witness -- and with R1 in the vocabulary the
     // same CNOT now lowers with zero garbage
     // (r1_cnot_lowering_is_garbage_free_zero_ancillas): the law is
     // voided by extending the vocabulary, not falsified within it.
@@ -472,7 +472,7 @@ fn ancilla_origins_attribute_constructs() {
     assert!(origins.outputs.iter().all(|&o| o == "prim_synth_chain"));
 
     // Trace: tag-injection/duplication ancillas are attributed to
-    // "trace"; the old "cond_not" origin is gone — conditional NOTs
+    // "trace"; the old "cond_not" origin is gone -- conditional NOTs
     // are ancilla-free R1 cells now.
     let iso = Iso::trace(bit(), Iso::SwapSum(bit(), bit()));
     let (_, _, origins) = lower_iso_with_ancillas_traced(&iso).expect("lowers");

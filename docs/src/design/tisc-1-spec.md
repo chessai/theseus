@@ -14,11 +14,11 @@ ADR-0029 (InstrReg, register file, Option-A scratch):
 
 | Field | Width (bits) | Count | Total bits | Notes |
 |-------|-------------|-------|------------|-------|
-| General registers r0–r7 | 8 | 8 | 64 | P5: W=8, 8 registers |
+| General registers r0-r7 | 8 | 8 | 64 | P5: W=8, 8 registers |
 | Program counter (PC) | 8 | 1 | 8 | **PROPOSAL:** W-wide; addresses 256 ROM words, sufficient for T≤64 with room |
 | Branch register (BR) | 8 | 1 | 8 | P3: PC-exchange target; same width as PC |
 | Instruction register (IR) | 16 | 1 | 16 | P4/P5: 16-bit instruction word; provably zero between steps |
-| Scratch words s0–s7 | 8 | 8 | 64 | ADR-0029 Option-A: ~8 scratch words as product type in State |
+| Scratch words s0-s7 | 8 | 8 | 64 | ADR-0029 Option-A: ~8 scratch words as product type in State |
 | **Total** | | | **160** | |
 
 **Rail count:** dual-rail encoding (ADR-0027) → 2 rails per bit →
@@ -41,7 +41,7 @@ are merges or exchanges (P2); no destructive MOV; shifts are excluded
 (P3). Each instruction lists its forward semantics, its adjoint, and
 whether it is self-inverse.
 
-In the table, `rd`, `rs`, `rt` are general registers (r0–r7); `imm8`
+In the table, `rd`, `rs`, `rt` are general registers (r0-r7); `imm8`
 is an 8-bit immediate embedded in the instruction word; `sx` is a
 scratch word addressed by a 3-bit field. All arithmetic is mod 256.
 
@@ -109,7 +109,7 @@ is the sequence of individual adjoints in reverse order.
 
 ---
 
-## 3. Opcode encoding (PROPOSAL — TBD-9)
+## 3. Opcode encoding (PROPOSAL -- TBD-9)
 
 Per ADR-0030 P5, opcode encodings are an implementation-time document.
 The following is a **proposal** for the 16-bit instruction word layout;
@@ -139,15 +139,15 @@ Two formats, distinguished by bit 15:
 | Format | Field | Bits | Width | Notes |
 |--------|-------|------|-------|-------|
 | R | type | 15 | 1 | = 1 |
-| R | opcode | 14–11 | 4 | 16 R-format slots |
-| R | rd | 10–8 | 3 | destination/first register |
-| R | rs | 7–5 | 3 | source/second register |
-| R | rt | 4–2 | 3 | third register (CSWAP); scratch addr (XCHG); unused otherwise |
-| R | pad | 1–0 | 2 | reserved zero |
+| R | opcode | 14-11 | 4 | 16 R-format slots |
+| R | rd | 10-8 | 3 | destination/first register |
+| R | rs | 7-5 | 3 | source/second register |
+| R | rt | 4-2 | 3 | third register (CSWAP); scratch addr (XCHG); unused otherwise |
+| R | pad | 1-0 | 2 | reserved zero |
 | I | type | 15 | 1 | = 0 |
-| I | opc | 14–12 | 3 | 8 I-format slots |
-| I | rd | 11–9 | 3 | destination register |
-| I | imm8 | 8–1 | 8 | immediate value (full W-width) |
+| I | opc | 14-12 | 3 | 8 I-format slots |
+| I | rd | 11-9 | 3 | destination register |
+| I | imm8 | 8-1 | 8 | immediate value (full W-width) |
 | I | pad | 0 | 1 | reserved zero |
 
 ### Proposed opcode map
@@ -165,7 +165,7 @@ R-format (16 slots):
 | 0110 | CSWAP rd, rs, rt |
 | 0111 | XCHG rd, rt (scratch exchange; rs ignored) |
 | 1000 | SWAPBR rd (rs, rt reserved zero; ADR-0034) |
-| 1001–1111 | reserved (compile error per P1) |
+| 1001-1111 | reserved (compile error per P1) |
 
 I-format (8 slots):
 
@@ -176,7 +176,7 @@ I-format (8 slots):
 | 010 | XORI rd, imm8 |
 | 011 | ROTLI rd, imm8 |
 | 100 | ROTRI rd, imm8 |
-| 101–111 | reserved (compile error per P1) |
+| 101-111 | reserved (compile error per P1) |
 
 This encoding is sufficient for both D3 workloads and leaves room for
 expansion. **The final encoding is TBD-9; the coverage checker
@@ -192,7 +192,7 @@ enforces totality regardless.**
 1. **Fetch.** CNOT the ROM word at address PC onto the zeroed IR.
    Copy-onto-known-zero is reversible (ordinary clauses). The ROM is a
    Fredkin tree (Branch tree on PC bits steering controlled swaps),
-   i.e. an addressed exchange with a known-zero register — exactly the
+   i.e. an addressed exchange with a known-zero register -- exactly the
    ADR-0027 cell pattern. The ROM threads through State linearly.
 
 2. **Decode + Execute.** Branch tree on the opcode bits of IR (P1).
@@ -211,14 +211,14 @@ enforces totality regardless.**
    XORs the same ROM word the fetch did, unconditionally (ADR-0034 D3).
 
 4. **PC += BR.** Add the branch register (offset) into PC via the
-   Takahashi–Kunihiro zero-ancilla in-place ripple adder (≤ K2). BR
+   Takahashi-Kunihiro zero-ancilla in-place ripple adder (≤ K2). BR
    is preserved. BR = 0 is fall-through.
 
 5. **PC += 1.** Ripple increment (the existing pc_inc).
 
-Together phases 4–5 implement the uniform end-of-step PC update
+Together phases 4-5 implement the uniform end-of-step PC update
 `PC += BR + 1 (mod 256)` (ADR-0034 D2). The entire
-fetch–execute–unfetch–advance sequence is one iso. Running T steps =
+fetch-execute-unfetch-advance sequence is one iso. Running T steps =
 unrolling `step` T times (C2.4, unroll-only in v1). The adjoint
 `~step` runs the five phases in reverse order, each replaced by its
 adjoint. `step` is a total bijection on the full State space
@@ -230,7 +230,7 @@ adjoint. `step` is a total bijection on the full State space
 
 **These are principled estimates with the derivation shown, not
 measurements. The estimate becomes exact when `step` is compiled and
-cells are counted — deferred until `step` exists.**
+cells are counted -- deferred until `step` exists.**
 
 ### 5a. Reference data (from rung0-chardb.ron, t_ramp = 1e-7 s)
 
@@ -323,7 +323,7 @@ Per-run totals:
 
 For context: the compiled Fibonacci oracle (specialized, no CPU
 overhead) achieves 2.73e-12 J/op. The CPU step estimate of ~4.2e-11
-J/step is ~15× larger — expected, since the CPU pays for
+J/step is ~15× larger -- expected, since the CPU pays for
 fetch/decode/state-buffering overhead that the specialized circuit
 eliminates. This ratio is the quantitative cost of generality; the
 ADR-0030 duality note observes that specializing step to a fixed ROM
@@ -331,7 +331,7 @@ constant-folds the CPU into the program's circuit, recovering it.
 
 ### 5f. Go / no-go recommendation
 
-**GO for M4-v1 at T = 16–32.**
+**GO for M4-v1 at T = 16-32.**
 
 Rationale:
 - At T=32, the estimated ~780k cells and ~1.3 nJ/run are within
@@ -349,7 +349,7 @@ Rationale:
 **What makes the estimate EXACT:** compiling `step` as a theseus iso
 through the adiabatic backend and reading the C3 static energy report
 (ADR-0028 C3.5/C3.6). This counts actual cells, actual balancing
-buffers, actual pipeline depth — replacing every "~" above with a
+buffers, actual pipeline depth -- replacing every "~" above with a
 measured number. Deferred until `step` exists; this budget authorizes
 building it.
 
@@ -362,7 +362,7 @@ later versions without committing to any of it.
 
 **Systolic throughput-pipelining.** The adiabatic fabric is inherently
 pipelined at single-gate granularity (ADR-0026); the unrolled-T
-machine already benefits — each step's pipeline is fully occupied.
+machine already benefits -- each step's pipeline is fully occupied.
 Throughput scales with pipeline depth without additional machinery.
 
 **Step specialization (CPU → circuit duality).** Specializing `step`

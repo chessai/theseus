@@ -1,4 +1,4 @@
-//! A-6 slice A-6.D.2 — synthesize gcd2 through the BDD path and MEASURE the body.
+//! A-6 slice A-6.D.2 -- synthesize gcd2 through the BDD path and MEASURE the body.
 //!
 //! The decisive efficiency test: build gcd2's fwd/bwd `RegTransfer` (the exact
 //! construction reused from `synth_gcd2.rs`) and synthesize the reversible body
@@ -9,7 +9,7 @@
 //!
 //! DETERMINISTIC construction (ANF-built spec → ROBDD walk), NOT search. The
 //! 256-state `exec_instr` round-trip is the authority (carriers land at the rule,
-//! every ancilla/helper/node word returns to 0 — Bennett net-zero); the symbolic
+//! every ancilla/helper/node word returns to 0 -- Bennett net-zero); the symbolic
 //! oracle cannot model the scratch node lines.
 
 use theseus_tisc::bveq::{expr_to_bdd, BvExpr, RegTransfer, VarMap};
@@ -135,7 +135,7 @@ fn bdd_node_count(e: &BvExpr, map: &VarMap) -> usize {
     let bdd = expr_to_bdd(e, map).expect("expr_to_bdd");
     let root = bdd.root_pointer();
     if root.is_zero() || root.is_one() {
-        0 // constant output bit — no non-terminal nodes
+        0 // constant output bit -- no non-terminal nodes
     } else {
         bdd.size() - 2
     }
@@ -182,7 +182,7 @@ fn gcd2_bdd_node_counts_report() {
 /// Measure, for the worst single output bit, the STRUCTURAL floor on live node
 /// lines even under an ideal recycler. Two numbers:
 ///   * total nodes (= the CURRENT synthesizer's live-line requirement, since it
-///     computes ALL nodes forward, reads root, then uncomputes ALL — nothing is
+///     computes ALL nodes forward, reads root, then uncomputes ALL -- nothing is
 ///     freed early);
 ///   * max BDD LEVEL WIDTH (antichain) = the classic lower bound on the pebbling
 ///     width a level-recycler could hope to reach.
@@ -233,7 +233,7 @@ fn gcd2_bdd_cut_width_report() {
 // gcd2's worst single-output-bit ROBDD is 35 nodes (`gcd2_bdd_node_counts_report`),
 // so a full-body synthesis needs a 35-word node bank. The WHOLE machine has only
 // 16 operand words (8 reg + 8 scratch) and `transcribe_bdd_bennett` enforces
-// pairwise-disjoint LEGAL operands (≤14 usable) — it CANNOT be handed 35 node
+// pairwise-disjoint LEGAL operands (≤14 usable) -- it CANNOT be handed 35 node
 // lines, and `exec_instr` panics on any operand index ≥ 16. So the full body can
 // neither be synthesized through the Bennett wrapper nor exec-verified on this
 // machine. That is itself the decisive budget finding (see the budget test).
@@ -242,7 +242,7 @@ fn gcd2_bdd_cut_width_report() {
 // `transcribe_bdd_into` performs NO operand-range/disjointness validation (it just
 // wires gate shapes onto the given indices), so we measure the full fwd/bwd body
 // length by handing it a 35-word node bank at indices the emitter accepts. These
-// indices are NEVER executed — they exist only to count the emitted gates.
+// indices are NEVER executed -- they exist only to count the emitted gates.
 
 /// Distinct node-word indices for LENGTH MEASUREMENT ONLY (never exec'd). We need
 /// one per simultaneously-live node = up to the max single-bit node count (35);
@@ -276,7 +276,7 @@ fn bdd_body_length() -> usize {
         }
     }
     let nodes = measurement_node_bank();
-    // temp at index 55 — also outside the real space, count-only.
+    // temp at index 55 -- also outside the real space, count-only.
     let helpers = BddHelpers {
         temp: 55,
         nodes: &nodes,
@@ -294,7 +294,7 @@ fn bdd_body_length() -> usize {
 fn gcd2_bdd_body_length_headline() {
     let len = bdd_body_length();
     let b_budget = 4 + 5 * (len + 10);
-    eprintln!("=== A-6.D.2 GCD synthesis (BDD → Bennett) — HEADLINE ===");
+    eprintln!("=== A-6.D.2 GCD synthesis (BDD → Bennett) -- HEADLINE ===");
     eprintln!("body.len() = {len}");
     eprintln!("B = 4 + 5*(len+10) = {b_budget}");
     eprintln!("--- vs ANF path: body.len() = 15148, B = 75794 ---");
@@ -315,7 +315,7 @@ fn gcd2_bdd_body_length_headline() {
     assert!(len > 0, "BDD body must emit gates");
     assert!(
         len < 15148,
-        "BDD body ({len}) must be shorter than the ANF body (15148) — else the slice failed"
+        "BDD body ({len}) must be shorter than the ANF body (15148) -- else the slice failed"
     );
 }
 
@@ -329,7 +329,7 @@ fn gcd2_bdd_body_length_headline() {
 // bit with `transcribe_bdd_into` onto a fresh dst, run all 256 inputs through
 // `exec_instr`, and assert: (a) dst bit b = the ANF-evaluated bit, and (b) every
 // node/temp word is net-zero. Bits too large to fit are reported, not skipped
-// silently — that residue IS the widen-state requirement.
+// silently -- that residue IS the widen-state requirement.
 
 /// Evaluate a BvExpr on concrete per-leaf carrier bytes (leaf i in symbolic reg i).
 fn eval_bit(e: &BvExpr, regvals: &[u8]) -> bool {
@@ -471,7 +471,7 @@ fn gcd2_bdd_per_bit_exec_verify_fittable() {
         skipped.len()
     );
     for (w, r, b, n) in &skipped {
-        eprintln!("  UNFITTABLE: {w} reg {r} bit {b} — {n} nodes > {max_fit}");
+        eprintln!("  UNFITTABLE: {w} reg {r} bit {b} -- {n} nodes > {max_fit}");
     }
     assert!(
         verified_bits > 0,
@@ -484,7 +484,7 @@ fn gcd2_bdd_per_bit_exec_verify_fittable() {
 /// The BUDGET VERDICT: quantify the node-line requirement against the machine.
 /// Reports total-nodes (current synthesizer, no recycling) and the antichain
 /// (pebbling floor an ideal recycler could reach), and asserts that BOTH exceed
-/// the free operand budget — i.e. gcd2's BDD needs widen-STATE regardless of
+/// the free operand budget -- i.e. gcd2's BDD needs widen-STATE regardless of
 /// recycling. Also confirms `transcribe_bdd_bennett` REJECTS the real attempt
 /// (it cannot be handed enough legal disjoint node words).
 #[test]
@@ -521,7 +521,7 @@ fn gcd2_bdd_budget_verdict() {
     //   4 carriers + 4 out-ancilla + 1 temp = 9 words, leaving 16-9 = 7 for nodes.
     let free_for_nodes_realistic = 16usize - (4 + 4 + 1);
     // Legal-operand free budget (the design's "~10": r4..r7 + s2..s7 = 10, minus
-    // the 4 ancilla + 1 temp when those come from scratch) — the coarse "~10".
+    // the 4 ancilla + 1 temp when those come from scratch) -- the coarse "~10".
     eprintln!("=== gcd2 BDD budget verdict ===");
     eprintln!("required node LINES, NO recycling (= total nodes)         = {worst_total}");
     eprintln!("required node LINES, ideal recycling (antichain floor)    = {worst_level}");

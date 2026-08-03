@@ -3,12 +3,12 @@
 //! differential against the core evaluator over the whole 32-value
 //! domain.
 //!
-//! History: this was the K3 acceptance test — the adder's
+//! History: this was the K3 acceptance test -- the adder's
 //! control-nesting depth 3 forced K3 cells under the old
 //! splitter/selector multi-controlled-NOT synthesis. Since the R1
 //! rewrite (ADR-0040 phase C) the synthesis AND-reduces controls down
 //! a K1 chain and fires one R1, so the adder no longer needs K3 at
-//! all — and its lowering is ancilla-clean (asserted below). K2/K3
+//! all -- and its lowering is ancilla-clean (asserted below). K2/K3
 //! promotion is still exercised by the Branch/iter tests.
 
 use theseus_core::{enumerate_values, type_of, Iso};
@@ -135,7 +135,7 @@ fn full_adder_5wire_lowers_garbage_free_without_k3() {
     );
     eprintln!("fa5 cell counts: {counts:?}");
 
-    // Differential oracle over all 32 inputs — and ancilla cleanliness:
+    // Differential oracle over all 32 inputs -- and ancilla cleanliness:
     // every ancilla output equals its init on every input (the parity
     // obstruction voided in practice, ADR-0040 D3).
     let (in_ty, out_ty) = type_of(&iso).expect("iso types");
@@ -158,7 +158,7 @@ fn full_adder_5wire_lowers_garbage_free_without_k3() {
             "untimed netlist disagrees with core eval on {v:?}"
         );
 
-        // Ancilla residue: zero — every ancilla restored to its init.
+        // Ancilla residue: zero -- every ancilla restored to its init.
         let dirty = got_full[n_data_out..]
             .iter()
             .zip(&ancillas)

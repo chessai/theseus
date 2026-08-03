@@ -3,7 +3,7 @@
 //! # The timed token model
 //!
 //! Tokens advance one stage per tick (2LAL: every cell is a register).
-//! A cell at `depth` d fires on tick d — it consumes tokens *valid at* d
+//! A cell at `depth` d fires on tick d -- it consumes tokens *valid at* d
 //! and produces tokens valid at d + 1. A token line is therefore valid
 //! on exactly one tick: its arrival tick ([`PhasedCellNetlist::line_arrivals`]).
 //!
@@ -64,7 +64,7 @@ pub enum SimError {
     Net(CellNetError),
     /// Wrong number of input tokens for the netlist's input ports.
     InputWidth { want: usize, got: usize },
-    /// A cell's inputs arrive on different ticks — a wrong circuit under
+    /// A cell's inputs arrive on different ticks -- a wrong circuit under
     /// ADR-0026 C2.2 (the tick-exact balancer, a later slice, owes K0
     /// insertions). The timed sim refuses rather than letting the early
     /// token silently wait.
@@ -143,7 +143,7 @@ pub fn simulate(
     // Every rail pair in the netlist, indexed by its valid tick.
     // validate() already rejected pair skew, so a pair's valid tick is
     // its lines' (equal) arrival tick. The same two lines may be named
-    // by both their driver and their consumer (possibly role-swapped —
+    // by both their driver and their consumer (possibly role-swapped --
     // NOT-in-Permute); the 1-of-2 predicate is role-symmetric, so one
     // check per unordered line pair suffices.
     let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
@@ -269,7 +269,7 @@ mod tests {
 
     /// The timed differential oracle: for every input value, the
     /// tick-level sim of the lowered netlist must agree with the core
-    /// interpreter (the semantic root, ADR-0008/0018) — extending the
+    /// interpreter (the semantic root, ADR-0008/0018) -- extending the
     /// untimed lowering oracle in `lower::tests` to the timed executor.
     fn assert_timed_sim_agrees(iso: &Iso) -> PhasedCellNetlist {
         let (in_ty, out_ty) = type_of(iso).expect("iso types");
@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn output_skew_is_simulable_each_port_at_its_own_tick() {
-        // Reg(1) × id: outputs arrive at ticks [1, 0] — fine for the
+        // Reg(1) × id: outputs arrive at ticks [1, 0] -- fine for the
         // sim, each port decodes at its recorded arrival tick.
         let id_bit = TypedNode {
             input: bit(),
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn unbalanced_cell_inputs_are_refused() {
-        // (Reg(1) × id × id) ; fredkin — the control arrives one tick
+        // (Reg(1) × id × id) ; fredkin -- the control arrives one tick
         // late (C2.2 wrong circuit); the timed sim must refuse, not
         // pretend the early tokens waited.
         let id_bit = || TypedNode {

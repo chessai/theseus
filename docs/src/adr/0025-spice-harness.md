@@ -25,8 +25,8 @@
   B5.3. **Harness self-validation gates belief:** energy-conservation
   bookkeeping closes within tolerance; analytic RC structures match
   closed forms; reproduction of the slope −2 shift-register curve is the
-  acceptance gate — fail that and the harness is wrong, not the field.
-- **B5.5** Output artifact: the **characterization database** — per-cell
+  acceptance gate -- fail that and the harness is wrong, not the field.
+- **B5.5** Output artifact: the **characterization database** -- per-cell
   E(ramp, load, flavor, body) tables + fitted coefficients of the
   standard adiabatic form, version-stamped (B2.2), RON, in-repo,
   diffable. Its schema is the interface to ADR-0028; the additive-

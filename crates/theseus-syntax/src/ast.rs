@@ -267,11 +267,11 @@ impl BinOp {
 /// core primitive (`Iso::Iter` / `Iso::Fold` / `Iso::Unfold`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CombKind {
-    /// `iter n f : n * a <-> n * a` — bounded iteration (ADR-0036).
+    /// `iter n f : n * a <-> n * a` -- bounded iteration (ADR-0036).
     Iter,
-    /// `fold l f : l * c <-> l * c` — reversible mapAccumL (ADR-0037).
+    /// `fold l f : l * c <-> l * c` -- reversible mapAccumL (ADR-0037).
     Fold,
-    /// `unfold l f : l * c <-> l * c` — the tail-to-head dual of `fold`.
+    /// `unfold l f : l * c <-> l * c` -- the tail-to-head dual of `fold`.
     Unfold,
 }
 

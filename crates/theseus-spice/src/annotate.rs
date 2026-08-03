@@ -2,7 +2,7 @@
 //!
 //! Energy is (almost) static in this backend: dual-rail means one rail
 //! pulses per valid signal regardless of value, linearity means no data
-//! fanout — so per-run energy is data-independent to first order and the
+//! fanout -- so per-run energy is data-independent to first order and the
 //! primary artifact is a *compiler report*: Σ over cells of the cell's
 //! DB-characterized energy at the operating ramp time (C3.2 additivity,
 //! a declared assumption validated by TH-E1).
@@ -36,7 +36,7 @@ pub struct KindEnergy {
 }
 
 /// The static energy report for one compiled netlist at one operating
-/// ramp time (a first-class emission, C3.6 — serializes to RON).
+/// ramp time (a first-class emission, C3.6 -- serializes to RON).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EnergyReport {
     /// Operating ramp time the energies were interpolated at, seconds.
@@ -75,7 +75,7 @@ impl fmt::Display for EnergyReport {
 /// cell's swept range is [`QueryError::OutOfRange`] (no extrapolation,
 /// C3.1).
 ///
-/// A zero-cell netlist (pure wiring — rewiring is free in this fabric)
+/// A zero-cell netlist (pure wiring -- rewiring is free in this fabric)
 /// reports 0 J with an empty breakdown.
 pub fn compiled_energy(
     netlist: &PhasedCellNetlist,
@@ -108,7 +108,7 @@ mod tests {
     }
 
     /// A fixture cell whose fitted model is the constant `e` over
-    /// `[t_min, t_max]` — exact expected sums, no ngspice.
+    /// `[t_min, t_max]` -- exact expected sums, no ngspice.
     fn const_cell(key: &str, e: f64, t_min: f64, t_max: f64) -> (String, CellChar) {
         (
             key.to_string(),

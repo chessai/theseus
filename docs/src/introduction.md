@@ -7,7 +7,7 @@ and a long-range target of adiabatic silicon.
 
 This book is organized by **change discipline** (ADR-0021):
 
-- **ADRs** are append-only. They record *why* — including the alternatives
+- **ADRs** are append-only. They record *why* -- including the alternatives
   we rejected and the failure modes we found by poking. Changing course
   means a new ADR with a `Supersedes:` link.
 - The **design document** is living and always-current. It records *what is
@@ -21,8 +21,8 @@ This book is organized by **change discipline** (ADR-0021):
 
 Diagrams are Structurizr DSL under `docs/diagrams/` (ADR-0021, amended).
 
-A note on provenance: ADRs 0001–0021 transcribe the original planning
+A note on provenance: ADRs 0001-0021 transcribe the original planning
 dialogue and preserve its numbering (ADR-0010 fills a session-scoping
-slot with the rewrite-engine decision). ADRs 0022–0032 record the
+slot with the rewrite-engine decision). ADRs 0022-0032 record the
 adiabatic pivot and its consequences, ratified in a second planning
 phase; ADR-0022 supersedes the original roadmap's L3/L4 sequencing.

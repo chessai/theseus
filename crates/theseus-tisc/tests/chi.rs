@@ -6,7 +6,7 @@
 //! computes the χ AND-gate for all 8 rows at once (the 8× bit-slicing win).
 //!
 //! Rust-composed instruction ROM (feistel.rs style). The program is a
-//! hand-composed `Vec<Instr>` assembled directly — it NEVER touches the
+//! hand-composed `Vec<Instr>` assembled directly -- it NEVER touches the
 //! lowering/recognition path (no source Iso, no recognize_prim, no Deferred).
 //!
 //! Register map (in-place 2-ancilla schedule):
@@ -19,13 +19,13 @@
 //! ## Rev-A garbage-free framing
 //!
 //! The 17-instruction in-place χ is **NOT** standalone garbage-free. After a
-//! forward-only run, ancillas r5 and r6 hold the OLD a0 and a1 values — dirty
+//! forward-only run, ancillas r5 and r6 hold the OLD a0 and a1 values -- dirty
 //! in 24 of 32 per-row states (precisely the rows where a0 or a1 is set).
 //!
 //! Garbage-freeness holds **only under the adjoint**: the full ROM run backward
 //! (17 adjoint cycles) restores the input AND zeroes the ancillas exactly
 //! (proven by `chi_reversible_roundtrip_eval`). χ is a bijection but NOT an
-//! involution — the correct reversibility check is the ROM adjoint, not χ∘χ.
+//! involution -- the correct reversibility check is the ROM adjoint, not χ∘χ.
 //!
 //! The `chi_whole_perrow_domain_packed` test explicitly asserts the dirty-
 //! ancilla fact as an L20 regression test: it must FAIL if someone later
@@ -86,7 +86,7 @@ fn chi_instrs() -> Vec<Instr> {
 }
 
 /// Estimate: a true garbage-free in-place χ (Rev-B) would add χ⁻¹ cleanup
-/// over live outputs to zero r5/r6 — ~20 extra instructions. Deferred to a
+/// over live outputs to zero r5/r6 -- ~20 extra instructions. Deferred to a
 /// separate slice.
 fn chi_gf_extra_cleanup_len() -> usize {
     20
@@ -168,7 +168,7 @@ fn chi_whole_perrow_domain_packed() {
             );
         }
         // Rev-A FINDING: ancilla r5, r6 dirtiness after forward-only run.
-        // This assertion is the L20 regression test — it must FAIL if
+        // This assertion is the L20 regression test -- it must FAIL if
         // someone later wrongly claims/forces the ancillas to zero.
         if out.regs[5] != 0 || out.regs[6] != 0 {
             dirty_ancilla += 1;
@@ -255,7 +255,7 @@ fn chi_keccak_golden_vector() {
     //   A2 = 1 ^ (¬1 & 0) = 1^0 = 1
     //   A3 = 1 ^ (¬0 & 1) = 1^1 = 0
     //   A4 = 0 ^ (¬1 & 0) = 0^0 = 0
-    // => (0,0,1,0,0)  — PINNED, not derived from the compiled path.
+    // => (0,0,1,0,0)  -- PINNED, not derived from the compiled path.
     const GOLDEN_IN: [u8; 5] = [1, 0, 1, 1, 0];
     const GOLDEN_OUT: [u8; 5] = [0, 0, 1, 0, 0];
     assert_eq!(
@@ -290,7 +290,7 @@ fn chi_forward_injective_over_domain() {
             a[i] = if (row >> i) & 1 == 1 { 0xFF } else { 0x00 };
         }
         let out = run_rom_fast(rom, state_with_lanes(a), budget);
-        // Full extended state (r0..r6) must be injective — reversibility.
+        // Full extended state (r0..r6) must be injective -- reversibility.
         let key: [u8; 7] = [
             out.regs[0],
             out.regs[1],
@@ -339,7 +339,7 @@ fn chi_instruction_inventory() {
 
 // ══════════════════════════════════════════════════════════════════════
 // 6. Reversibility: forward ROM then adjoint restores input + ancilla
-//    (HEAVY — eval-based step-iso path)
+//    (HEAVY -- eval-based step-iso path)
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -384,7 +384,7 @@ fn chi_reversible_roundtrip_eval() {
 
 // ══════════════════════════════════════════════════════════════════════
 // 7. Energy / perf-win: price the χ ROM; bit-slicing factor
-//    (HEAVY — requires lower_iso of step netlist)
+//    (HEAVY -- requires lower_iso of step netlist)
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -425,7 +425,7 @@ fn chi_energy_and_bitslicing() {
 
 // ══════════════════════════════════════════════════════════════════════
 // 8. System-ring authority tier: real CPU (L19)
-//    (HEAVY — system_ring build is expensive)
+//    (HEAVY -- system_ring build is expensive)
 // ══════════════════════════════════════════════════════════════════════
 
 /// Cached system ring for the χ ROM.

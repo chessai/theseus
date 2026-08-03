@@ -1,4 +1,4 @@
-//! BVEQ-INVARIANT-VALWIDTH — extend the inductive-invariant method from the
+//! BVEQ-INVARIANT-VALWIDTH -- extend the inductive-invariant method from the
 //! Trace COME-FROM loop (vart_halve, bveq_invariant_poc.rs) to the DIFFERENT
 //! loop shape used by valwidth REDUCEs: the `Iter` FORWARD-SKIP-BLOCK loop.
 //!
@@ -23,10 +23,10 @@
 //! CONSEQUENCE for the proof shape (the headline finding):
 //!   * The trip count is STATIC: there are ALWAYS exactly D-1 skip-blocks in
 //!     ROM. The DATA (counter tags) only decides which copies RUN their body vs
-//!     SKIP it. So the induction over a data-dependent count DISAPPEARS —
+//!     SKIP it. So the induction over a data-dependent count DISAPPEARS --
 //!     replaced by COMPOSITION of D-1 fixed per-copy relations. `loop_terms`
 //!     is EMPTY for an Iter (only Trace/Fold contribute), and wcet() == the raw
-//!     instruction count — fully static.
+//!     instruction count -- fully static.
 //!   * The NEW lemma the forward-skip loop needs (the Iter analog of vart's L2
 //!     come-from) is the SKIP-BLOCK LEMMA: over the whole carrier domain AND
 //!     both control values of ctrl, one skip-block copy realizes
@@ -34,19 +34,19 @@
 //!         ctrl_bit0 == 0  ⇒  carrier := carrier         (SKIP, identity)
 //!     with all skip aux {rb,temp} restored to 0. Unlike vart's L2 (a single
 //!     back-jump BR-router), this lemma spans the WHOLE copy AND must handle a
-//!     DATA-DEPENDENT FORWARD PC JUMP inside it (the Swapbr over the body) — so
+//!     DATA-DEPENDENT FORWARD PC JUMP inside it (the Swapbr over the body) -- so
 //!     concrete-PC pinning across the whole copy is NOT valid; PC branches on
 //!     ctrl at the first Swapbr. That is the machinery the come-from proof did
 //!     not need.
 //!
 //! ── The MEMORY obstacle (reported honestly) ────────────────────────────────
 //! The reduce BODY uses `MexchReg` (resident-array indexed read), which operates
-//! on `(CpuState, MemState)` and PANICS in `decode_execute_l` — it needs the
+//! on `(CpuState, MemState)` and PANICS in `decode_execute_l` -- it needs the
 //! full `system_step` memory ring (CPU+Mem+Bus). vart_halve's StepEngine walks
 //! only the CPU-only `decode_execute_l`. So the reduce BODY-lemma (L1 analog)
 //! cannot reuse vart's CPU-only StepEngine as-is; it requires a system-ring
 //! symbolic walk. This file MEASURES whether that is tractable and, crucially,
-//! proves the NOVEL part — the CPU-only skip-block/counter machinery — which is
+//! proves the NOVEL part -- the CPU-only skip-block/counter machinery -- which is
 //! what actually distinguishes the Iter shape from the Trace shape.
 //!
 //! This is a RESEARCH file: it reports GO/NO-GO honestly and does not fake
@@ -176,7 +176,7 @@ fn reduce_flat(w: u8, d: usize) -> Iso {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// EXPLORATION — dump the ROM geometry of the Iter skip-block loop.
+// EXPLORATION -- dump the ROM geometry of the Iter skip-block loop.
 // ══════════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -213,9 +213,9 @@ fn explore_iter_rom_geometry() {
 // SYSTEM-STATE symbolic machinery (the NOVEL part vs the vart CPU-only POC).
 //
 // The reduce body uses MexchReg, which PANICS in the CPU-only decode_execute_l.
-// So we walk the MONOLITHIC `system_step(rom)` Iso — an Iso over
+// So we walk the MONOLITHIC `system_step(rom)` Iso -- an Iso over
 //   ((CpuState, MemState), BusMsg)  = ((23 cpu fields, 4 mem fields), 3 bus)
-// = 30 Word8 fields, structured Pair(Pair(cpu, mem), bus) — via `eval_bdd`, with
+// = 30 Word8 fields, structured Pair(Pair(cpu, mem), bus) -- via `eval_bdd`, with
 // NO fetch short-circuit (system_step is a single Iso, not a phase list).
 // (NUM_CPU_FIELDS = 8 regs + PC_lo + BR + 4 IR + 8 scratch + PC_hi = 23 at the
 // default layout w_pc=16/w_br=8; the types.rs "=24" docstring is stale.)
@@ -267,7 +267,7 @@ fn sym_low_word8(vs: &BddVariableSet, f: usize, wbits: usize) -> SV {
     }
     sv
 }
-/// The symbolic entry bits for a field (low `wbits` symbolic, high 0) — the
+/// The symbolic entry bits for a field (low `wbits` symbolic, high 0) -- the
 /// reference the specs are written against.
 fn entry_bits(vs: &BddVariableSet, f: usize, wbits: usize) -> Vec<Bdd> {
     (0..W)
@@ -365,7 +365,7 @@ fn word8_from_bits(bits: &[Bdd]) -> SV {
 // is one monolithic Iso, so we call `eval_bdd(&system_step, sv, vs, ctx)` per step
 // (the fetch mux is walked in full). We build the Iso ONCE and reuse it. PC is
 // re-pinned concrete every step (valid whenever the step's own PC output is a
-// compile-time constant — asserted by the PC-agreement check at the call site).
+// compile-time constant -- asserted by the PC-agreement check at the call site).
 struct SystemStepEngine {
     step: Iso,
 }
@@ -531,11 +531,11 @@ fn body_entry_sv(pc: usize, w: u8, rr: &ReduceRegs, vs: &BddVariableSet) -> SV {
     })
 }
 
-/// SPIKE — the crux measurement. Compose the 6-instr reduce body [3,9) of
+/// SPIKE -- the crux measurement. Compose the 6-instr reduce body [3,9) of
 /// reduce_flat(2,2) through the SystemStepEngine at concrete PC (RUN path), with
 /// symbolic carrier (acc,data,idx in regs; arr0,arr1 in mem) and everything else
 /// 0. Print peak BDD nodes + secs per step. IF a step's peak explodes (>500k) or
-/// takes minutes, that is the memory-ring blocker — reported LOUDLY.
+/// takes minutes, that is the memory-ring blocker -- reported LOUDLY.
 #[test]
 fn spike_system_ring_body_tractability() {
     let w = 2u8;
@@ -546,7 +546,7 @@ fn spike_system_ring_body_tractability() {
     let engine = SystemStepEngine::new(&rom);
     let mut ctx = WalkCtx::new();
 
-    // Body span for reduce_flat(2,2): [3,9) — the 6 instrs between the two Swapbr.
+    // Body span for reduce_flat(2,2): [3,9) -- the 6 instrs between the two Swapbr.
     let body_start = 3usize;
     let body_len = 6usize;
     let mut cur = body_entry_sv(body_start, w, &rr, &vs);
@@ -568,13 +568,13 @@ fn spike_system_ring_body_tractability() {
             "  step {i} pc={pc} ({:>10?}): peak={peak} sum={sum} {secs:.3}s  PC_out={pc_out:?} (want {next_pc})",
             rom_instr_name(&rom, pc),
         );
-        // RUN body is straight-line (BR=0) so PC_out must be pc+1 — re-pin.
+        // RUN body is straight-line (BR=0) so PC_out must be pc+1 -- re-pin.
         assert_eq!(pc_out, Some(next_pc), "SPIKE PC-AGREEMENT: pc={pc} PC_out != pc+1");
         cur = repin_pc(&out, next_pc, &vs);
         // LOUD tractability tripwire.
         assert!(
             peak < 500_000,
-            "SPIKE BLOWUP: body step {i} (pc={pc}) peak {peak} > 500k — the MEMORY RING is the blocker"
+            "SPIKE BLOWUP: body step {i} (pc={pc}) peak {peak} > 500k -- the MEMORY RING is the blocker"
         );
     }
     eprintln!(
@@ -732,10 +732,10 @@ fn assert_body_semantics(out: &SV, w: u8, rr: &ReduceRegs, vs: &BddVariableSet) 
     }
 }
 
-/// L1-analog — the reduce BODY LEMMA (memory ring, whole carrier domain).
+/// L1-analog -- the reduce BODY LEMMA (memory ring, whole carrier domain).
 /// Compose body [3,9) of reduce_flat(w,2), prove carrier ≡ reduce-body function.
 /// Width-parameterized: w=2 and w=4 share this whole body (the ROM is byte-
-/// identical across widths — only the symbolic carrier bit-widths differ).
+/// identical across widths -- only the symbolic carrier bit-widths differ).
 fn body_lemma_reduce_w(w: u8) {
     let d = 2usize;
     let (rom, _budget) = compile_reduce_rom(w, d);
@@ -746,8 +746,8 @@ fn body_lemma_reduce_w(w: u8) {
     let (out, peak, secs) = compose_body(&rom, w, &rr, body_start, body_len, &vs);
     assert_body_semantics(&out, w, &rr, &vs);
 
-    // TEETH (NEG-body): a WRONG body spec — acc' = acc ^ arr[idx^1] (wrong index)
-    // — must DIFFER from the real composed acc output (so the assert isn't vacuous).
+    // TEETH (NEG-body): a WRONG body spec -- acc' = acc ^ arr[idx^1] (wrong index)
+    // -- must DIFFER from the real composed acc output (so the assert isn't vacuous).
     let wb = w as usize;
     let acc_in = entry_bits(&vs, rr.acc, wb);
     let arr0_in = entry_bits(&vs, mem_f(0), wb);
@@ -757,9 +757,9 @@ fn body_lemma_reduce_w(w: u8) {
     // wrong: swap idx branches (arr[idx^1]).
     let wrong = body_acc_spec(&acc_in, &arr1_in, &arr0_in, &idx_in[0], wb, &vs);
     let differs = (0..W).any(|b| acc_out[b] != wrong[b]);
-    assert!(differs, "NEG-body: real acc == WRONG acc^arr[idx^1] — teeth vacuous");
+    assert!(differs, "NEG-body: real acc == WRONG acc^arr[idx^1] -- teeth vacuous");
 
-    assert!(peak < 500_000, "BODY LEMMA peak {peak} — memory ring blowup");
+    assert!(peak < 500_000, "BODY LEMMA peak {peak} -- memory ring blowup");
     eprintln!(
         "L1 BODY LEMMA [reduce_flat({w},2)]: system-ring body [3,9) ≡ (acc^=arr[idx]; idx^=1; \
          data/arr preserved) over the WHOLE symbolic carrier domain; all aux/scratch/bus/IR/BR/mem \
@@ -779,7 +779,7 @@ fn invariant_body_lemma_reduce_w4() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// L2-analog — the SKIP-BLOCK LEMMA (the true Iter novelty).
+// L2-analog -- the SKIP-BLOCK LEMMA (the true Iter novelty).
 //
 // One skip-block copy is [copy_start, copy_start+12):
 //   +0 Addi rb, 6            (rb = body_len 6 = skip distance)
@@ -791,7 +791,7 @@ fn invariant_body_lemma_reduce_w4() {
 //   +11 Subi rb, 6           (cleanup)
 //
 // Because Swapbr makes PC data-dependent on ctrl, we CASE-SPLIT on ctrl∈{0,1}
-// (the counter tag is a concrete bit at any real iteration boundary — faithful
+// (the counter tag is a concrete bit at any real iteration boundary -- faithful
 // and complete). We drive PC by the datapath's OWN concrete PC output each step
 // (NOT pc+1), so the forward jump is followed FAITHFULLY: this is the machinery
 // the come-from proof did not need.
@@ -799,7 +799,7 @@ fn invariant_body_lemma_reduce_w4() {
 //                  exit PC=+12, carrier := body(carrier).
 //   SKIP (ctrl=0): rb=6 at Swapbr[+2] → BR=6 → forward jump. The KEY assert: the
 //                  datapath PC output after Swapbr[+2] MUST equal the come-from PC
-//                  (copy_start+9) — PC += sext(BR)+1 = (+2)+6+1 = +9. Body [+3,+8]
+//                  (copy_start+9) -- PC += sext(BR)+1 = (+2)+6+1 = +9. Body [+3,+8]
 //                  never executes → MexchReg never fetched. exit PC=+12, carrier
 //                  IDENTITY.
 // ══════════════════════════════════════════════════════════════════════════
@@ -879,7 +879,7 @@ fn skip_entry_sv(
 /// Compose a whole skip-block copy [copy_start, copy_start+12), driving PC by the
 /// datapath's OWN concrete PC output each step (so the forward skip is followed
 /// faithfully). Returns (out SV, max_peak, secs, pc_after_first_swapbr).
-/// `pc_after_first_swapbr` is the datapath PC output produced by Swapbr[+2] — the
+/// `pc_after_first_swapbr` is the datapath PC output produced by Swapbr[+2] -- the
 /// KEY forward-skip control value (the Iter analog of vart's GAP-A landing assert).
 fn compose_skip_block(
     rom: &[u32],
@@ -912,7 +912,7 @@ fn compose_skip_block(
         // the forward jump). All Swapbr's here have a CONCRETE rb (ctrl concrete
         // ⇒ Cswap output concrete ⇒ BR concrete), so PC_out is always concrete.
         let next_pc = read_concrete_pc(&out).unwrap_or_else(|| {
-            panic!("compose_skip_block: PC_out SYMBOLIC at pc={pc} — ctrl case-split broken")
+            panic!("compose_skip_block: PC_out SYMBOLIC at pc={pc} -- ctrl case-split broken")
         });
         if pc == swapbr_pc {
             pc_after_first_swapbr = next_pc;
@@ -1017,7 +1017,7 @@ fn assert_skip_exit(
     }
 }
 
-/// L2-analog — the SKIP-BLOCK LEMMA. Both ctrl cases over the whole carrier.
+/// L2-analog -- the SKIP-BLOCK LEMMA. Both ctrl cases over the whole carrier.
 /// Width-parameterized (w=2 and w=4 share it; ROM byte-identical across widths).
 fn skip_block_lemma_reduce_w(w: u8) {
     let d = 2usize;
@@ -1059,15 +1059,15 @@ fn skip_block_lemma_reduce_w(w: u8) {
 
     // ── TEETH ────────────────────────────────────────────────────────────
     // NEG-skip: a WRONG landing (e.g. +8, body only partially skipped) must be
-    // DETECTED — the real landing must differ from the wrong one.
+    // DETECTED -- the real landing must differ from the wrong one.
     let wrong_land = sb.copy_start + 8;
-    assert_ne!(land_skip, wrong_land, "NEG-skip: real landing == wrong landing (+8) — teeth vacuous");
+    assert_ne!(land_skip, wrong_land, "NEG-skip: real landing == wrong landing (+8) -- teeth vacuous");
     // NEG-run-vs-skip: the RUN carrier output must DIFFER from the SKIP output
     // (body changed acc vs identity), for at least one bit.
     let acc_run = sys_field_bits(&out_run, rr.acc);
     let acc_skip = sys_field_bits(&out_skip, rr.acc);
     let differs = (0..W).any(|b| acc_run[b] != acc_skip[b]);
-    assert!(differs, "NEG-run-vs-skip: RUN acc == SKIP acc — the body did nothing / teeth vacuous");
+    assert!(differs, "NEG-run-vs-skip: RUN acc == SKIP acc -- the body did nothing / teeth vacuous");
 
     assert!(peak_run < 500_000 && peak_skip < 500_000, "SKIP-BLOCK peak blowup");
     // The skip-block SKIP δu forward-reach, discharged closed-form vs the netlist
@@ -1099,7 +1099,7 @@ fn assert_body_run_reached_exit(out: &SV, exit_pc: usize) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// COMPOSITION LEMMA (d=3, two copies) — the STATIC-TRIP-COUNT argument.
+// COMPOSITION LEMMA (d=3, two copies) -- the STATIC-TRIP-COUNT argument.
 //
 // Because loop_terms is EMPTY and there are exactly D-1 PHYSICAL copies, NO
 // induction over a data-dependent count is needed: the whole program is
@@ -1203,7 +1203,7 @@ fn composition_lemma_reduce_d3_w(w: u8) {
     // non-empty the composition-over-copies argument (vs induction) is invalid.
     assert!(
         lowered.loop_terms.is_empty(),
-        "COMPOSITION premise: Iter must yield EMPTY loop_terms (got {}) — static composition invalid",
+        "COMPOSITION premise: Iter must yield EMPTY loop_terms (got {}) -- static composition invalid",
         lowered.loop_terms.len()
     );
     let rr = reduce_regs(d);
@@ -1280,7 +1280,7 @@ fn composition_lemma_reduce_d3_w(w: u8) {
         // the k-count is load-bearing (not vacuous). Compare acc_want vs body^{k+1}.
         let (acc_next, _) = body_k_spec(&acc_in, &arr0_in, &arr1_in, &idx_in[0], k + 1, wb, &vs);
         let differs = (0..wb).any(|b| acc_want[b] != acc_next[b]);
-        assert!(differs, "COMPOSE teeth: body^{k} == body^{} — trip count vacuous", k + 1);
+        assert!(differs, "COMPOSE teeth: body^{k} == body^{} -- trip count vacuous", k + 1);
 
         eprintln!("  COMPOSE tags={tags:?} k={k}: full ROM ≡ body^{k}, peak {peak}, {secs:.3}s");
     }
@@ -1305,14 +1305,14 @@ fn invariant_composition_lemma_reduce_d3_w4() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// MARSHAL-ENCODING ANCHOR (always-on) — the PREMISE the COMPOSITION lemma's
+// MARSHAL-ENCODING ANCHOR (always-on) -- the PREMISE the COMPOSITION lemma's
 // case-split rests on.
 //
 // `invariant_composition_lemma_reduce_d3` enumerates the combos {(0,0,0),
 // (1,0,0),(1,1,0)} and CLAIMS these cover all REACHABLE counter states. That is
 // only true if `marshal_resident` encodes Nat_d as LEADING-ONES in r0..r_{d-1}
 // (k leading 1-tags, the rest 0). Previously this was checked ONLY by the
-// `#[ignore]` `diag_reduce_layout` — so a change to the marshal encoding could
+// `#[ignore]` `diag_reduce_layout` -- so a change to the marshal encoding could
 // leave the composition tests green while they proved UNREACHABLE combos. This
 // always-on test pins the premise: for each k, marshal_resident(input).regs[0..d]
 // is exactly the k-leading-ones prefix (r0..r_{k-1}=1, r_k..r_{d-1}=0).
@@ -1343,18 +1343,18 @@ fn invariant_marshal_encodes_leading_ones() {
         let ty2 = carrier_ty(w, d);
         let p0 = marshal_resident(&make_reduce_input_w(w, 0, 1, 2, 0, 3, 1, d), &ty2, 2).regs[0..d].to_vec();
         let p1 = marshal_resident(&make_reduce_input_w(w, 1, 1, 2, 1, 3, 1, d), &ty2, 2).regs[0..d].to_vec();
-        assert_ne!(p0, p1, "MARSHAL-ENCODING w={w} d={d}: k=0 and k=1 tag prefixes collapse — teeth vacuous");
+        assert_ne!(p0, p1, "MARSHAL-ENCODING w={w} d={d}: k=0 and k=1 tag prefixes collapse -- teeth vacuous");
         eprintln!("  marshal-encoding w={w} d={d}: regs[0..{d}] == k-leading-ones for k=0..{}", d - 1);
     }
     }
     eprintln!(
-        "MARSHAL-ENCODING ANCHOR: Nat_d marshals as leading-ones in r0..r_{{d-1}} — the \
+        "MARSHAL-ENCODING ANCHOR: Nat_d marshals as leading-ones in r0..r_{{d-1}} -- the \
          premise the COMPOSITION reachable-combos case-split rests on."
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// L3-analog — REALITY ANCHOR (fast, always-on). For d=2 and d=3, on a handful of
+// L3-analog -- REALITY ANCHOR (fast, always-on). For d=2 and d=3, on a handful of
 // concrete inputs spanning k=0..d-1, assert run_rom_fast == eval. Seconds. Ties
 // the symbolic lemmas to the real machine's semantics.
 // ══════════════════════════════════════════════════════════════════════════
@@ -1397,16 +1397,16 @@ fn invariant_reality_anchor_reduce() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// FINDINGS (GO/NO-GO) — the inductive-invariant method EXTENDS to the Iter
+// FINDINGS (GO/NO-GO) -- the inductive-invariant method EXTENDS to the Iter
 // FORWARD-SKIP-BLOCK loop. HONEST research record.
 //
 // GO. The method extends, at BOTH w=2 AND w=4 (see the "w=4 MECHANICAL EXTENSION"
 // block below). Measured (reduce_flat, w=2, w_pc=16 default layout; w=4 identical):
 //   * SPIKE / L1 BODY (memory ring): the 6-instr MexchReg body walked through the
 //     monolithic `system_step` (CPU+Mem+Bus, 30 fields, 240 vars) with symbolic
-//     carrier stays TINY — MAX peak 9 BDD nodes, ~1.6 s/step (~8-16 s total). The
+//     carrier stays TINY -- MAX peak 9 BDD nodes, ~1.6 s/step (~8-16 s total). The
 //     cost is the un-short-circuited fetch-mux gate count, NOT BDD growth. The
-//     MEMORY RING IS TRACTABLE — this was the crux risk and it is cleared.
+//     MEMORY RING IS TRACTABLE -- this was the crux risk and it is cleared.
 //   * L2 SKIP-BLOCK RUN (ctrl=1): whole copy → carrier:=body(carrier); Swapbr[+2]
 //     lands +3. peak 9, ~16 s.
 //   * L2 SKIP-BLOCK SKIP (ctrl=0): whole copy → carrier IDENTITY; the FORWARD-JUMP
@@ -1420,14 +1420,14 @@ fn invariant_reality_anchor_reduce() {
 //     BR-router + a math induction argument).
 //   * Iter skip-block: D-1 STATIC physical copies, each a FORWARD data-dependent
 //     skip. The novelty is (a) CASE-SPLIT on the concrete counter tag (ctrl∈{0,1}
-//     at every real iteration boundary), (b) a FORWARD-JUMP PC-LANDING assert —
+//     at every real iteration boundary), (b) a FORWARD-JUMP PC-LANDING assert --
 //     the SKIP path's Swapbr must land exactly on the come-from (PC+=body_len+1),
-//     the sole BR≠0 pass — and (c) STATIC COMPOSITION of the D-1 fixed per-copy
+//     the sole BR≠0 pass -- and (c) STATIC COMPOSITION of the D-1 fixed per-copy
 //     relations INSTEAD of induction. `loop_terms` is EMPTY, wcet()==instr count.
 //
 // STATIC TRIP COUNT = ADVANTAGE. Yes: because the count is compile-time (D-1
 // copies), there is NO data-dependent back-edge, NO induction, NO re-entry weld.
-// The proof is a finite composition of per-copy relations — strictly simpler than
+// The proof is a finite composition of per-copy relations -- strictly simpler than
 // the Trace come-from. Its cost is O(D) copies (the ROM is unrolled), which the
 // composition lemma walks directly.
 //
@@ -1441,24 +1441,24 @@ fn invariant_reality_anchor_reduce() {
 //     both skip cases incl. the forward-jump PC landing (L2), and the d=3 static
 //     composition ≡ body^k (COMPOSITION).
 //   * ARGUED: (i) the carrier is walked with only the low-w bits symbolic (the
-//     reachable Flat(w) window) — like vart's carrier-width limiting; out-of-range
+//     reachable Flat(w) window) -- like vart's carrier-width limiting; out-of-range
 //     high bits are pinned 0. (ii) the counter tags are case-split on concrete
 //     {0,1} (faithful: at a real iteration boundary each unary tag IS a concrete
 //     bit), and only the reachable unary PREFIX combos are enumerated for d=3.
-//     (iii) the PROLOGUE (marshal→r0..) and EPILOGUE (unmarshal) legs — anchored
+//     (iii) the PROLOGUE (marshal→r0..) and EPILOGUE (unmarshal) legs -- anchored
 //     by L3, not lemma-covered. (iv) the ctrl register enters concrete, so BR/PC
-//     stay concrete throughout — the skip-block never introduces a symbolic PC.
+//     stay concrete throughout -- the skip-block never introduces a symbolic PC.
 //
 // DOES IT REPLACE THE WHOLE-DOMAIN SWEEP? For the loop-control + body semantics:
-//   YES for reduce_flat(w,d) at BOTH w=2 AND w=4 — L1+L2+COMPOSITION cover the
+//   YES for reduce_flat(w,d) at BOTH w=2 AND w=4 -- L1+L2+COMPOSITION cover the
 //   per-copy relation and its static composition over the whole Flat(w) carrier,
 //   and the forward-skip PC control is netlist-asserted. The symbolic lemmas retire
 //   the LOOP-CONTROL + body-semantics portion of the authority for w∈{2,4}; they do
 //   NOT retire the marshal/unmarshal legs (anchored by L3, not lemma-covered).
 //
-// w=4 MECHANICAL EXTENSION (this file, the follow-up the rollout left open) — DONE.
+// w=4 MECHANICAL EXTENSION (this file, the follow-up the rollout left open) -- DONE.
 //   The reduce ROM is BYTE-IDENTICAL across Flat(1)/Flat(2)/Flat(4) (width-
-//   independent codegen — valwidth_reduce.rs pins "reduce ROM must be identical for
+//   independent codegen -- valwidth_reduce.rs pins "reduce ROM must be identical for
 //   Flat(2) vs Flat(4)"). So the w=4 proof reuses the SAME ROM, SAME body span
 //   [3,9), SAME 12-instr skip-block, SAME 24-instr d=3 ROM; only the symbolic
 //   carrier bit-width changes (sym_low_word8 low-4 symbolic vs low-2). Every lemma
@@ -1466,13 +1466,13 @@ fn invariant_reality_anchor_reduce() {
 //   Measured w=4 (identical machinery):
 //     * L1 BODY (w=4): peak 9 BDD nodes, ~7.5 s. (w=2: peak 9, ~7.3 s.)
 //     * L2 SKIP-BLOCK (w=4): RUN peak 9 ~15.6 s, SKIP peak 3 ~7.0 s; forward-skip
-//       Swapbr[+2] lands +3 (RUN) / +9 come-from (SKIP), body skipped — identical
+//       Swapbr[+2] lands +3 (RUN) / +9 come-from (SKIP), body skipped -- identical
 //       control to w=2.
 //     * COMPOSITION d=3 (w=4): full 24-instr ROM ≡ body^k, k∈{0,1,2}, peak 9,
 //       ~88 s. loop_terms EMPTY.
 //     * L3 anchor + marshal-encoding anchor extended to w∈{2,4}.
 //   The prior agent's prediction HELD: the memory-ring cost is GATE-COUNT (the
-//   un-short-circuited fetch mux), NOT BDD width — peak nodes are IDENTICAL at w=4
+//   un-short-circuited fetch mux), NOT BDD width -- peak nodes are IDENTICAL at w=4
 //   and w=2 (9 nodes). NO blow-up, NO field-assert failure, NO non-mechanical
 //   obstacle. Teeth confirmed at w=4 (a mutation dropping the idx selector in the
 //   body spec IS caught by the whole-domain assert). reduce_flat(4,d) loop-control +

@@ -1,10 +1,10 @@
-//! BVEQ-FULL-STEP-POC — the PIVOTAL go/no-go experiment.
+//! BVEQ-FULL-STEP-POC -- the PIVOTAL go/no-go experiment.
 //!
 //! Prove the FULL combinational CPU step netlist `step_with(&layout, &rom)`
 //! ≡ its step-spec, ONCE, SYMBOLICALLY over the whole reachable state domain,
 //! via the repo's BDD machinery (`bveq_netlist::eval_bdd`).
 //!
-//! `step_with = fetch ; decode_execute_l ; unfetch ; pc_add_br ; pc_inc` — all
+//! `step_with = fetch ; decode_execute_l ; unfetch ; pc_add_br ; pc_inc` -- all
 //! combinational (no Trace/Iter/Fold), so it is INSIDE `eval_bdd`'s fragment.
 //! If this is tractable it is the master key: it retires the ~3.5 h decoder-class
 //! brute-force sweeps AND (with induction over steps) the multi-step + ~4 h
@@ -80,7 +80,7 @@ fn is_concrete_zero(layout: &Layout, f: usize) -> bool {
         }
     }
     // s0/s1 only: the decoder-reserved operand/predicate buffers. s2.. stay
-    // SYMBOLIC (DATA operand space; must be restored — asserted identity).
+    // SYMBOLIC (DATA operand space; must be restored -- asserted identity).
     f == layout.scratch_field(0) || f == layout.scratch_field(1)
 }
 
@@ -497,13 +497,13 @@ fn negative_control(layout: &Layout) {
     let rin = |i: usize| field_bits(&vs, nf, layout.reg_field(i));
     let br_in = field_bits(&vs, nf, layout.br_field());
 
-    // WRONG-1: wrong op (ADD instead of XOR) — must differ on r1.
+    // WRONG-1: wrong op (ADD instead of XOR) -- must differ on r1.
     let wrong_add = ripple_sum(&rin(1), &rin(0), &vs);
     let got_r1 = out_field_bits(&out, layout, layout.reg_field(1));
     let differs_op = (0..W).any(|i| got_r1[i] != wrong_add[i]);
     assert!(differs_op, "NEG: XOR step must DIFFER from an ADD spec (teeth)");
 
-    // WRONG-2: drop the +1 in the PC update — must differ on PC.
+    // WRONG-2: drop the +1 in the PC update -- must differ on PC.
     let pc_in: Vec<Bdd> = vec![vs.mk_false(); layout.w_pc];
     let sext: Vec<Bdd> = (0..layout.w_pc)
         .map(|i| if i < W { br_in[i].clone() } else { br_in[W - 1].clone() })
@@ -515,7 +515,7 @@ fn negative_control(layout: &Layout) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// TESTS — start minimal, measure, scale.
+// TESTS -- start minimal, measure, scale.
 // ══════════════════════════════════════════════════════════════════════════
 
 /// The MINIMAL instance: w_pc=8, one XOR. This is the go/no-go headline.
@@ -525,7 +525,7 @@ fn full_step_xor_minimal_wpc8() {
     let (walk_s, cmp_s) = prove_one_instr(&layout, Instr::Xor { rd: 1, rs: 0 });
     eprintln!(
         "FULL-STEP POC [w_pc=8, XOR r1,r0]: step_with ≡ step-spec over the WHOLE \
-         symbolic (regs,BR) domain [PC=0,IR=0 concrete; s0/s1=0] — eval_bdd walk {walk_s:.3}s + \
+         symbolic (regs,BR) domain [PC=0,IR=0 concrete; s0/s1=0] -- eval_bdd walk {walk_s:.3}s + \
          BDD compare {cmp_s:.3}s = {:.3}s total. (decoder-class brute force baseline: ~hours.)",
         walk_s + cmp_s
     );
@@ -545,7 +545,7 @@ fn full_step_instr_family_wpc8() {
     for instr in cases {
         let (walk_s, cmp_s) = prove_one_instr(&layout, instr);
         eprintln!(
-            "FULL-STEP POC [w_pc=8, {instr:?}]: step_with ≡ step-spec — walk {walk_s:.3}s + \
+            "FULL-STEP POC [w_pc=8, {instr:?}]: step_with ≡ step-spec -- walk {walk_s:.3}s + \
              compare {cmp_s:.3}s = {:.3}s.",
             walk_s + cmp_s
         );
@@ -553,7 +553,7 @@ fn full_step_instr_family_wpc8() {
 }
 
 /// Scale: the full 16-bit PC step (default layout), one XOR. Same domain-flat
-/// BDD claim as bveq_step_poc — measures the decode+execute crossbar cost at
+/// BDD claim as bveq_step_poc -- measures the decode+execute crossbar cost at
 /// the shipped PC width.
 #[test]
 fn full_step_xor_wpc16() {
@@ -561,7 +561,7 @@ fn full_step_xor_wpc16() {
     assert_eq!(layout.w_pc, 16);
     let (walk_s, cmp_s) = prove_one_instr(&layout, Instr::Xor { rd: 1, rs: 0 });
     eprintln!(
-        "FULL-STEP POC [w_pc=16, XOR r1,r0]: step_with ≡ step-spec — walk {walk_s:.3}s + \
+        "FULL-STEP POC [w_pc=16, XOR r1,r0]: step_with ≡ step-spec -- walk {walk_s:.3}s + \
          compare {cmp_s:.3}s = {:.3}s.",
         walk_s + cmp_s
     );
@@ -587,16 +587,16 @@ fn full_step_reality_anchor_wpc8() {
     ] {
         concrete_anchor(&layout, instr, &pts, &brs);
     }
-    eprintln!("FULL-STEP reality anchor [w_pc=8]: real theseus_eval == spec across the op family — the reality anchor.");
+    eprintln!("FULL-STEP reality anchor [w_pc=8]: real theseus_eval == spec across the op family -- the reality anchor.");
 }
 
-/// SCALE — SYMBOLIC PC (the PC-mux, the real blow-up risk for the inductive
+/// SCALE -- SYMBOLIC PC (the PC-mux, the real blow-up risk for the inductive
 /// multi-step proof). Walk the full step with PC_lo SYMBOLIC over a 2-instr rom
 /// [XOR r1,r0 @0 ; ADD r1,r0 @1], regs+BR+s2.. symbolic. Then verify by
 /// CO-FACTORING (BDD.restrict) the symbolic output at PC=0 and PC=1: at PC=0 the
 /// step must be the XOR step, at PC=1 the ADD step, and at PC=2 (out of ROM) a
 /// NOP-fetch (IR stays 0 → regs identity, PC just += sext(BR)+1). Reports peak
-/// output-BDD node counts — the tractability metric for symbolic PC.
+/// output-BDD node counts -- the tractability metric for symbolic PC.
 #[test]
 fn full_step_symbolic_pc_wpc8() {
     let layout = Layout { w_pc: 8, ..Layout::default() };
@@ -687,5 +687,5 @@ fn full_step_symbolic_pc_wpc8() {
 fn full_step_negative_control_wpc8() {
     let layout = Layout { w_pc: 8, ..Layout::default() };
     negative_control(&layout);
-    eprintln!("FULL-STEP POC negative control [w_pc=8]: step != {{wrong-op, drop-+1}} — the oracle has TEETH.");
+    eprintln!("FULL-STEP POC negative control [w_pc=8]: step != {{wrong-op, drop-+1}} -- the oracle has TEETH.");
 }

@@ -8,7 +8,7 @@ use theseus_check::env::Env;
 use theseus_core::prim::{enumerate_values, Value};
 use theseus_syntax::ast::Type;
 
-/// A parsed surface value — either a constructor application or a tuple.
+/// A parsed surface value -- either a constructor application or a tuple.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SVal {
     /// A constructor name applied to zero or more atom arguments.
@@ -99,7 +99,7 @@ fn parse_atom(toks: &[String], pos: &mut usize) -> SVal {
         );
         *pos += 1; // consume ')'
         if elems.len() == 1 {
-            // Parenthesised single value — unwrap.
+            // Parenthesised single value -- unwrap.
             elems.into_iter().next().unwrap()
         } else {
             SVal::Tuple(elems)
@@ -110,7 +110,7 @@ fn parse_atom(toks: &[String], pos: &mut usize) -> SVal {
         *pos += 1;
         SVal::Ctor(name, Vec::new())
     } else if is_numeric(head) {
-        // Numeric literal — treat as a constructor name.
+        // Numeric literal -- treat as a constructor name.
         let name = head.clone();
         *pos += 1;
         SVal::Ctor(name, Vec::new())
@@ -218,7 +218,7 @@ fn ctor_to_core(name: &str, args: &[SVal], ty: &Type, env: &Env) -> Value {
         tuple_to_core(args, payload_ty, env)
     };
 
-    // Wrap with injection path — innermost-first (rev).
+    // Wrap with injection path -- innermost-first (rev).
     use theseus_check::env::Inj;
     ci.path.iter().rev().fold(payload, |v, inj| match inj {
         Inj::L => Value::left(v),

@@ -15,7 +15,7 @@
 //!
 //! ── Classification: ALL b21c whole-domain tests are STRAIGHT-LINE ──
 //! Every one is a SINGLE combinational instruction (`prog.len()==1`; the one
-//! multi-instr case, `add_xor_kernel`, is 3 straight-line instrs) — NONE set BR
+//! multi-instr case, `add_xor_kernel`, is 3 straight-line instrs) -- NONE set BR
 //! or take a data-dependent branch, so PC is concrete and the step is inside
 //! `eval_bdd`'s loop-free fragment (the proven-tractable regime). NONE are
 //! REDUCE/loop-based. So all are eligible for symbolic conversion.
@@ -30,7 +30,7 @@
 //! sets ({1,2,4,8} + a binary-signature 0xA) that exercise every imm bit-lane
 //! independently. Beyond registers, the FULL FRAME is checked: BR=0 / PC=const /
 //! IR=const / s0=s1=0 / s2..=identity (what `run_rom_on_cpu_with`'s terminal
-//! check enforced at every retired sim point — see `assert_frame`).
+//! check enforced at every retired sim point -- see `assert_frame`).
 //!
 //! Reality anchor: the SAME step iso through concrete `theseus_eval::eval`
 //! (a few points) equals the 4-bit reference. Negative control: a wrong spec
@@ -39,7 +39,7 @@
 //! NOTE: b21c's NON-whole-domain structural tests (`state_bits_shrinks_*`,
 //! `pred_base_is_*`) and the small-sample `add_xor_kernel_*` +
 //! `scratch_operand_ccnot_*` (7 pts, a mixed-width crossbar routing tooth) stay
-//! in b21c_data_word.rs — they are already fast and not brute-force sweeps.
+//! in b21c_data_word.rs -- they are already fast and not brute-force sweeps.
 
 #![allow(clippy::needless_range_loop)]
 
@@ -144,7 +144,7 @@ fn symbolic_state_sv(layout: &Layout, vs: &BddVariableSet, pc: u8) -> SV {
     }
     // Structural sanity: must match state_ty_with(layout). HARD assert (a
     // carrier-shape misalignment must fault even under --release, not just in
-    // debug — a mis-shaped SV silently mis-routes the whole symbolic walk).
+    // debug -- a mis-shaped SV silently mis-routes the whole symbolic walk).
     assert!(sv_matches_type(&sv, &state_ty_with(layout)), "symbolic_state_sv: SV shape != state_ty_with(layout)");
     sv
 }
@@ -298,7 +298,7 @@ where
     // ── FULL-FRAME restoration (MAJOR-1) ────────────────────────────────
     // The retired sims ran through `run_rom_on_cpu_with`, whose terminal check
     // HARD-FAILS at EVERY domain point on `BR != 0 || s0 != 0 || s1 != 0`
-    // (compile.rs:4655) — and it is data-dependent (Ccnot/Cswap transit rt/operands
+    // (compile.rs:4655) -- and it is data-dependent (Ccnot/Cswap transit rt/operands
     // through BR and s0). `prove_op` checking REGISTERS ONLY silently dropped that
     // whole-domain frame guarantee. Restore it: BR=0, PC=const, IR=const, s0=s1=0,
     // and s2.. = identity, all over the whole symbolic operand domain.
@@ -364,7 +364,7 @@ fn assert_frame(layout: &Layout, out: &SV, vs: &BddVariableSet, label: &str) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 1. BVEQ WHOLE-DOMAIN authority — retires the b21c reduced-width sweeps.
+// 1. BVEQ WHOLE-DOMAIN authority -- retires the b21c reduced-width sweeps.
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -423,7 +423,7 @@ fn b21c_bveq_whole_domain() {
     // the one-hots {1,2,4,8} exercise every imm bit-lane INDEPENDENTLY, plus a
     // binary-signature 0xA (=1010) crosses lanes; 0 and 0xF anchor the ends.
     // (The retired sim swept all 16 imms; two arbitrary imms like {7} would
-    // leave a bit1↔bit3 imm-lane cross invisible — one-hots close that axis.)
+    // leave a bit1↔bit3 imm-lane cross invisible -- one-hots close that axis.)
     for x in [0u8, 1, 2, 4, 8, 0xA, 0xF] {
         total += prove_op(
             &layout,
@@ -467,7 +467,7 @@ fn b21c_bveq_whole_domain() {
     }
     // Rotli/Rotri r0 by #x  (whole_domain_rotli_rotri, 16×16 each). The imm here
     // is a rotate AMOUNT masked to `& 3` (log2(w_data)=2 effective bits), so the
-    // set {0,1,2,3} is EXHAUSTIVE over the whole effective-amount domain — every
+    // set {0,1,2,3} is EXHAUSTIVE over the whole effective-amount domain -- every
     // amount lane is exercised (no lane hidden; nothing more to add).
     for x in [0u8, 1, 2, 3] {
         total += prove_op(
@@ -494,7 +494,7 @@ fn b21c_bveq_whole_domain() {
         );
     }
 
-    // Ccnot r0 ^= r1 & r2  (whole_domain_ccnot, 4096 pts — one of the hogs)
+    // Ccnot r0 ^= r1 & r2  (whole_domain_ccnot, 4096 pts -- one of the hogs)
     total += prove_op(
         &layout,
         Instr::Ccnot { rd: 0, rs: 1, rt: 2 },
@@ -506,7 +506,7 @@ fn b21c_bveq_whole_domain() {
         },
         "Ccnot(0,1,2)",
     );
-    // Cswap r1↔r2 iff r0[0]  (whole_domain_cswap, 4096 pts — the other hog)
+    // Cswap r1↔r2 iff r0[0]  (whole_domain_cswap, 4096 pts -- the other hog)
     total += prove_op(
         &layout,
         Instr::Cswap { rd: 0, rs: 1, rt: 2 },
@@ -523,7 +523,7 @@ fn b21c_bveq_whole_domain() {
 
     eprintln!(
         "b21c-BVEQ whole-domain [w_data=4]: every straight-line op ≡ its mixed-width ripple/xor/rotate \
-         spec — SUPERSET on the register/value axis (WHOLE 2^4-per-operand domain vs the retired \
+         spec -- SUPERSET on the register/value axis (WHOLE 2^4-per-operand domain vs the retired \
          16×16 / 16³ sim grids) and LANE-COMPLETE on the immediate axis (one-hots {{1,2,4,8}} + 0xA); \
          plus the FULL FRAME (BR=0/PC=const/IR=const/s0=s1=0/s2..=identity) per point; \
          total {:.2}s (sum of eval_bdd walks {total:.2}s). Reduced-width sim baseline: part of ~2.27 h.",
@@ -531,14 +531,14 @@ fn b21c_bveq_whole_domain() {
     );
 }
 
-/// Helper: data-word width (4) inferred from a dummy — used by the imm-rotate
+/// Helper: data-word width (4) inferred from a dummy -- used by the imm-rotate
 /// closures where the amount vector needs ≥ log2(w) bits.
 fn layout_w(_vs: &BddVariableSet) -> usize {
     poc_layout().w_data
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 2. REALITY-ANCHOR BOOTSTRAP — same step iso, concrete eval == 4-bit ref.
+// 2. REALITY-ANCHOR BOOTSTRAP -- same step iso, concrete eval == 4-bit ref.
 // ══════════════════════════════════════════════════════════════════════
 
 const EVAL_FUEL: u64 = 8_000_000_000;
@@ -638,11 +638,11 @@ fn b21c_bveq_bootstrap() {
         }
     }
     eprintln!("b21c-BVEQ bootstrap [w_data=4]: SAME step_with iso, concrete theseus_eval == 4-bit reference \
-               across the FULL op family (Add/Sub/Xor/Exch/Ccnot/Cswap + Rotl/Rotr/Addi/Subi/Xori/Rotli/Rotri) — the reality anchor.");
+               across the FULL op family (Add/Sub/Xor/Exch/Ccnot/Cswap + Rotl/Rotr/Addi/Subi/Xori/Rotli/Rotri) -- the reality anchor.");
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 3. NEGATIVE CONTROL — a wrong spec / wrong width must be caught (teeth).
+// 3. NEGATIVE CONTROL -- a wrong spec / wrong width must be caught (teeth).
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -663,16 +663,16 @@ fn b21c_bveq_negative_control() {
     assert!(differs_op, "NEG: 4-bit Add must DIFFER from an XOR spec (teeth)");
 
     // WRONG-2: a real WIDTH tooth. The w_data=4 datapath computes
-    // r0 = (a + b) mod 2^4 — it MASKS the carry out of bit-3. A width-blind
+    // r0 = (a + b) mod 2^4 -- it MASKS the carry out of bit-3. A width-blind
     // spec that added at the WRONG width (8) and read bit-3 with the carry
     // chain still running past the nibble boundary would AGREE on bits 0..3
-    // (the low nibble sum is width-independent) — so a naive "compare low 4
+    // (the low nibble sum is width-independent) -- so a naive "compare low 4
     // bits" would NOT catch a width bug. The distinguishing signal is the
     // carry-OUT of the 4-bit boundary: the correct datapath drops it; a
     // width-blind spec keeps it as an extra output bit. Prove (a) the datapath
     // output field is EXACTLY w_data=4 bits (no high-nibble leak), and (b) the
     // dropped carry-out is a genuine, satisfiable function of the operands
-    // (a=0xF,b=0x1 ⇒ carry-out=1) — so a spec that kept it would be a
+    // (a=0xF,b=0x1 ⇒ carry-out=1) -- so a spec that kept it would be a
     // DIFFERENT function than the 4-bit datapath.
     assert_eq!(got_r0.len(), 4, "NEG width: r0 output must be exactly w_data=4 bits (no high-nibble leak)");
     let a_ext: Vec<Bdd> = (0..8)
@@ -683,7 +683,7 @@ fn b21c_bveq_negative_control() {
         .collect();
     let wide_sum = ripple_sum(&a_ext, &b_ext, &vs);
     // The low nibble of the wide add EQUALS the datapath output (width tooth is
-    // NOT on the low bits — it is on the carry-out bit-4).
+    // NOT on the low bits -- it is on the carry-out bit-4).
     for i in 0..4 {
         assert!(
             wide_sum[i] == got_r0[i],
@@ -697,15 +697,15 @@ fn b21c_bveq_negative_control() {
     assert!(
         carry_out.sat_witness().is_some(),
         "NEG width: the carry-out of the 4-bit boundary must be satisfiable \
-         (a width-blind spec keeps it; the w_data=4 datapath drops it) — teeth"
+         (a width-blind spec keeps it; the w_data=4 datapath drops it) -- teeth"
     );
 
     eprintln!("b21c-BVEQ negative control [w_data=4]: 4-bit Add ≠ XOR spec; r0 is exactly 4 bits and \
-               the w_data=4 mask drops a satisfiable carry-out a width-blind 8-bit spec would keep — TEETH.");
+               the w_data=4 mask drops a satisfiable carry-out a width-blind 8-bit spec would keep -- TEETH.");
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 3b. FRAME NEGATIVE CONTROL — a stray BR write must be caught (MAJOR-1).
+// 3b. FRAME NEGATIVE CONTROL -- a stray BR write must be caught (MAJOR-1).
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -745,5 +745,5 @@ fn b21c_bveq_frame_negative_control() {
         "NEG frame: stray BR-copy witness (r1 != 0) must be satisfiable"
     );
 
-    eprintln!("b21c-BVEQ frame negative control [w_data=4]: restored BR=0 ≠ a stray BR=r1 copy — the frame check has TEETH.");
+    eprintln!("b21c-BVEQ frame negative control [w_data=4]: restored BR=0 ≠ a stray BR=r1 copy -- the frame check has TEETH.");
 }

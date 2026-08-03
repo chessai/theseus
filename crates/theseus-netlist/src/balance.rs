@@ -54,7 +54,7 @@ impl fmt::Display for CompactSimError {
 ///
 /// Instead of materializing one [`Cell`] per K0 buffer per tick of
 /// deficit (which is ~1.6 M structs for a full TISC-1 step), this type
-/// stores a per-input-port **delay count** — the number of K0 stages
+/// stores a per-input-port **delay count** -- the number of K0 stages
 /// the materializing [`balance`] *would* insert. Memory is O(active
 /// cells + ports), independent of total buffer count.
 ///
@@ -67,7 +67,7 @@ impl fmt::Display for CompactSimError {
 /// Produced by [`balance_compact`].
 #[derive(Clone, Debug)]
 pub struct CompactBalanced {
-    /// The original (possibly unbalanced) netlist — cells in topological
+    /// The original (possibly unbalanced) netlist -- cells in topological
     /// order.
     net: PhasedCellNetlist,
     /// `cell_input_delays[i][j]` = number of K0 buffer stages that
@@ -94,7 +94,7 @@ impl CompactBalanced {
         let mut counts = self.net.cell_counts();
         // Only record a K0 entry when buffers are actually inserted, so a
         // zero-buffer (already-balanced or wiring-only) net's counts equal
-        // the original's — matching materialized `balance()`, which adds no
+        // the original's -- matching materialized `balance()`, which adds no
         // K0 key when it inserts none.
         if self.total_k0_inserted > 0 {
             *counts.entry(CellKind::K0).or_insert(0) += self.total_k0_inserted;
@@ -145,7 +145,7 @@ impl CompactBalanced {
                     continue;
                 }
                 let arr = arrivals[inp.line1.0 as usize];
-                // Virtual K0 buffers fire at depths arr, arr+1, …,
+                // Virtual K0 buffers fire at depths arr, arr+1, ...,
                 // arr+delay−1. Compute per-phase counts in O(PHASE_COUNT).
                 let start = arr % p;
                 let full_cycles = delay / p;
@@ -169,7 +169,7 @@ impl CompactBalanced {
     /// Walks the original active cells in topological order, evaluates
     /// each via [`CellKind::eval`], and produces output bits **equal**
     /// to `sim::simulate` on the materialized balanced netlist (K0
-    /// buffers are logical identity — delays change timing, not bits).
+    /// buffers are logical identity -- delays change timing, not bits).
     ///
     /// This is a real evaluation over every active cell, not a
     /// delegation shortcut.

@@ -14,7 +14,7 @@ use theseus_spice::bench::ngspice_available;
 
 fn main() {
     if !ngspice_available() {
-        eprintln!("note: ngspice is not installed or not on PATH — cannot generate money plot.");
+        eprintln!("note: ngspice is not installed or not on PATH -- cannot generate money plot.");
         eprintln!("Install ngspice and re-run to produce the artifact.");
         return;
     }

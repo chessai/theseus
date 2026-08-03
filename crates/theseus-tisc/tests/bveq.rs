@@ -2,7 +2,7 @@
 // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! Tests for the `bveq` symbolic bit-vector equivalence module.
 //!
-//! T1–T8 cover the full trust-core surface: equiv correctness, the Ccnot
+//! T1-T8 cover the full trust-core surface: equiv correctness, the Ccnot
 //! wall-break, I4 must-reject, shared-mapping discipline, aliasing,
 //! tri-model reconciliation (L-a full-domain, L-b netlist-sampled),
 //! and the perf POC.
@@ -65,7 +65,7 @@ fn bveq_equiv_correctness_wrong_candidate() {
 
 #[test]
 fn bveq_wall_break_ccnot_flat8() {
-    // MINOR-3: non-reflexive — hand-built `rd ^= rs & rt` spec compared
+    // MINOR-3: non-reflexive -- hand-built `rd ^= rs & rt` spec compared
     // against instr_semantics. Previously both sides were the same call.
     let t = std::time::Instant::now();
     let model = bveq::instr_semantics(&Instr::Ccnot {
@@ -119,7 +119,7 @@ fn bveq_i4_must_reject_add_flat4() {
     let result = bveq::equiv(&instr_model, &spec, 4, &[0, 1]);
     assert!(
         result.is_err(),
-        "I4: byte-Add MUST be rejected at Flat(4) — upper output bits leak carry"
+        "I4: byte-Add MUST be rejected at Flat(4) -- upper output bits leak carry"
     );
 
     let cex = result.unwrap_err().unwrap_counterexample();
@@ -175,7 +175,7 @@ fn bveq_major1_i4_argument_swap_rejection() {
 
     // Also reject a spec with GENUINELY-MALFORMED upper bits (N1: the I4
     // obligation is UNDER the Flat(w) constraint, so a pass-through upper bit
-    // `Var(0,i≥4)` is legitimately false and ACCEPTED — that is invariant
+    // `Var(0,i≥4)` is legitimately false and ACCEPTED -- that is invariant
     // preservation, not junk. Real junk is a LOW-bit-dependent upper bit
     // (`Var(0,0)`), which stays satisfiable under the constraint → rejected).
     let mut junk_spec = RegTransfer::identity();
@@ -281,7 +281,7 @@ fn bveq_major2_nonoperand_corruption_rejected() {
 fn bveq_major2_overdeclaration_hides_corruption() {
     // N5 CONTRACT HAZARD (pinned, not endorsed): `equiv` trusts `operand_regs`.
     // OVER-declaring a register that is NOT actually Flat(w) forces its upper
-    // bits to zero and thereby HIDES any corruption conditioned on them —
+    // bits to zero and thereby HIDES any corruption conditioned on them --
     // `equiv` then returns Ok on a corrupting sequence. This is UNSOUND BY
     // DECLARATION and cannot be detected inside `equiv`. It is why slice-2 MUST
     // derive `operand_regs` from the prim's TYPE, never from the candidate
@@ -311,7 +311,7 @@ fn bveq_major2_overdeclaration_hides_corruption() {
 #[test]
 fn bveq_n1_identity_accepts_at_flat4() {
     // N1 regression (L20): the prior UNCONDITIONAL I4 rejected EVERY reversible
-    // model at w<8 — including identity ≡ identity — because an output bit of a
+    // model at w<8 -- including identity ≡ identity -- because an output bit of a
     // bijection can never be identically false. Under-constraint I4 accepts it.
     let id = RegTransfer::identity();
     assert!(
@@ -336,7 +336,7 @@ fn bveq_n1_exch_accepts_at_flat4() {
 
 #[test]
 fn bveq_n1_flat4_xor_spec_accepts() {
-    // Hand-built Flat(4) xorInto spec vs the Xor instruction model — the real
+    // Hand-built Flat(4) xorInto spec vs the Xor instruction model -- the real
     // slice-2 positive use case. Byte-Xor is width-agnostic: low 4 bits = a^b,
     // upper bits pass-through (legitimately false under the Flat(4) constraint).
     let model = bveq::symbolic_exec(&[Instr::Xor { rd: 1, rs: 0 }]).unwrap();
@@ -492,7 +492,7 @@ fn bveq_major4_mismap_canary_has_teeth() {
     // MAJOR-4 regression (L20): proves the shared-mapping discipline is
     // LOAD-BEARING for equiv. Two genuinely-equal transfers: under normal
     // (shared) mapping their BDDs are identical; under a mis-mapped b-side
-    // (operands shifted by 1) the BDDs differ — proving that a mapping
+    // (operands shifted by 1) the BDDs differ -- proving that a mapping
     // divergence would cause equiv to give wrong results.
     //
     // This is the "real canary" the review demanded: it exercises equiv's
@@ -510,11 +510,11 @@ fn bveq_major4_mismap_canary_has_teeth() {
 
     // Mis-mapped encoding: same expression but b-side operands shifted by 1.
     // The Add output for reg[0] references operand 0 and 1; under shift,
-    // it would reference operand 1 and 2 instead — different BDD.
+    // it would reference operand 1 and 2 instead -- different BDD.
     let shifted_b = bveq::expr_to_bdd_shifted(&add.regs[0][0], &map, 1).unwrap();
     assert_ne!(
         normal_a, shifted_b,
-        "MAJOR-4: mis-mapped encoding MUST produce a different BDD — \
+        "MAJOR-4: mis-mapped encoding MUST produce a different BDD -- \
          this proves the shared-mapping discipline is load-bearing. \
          If this assertion failed, the mapping discipline would be vacuous."
     );
@@ -827,13 +827,13 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     s.regs[4] = 0b1110_0111;
     cases.push(("Rotri(4,5) val=E7", Instr::Rotri { rd: 4, imm: 5 }, s));
 
-    // MINOR-1: rs=0 case — exercises the rs-port index-0 decoder mux.
+    // MINOR-1: rs=0 case -- exercises the rs-port index-0 decoder mux.
     let mut s = state_with_regs(&[]);
     s.regs[1] = 42;
     s.regs[0] = 170;
     cases.push(("Add(1,0) rs=0", Instr::Add { rd: 1, rs: 0 }, s));
 
-    // MINOR-1: additional rt indices — rt=3 for Ccnot.
+    // MINOR-1: additional rt indices -- rt=3 for Ccnot.
     let mut s = state_with_regs(&[]);
     s.regs[0] = 0xFF;
     s.regs[1] = 0xAA;
@@ -929,7 +929,7 @@ fn bveq_reconciliation_lb_netlist_sampled() {
             "L-b mem mismatch for {name}"
         );
 
-        // MINOR-2: quiescence — IR must return to 0, PC must advance to budget.
+        // MINOR-2: quiescence -- IR must return to 0, PC must advance to budget.
         assert_eq!(
             netlist_state.ir, 0,
             "L-b IR quiescence: IR must be 0 after execution for {name}"
@@ -941,7 +941,7 @@ fn bveq_reconciliation_lb_netlist_sampled() {
     }
 }
 
-// bveq_reconciliation_lb_netlist_wide RETIRED — superseded by
+// bveq_reconciliation_lb_netlist_wide RETIRED -- superseded by
 // bveq_netlist_walk_full_sweep (tests/bveq_netlist.rs) which provides
 // strictly greater coverage (complete in operand VALUES via BDD,
 // not just boundary samples) in ~19 min vs 2.6 h.
@@ -951,7 +951,7 @@ fn bveq_reconciliation_lb_netlist_sampled() {
 #[test]
 fn bveq_perf_poc() {
     // --- BDD equiv: Ccnot at full Flat(8) (2^24 domain) ---
-    // MINOR-3: non-reflexive — hand-built spec.
+    // MINOR-3: non-reflexive -- hand-built spec.
     let t = std::time::Instant::now();
     let ccnot_a = bveq::instr_semantics(&Instr::Ccnot {
         rd: 0,
@@ -1001,10 +1001,10 @@ fn bveq_perf_poc() {
     let exec_enum_us = t.elapsed().as_secs_f64() * 1e6;
 
     eprintln!("=== T8 PERF POC ===");
-    eprintln!("BDD equiv — Ccnot Flat(8) 3-op (2^24 domain): {ccnot_bdd_us:.1} µs (POC: 11 µs)");
-    eprintln!("BDD equiv — Add Flat(8) 2-op (2^16 domain):   {add_bdd_us:.1} µs (POC: 40 µs)");
-    eprintln!("Raw-u8 closure enum — 2-op Flat(8) (65536):   {raw_enum_us:.1} µs (POC: 32 µs)");
-    eprintln!("exec_instr enum — 2-op Flat(8) (65536):       {exec_enum_us:.1} µs");
+    eprintln!("BDD equiv -- Ccnot Flat(8) 3-op (2^24 domain): {ccnot_bdd_us:.1} µs (POC: 11 µs)");
+    eprintln!("BDD equiv -- Add Flat(8) 2-op (2^16 domain):   {add_bdd_us:.1} µs (POC: 40 µs)");
+    eprintln!("Raw-u8 closure enum -- 2-op Flat(8) (65536):   {raw_enum_us:.1} µs (POC: 32 µs)");
+    eprintln!("exec_instr enum -- 2-op Flat(8) (65536):       {exec_enum_us:.1} µs");
     eprintln!("---");
     eprintln!("The win is COMPLETENESS WITHOUT A TABLE:");
     eprintln!("  BDD proves 16.7M-domain equivalence in microseconds");

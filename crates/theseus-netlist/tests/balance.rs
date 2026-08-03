@@ -1,6 +1,6 @@
 //! Tests for the tick-exact balancer (ADR-0026 C2.2).
 //!
-//! Pure logic tests — no ngspice, no SPICE. Validates that `balance()`
+//! Pure logic tests -- no ngspice, no SPICE. Validates that `balance()`
 //! produces netlists that are:
 //! - balanced (no tick imbalances),
 //! - structurally valid (validate() Ok),
@@ -59,7 +59,7 @@ fn assert_balanced_agrees_with_core(iso: &Iso, balanced: &PhasedCellNetlist) {
 /// Build the unbalanced netlist: `(Reg(1) × id × id) ; fredkin`.
 /// The control bit passes through Reg(1) (arrives at tick 1) while the
 /// data bits pass through (arrive at tick 0). The Fredkin cell sees
-/// arrivals [1, 0, 0] — a tick imbalance the balancer must repair.
+/// arrivals [1, 0, 0] -- a tick imbalance the balancer must repair.
 fn reconvergent_fixture() -> (TypedNode, Iso) {
     let reg1 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(1) };
     let par = TypedNode {
@@ -84,7 +84,7 @@ fn reconvergent_fixture() -> (TypedNode, Iso) {
         output: three_bits(),
         kind: NodeKind::Seq(vec![par, fredkin]),
     };
-    // Reg is logically the identity — the Iso oracle for the core
+    // Reg is logically the identity -- the Iso oracle for the core
     // interpreter is just the Fredkin itself.
     let iso = Iso::Prim(Box::new(fredkin_prim()));
     (net, iso)
@@ -342,14 +342,14 @@ fn balance_preserves_output_skew() {
     assert_eq!(balanced.validate(), Ok(()));
 }
 
-// ── Chain of five Fredkins — semantics oracle ───────────────────────
+// ── Chain of five Fredkins -- semantics oracle ───────────────────────
 
 #[test]
 fn chain_of_fredkins_semantics_preserved() {
     let fk = || Iso::Prim(Box::new(fredkin_prim()));
     let iso = Iso::seq(fk(), Iso::seq(fk(), Iso::seq(fk(), Iso::seq(fk(), fk()))));
     let original = lower_iso(&iso).unwrap();
-    // All inputs from previous Fredkin at same tick — already balanced.
+    // All inputs from previous Fredkin at same tick -- already balanced.
     assert!(original.tick_imbalances().unwrap().is_empty());
 
     let balanced = balance(&original).unwrap();
@@ -364,8 +364,8 @@ fn chain_of_fredkins_semantics_preserved() {
 fn synthesized_monolithic_adder_balances_and_sims() {
     // The monolithic preserved-input 2-bit adder lowers via general
     // CSWAP synthesis (it matches no fixed template); after balancing,
-    // the TIMED phased sim — which asserts dynamic INV-TOKEN for every
-    // rail pair on every tick — agrees with core eval on all 16 inputs.
+    // the TIMED phased sim -- which asserts dynamic INV-TOKEN for every
+    // rail pair on every tick -- agrees with core eval on all 16 inputs.
     let four = Type::prod(Type::prod(bit(), bit()), Type::prod(bit(), bit()));
     let adder = prim_from_bits("add2", four.clone(), four.clone(), |bits| {
         let a = (u8::from(bits[0]) << 1) | u8::from(bits[1]);

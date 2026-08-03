@@ -8,7 +8,7 @@
 //! - `bveq_netlist_walk_reconcile` (DEFAULT, ~5-15s): one-arm, 13 ops,
 //!   2-3 selector/imm configs each. THE UN-IGNORE WIN.
 //! - `bveq_netlist_walk_system` (#[ignore], ~46s): full system_step,
-//!   13 ops, 1 config each — the whole-step authority (discharges T3).
+//!   13 ops, 1 config each -- the whole-step authority (discharges T3).
 //! - `bveq_netlist_walk_full_sweep` (#[ignore], ~19min): one-arm,
 //!   EVERY selector pair/triple + every immediate.
 //! - `bveq_netlist_walk_bootstrap` (#[ignore], ~30-40s): concrete
@@ -317,7 +317,7 @@ fn bveq_netlist_walk_reconcile() {
 #[ignore]
 fn bveq_netlist_walk_system() {
     // Full system_step([word]) walk, 13 ops, 1 config each.
-    // THE WHOLE-STEP AUTHORITY — discharges T3.
+    // THE WHOLE-STEP AUTHORITY -- discharges T3.
     let ops = register_pure_ops();
 
     big_stack(move || {
@@ -706,7 +706,7 @@ fn bveq_netlist_negative_xor_vs_add() {
 
 #[test]
 fn bveq_netlist_negative_addi_symbolic_s0() {
-    // Assert symbolic-s0 Addi MISMATCH — s0=0 is load-bearing + detected.
+    // Assert symbolic-s0 Addi MISMATCH -- s0=0 is load-bearing + detected.
     // When s0 is symbolic, Addi adds (s0 ^ imm) instead of imm.
     big_stack(|| {
         let map = extended_varmap();
@@ -736,7 +736,7 @@ fn bveq_netlist_negative_addi_symbolic_s0() {
         }
         assert!(
             found_mismatch,
-            "Addi with symbolic s0: no mismatch found — s0=0 constraint is NOT load-bearing!"
+            "Addi with symbolic s0: no mismatch found -- s0=0 constraint is NOT load-bearing!"
         );
     });
 }

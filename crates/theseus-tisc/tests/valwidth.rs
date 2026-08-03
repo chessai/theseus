@@ -6,7 +6,7 @@
 //! T2: Flat(4) Xor → exactly [Xor{rd,rs}]; run_on_cpu_fast == eval whole domain.
 //! T3: Flat(8) Xor → same [Xor] shape; run_on_cpu_fast == eval strided.
 //! T4: real CPU on a handful of Flat(8) Xor inputs.
-//! T6: canonicalization — Flat(4) Xor register bytes stay < 16.
+//! T6: canonicalization -- Flat(4) Xor register bytes stay < 16.
 //! T-neg: Flat(9) rejected; Prod(Flat(4),Flat(4)) is 2 leaves.
 
 use std::collections::BTreeMap;
@@ -255,7 +255,7 @@ fn t4_flat8_xor_real_cpu() {
     }
 }
 
-// ── T6: canonicalization — Flat(4) register bytes stay < 16 ─────────
+// ── T6: canonicalization -- Flat(4) register bytes stay < 16 ─────────
 
 #[test]
 fn t6_flat4_xor_register_bytes_canonical() {

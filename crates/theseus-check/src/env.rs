@@ -21,7 +21,7 @@ use crate::labels::Clash;
 /// One step of an injection path into a right-nested sum.
 ///
 /// A right-nested sum `p0 + (p1 + (p2 + ...))` selects its `i`-th summand by
-/// taking [`Inj::R`] `i` times and then [`Inj::L`] once — except the *last*
+/// taking [`Inj::R`] `i` times and then [`Inj::L`] once -- except the *last*
 /// summand, which is reached by taking [`Inj::R`] `n-1` times (no trailing
 /// `L`). See [`CtorInfo::path`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,12 +89,12 @@ pub struct IsoCollision {
 }
 
 /// The default bounded-unroll depth `D` for recursive (μ-) types
-/// (v0.2 software dialect, increment 1 — ADR-0035, design/mu-types.md).
+/// (v0.2 software dialect, increment 1 -- ADR-0035, design/mu-types.md).
 ///
 /// A recursive nominal type is lowered by unrolling its fixpoint `D` times
 /// and cutting off with `Zero` (the empty type), so the lowered type's
 /// inhabitants are exactly the values of the recursive type with fewer than
-/// `D` unfoldings — e.g. `Nat` at `D = 4` lowers to `1+(1+(1+(1+0)))`, the
+/// `D` unfoldings -- e.g. `Nat` at `D = 4` lowers to `1+(1+(1+(1+0)))`, the
 /// numerals `0..=3`. `4` keeps exhaustive coverage enumeration cheap even for
 /// branching recursion (a binary tree at `D = 4` has 26 inhabitants) while
 /// still exercising multiple levels of nesting.
@@ -256,7 +256,7 @@ impl Env {
     /// fewer than `D` unfoldings, encoded independently of `D` (a numeral `n`
     /// is `inr`ⁿ`(inl unit)` at every depth that admits it). The budget is
     /// per-path (restored on exit), so sibling occurrences of a type are
-    /// unaffected and non-recursive programs lower exactly as before — a type
+    /// unaffected and non-recursive programs lower exactly as before -- a type
     /// can only re-enter itself along a path if it is recursive.
     pub fn lower(&self, ty: &SurfType) -> CoreType {
         let mut fuel: BTreeMap<String, usize> = BTreeMap::new();
@@ -308,7 +308,7 @@ impl Env {
             .entry(name.to_string())
             .or_insert(self.unroll_depth);
         if *remaining == 0 {
-            // μ-cutoff: a value would need ≥ D unfoldings of `name` — outside
+            // μ-cutoff: a value would need ≥ D unfoldings of `name` -- outside
             // the truncated domain (empty, not junk: see ADR-0035).
             return CoreType::Zero;
         }
@@ -379,7 +379,7 @@ pub(crate) fn navigate<'a>(value: &'a Value, path: &[Inj]) -> Option<&'a Value> 
 }
 
 /// The blessed stdlib numeric types `U<n>` (ADR-0017): `U1`, `U2`, `U4`, `U8`,
-/// `U16`, … — builtin, not user-declared, so name resolution treats them as
+/// `U16`, ... -- builtin, not user-declared, so name resolution treats them as
 /// known.
 fn is_builtin_type(name: &str) -> bool {
     parse_un_bits(name).is_some()
@@ -402,7 +402,7 @@ fn parse_un_bits(name: &str) -> Option<u32> {
 /// Lower a `U<n>` builtin numeric type to its core encoding (ADR-0017).
 ///
 /// Fixed little-endian-pair representation:
-/// * `U1 = 1 + 1`  (2 values — a single bit)
+/// * `U1 = 1 + 1`  (2 values -- a single bit)
 /// * `U<n> = U<n/2> × U<n/2>`  for `n > 1`  (doubles the bit-width via product)
 ///
 /// So `U2 = (1+1) × (1+1)` (4 values), `U4 = U2 × U2` (16 values), etc.
@@ -585,7 +585,7 @@ mod tests {
         let program = theseus_syntax::parse("type Nat = Zero | Succ Nat\n").unwrap();
         let env = resolve(&program);
         let core = env.lower(&named("Nat"));
-        // D = 4: Nat ⇒ 1 + (1 + (1 + (1 + 0))) — numerals 0..=3.
+        // D = 4: Nat ⇒ 1 + (1 + (1 + (1 + 0))) -- numerals 0..=3.
         let expected = CoreType::sum(
             CoreType::One,
             CoreType::sum(
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn recursive_value_encoding_is_depth_independent() {
         // The numeral n encodes as inrⁿ(inl unit) at EVERY depth that admits
-        // it — the truncated domains nest as prefixes. This is what lets
+        // it -- the truncated domains nest as prefixes. This is what lets
         // coverage/elaboration thread payload types without depth bookkeeping.
         let program = theseus_syntax::parse("type Nat = Zero | Succ Nat\n").unwrap();
         let mut env = resolve(&program);

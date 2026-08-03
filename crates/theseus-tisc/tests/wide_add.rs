@@ -1,16 +1,16 @@
-//! A-7.1 — wide reversible ADDER (cross-byte carry).
+//! A-7.1 -- wide reversible ADDER (cross-byte carry).
 //!
-//! `wide_add(k) : (a: kbytes, b: kbytes) ↦ (a + b mod 2^(8k), b)` — a
-//! zero-ancilla, parametric-in-`k` Takahashi–Kunihiro in-place ripple adder
+//! `wide_add(k) : (a: kbytes, b: kbytes) ↦ (a + b mod 2^(8k), b)` -- a
+//! zero-ancilla, parametric-in-`k` Takahashi-Kunihiro in-place ripple adder
 //! that generalizes the 1-byte `pc_add_br`/`add_operand` (step.rs / instr.rs)
 //! by running the SAME construction at width `m = k·W`. The carry is a
-//! bit-level chain that crosses each byte boundary for free — a `Times` of
+//! bit-level chain that crosses each byte boundary for free -- a `Times` of
 //! independent byte-adds would DROP exactly this inter-byte carry.
 //!
 //! ─────────────────────────────────────────────────────────────────────────
 //! VERIFICATION TIERS (verify-at-small-n, ship-large):
 //!
-//!   (1) BDD symbolic `equiv` — THE width-agnostic correctness proof. We walk
+//!   (1) BDD symbolic `equiv` -- THE width-agnostic correctness proof. We walk
 //!       the compiled iso netlist symbolically (`eval_bdd`) over 2m fresh BDD
 //!       variables and compare, bit-for-bit via BDD, against the ripple-carry
 //!       spec `sum_i = a_i ⊕ b_i ⊕ c_i` (complete over the FULL 2^(2m) domain,
@@ -25,7 +25,7 @@
 //!   (4) Real-authority witness: lower → balance → `simulate` (the real
 //!       reversible-netlist simulator, the same tier `step_faithfulness_
 //!       balanced_simulate` uses) == core `eval`, on dense k=2 wide inputs incl.
-//!       cross-byte-carry vectors. (`run_on_cpu` — the ISA ROM path — does NOT
+//!       cross-byte-carry vectors. (`run_on_cpu` -- the ISA ROM path -- does NOT
 //!       apply: a cross-byte ripple is a gate-level operand iso, not an ISA
 //!       byte-op sequence; the balanced-netlist simulate is the faithful CPU
 //!       tier for it.)
@@ -102,19 +102,19 @@ fn eval_wide_add(k: usize, a: u128, b: u128) -> (u128, u128) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// (1) BDD symbolic equiv — the width-agnostic correctness proof
+// (1) BDD symbolic equiv -- the width-agnostic correctness proof
 // ══════════════════════════════════════════════════════════════════════════
 
 /// Build the symbolic input SV for `wide_add(k)`: a tree matching the input
 /// type `Prod(wideWord, wideWord)`, with target bit i = BDD var i and operand
-/// bit i = BDD var m+i. (Right-nested products, LSB byte/bit first — same order
+/// bit i = BDD var m+i. (Right-nested products, LSB byte/bit first -- same order
 /// `sv_flatten`/`bits_of` produce.)
 fn symbolic_input_sv(k: usize, vs: &BddVariableSet) -> SV {
     let m = k * W;
     let (in_ty, _) = type_of(&wide_add(k)).expect("type");
     // Flat bit BDDs in STRUCTURAL order (target 0..m, then operand 0..m), but
     // each mapped to a BIT-INTERLEAVED BDD variable so ripple-carry stays
-    // linear in the BDD (target bit i = var 2i, operand bit i = var 2i+1 — the
+    // linear in the BDD (target bit i = var 2i, operand bit i = var 2i+1 -- the
     // same interleaving `VarMap` uses to keep ADD/SUB linear). Sequential
     // ordering blows the BDD up exponentially at m=32.
     let flat: Vec<Bdd> = (0..m)
@@ -190,7 +190,7 @@ fn bdd_equiv_wide_add(k: usize) -> Result<(), String> {
         return Err(format!("out width {} != {}", out_flat.len(), 2 * m));
     }
 
-    // Input target/operand bit BDDs (bit-interleaved vars — same VarSet).
+    // Input target/operand bit BDDs (bit-interleaved vars -- same VarSet).
     let a: Vec<Bdd> = (0..m).map(|i| tgt_var(&vs, i)).collect();
     let b: Vec<Bdd> = (0..m).map(|i| opd_var(&vs, i)).collect();
 
@@ -215,7 +215,7 @@ fn wide_add_bdd_equiv_k2() {
 
 #[test]
 // A-7.1 review M2: the old `#[ignore = "slow (symbolic gate minterm
-// expansion)"]` reason was STALE — the bit-interleaved BDD variable order
+// expansion)"]` reason was STALE -- the bit-interleaved BDD variable order
 // (`symbolic_input_sv`) keeps ripple-carry LINEAR even at k=4 (64 vars), so this
 // completes in ~1.2s debug / ~0.9s release over the FULL 2^64 domain. Un-ignored
 // and moved into the heavy-tests tier (not the default fast tier, since ~1.2s is
@@ -223,7 +223,7 @@ fn wide_add_bdd_equiv_k2() {
 // ignored otherwise.
 #[cfg_attr(
     not(feature = "heavy-tests"),
-    ignore = "k=4 full-domain BDD equiv (~1.2s); heavy-tests tier — run via --features heavy-tests"
+    ignore = "k=4 full-domain BDD equiv (~1.2s); heavy-tests tier -- run via --features heavy-tests"
 )]
 fn wide_add_bdd_equiv_k4() {
     bdd_equiv_wide_add(4).expect("wide_add(4) ≡ a+b mod 2^32 (BDD, complete)");
@@ -232,13 +232,13 @@ fn wide_add_bdd_equiv_k4() {
 
 #[test]
 fn wide_add_bdd_equiv_k1_matches_byte_adder() {
-    // The k=1 instance is exactly the byte adder — proves the parametric
+    // The k=1 instance is exactly the byte adder -- proves the parametric
     // construction degenerates correctly at the base case.
     bdd_equiv_wide_add(1).expect("wide_add(1) ≡ a+b mod 2^8 (BDD)");
     eprintln!("BDD equiv: wide_add(1) == byte adder (a+b mod 2^8, b)");
 }
 
-// A negative control: the BDD oracle has teeth — a WRONG spec (independent
+// A negative control: the BDD oracle has teeth -- a WRONG spec (independent
 // per-byte add, i.e. carry RESET at the byte boundary) must be caught.
 #[test]
 fn wide_add_bdd_rejects_carryless_byte_split() {
@@ -263,14 +263,14 @@ fn wide_add_bdd_rejects_carryless_byte_split() {
     let differs = (0..m).any(|i| out_flat[i] != wrong[i]);
     assert!(
         differs,
-        "the wide adder must NOT equal a carry-less per-byte split — \
+        "the wide adder must NOT equal a carry-less per-byte split -- \
          inter-byte carry is the whole point"
     );
     eprintln!("BDD negative control: wide_add(2) ≠ carry-less per-byte split (carry crosses)");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// (2) Concrete exec — exhaustive at k=1, strided vs Rust reference at k=2/k=4
+// (2) Concrete exec -- exhaustive at k=1, strided vs Rust reference at k=2/k=4
 // ══════════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -325,7 +325,7 @@ fn wide_add_strided_k2_vs_u16_reference() {
 }
 
 /// A SMALL focused k=4 vector set (each k=4 eval walks a ~250-cell iso, so keep
-/// the default-tier count low — the exhaustive proof lives at k=2). These still
+/// the default-tier count low -- the exhaustive proof lives at k=2). These still
 /// force carries across ALL THREE k=4 byte boundaries.
 fn k4_focus_pairs() -> Vec<(u128, u128)> {
     let m = mask(4);
@@ -364,7 +364,7 @@ fn wide_word_ty_and_byte_order_pin() {
         theseus_core::Type::prod(word8(), word8()),
         "wide_word_ty(2) must be (Word8, Word8) LSB byte first"
     );
-    // Byte order — NON-VACUOUS pin. An add-zero round-trip (`0x0201 + 0 =
+    // Byte order -- NON-VACUOUS pin. An add-zero round-trip (`0x0201 + 0 =
     // 0x0201`) is VACUOUS: encode and decode share the SAME byte-order
     // convention, so swapping the byte lanes in BOTH cancels out and the test
     // passes regardless of order (the L20 green-for-wrong-reason anti-pattern).
@@ -374,7 +374,7 @@ fn wide_word_ty_and_byte_order_pin() {
     // correct little-endian order the carry ripples from byte0 (0xFF) UP into
     // byte1, giving 0x0100. If byte0/byte1 were swapped, the same operand bytes
     // would present as 0xFF00 + 0x0100 and the low lane (0x00 + 0x00) would NOT
-    // carry — the result would be 0xFF00-shaped, not 0x0100. So this add
+    // carry -- the result would be 0xFF00-shaped, not 0x0100. So this add
     // distinguishes correct vs swapped byte order.
     let (sum, bout) = eval_wide_add(2, 0x00FF, 0x0001);
     assert_eq!(
@@ -412,11 +412,11 @@ fn wide_add_cross_byte_carry_headline() {
     // And a 4-byte triple-boundary carry: 0x00FF_FFFF + 1 = 0x0100_0000.
     let (sum4, _) = eval_wide_add(4, 0x00FF_FFFF, 0x0000_0001);
     assert_eq!(sum4, 0x0100_0000, "triple-boundary carry (4-byte)");
-    eprintln!("exec: 0x00FF+1=0x0100 (k=2) and 0x00FFFFFF+1=0x01000000 (k=4) — carry crosses");
+    eprintln!("exec: 0x00FF+1=0x0100 (k=2) and 0x00FFFFFF+1=0x01000000 (k=4) -- carry crosses");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// (3) Bijectivity + net-zero ancilla — adjoint round-trip
+// (3) Bijectivity + net-zero ancilla -- adjoint round-trip
 // ══════════════════════════════════════════════════════════════════════════
 
 /// `wide_sub(k)` inverts `wide_add(k)`: sub(add(a,b)) = (a, b).
@@ -472,7 +472,7 @@ fn wide_add_adjoint_roundtrip_k2_strided() {
     for &(a, b) in &strided_pairs(2) {
         roundtrip(2, a, b);
     }
-    // A few k=4 round-trips (each is 2 k=4 evals; keep the count small — the
+    // A few k=4 round-trips (each is 2 k=4 evals; keep the count small -- the
     // exhaustive bijection proof is at k=1, the complete correctness at k=2).
     for &(a, b) in &k4_focus_pairs() {
         roundtrip(4, a, b);
@@ -483,7 +483,7 @@ fn wide_add_adjoint_roundtrip_k2_strided() {
 #[test]
 fn wide_add_ancilla_profile_matches_pc_add_br() {
     // "Zero-ancilla" is an OPERAND-ISO property: no wire OUTSIDE the 2m
-    // target/operand data wires appears in the Iso — the carry is threaded
+    // target/operand data wires appears in the Iso -- the carry is threaded
     // transiently through the operand's own wires and restored. The reversible
     // CELL lowering still allocates structural routing ancillas (Toffoli
     // decomposition scratch), all initialized to `false`; these are the SAME
@@ -537,7 +537,7 @@ fn wide_add_ancilla_profile_matches_pc_add_br() {
 #[test]
 fn wide_add_netlist_valid_and_conservative() {
     // The netlist validates and uses only the admitted K0..K2 (+R1) vocabulary,
-    // like pc_add_br — a further reversibility sanity gate.
+    // like pc_add_br -- a further reversibility sanity gate.
     use theseus_netlist::CellKind;
     for k in [1usize, 2, 4] {
         let net = lower_iso(&wide_add(k)).expect("lower");
@@ -554,7 +554,7 @@ fn wide_add_netlist_valid_and_conservative() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// (4) Real-authority witness — lower → balance → simulate == eval
+// (4) Real-authority witness -- lower → balance → simulate == eval
 // ══════════════════════════════════════════════════════════════════════════
 
 #[test]

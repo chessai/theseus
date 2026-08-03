@@ -20,12 +20,12 @@ pub enum TypeError {
     /// In `trace(u, f)`, the carrier in `f`'s codomain ≠ declared `u`.
     TraceOutputCarrier { expected: Type, got: Type },
     /// In `iter(n, f)`, the counter type `n` is not a unary numeral
-    /// type `1 + (1 + (… + 0))`.
+    /// type `1 + (1 + (... + 0))`.
     IterCounterNotNumeral(Type),
     /// In `iter(n, f)`, the body is not an endo-iso (`f : a ↔ a`).
     IterBodyNotEndo { input: Type, output: Type },
     /// In `fold(l, f)` / `unfold(l, f)`, the spine type `l` is not a
-    /// list-spine type `1 + (b × (1 + (b × (… + 0))))`.
+    /// list-spine type `1 + (b × (1 + (b × (... + 0))))`.
     FoldSpineNotList(Type),
     /// In `fold(l, f)` / `unfold(l, f)`, the body is not an endo-iso
     /// (`f : b × c ↔ b × c`).
@@ -38,7 +38,7 @@ pub enum TypeError {
     FoldBodyElemMismatch { expected: Type, got: Type },
 }
 
-/// Is `ty` a unary numeral type `1 + (1 + (… + 0))`? (`0` itself is the
+/// Is `ty` a unary numeral type `1 + (1 + (... + 0))`? (`0` itself is the
 /// degenerate, uninhabited numeral type.) These are exactly the types
 /// bounded μ-unrolling (ADR-0035) produces for `Nat`, and the only
 /// admissible `iter` counters: their inhabitants have a canonical
@@ -54,17 +54,17 @@ pub fn is_numeral_ty(ty: &Type) -> bool {
     }
 }
 
-/// Is `ty` a list-spine type `1 + (b × (1 + (b × (… + 0))))` with a
+/// Is `ty` a list-spine type `1 + (b × (1 + (b × (... + 0))))` with a
 /// UNIFORM element type `b`? (`0` itself is the degenerate, uninhabited
 /// spine.) These are exactly the types bounded μ-unrolling (ADR-0035)
 /// produces for `List b = Nil | Cons b List`, and the only admissible
 /// `fold`/`unfold` spines (ADR-0037).
 ///
 /// Returns:
-/// - `None` — not a list-spine type;
-/// - `Some(None)` — the degenerate spine `0` (no layers, so the element
+/// - `None` -- not a list-spine type;
+/// - `Some(None)` -- the degenerate spine `0` (no layers, so the element
 ///   type is unconstrained);
-/// - `Some(Some(b))` — a spine with ≥ 1 layer and element type `b`.
+/// - `Some(Some(b))` -- a spine with ≥ 1 layer and element type `b`.
 pub fn list_spine_elem_ty(ty: &Type) -> Option<Option<&Type>> {
     let mut elem: Option<&Type> = None;
     let mut cur = ty;
@@ -279,7 +279,7 @@ fn type_max_flat_width(ty: &Type) -> Option<u8> {
     }
 }
 
-/// The widest data-word (`Type::Flat(n)`) the program manipulates — the
+/// The widest data-word (`Type::Flat(n)`) the program manipulates -- the
 /// per-program `w_data` derivation input (B-2.1c auto-derive).
 ///
 /// The compiled `&[Instr]` stream is byte-oriented and has lost the source
@@ -292,8 +292,8 @@ fn type_max_flat_width(ty: &Type) -> Option<u8> {
 /// `Type` it takes the widest `Flat(n)` leaf ([`type_max_flat_width`]).
 ///
 /// Returns the max `n` seen, clamped to `[1, 8]`. **Defaults to `8` when no
-/// `Flat` leaf is found** — this is the SAFE direction: it never under-reports
-/// (a spuriously narrow `w_data` would misroute a wide data word — a silent
+/// `Flat` leaf is found** -- this is the SAFE direction: it never under-reports
+/// (a spuriously narrow `w_data` would misroute a wide data word -- a silent
 /// corruption). A program whose widest value is `Flat(4)` returns `4`; a
 /// byte (`Flat(8)`) program returns `8`; a mixed `Flat(4)` + `Flat(8)` program
 /// returns `8`.
@@ -343,7 +343,7 @@ pub fn max_flat_width(iso: &Iso) -> usize {
     }
     match go(iso, None) {
         Some(n) => (n as usize).clamp(1, 8),
-        // No Flat leaf anywhere — default to the full byte width (never
+        // No Flat leaf anywhere -- default to the full byte width (never
         // under-report; a narrow w_data would misroute wide data).
         None => 8,
     }
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn max_flat_width_wrapped_reaches_inner_flat() {
-        // The Flat(4) is buried inside Times / Plus / Trace / Iter / Sym / Seq —
+        // The Flat(4) is buried inside Times / Plus / Trace / Iter / Sym / Seq --
         // each wrapper must be descended, else the width is under-reported.
         let inner = || Iso::Id(Type::Flat(4));
         // Times: sub-iso descent.
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn reject_seq_mismatch() {
-        // id(1) ; swap⁺(1, Bool) — output of id is 1, input of swap is 1+Bool
+        // id(1) ; swap⁺(1, Bool) -- output of id is 1, input of swap is 1+Bool
         let term = Iso::seq(Iso::Id(one()), Iso::SwapSum(one(), bool_ty()));
         let err = type_of(&term).unwrap_err();
         assert!(matches!(err, TypeError::SeqMismatch { .. }));
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn reject_trace_bad_carrier() {
-        // trace(u=1, f) where f : Bool+a ↔ ...  — carrier mismatch
+        // trace(u=1, f) where f : Bool+a ↔ ...  -- carrier mismatch
         let u = one();
         let a = one();
         // f : Bool + a ↔ Bool + a  (carrier is Bool, not 1)
@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn reject_iter_body_not_endo() {
-        // swap⁺(1, Bool) : 1 + Bool ↔ Bool + 1 — not an endo-iso.
+        // swap⁺(1, Bool) : 1 + Bool ↔ Bool + 1 -- not an endo-iso.
         let n = Type::numeral_ty(2);
         let body = Iso::SwapSum(one(), bool_ty());
         let err = type_of(&Iso::iter(n, body)).unwrap_err();
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn reject_fold_body_not_endo() {
-        // swap⁺(1, Bool) : 1 + Bool ↔ Bool + 1 — not an endo-iso.
+        // swap⁺(1, Bool) : 1 + Bool ↔ Bool + 1 -- not an endo-iso.
         let l = Type::list_spine_ty(bool_ty(), 2);
         let body = Iso::SwapSum(one(), bool_ty());
         let err = type_of(&Iso::fold(l, body)).unwrap_err();

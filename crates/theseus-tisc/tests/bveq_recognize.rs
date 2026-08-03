@@ -324,7 +324,7 @@ fn t_suite_agree_xori_f8() {
 
 #[test]
 fn t_suite_agree_3cycle_fwd() {
-    // Sum(Bit, One) carrier — 2-leaf, 3 inhabitants.
+    // Sum(Bit, One) carrier -- 2-leaf, 3 inhabitants.
     let carrier = Type::sum(bit_ty(), Type::One);
     let vals = enumerate_values(&carrier);
     let mut forward = BTreeMap::new();
@@ -461,11 +461,11 @@ fn t_wrong_arm_add_for_xor_rejected() {
 
 #[test]
 fn t_operand_from_type_rejects_corruption() {
-    // Build a prim on Flat(8)×Flat(8): (a, b) ↦ (a, a ^ b) — standard xorInto.
+    // Build a prim on Flat(8)×Flat(8): (a, b) ↦ (a, a ^ b) -- standard xorInto.
     // Emit a body that corrupts result conditioned on a non-operand register:
     // Xor r1,r0; Ccnot rd=1,rs=3,rt=4
     // With TYPE-derived operands [r0, r1], the Ccnot touches r1 conditioned on
-    // r3&r4 — the frame-closure check catches r1's output depending on r3,r4.
+    // r3&r4 -- the frame-closure check catches r1's output depending on r3,r4.
     // If someone derived operands from the candidate (including r3,r4 as
     // "operands"), the corruption would be hidden (FALSE-ACCEPT).
     let def = prim_2reg("xorInto", &flat8(), |a, b| (a, a ^ b));
@@ -488,12 +488,12 @@ fn t_operand_from_type_rejects_corruption() {
 
     // If we OVER-DECLARE operands to include r3, r4 (candidate-derived),
     // the frame closure would not catch the dependence. This is the
-    // false-accept vector from Q2b — we verify it would pass.
+    // false-accept vector from Q2b -- we verify it would pass.
     let candidate_regs: &[u8] = &[0, 1, 3, 4];
     let result2 = bveq_verify_emission(&body, &def, candidate_regs);
     // The pointwise check might still catch it (since the table only has entries
     // for the 2-operand function), but the frame-closure check specifically
-    // passes with over-declared operands — this is the danger.
+    // passes with over-declared operands -- this is the danger.
     // The exact outcome depends on whether pointwise catches it (r3,r4 default
     // to 0 in the input so Ccnot rd=1,rs=3,rt=4 is a no-op at those inputs).
     // At all-zeros for r3,r4 the Ccnot is identity → pointwise passes.

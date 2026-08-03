@@ -3,7 +3,7 @@
 //!
 //! The MEXCH instruction's decode includes a 1-of-N select tree over the
 //! memory bank (the C1 tree). This test demonstrates whole-domain
-//! ancilla-cleanliness at N ∈ {2, 4, 8} — the defining gate of Layer 1.
+//! ancilla-cleanliness at N ∈ {2, 4, 8} -- the defining gate of Layer 1.
 //!
 //! Strategy: build a standalone iso with the SAME Fredkin-tree structure
 //! as the decoder's select_mem, but using Bit-sized fields (not Word8)

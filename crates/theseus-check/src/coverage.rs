@@ -41,7 +41,7 @@ fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
     }
 }
 
-/// Plain side check (no labels) — original behavior.
+/// Plain side check (no labels) -- original behavior.
 fn check_side_plain(
     clauses: &[Clause],
     surf_ty: &SurfType,
@@ -215,7 +215,7 @@ fn matches_extended_value(
     let pattern = strip_paren_pat(pattern);
     match pattern {
         Pattern::Label(name, args, _) => {
-            // Must be Left(...) — a label-state value.
+            // Must be Left(...) -- a label-state value.
             let Value::Left(carrier_val) = value else {
                 return false;
             };
@@ -299,7 +299,7 @@ fn match_args(value: &Value, args: &[Pattern], payload_ty: Option<&SurfType>, en
             if let Some(ty) = payload_ty {
                 matches_value(value, single, ty, env)
             } else {
-                // Nullary ctor with no payload type — structural match only.
+                // Nullary ctor with no payload type -- structural match only.
                 pattern_is_var(single)
             }
         }
@@ -490,7 +490,7 @@ mod tests {
         // Zero is never produced on the right, and the deepest numeral's
         // image would exceed depth D. The documented diagnostic for a
         // depth-escaping iso is the ordinary coverage error (T0301) with the
-        // uncovered witness — here Zero (= inl unit) on the right side.
+        // uncovered witness -- here Zero (= inl unit) on the right side.
         let src = "type Nat = Zero | Succ Nat\n\
                    iso succ : Nat <-> Nat\n\
                    | Zero <-> Succ Zero\n\

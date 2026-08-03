@@ -3,7 +3,7 @@
 //!
 //! Adopted from the adversarial-review probe
 //! `docs/reviews/a0-shared-crossbar-review.md`. Naming a scratch word
-//! (s2..s7, operand idx 10..15 — legal per `asm::check_operand`) as the
+//! (s2..s7, operand idx 10..15 -- legal per `asm::check_operand`) as the
 //! `rd` operand routes it through the operand crossbar `select_operand`.
 //! Before the fix, the crossbar's level-3 stage swapped `base(0)↔base(8)`
 //! (r0↔s0 = `AUX_OPERAND_FIELD`, the fixed operand buffer) and
@@ -12,9 +12,9 @@
 //! mid-instruction → wrong cores fire, BR clobbered, s0 left dirty
 //! (breaks the inter-step s0=s1=0 invariant → unbounded corruption).
 //!
-//! Each op is run through the REAL evaluator in BOTH decoder forms —
+//! Each op is run through the REAL evaluator in BOTH decoder forms --
 //! `decode_execute()` (shared cores) and `decode_execute_ops(&Op::ALL)`
-//! (replicated per-op) — with a scratch word as `rd`, and asserted to:
+//! (replicated per-op) -- with a scratch word as `rd`, and asserted to:
 //!   1. equal the ISA semantics (`compile::exec_instr`),
 //!   2. leave s0 (operand buffer) and s1 (predicate word) == 0, and
 //!   3. agree shared ≡ replicated (proves the fix is at the crossbar,
@@ -95,7 +95,7 @@ fn scratch_rd_samples() -> Vec<(&'static str, Instr, StateVals)> {
     // NB: Swapbr is register-only by ISA (`rd < NUM_REGS`), so it has no
     // scratch-rd form. Xchg is EXCLUDED here: it is the sole op that
     // composes `select_operand(rd)` with `select_scratch(sx)` over the
-    // OVERLAPPING scratch field range — for a scratch `rd`, select_operand
+    // OVERLAPPING scratch field range -- for a scratch `rd`, select_operand
     // parks a displaced register value into a scratch home field that
     // select_scratch then reads, so the two crossbars alias. That is a
     // SEPARATE pre-existing datapath issue (independent of BLOCKER-1: it

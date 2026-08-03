@@ -2,24 +2,24 @@
 //!
 //! A [`RingNetlist`] is one balanced feed-forward body plus an
 //! *implicit* wrap: output port i feeds input port i on the next
-//! revolution. Per ADR-0033 D2 the wrap edge lives **outside** the DAG —
+//! revolution. Per ADR-0033 D2 the wrap edge lives **outside** the DAG --
 //! `PhasedCellNetlist` stays acyclic and every existing analysis
 //! (`validate`, `line_arrivals`, `sim`) is reused on the body
 //! unchanged. The closure conditions checked here:
 //!
-//! 1. the body validates (and is tick-balanced — the sim refuses
+//! 1. the body validates (and is tick-balanced -- the sim refuses
 //!    otherwise);
 //! 2. **uniform output depth** D: all output ports arrive on one tick,
 //!    so the whole boundary crosses the wrap together;
 //! 3. **phase closure** `D ≡ 0 (mod P)`: the 4-phase clock is periodic,
-//!    so tick D drives the same trapezoids as tick 0 iff P | D — the
+//!    so tick D drives the same trapezoids as tick 0 iff P | D -- the
 //!    sequencer's periodicity, not a wrapped phase assignment, is what
 //!    makes the feedback legal;
 //! 4. the wrap is a width-aligned identity on ports (`input_ty` =
 //!    `output_ty` is the type-level face of the same condition).
 //!
-//! [`pad_ring`] establishes 2–3 by appending K0 chains (the materialized
-//! stand-in for the compact delay-count edges of ADR-0033 D4 — fine at
+//! [`pad_ring`] establishes 2-3 by appending K0 chains (the materialized
+//! stand-in for the compact delay-count edges of ADR-0033 D4 -- fine at
 //! prototype scale, exactly what `balance_compact` replaces at step
 //! scale). [`RingNetlist::run`] is the value-level executor:
 //! revolutions R come from the caller (the "sequencer", ADR-0033 D3),
@@ -41,7 +41,7 @@ pub enum RingError {
     /// The wrap is not a width-aligned identity: output port count must
     /// equal input port count (ADR-0033 D2 condition 4).
     PortMismatch { inputs: usize, outputs: usize },
-    /// Output ports arrive on different ticks — the boundary would not
+    /// Output ports arrive on different ticks -- the boundary would not
     /// cross the wrap together (condition 2). Run [`pad_ring`] first.
     OutputSkew { depths: Vec<u32> },
     /// Uniform output depth D is not a multiple of P: tick D would not
@@ -68,10 +68,10 @@ impl fmt::Display for RingError {
 
 /// Append K0 chains so (a) every output port arrives at one uniform
 /// tick D and (b) `D ≡ 0 (mod P)`, with D ≥ P. Returns a new body
-/// satisfying ADR-0033 D2 conditions 2–3; inserts the minimal number of
+/// satisfying ADR-0033 D2 conditions 2-3; inserts the minimal number of
 /// buffer stages (output flush + ≤ P−1 round-up stages per rail).
 ///
-/// This materializes the K0s — the prototype stand-in for
+/// This materializes the K0s -- the prototype stand-in for
 /// `balance_compact`'s delay-count edges (ADR-0033 D4), affordable only
 /// because prototype bodies are tiny.
 pub fn pad_ring(body: &PhasedCellNetlist) -> Result<PhasedCellNetlist, RingError> {
@@ -117,7 +117,7 @@ pub struct RingNetlist {
 
 impl RingNetlist {
     /// Close `body` into a ring, checking all four ADR-0033 D2
-    /// conditions. Bodies that fail 2–3 can be repaired with
+    /// conditions. Bodies that fail 2-3 can be repaired with
     /// [`pad_ring`].
     pub fn new(body: PhasedCellNetlist) -> Result<Self, RingError> {
         body.validate().map_err(RingError::Body)?;
@@ -138,7 +138,7 @@ impl RingNetlist {
         Ok(RingNetlist { body, depth: d })
     }
 
-    /// The recirculated body — the machine's entire cell inventory,
+    /// The recirculated body -- the machine's entire cell inventory,
     /// independent of how many revolutions it runs (the observable
     /// area difference vs unroll, ADR-0033).
     pub fn body(&self) -> &PhasedCellNetlist {
@@ -171,7 +171,7 @@ mod tests {
         (1..n).fold(bit(), |t, _| Type::prod(bit(), t))
     }
 
-    /// One K1 Fredkin on ports [c, a, b], outputs at depth 1 — the
+    /// One K1 Fredkin on ports [c, a, b], outputs at depth 1 -- the
     /// tiniest nontrivial step body.
     fn fredkin_body() -> PhasedCellNetlist {
         let pair = |i: u32| RailPair { line0: LineId(2 * i), line1: LineId(2 * i + 1) };
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn even_revolutions_restore_input() {
         // K1 is self-inverse, so every even revolution count is the
-        // identity — recirculation composes adjoints on the same
+        // identity -- recirculation composes adjoints on the same
         // silicon (C2.5 in miniature).
         let ring = RingNetlist::new(pad_ring(&fredkin_body()).unwrap()).unwrap();
         let input = vec![true, false, true];
@@ -261,7 +261,7 @@ mod tests {
         // Drop one output port: the wrap can no longer be an identity.
         body.outputs.pop();
         body.output_depths.pop();
-        // (validate() will reject the dangling lines first — either
+        // (validate() will reject the dangling lines first -- either
         // error is a refusal to close the ring.)
         assert!(RingNetlist::new(body).is_err());
     }

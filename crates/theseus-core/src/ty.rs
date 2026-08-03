@@ -10,12 +10,12 @@ use std::sync::Arc;
 ///
 /// The recursive payloads are held behind `Arc` (not `Box`) so `.clone()` is an
 /// O(1) refcount bump rather than an O(width) deep copy. `Type` is an immutable
-/// value type — it is only ever *read* (shape / dispatch / typing / lowering),
-/// never mutated in place — so sharing a subtree behind an `Arc` is
+/// value type -- it is only ever *read* (shape / dispatch / typing / lowering),
+/// never mutated in place -- so sharing a subtree behind an `Arc` is
 /// observationally identical to owning it: `Arc` forwards `Clone`/`Debug`/`Eq`/
 /// `Hash` (its `Eq`/`Hash` deref to the pointee), and the type algebra is a DAG
 /// (no cycles), so no reference cycle can leak. `Arc` (not `Rc`) preserves the
-/// `Send`/`Sync` that `Box<Type>` gave — some downstream types (e.g.
+/// `Send`/`Sync` that `Box<Type>` gave -- some downstream types (e.g.
 /// `SystemRing` cached in a `static OnceLock`) require `Type: Sync`. The atomic
 /// refcount is a trivial constant cost next to the O(width) deep copy removed.
 /// This is a pure representation change: the produced netlist is bit-identical
@@ -46,7 +46,7 @@ impl Type {
         Type::Prod(Arc::new(a), Arc::new(b))
     }
 
-    /// Convenience constructor for `Flat(n)` — a single-leaf word of width
+    /// Convenience constructor for `Flat(n)` -- a single-leaf word of width
     /// `n` bits (cardinality `2^n`). Panics if `n` is 0 or > 8.
     pub fn flat(n: u8) -> Self {
         assert!((1..=8).contains(&n), "Flat width must be 1..=8, got {n}");
@@ -54,9 +54,9 @@ impl Type {
     }
 
     /// The unary numeral type with `count` inhabitants:
-    /// `numeral_ty(k) = 1 + (1 + (… + 0))` with `k` units. Its values
+    /// `numeral_ty(k) = 1 + (1 + (... + 0))` with `k` units. Its values
     /// are exactly the numerals `0 ..= k−1`, numeral `i` being
-    /// `inrⁱ(inl ())` — the same encoding bounded μ-type unrolling
+    /// `inrⁱ(inl ())` -- the same encoding bounded μ-type unrolling
     /// produces for `Nat` (ADR-0035). This is the admissible counter
     /// type for `iter` (ADR-0036).
     pub fn numeral_ty(count: usize) -> Self {

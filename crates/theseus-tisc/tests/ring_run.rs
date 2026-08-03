@@ -7,7 +7,7 @@
 //! fall-through) to keep build + lower + balance_compact fast while
 //! exercising the full ring pipeline at real scale.
 //!
-//! Tests 3–6 verify the zero-garbage ring (ADR-0040 phase C payoff):
+//! Tests 3-6 verify the zero-garbage ring (ADR-0040 phase C payoff):
 //! ancillas restored after one revolution, `run_true == eval^R`,
 //! `run_true == run`, and zero boundary vs Bennett's 320.
 
@@ -156,7 +156,7 @@ fn ring_area_independent_of_revolutions() {
     eprintln!("ring cell counts: {counts:?}");
     eprintln!("ring k0 buffer count: {k0}");
 
-    // The body is the same struct regardless of R — run a few and
+    // The body is the same struct regardless of R -- run a few and
     // re-check (proving the ring reuses one body, not R copies).
     for r in [1u32, 4, 16] {
         let s = sample_state(0u8);
@@ -176,7 +176,7 @@ fn ring_area_independent_of_revolutions() {
 
 // ══════════════════════════════════════════════════════════════════════
 // 3. Zero-garbage assertion: ancillas restored after one revolution
-//    (ADR-0040 phase C payoff — the parity obstruction is voided)
+//    (ADR-0040 phase C payoff -- the parity obstruction is voided)
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -185,7 +185,7 @@ fn ancillas_restored_after_one_revolution() {
 
     eprintln!("ancilla count: {}", c.ring.ancilla_count());
 
-    // Assert across ALL sampled PCs — not just pc=0.
+    // Assert across ALL sampled PCs -- not just pc=0.
     for &pc in &[0u8, 1, 2, 4] {
         let start = sample_state(pc);
         let mismatches = c.ring.ancilla_mismatches(&start);
@@ -200,7 +200,7 @@ fn ancillas_restored_after_one_revolution() {
     }
 
     eprintln!(
-        "ancillas restored: true — all {} ancilla lines return to init \
+        "ancillas restored: true -- all {} ancilla lines return to init \
          after one revolution on every sampled state. The parity \
          obstruction is voided (ADR-0040 phase C).",
         c.ring.ancilla_count()
@@ -209,7 +209,7 @@ fn ancillas_restored_after_one_revolution() {
 
 // ══════════════════════════════════════════════════════════════════════
 // 4. TRUE recirculation: run_true(s, R) == eval(step)^R
-//    (plain path, zero boundary — no Bennett, no re-supply)
+//    (plain path, zero boundary -- no Bennett, no re-supply)
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -226,7 +226,7 @@ fn true_recirculation_matches_eval_oracle() {
             let true_result = c.ring.run(&start, r);
             assert_eq!(
                 true_result, oracle,
-                "run(s, {r}) != eval^{r} at pc={pc} — \
+                "run(s, {r}) != eval^{r} at pc={pc} -- \
                  the default closed (zero-garbage) runner feeds ancilla \
                  outputs back and must equal the eval oracle"
             );
@@ -243,7 +243,7 @@ fn true_recirculation_matches_eval_oracle() {
 // ══════════════════════════════════════════════════════════════════════
 // 5. run (closed) == run_open (fresh re-supply): both paths agree
 //    (ancilla-clean step means feeding back restored ancillas ==
-//    re-supplying fresh ones — this equivalence certifies the closure)
+//    re-supplying fresh ones -- this equivalence certifies the closure)
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -259,7 +259,7 @@ fn run_true_equals_run_when_ancillas_restored() {
             let fresh = c.ring.run_open(&start, r);
             assert_eq!(
                 fresh, feedback,
-                "run_open(s, {r}) != run(s, {r}) at pc={pc} — \
+                "run_open(s, {r}) != run(s, {r}) at pc={pc} -- \
                  with ancillas restored, closed feed-back and fresh \
                  re-supply must agree"
             );
@@ -285,7 +285,7 @@ fn zero_boundary_vs_bennett_boundary() {
     let bennett_boundary = closed.boundary_size();
 
     eprintln!(
-        "plain  path (run_true): boundary per revolution = {plain_boundary} (zero — ancilla-clean)"
+        "plain  path (run_true): boundary per revolution = {plain_boundary} (zero -- ancilla-clean)"
     );
     eprintln!(
         "Bennett path (closed) : boundary per revolution = {bennett_boundary} (2·w = 2·{})",
@@ -328,7 +328,7 @@ fn zero_boundary_vs_bennett_boundary() {
 
     eprintln!(
         "\nThe plain R1-lowered ring closes with ZERO per-revolution \
-         boundary — the literal zero-garbage ring (ADR-0040 phase C). \
+         boundary -- the literal zero-garbage ring (ADR-0040 phase C). \
          The Bennett ClosedStepRing demotes to a fallback for \
          K-only-dirty circuits."
     );
@@ -336,7 +336,7 @@ fn zero_boundary_vs_bennett_boundary() {
 
 // ══════════════════════════════════════════════════════════════════════
 // 7. CLOSED ring (Bennett path): differential oracle with TRUE
-//    recirculation — State + forward ancillas fed back, only the fixed
+//    recirculation -- State + forward ancillas fed back, only the fixed
 //    2·w boundary re-supplied (ADR-0033 ring closure, now the fallback).
 // ══════════════════════════════════════════════════════════════════════
 
@@ -350,7 +350,7 @@ fn closed_ring_matches_eval_oracle() {
     // The closed run injects NOTHING data-dependent after the start
     // state (forward ancillas are fed back verbatim), so agreement
     // with eval^R certifies the ancillas come back clean every
-    // revolution — a dirty line would corrupt revolution r+1.
+    // revolution -- a dirty line would corrupt revolution r+1.
     for &pc in &[0u8, 1, 2, 4] {
         let start = sample_state(pc);
         let mut oracle = start.clone();
@@ -418,7 +418,7 @@ fn closed_ring_forward_ancillas_clean_and_boundary_fixed() {
             &mismatches[..mismatches.len().min(10)]
         );
 
-        // The boundary residue is EXACTLY (y_j, x_j) interleaved — the
+        // The boundary residue is EXACTLY (y_j, x_j) interleaved -- the
         // output word and the regenerated input word. Its POSITIONS
         // and re-supplied inits (1, 0) are data-independent; only the
         // exiting values carry data, as any nonzero Bennett residue

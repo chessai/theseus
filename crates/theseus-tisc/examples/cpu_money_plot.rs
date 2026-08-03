@@ -1,10 +1,10 @@
 //! CPU money-plot artifact emitter: energy per TISC-1 **step** vs the
 //! power-clock ramp time, on the zero-garbage ring body (ADR-0040
-//! phase C — R1-based, ancilla-clean lowering).
+//! phase C -- R1-based, ancilla-clean lowering).
 //!
 //! Run: `cargo run -p theseus-tisc --example cpu_money_plot`
 //!
-//! No ngspice required — the adiabatic curves come from the committed
+//! No ngspice required -- the adiabatic curves come from the committed
 //! rung-0 characterization DB fits summed over the step's cell
 //! inventory; the flat CMOS reference is the committed
 //! `CMOS_STATIC_E_PER_GATE_J` constant. Lowering the full step takes a

@@ -1,4 +1,4 @@
-# ADR-0035: μ-types, increment 1 — bounded unrolling at lowering
+# ADR-0035: μ-types, increment 1 -- bounded unrolling at lowering
 
 **Status:** Accepted
 
@@ -21,7 +21,7 @@ lowering**. Core Π (`0 | 1 | + | ×`) and the `Iso` grammar are unchanged.
   restored on exit, so sibling occurrences are unaffected and only a type
   on a reference cycle can ever exhaust it. Termination is structural.
 - The cutoff is **`Zero` (empty), not `One`**: `Nat = Zero | Succ Nat`
-  at `D = 4` lowers to `1+(1+(1+(1+0)))` — exactly the numerals `0..=3`.
+  at `D = 4` lowers to `1+(1+(1+(1+0)))` -- exactly the numerals `0..=3`.
   Every inhabitant of the truncated type is a *real* value of the μ-type,
   encoded independently of `D` (numeral `n` is `inrⁿ(inl unit)` at every
   admitting depth), so coverage witnesses, the CLI value bridge, and
@@ -38,7 +38,7 @@ lowering**. Core Π (`0 | 1 | + | ×`) and the `Iso` grammar are unchanged.
 Recursive types parse, check, elaborate, and evaluate forward/backward
 today, oracle-verified over the whole truncated domain (conformance
 0016/0017). Depth-*generic* programs (true successor, fold) are
-inexpressible until the primitive combinators land — that is the next
+inexpressible until the primitive combinators land -- that is the next
 increment, and this lowering does not prejudge it: `fold`/`unfold` will
 carry their own typing against the nominal type, while bounded unroll
 remains the finite-elaboration/coverage backstop.

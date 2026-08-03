@@ -1,9 +1,9 @@
 //! Bennett clean-up wrap for lowered netlists (ADR-0033 ring closure).
 //!
-//! # The K-only parity law — and its ADR-0040 escape hatch
+//! # The K-only parity law -- and its ADR-0040 escape hatch
 //!
 //! Every **K-cell** (K0 buffer, K1/K2/K3 conditional swaps) *permutes
-//! the values on its rail pairs* — a controlled swap only routes
+//! the values on its rail pairs* -- a controlled swap only routes
 //! tokens. Free NOTs (rail-role swaps) are *fixed* per edge.
 //! Consequently, for any K-only lowered netlist, the parity of all
 //! output pair-values equals the parity of all input pair-values plus
@@ -16,15 +16,15 @@
 //! So a K-only lowering of `f` can restore **all** ancillas to their
 //! inits only if `parity(bits(f(x))) ⊕ parity(bits(x))` is constant
 //! over the domain. A single conditional-NOT (`t ↦ t ⊕ AND(controls)`)
-//! already violates this — its parity deviation *is* the AND — which
+//! already violates this -- its parity deviation *is* the AND -- which
 //! is why the old splitter/selector construction had to leave two
 //! data-dependent garbage pairs per multi-controlled NOT.
 //!
 //! **Since ADR-0040 phase C this floor is gone in practice**: the `R1`
 //! controlled rail-role-swap cell flips its target's value in place
-//! (NOT a value-permutation — the law's premise fails for it), and
+//! (NOT a value-permutation -- the law's premise fails for it), and
 //! [`crate::lower`] now emits every (multi-)controlled NOT
-//! ancilla-clean — one `R1` for CNOT (zero ancillas), a K1 AND-chain +
+//! ancilla-clean -- one `R1` for CNOT (zero ancillas), a K1 AND-chain +
 //! `R1` + replayed chain for `k ≥ 2` (every scratch restored to init
 //! on every input). `tests/ancilla_clean.rs` verifies the zero residue
 //! over whole domains; `parity_obstruction_is_real` (same file) keeps
@@ -32,22 +32,22 @@
 //!
 //! What still emits K-only garbage: the TraceLoop tag duplication and
 //! the iter/fold control chains (genuine fan-outs, not conditional
-//! NOTs — copying a live bit needs a K1 splitter whose complement
+//! NOTs -- copying a live bit needs a K1 splitter whose complement
 //! output stays dirty). The wrap below remains the tool that bounds
 //! *that* residue.
 //!
 //! # What this module does about it
 //!
 //! The garbage of a *composition* can still cancel: [`bennett_wrap`]
-//! applies the classic compute–copy–uncompute discipline **to the
+//! applies the classic compute-copy-uncompute discipline **to the
 //! whole netlist**:
 //!
-//! 1. **compute** — the forward net runs unchanged; its garbage
+//! 1. **compute** -- the forward net runs unchanged; its garbage
 //!    outputs are intercepted instead of exported;
-//! 2. **copy** — each data output `y_j` is fanned out with one K1
-//!    (`K1(y, 1, 0) → (y, ¬y, y)` — Fredkin fan-out, consuming a
+//! 2. **copy** -- each data output `y_j` is fanned out with one K1
+//!    (`K1(y, 1, 0) → (y, ¬y, y)` -- Fredkin fan-out, consuming a
 //!    fresh `(1, 0)` ancilla pair per bit);
-//! 3. **uncompute** — the forward cells are replayed in reverse (every
+//! 3. **uncompute** -- the forward cells are replayed in reverse (every
 //!    K-cell is an involution), consuming the forward garbage and the
 //!    fanned-through result register. This *provably* returns every
 //!    forward ancilla to its init value and regenerates the input
@@ -57,15 +57,15 @@
 //! fan-out copies), and its ancilla outputs are, positionally:
 //!
 //! - one output per forward ancilla input, **always equal to its
-//!   init** (data-independently — the mirror restores it exactly);
+//!   init** (data-independently -- the mirror restores it exactly);
 //! - per data bit `j`, the fan-out slot pair: a spare copy (equal to
 //!   its init `1` iff `y_j = 1`) and the regenerated input bit (equal
 //!   to its init `0` iff `x_j = 0`).
 //!
 //! I.e. the *unbounded* per-construct K-only garbage (per TraceLoop
-//! tag duplication, per iter/fold control chain, …) collapses to
+//! tag duplication, per iter/fold control chain, ...) collapses to
 //! exactly `2·w` boundary pairs whose residue is the input word and
-//! the output word — the honest Bennett residue. (For the synthesized
+//! the output word -- the honest Bennett residue. (For the synthesized
 //! multi-controlled NOTs themselves the wrap is no longer needed at
 //! all: the R1 lowering is already ancilla-clean per instance.)
 //!
@@ -76,20 +76,20 @@
 //!
 //! # Measured on the TISC-1 step (M4-v2, 3-instruction ROM)
 //!
-//! *(Historical numbers — measured under the pre-ADR-0040
+//! *(Historical numbers -- measured under the pre-ADR-0040
 //! splitter/selector synthesis. With the R1 rewrite the `prim_synth` /
 //! `prim_synth_chain` dirt below drops to zero by construction; the
 //! remaining dirt is the trace/branch tag machinery.)*
 //!
 //! Plain `lower_iso_with_ancillas(step)`: 4654 cells, 160 data pairs,
-//! 1138 ancillas — **945 dirty** at the ring test's pc = 0 start state
+//! 1138 ancillas -- **945 dirty** at the ring test's pc = 0 start state
 //! (809/832 at pc = 1/2), all attributed to prim synthesis
 //! (`prim_synth` 903/1082 + `prim_synth_chain` 42/56 at pc = 0; the
 //! step lowers to CNOT/Toffoli mcnots, each stuck at its 2-pair
 //! per-instance floor). After `bennett_wrap`: 9468 cells, 1458
-//! ancillas — **forward dirty 0/1138** at every sampled state; the
+//! ancillas -- **forward dirty 0/1138** at every sampled state; the
 //! whole residue is the 320 boundary slots (166/156/161 dirty at
-//! pc = 0/1/2 — the encoded input word + output-word complement).
+//! pc = 0/1/2 -- the encoded input word + output-word complement).
 //! True recirculation (`ancillas_restored == true`) remains
 //! **impossible** for `step` in this cell vocabulary: its encoded-bit
 //! parity deviation is non-constant, so by the parity law some
@@ -97,7 +97,7 @@
 //! must either re-supply the 2·w boundary pairs per revolution
 //! (constant-size, data-independent *ports*, unlike the plain
 //! lowering's 1138 scattered lines) or extend the cell vocabulary
-//! with a non-value-conserving cell (a controlled rail-role swap —
+//! with a non-value-conserving cell (a controlled rail-role swap --
 //! physically a CSWAP whose two swapped conductors are the two rails
 //! of one pair, which would make CNOT garbage-free and void the
 //! parity law).
@@ -198,7 +198,7 @@ fn mirror_of(m: &HashMap<RailPair, RailPair>, p: RailPair) -> RailPair {
     }
 }
 
-/// Wrap a lowered netlist in the Bennett compute–copy–uncompute
+/// Wrap a lowered netlist in the Bennett compute-copy-uncompute
 /// discipline. Returns the wrapped netlist and its extended ancilla
 /// init vector (forward inits ++ `[true, false]` per data bit).
 ///
@@ -276,14 +276,14 @@ pub fn bennett_wrap(
     // ── boundary: assemble outputs positionally against `init2` ──────
     // Data section: the fan-out copies (value y_j).
     let mut outputs = data_copies;
-    // Forward ancilla slots: mirror images of the ancilla inputs —
+    // Forward ancilla slots: mirror images of the ancilla inputs --
     // these carry exactly their init values, data-independently.
     for i in 0..n_f {
         outputs.push(mirror_of(&m, net.inputs[w + i]));
     }
     // Fan-out slots, per data bit j: the spare copy rail-swapped to
     // carry y_j (against init 1: clean iff y_j = 1), then the
-    // regenerated input bit x_j (against init 0: clean iff x_j = 0) —
+    // regenerated input bit x_j (against init 0: clean iff x_j = 0) --
     // the concentrated Bennett residue.
     for (j, &spare) in spares.iter().enumerate() {
         outputs.push(spare.swapped());

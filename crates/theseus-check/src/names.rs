@@ -172,7 +172,7 @@ mod tests {
         for path in testkit::program_fixtures() {
             let file = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
             if file == "0011-label-loop.thse" {
-                continue; // label test — out of slice-1 scope
+                continue; // label test -- out of slice-1 scope
             }
             let program = testkit::load_program(&path);
             let env = crate::env::resolve(&program);

@@ -332,11 +332,11 @@ pub struct RomTrace {
 }
 
 /// Execute a ROM for `budget` steps (mirroring `run_rom_fast`) and identify
-/// the productive trace length T — the first step at which PC enters the
+/// the productive trace length T -- the first step at which PC enters the
 /// dead zone `[rom.len(), 256)`.
 ///
 /// T is defined by PC entering the dead zone, NOT by `decode() == None`
-/// (idle decodes to `Some(Addi r0, #0)` — F4).
+/// (idle decodes to `Some(Addi r0, #0)` -- F4).
 pub fn rom_trace(rom: &[u32], init: StateVals, budget: usize) -> RomTrace {
     let rom_len = rom.len();
     let mut steps_t = budget; // default: never entered dead zone
@@ -383,7 +383,7 @@ pub struct ProgramEnergy {
     pub steps_b: usize,
     /// Productive step count T (first step PC enters dead zone).
     pub steps_t: usize,
-    /// WCET park tax: `(B - T) / B` — fraction of energy spent idling.
+    /// WCET park tax: `(B - T) / B` -- fraction of energy spent idling.
     pub park_tax: f64,
     /// Per-step energy (from `balanced_energy` on the fib ROM's own step net).
     pub step_j: f64,
@@ -394,9 +394,9 @@ pub struct ProgramEnergy {
 /// Computes:
 /// - `B` = `wcet(iso)` (physical step count, WCET park included)
 /// - `T` = productive trace length (first step PC enters dead zone)
-/// - `step_j` = `balanced_energy(step(rom), db, t_ramp)` — from THIS ROM's
+/// - `step_j` = `balanced_energy(step(rom), db, t_ramp)` -- from THIS ROM's
 ///   own step netlist (not the 2-word money-plot ROM; F2)
-/// - `total_j = B × step_j` (exact; the model is data-independent — F1)
+/// - `total_j = B × step_j` (exact; the model is data-independent -- F1)
 ///
 /// The step net is lowered from `step(rom)` (CPU-only, consistent with
 /// `cpu_money_plot`). Callers should memoize the ~2min lowering externally
@@ -448,9 +448,9 @@ pub fn rom_program_energy(
 
 /// Energy-price a program at its AUTO-DERIVED [`Layout`] (B-2.1c auto-derive).
 ///
-/// Unlike [`rom_program_energy`] — which prices against a caller-supplied
+/// Unlike [`rom_program_energy`] -- which prices against a caller-supplied
 /// `step_net` (lowered at whatever layout the caller chose, historically the
-/// default `w_data=8`) — this derives the FULL per-program layout from the
+/// default `w_data=8`) -- this derives the FULL per-program layout from the
 /// compiled program ([`crate::compile::derive_full_layout_from_lowered`]:
 /// `w_data`/`num_regs` off the source iso + `w_pc` off the `Lowered`'s
 /// B+S_max/rom_len, B-2.2c) and lowers the step netlist at that layout

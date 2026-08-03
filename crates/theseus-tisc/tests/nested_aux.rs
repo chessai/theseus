@@ -1,4 +1,4 @@
-//! A-5: occ-aware nested come-from frame stack — WHITE-BOX allocation tests.
+//! A-5: occ-aware nested come-from frame stack -- WHITE-BOX allocation tests.
 //!
 //! `lower_trace` used to hand-assign its four aux registers {rc, rb, temp, ctrl}
 //! positionally as `aux_base = max_carrier_reg + 1`, WITHOUT consulting occ.
@@ -6,7 +6,7 @@
 //! occupied ctx. For compositional control it is unsound:
 //!   - `Times(Trace, g)`: `split` copies parent occ into a left half whose homes
 //!     still look canonical, so `max_carrier_reg+1` would land on g's LIVE regs
-//!     and clobber them — invisible to the BR/s0/s1 terminal check (F-1 failure).
+//!     and clobber them -- invisible to the BR/s0/s1 terminal check (F-1 failure).
 //!   - nested `Trace`: the fixed positions collide, and the outer level's
 //!     in-flight δu token (in `temp`) is destroyed every inner iteration.
 //!
@@ -42,7 +42,7 @@ fn nested_two_levels_get_disjoint_frames() {
     // Two full 4-aux frames + a carrier do NOT fit in an 8-register file
     // (1 carrier + 4 outer aux + 1 carrier + 4 inner aux = 10 > 8), so a
     // genuinely nested depth-2 Trace with both aux frames register-resident is
-    // register-bound (§2.3 depth bound) — see the reject test below. To exercise
+    // register-bound (§2.3 depth bound) -- see the reject test below. To exercise
     // DISJOINTNESS where it fits, model a shallow outer (tag-only carrier @{0})
     // so the frames can coexist enough to prove the property: the inner frame
     // NEVER intersects the outer's occ-marked set.
@@ -55,7 +55,7 @@ fn nested_two_levels_get_disjoint_frames() {
     // Inner level: shares no carrier reg with the outer here (inner tag-only @0
     // is already outer-live). Thread the outer's WHOLE live set as also_occupied.
     let outer_live = set_regs(after_outer); // {0,1,2,3,4}
-    // Inner carrier reuses reg 0 (tag) — already in outer_live — so the inner
+    // Inner carrier reuses reg 0 (tag) -- already in outer_live -- so the inner
     // frame draws from the remaining free {5,6,7}: only 3 free < 4 → rejects,
     // proving no aliasing. The DISJOINTNESS property is asserted structurally:
     // whatever the inner CAN draw is confined to regs NOT in outer_live.
@@ -72,14 +72,14 @@ fn nested_two_levels_get_disjoint_frames() {
             );
         }
         Err(_) => {
-            // Reject is the SOUND outcome when a disjoint frame cannot fit —
+            // Reject is the SOUND outcome when a disjoint frame cannot fit --
             // never a silent alias. This is the depth bound (§2.3).
         }
     }
 
     // Direct disjointness proof with a scenario that DOES fit: outer live = only
     // the outer frame {1,2,3,4} + carrier {0} = {0,1,2,3,4}; give the inner a
-    // carrier that does NOT reuse a low reg — impossible in 8 regs for a 4-aux
+    // carrier that does NOT reuse a low reg -- impossible in 8 regs for a 4-aux
     // inner too. So we prove disjointness at the smallest witnessing occupancy:
     // outer marked {0,1,2}, inner draws {3,4,5,6}, disjoint from {0,1,2}.
     let (inner_frame2, _) = alloc_aux_frame_for_test(&[0u8], &[1, 2]).expect("inner fits");
@@ -153,7 +153,7 @@ fn times_trace_g_old_positional_would_have_aliased() {
 // ─────────────────────────────────────────────────────────────────────
 // (b2) Finding 1: the TAG + extra-payload PADDING are now occ-aware too.
 //
-// Finding 7 noted nested_aux pinned only the FRAME allocator — nothing white-box
+// Finding 7 noted nested_aux pinned only the FRAME allocator -- nothing white-box
 // pinned the tag/padding placement, which is exactly how Finding 1 (the tag
 // aliasing g under Times) escaped. `lower_trace` now draws the tag + extra
 // padding from the SAME occ-free register pool as the frame, occ-marked before
@@ -195,7 +195,7 @@ fn times_trace_tag_does_not_alias_sibling_end_to_end() {
 //
 // The outer δu token lives in the outer level's `temp` register. Because the
 // inner level's frame is DISJOINT (test (a)), the inner loop never touches the
-// outer's `temp` — so the outer δu is preserved across the ENTIRE inner region
+// outer's `temp` -- so the outer δu is preserved across the ENTIRE inner region
 // with NO explicit save/restore instruction: disjointness IS the net-zero
 // bracket (create-zero at prologue ADDI temp,δu / consume-to-zero at exit
 // SUBI temp,δu, per level, in the level's own disjoint slot).
@@ -214,19 +214,19 @@ fn outer_delta_u_temp_disjoint_from_inner_frame() {
         "outer temp {outer_temp} must be occ-marked before lowering the body"
     );
     // (2) Threading the REAL outer-live set into the inner allocation: whatever
-    // the inner draws is disjoint from the outer temp — disjointness IS the
+    // the inner draws is disjoint from the outer temp -- disjointness IS the
     // net-zero save/restore. The outer δu in `temp` is untouched across the
     // entire inner region with NO explicit spill instruction (create-zero via
     // ADDI temp,δu at each level's prologue; consume-to-zero via SUBI temp,δu at
-    // exit — in the level's OWN disjoint slot). When no disjoint frame fits the
+    // exit -- in the level's OWN disjoint slot). When no disjoint frame fits the
     // allocator REJECTS (never aliases the outer temp), which equally preserves
-    // δu — the reject-or-disjoint dichotomy.
+    // δu -- the reject-or-disjoint dichotomy.
     match alloc_aux_frame_for_test(&[0u8], &outer_live) {
         Ok((inner_frame, _)) => assert!(
             disjoint(&inner_frame, &[outer_temp]),
             "outer δu slot {outer_temp} preserved: inner frame {inner_frame:?} avoids it"
         ),
-        Err(_) => { /* reject preserves δu just as well — no aliasing possible */ }
+        Err(_) => { /* reject preserves δu just as well -- no aliasing possible */ }
     }
     // Witness a genuinely-fitting disjoint inner allocation at a smaller outer
     // occupancy (outer marked exactly {0, outer_temp}): the inner avoids the
@@ -298,7 +298,7 @@ fn single_level_trace_rom_byte_identical() {
 // ─────────────────────────────────────────────────────────────────────
 #[test]
 fn nested_trace_program_now_compiles_via_aux_reuse() {
-    // A-5b: a depth-2 nested Trace now COMPILES — the inner Trace REUSES the outer
+    // A-5b: a depth-2 nested Trace now COMPILES -- the inner Trace REUSES the outer
     // level's four aux {rc,rb,temp,ctrl}, which are provably DEAD across the inner
     // region (design §2.2), instead of drawing a disjoint second frame. Before
     // A-5b this exact program REJECTED (frame register-bound); this is the L20

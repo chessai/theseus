@@ -1,9 +1,9 @@
-//! M4 FUNCTIONAL HEADLINE: the TISC-1 CPU runs a real program —
-//! Fibonacci — forward AND backward.
+//! M4 FUNCTIONAL HEADLINE: the TISC-1 CPU runs a real program --
+//! Fibonacci -- forward AND backward.
 //!
 //! The program is assembled from typed mnemonics ([`theseus_tisc::asm`])
 //! into a ROM, and executed by iterating the machine-cycle iso
-//! `step(rom) : State <-> State` via core eval (no lowering — this is
+//! `step(rom) : State <-> State` via core eval (no lowering -- this is
 //! the CPU-executes-a-program demo, kept cheap on purpose).
 //!
 //! The reversible Fibonacci iteration is the two-instruction pair
@@ -24,7 +24,7 @@
 //!      sanity);
 //!   4. BACKWARD: T adjoint steps from the final state return the
 //!      machine EXACTLY to the seed (r1 = r2 = 1, PC = 0, IR/scratch 0)
-//!      — the CPU is reversible end to end.
+//!      -- the CPU is reversible end to end.
 
 use theseus_core::Iso;
 use theseus_tisc::asm::{assemble, decode, encode, AsmError, Instr};
@@ -206,7 +206,7 @@ fn assembler_rejects_xchg_s0() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 2–4. The headline: Fibonacci forward, adjoint sanity, and backward
+// 2-4. The headline: Fibonacci forward, adjoint sanity, and backward
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]

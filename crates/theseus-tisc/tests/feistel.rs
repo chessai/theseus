@@ -6,7 +6,7 @@
 //! for ANY round function F, because given (R, L') the input is
 //! recovered as L = L' ^ F(R). On a reversible machine this means the
 //! SAME hardware encrypts running forward and decrypts running the
-//! adjoint — no separate decryption datapath.
+//! adjoint -- no separate decryption datapath.
 //!
 //! Round function here: F(R) = ROTL(R, C) ^ key (key held in r3).
 //!
@@ -26,19 +26,19 @@
 //! No aliased operands anywhere; R and key are read-only within a
 //! round; ROUNDS rounds are unrolled in the ROM (T = 8 * ROUNDS cycles).
 //!
-//! Verified here (run harness mirrors tests/fib_cpu.rs — eval-only,
+//! Verified here (run harness mirrors tests/fib_cpu.rs -- eval-only,
 //! no lowering in the run):
 //!   1. FORWARD: after every round the registers match a Rust reference
 //!      Feistel round with the same F; temp = 0, IR = 0 (P4), scratch
 //!      zero, key intact, PC tracks the cycle count.
 //!   2. BACKWARD: T forward cycles then T adjoint cycles
 //!      (`Iso::sym(step(rom))`) return EXACTLY to the input block + key
-//!      + PC — encryption forward, decryption backward, same hardware.
+//!      + PC -- encryption forward, decryption backward, same hardware.
 //!   3. ENERGY: per-step and whole-round energy of the Feistel workload
 //!      from the REAL rung-0 char DB via the analytic balanced-energy
 //!      model (lower_iso only, buffers counted not materialized), plus
 //!      the per-clause cost of the round's own ops (XOR / ROTLI / ROTRI
-//!      / EXCH — the XOR/ROT-heavy mix is the designated energy
+//!      / EXCH -- the XOR/ROT-heavy mix is the designated energy
 //!      workload).
 
 use std::sync::OnceLock;
@@ -287,7 +287,7 @@ fn char_db() -> &'static CharDb {
 }
 
 /// Memoized unbalanced step netlist for the Feistel ROM (lowered ONCE;
-/// never balanced — buffers are counted analytically).
+/// never balanced -- buffers are counted analytically).
 fn feistel_step_net() -> &'static PhasedCellNetlist {
     static NET: OnceLock<PhasedCellNetlist> = OnceLock::new();
     NET.get_or_init(|| {
@@ -318,7 +318,7 @@ fn feistel_energy() {
     for (label, iso) in &round_ops {
         let bd = instruction_energy(iso, db, T_RAMP).unwrap();
         // XOR burns real energy; ROTLI/ROTRI (rotate by an immediate)
-        // and EXCH lower to pure wire permutations — zero active cells,
+        // and EXCH lower to pure wire permutations -- zero active cells,
         // zero energy. That asymmetry is itself a workload finding.
         assert!(bd.total_j >= 0.0, "{label}: energy must be non-negative");
         if label.starts_with("XOR") {

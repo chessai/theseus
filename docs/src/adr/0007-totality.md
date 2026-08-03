@@ -6,14 +6,14 @@
 Should loops be provably terminating in the type system? Three regimes:
 finite types, μ-types, full generality. A reversibility-specific trap
 applies throughout: forward totality does **not** imply backward totality
-— any termination evidence must hold in both directions
+-- any termination evidence must hold in both directions
 (theory/bidirectional-descent.md).
 
 ## Decision
 - **Finite fragment:** totality is free. `trace` over finite `u` cannot
   diverge: the body is injective, so trajectories through `u` cannot
-  repeat a state. **Exact bound (corrected — TH-1):** an exiting trajectory
-  applies the body to `Right(a), Left(w₁), …, Left(w_{t−1})` (`t`
+  repeat a state. **Exact bound (corrected -- TH-1):** an exiting trajectory
+  applies the body to `Right(a), Left(w₁), ..., Left(w_{t−1})` (`t`
   applications, incl. the exit); injectivity forces the `wᵢ` pairwise-
   distinct in `u`, so `t − 1 ≤ |u|`, i.e. **iteration count `t ≤ |u| + 1`,
   and this is attained** (witness: the 3-cycle `R()→L(L())→L(R())→R()` on
@@ -35,27 +35,27 @@ applies throughout: forward totality does **not** imply backward totality
   backward-deterministic, so **trajectories from distinct inputs are
   vertex-disjoint in `Left(u)`** (a shared carrier state would have two
   predecessors walking back to two different `Right` entries). Hence:
-  (1) **`Σ_inputs (Tᵢ − 1) ≤ |u|`** — the sum-over-inputs form of `t ≤ |u|+1`;
-  (2) **`|u| ≥ |a|`** whenever (almost) every input iterates ≥ 1 time — a
+  (1) **`Σ_inputs (Tᵢ − 1) ≤ |u|`** -- the sum-over-inputs form of `t ≤ |u|+1`;
+  (2) **`|u| ≥ |a|`** whenever (almost) every input iterates ≥ 1 time -- a
   loop carrier must be at least the *input* width; a bijection cannot shed
   information mid-loop; (3) **distinct inputs have distinct exit states**, so
   "iterate until `x == const`" is *impossible without a distinguishing witness
-  in the carrier* — the exit-until-target test is itself a Bennett-taxed
+  in the carrier* -- the exit-until-target test is itself a Bennett-taxed
   erasure. **Corollary (the wall for variable-`T` loops):** a genuinely
   iterative program over an input domain of size `2^k` needs `|u| ≥ 2^k` ⇒
   `≥ k` payload leaves ⇒ over the `MAX_LEAVES_LOOP = 3` cap for any `k > 3` and
   any formulation (this is why GCD/Collatz break today independent of their
   branch structure). And because the emitted `k_max = |u|+1` is read from *type
   cardinality*, a large `|u|` also blows the WCET guard (`4 + k_max·|body| ≤
-  256`) — so real loop programs need, together: **loop-carrier spill (M-D.e) +
+  256`) -- so real loop programs need, together: **loop-carrier spill (M-D.e) +
   widen-PC + a `k_max`-tightening mechanism** (a typed/verified iteration bound,
-  e.g. numeral-typed fuel — `iter`/`fold` already have this, which is why fib's
+  e.g. numeral-typed fuel -- `iter`/`fold` already have this, which is why fib's
   park tax is meaningful and a raw `Trace`'s would be ~99.8% loose).
-- **μ-types (v0.2):** blessed total-by-construction combinators — bounded
+- **μ-types (v0.2):** blessed total-by-construction combinators -- bounded
   iteration (the count lives in the data, symmetric by construction) and
   reversible fold/unfold pairs. Raw unbounded trace stays expressible but
   explicitly marked partial, `unsafe`-style. Primitive-recursive
-  completeness (RPP, Paolini–Piccolo–Roversi) is the expressiveness floor.
+  completeness (RPP, Paolini-Piccolo-Roversi) is the expressiveness floor.
 - **Sized types:** documented research extension, not on the roadmap.
 
 ## Consequences
@@ -65,6 +65,6 @@ quantum lift frictionless (unitaries are total).
 
 ## Alternatives rejected
 Full sized/indexed types now (research-grade metatheory, soundness-bug
-history, and it must be done *twice* — once per direction);
+history, and it must be done *twice* -- once per direction);
 Turing-complete synthesizable dialect (a feature with no customer in a
 netlist-bound language).

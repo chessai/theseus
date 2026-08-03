@@ -189,7 +189,7 @@ pub fn log_log_slope(data: &[(f64, f64)]) -> f64 {
 pub fn rc_ramp_netlist(r_ohm: f64, c_farad: f64, v_volt: f64, period_s: f64) -> String {
     let half = period_s / 2.0;
     // PWL: ramp up 0→V over half, ramp down V→0 over half
-    // Use a tiny rise time at edges for numerical stability? No — the ramp IS
+    // Use a tiny rise time at edges for numerical stability? No -- the ramp IS
     // the waveform; we want a perfect triangle.
     format!(
         "\
@@ -231,7 +231,7 @@ meas tran esource INTEG V(pwr) FROM=0 TO={tstop:.15e}
 /// Symmetric discharge dissipates the same, so full cycle:
 ///   E_diss(cycle) = 2 · C · V² · (2RC/T) = 4·C²·V²·R/T
 ///
-/// Wait — let's be careful. The exact adiabatic dissipation for a single
+/// Wait -- let's be careful. The exact adiabatic dissipation for a single
 /// charge from 0→V with a linear ramp of duration T_half:
 ///   The quasi-static current is i ≈ C · dV_ramp/dt = C·V/T_half.
 ///   Power = i²R = C²V²R / T_half².
@@ -256,9 +256,9 @@ pub fn rc_ramp_closed_form(r_ohm: f64, c_farad: f64, v_volt: f64, period_s: f64)
 
 /// Axes for a multi-axis parameter sweep.
 pub struct SweepAxes {
-    /// Clock periods (s) — outer loop.
+    /// Clock periods (s) -- outer loop.
     pub ramps: Vec<f64>,
-    /// Load capacitances (F) — inner loop.
+    /// Load capacitances (F) -- inner loop.
     pub loads: Vec<f64>,
 }
 
@@ -327,7 +327,7 @@ pub fn slopes_by_load(points: &[SweepPoint]) -> Vec<(f64, f64)> {
         .collect()
 }
 
-/// Gate 2: Ideal source driving an open circuit — one full charge/discharge
+/// Gate 2: Ideal source driving an open circuit -- one full charge/discharge
 /// cycle into a capacitor with zero resistance (ideal wires).
 ///
 /// Over a symmetric cycle the net energy delivered should be zero (energy
@@ -366,7 +366,7 @@ mod tests {
     macro_rules! require_ngspice {
         () => {
             if !ngspice_available() {
-                eprintln!("ngspice not found — skipping test");
+                eprintln!("ngspice not found -- skipping test");
                 return;
             }
         };
@@ -463,7 +463,7 @@ esource              =  3.14159e-12
         // CV² reference scale for the epsilon.
         let cv2 = c * v * v; // 1e-12 J
 
-        // |E_net| should be within solver tolerance — tiny fraction of CV².
+        // |E_net| should be within solver tolerance -- tiny fraction of CV².
         let eps = 1e-18_f64.max(cv2 * 1e-4);
         assert!(
             e_net.abs() < eps,

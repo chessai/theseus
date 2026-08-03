@@ -7,7 +7,7 @@
 //! (b) balanced_energy on a single instruction and on the step is
 //!     positive with a sensible kind-breakdown, using the REAL char DB.
 //! (c) Print the per-clause energy table so the numbers are visible.
-//! (d) M-E: ROM program energy (ADR-0042) — fib priced in joules.
+//! (d) M-E: ROM program energy (ADR-0042) -- fib priced in joules.
 //!
 //! The full-step lowering is memoized via `OnceLock` so it happens at
 //! most once across all tests. The balanced step netlist is NEVER
@@ -33,7 +33,7 @@ use theseus_tisc::money_plot::{cmos_crossing_t_ramp, CMOS_STATIC_E_PER_GATE_J};
 
 const T_RAMP: f64 = 1e-7;
 
-/// Gate to serialize expensive step-net lowerings — concurrent lowerings
+/// Gate to serialize expensive step-net lowerings -- concurrent lowerings
 /// exhaust memory and trigger SIGKILL.
 static LOWER_GATE: Mutex<()> = Mutex::new(());
 
@@ -72,7 +72,7 @@ fn step_net() -> &'static PhasedCellNetlist {
 // This POC lowers `step(test_rom)` and asserts the net matches a fingerprint
 // captured from the pre-change (Box) code on base `9b12f7e`. The fingerprint is
 // a full-net digest: `Debug` of the whole `PhasedCellNetlist` (every cell's
-// kind/depth/phase/rails, both boundary Types, num_lines) hashed — it changes
+// kind/depth/phase/rails, both boundary Types, num_lines) hashed -- it changes
 // if ANY produced bit changes. Reproduces the finding: identical old-vs-new.
 //
 // How the golden was captured: check out base `9b12f7e` (Box<Type>), copy this
@@ -81,7 +81,7 @@ fn step_net() -> &'static PhasedCellNetlist {
 //
 // NOTE (gate tier): this whole file is `#![cfg(feature = "heavy-tests")]`, so
 // this POC runs in the HEAVY tier (`--features heavy-tests`), not the fast gate
-// — it must lower a full step net (seconds + GBs), which is heavy by nature.
+// -- it must lower a full step net (seconds + GBs), which is heavy by nature.
 // The advisor's pre-merge heavy run is the gate; a fast-only run won't exercise
 // it.
 fn net_fingerprint(net: &PhasedCellNetlist) -> u64 {
@@ -130,15 +130,15 @@ fn poc_step_net_bit_identical_across_type_repr() {
 
     assert_eq!(
         cells, GOLDEN_CELLS,
-        "cell count changed under the Type repr change — NOT bit-identical"
+        "cell count changed under the Type repr change -- NOT bit-identical"
     );
     assert_eq!(
         num_lines, GOLDEN_NUM_LINES,
-        "num_lines changed under the Type repr change — NOT bit-identical"
+        "num_lines changed under the Type repr change -- NOT bit-identical"
     );
     assert_eq!(
         fp, GOLDEN_FP,
-        "net fingerprint changed under the Type repr change — NOT bit-identical"
+        "net fingerprint changed under the Type repr change -- NOT bit-identical"
     );
 }
 
@@ -265,7 +265,7 @@ fn fib_iso() -> &'static theseus_core::Iso {
     ISO.get_or_init(|| elaborate(FIB_SRC, "fib"))
 }
 
-/// Memoized fib step net (lowered from fib's OWN 24-word ROM — F2).
+/// Memoized fib step net (lowered from fib's OWN 24-word ROM -- F2).
 fn fib_step_net() -> &'static PhasedCellNetlist {
     static NET: OnceLock<PhasedCellNetlist> = OnceLock::new();
     NET.get_or_init(|| {
@@ -280,7 +280,7 @@ fn fib_step_net() -> &'static PhasedCellNetlist {
 }
 
 /// A representative fib input: Nat=1 (the 2nd domain value, k=1),
-/// with initial pair (1,0) — computes fib(1). This gives T < B
+/// with initial pair (1,0) -- computes fib(1). This gives T < B
 /// (one iteration used out of 3 unrolled), demonstrating the park tax.
 fn fib_input() -> theseus_core::Value {
     use theseus_core::Value;
@@ -404,8 +404,8 @@ fn me_a3_golden() {
     // ops now share ONE bracket + ONE configurable ALU (Add/Sub/Addi/Subi → one
     // adder, the 4 rotates → one rotator) and the group_b block is removed from
     // decode_execute. This nearly halves decode_execute (874510 → 441015 balanced
-    // cells) — dropping group_b's cells AND its share of the ~50% inter-block
-    // seq_balanced overhead — so step energy drops sharply: step_j
+    // cells) -- dropping group_b's cells AND its share of the ~50% inter-block
+    // seq_balanced overhead -- so step energy drops sharply: step_j
     // 2.5259595646e-9 → 1.8664606459e-9 (−26.1%), total_j 6.0623029551e-8 →
     // 4.4795055502e-8, total_j = 24·step_j. B=24/T=20 codegen UNCHANGED (step_j-
     // only change, same ROM/trace). Deterministic (per-cell sum). Behaviour is
@@ -524,14 +524,14 @@ fn me_a4_honest_crossing() {
     // The program crossing must be the per-step crossing shifted right by
     // EXACTLY B/T (cmos_crossing_t_ramp is linear in the energy ratio; F3:
     // reversible pays B steps, CMOS pays only T). This FALSIFIES a B-vs-B
-    // regression — if CMOS were charged B steps, the B would cancel and
+    // regression -- if CMOS were charged B steps, the B would cancel and
     // tc == per_step_crossing (no shift), which this assertion rejects.
     let expected = per_step_crossing * (b as f64 / t as f64);
     let rel_err = ((tc - expected) / expected).abs();
     assert!(
         rel_err < 1e-3,
         "program crossing ({tc:.3e}) must equal per-step ({per_step_crossing:.3e}) × B/T ({:.3}) \
-         = {expected:.3e}; rel_err={rel_err:.2e} — a B-vs-B regression gives no shift and fails here",
+         = {expected:.3e}; rel_err={rel_err:.2e} -- a B-vs-B regression gives no shift and fails here",
         b as f64 / t as f64
     );
 
@@ -550,7 +550,7 @@ fn me_a4_honest_crossing() {
 // opcode once into config lines, run one gated core) actually SHRINK the
 // lowered decode netlist, or does route fan-out create balance-buffer skew
 // that eats the win? Reports decode_execute cells + fib step_j vs the
-// committed baseline. Prints only — no golden assertion here (me_a3_golden
+// committed baseline. Prints only -- no golden assertion here (me_a3_golden
 // is re-pinned during finish, after adversarial review).
 //
 // Baseline (design doc §1.1, pre-B1.1): decode_execute = 874 510 cells;
@@ -560,12 +560,12 @@ fn poc_b11_shared_alu_measure() {
     const BASE_DECODE_CELLS: usize = 874_510;
     const BASE_STEP_J: f64 = 2.5259595646e-9;
 
-    // (1) decode_execute BALANCED cell count — the same metric as the
+    // (1) decode_execute BALANCED cell count -- the same metric as the
     // design baseline (`clause_report` / `instruction_energy` = lower THEN
     // balance, counting the K0 balance buffers). This is what step_j is
     // built from, so it is the apples-to-apples Q1 number. (The raw
     // `lower_iso` count is ~187× smaller but is a different, pre-balance
-    // metric — not comparable to 874 510.)
+    // metric -- not comparable to 874 510.)
     let de_iso = theseus_tisc::decoder::decode_execute();
     let de_bd = {
         let _guard = LOWER_GATE.lock().unwrap();
@@ -636,7 +636,7 @@ fn poc_b11_shared_alu_measure() {
         pe.total_j, pe.steps_b, pe.step_j
     );
 
-    // (3) B/T must be invariant (step_j-only change — same ROM, same trace).
+    // (3) B/T must be invariant (step_j-only change -- same ROM, same trace).
     assert_eq!(pe.steps_b, 24, "B changed (must be step_j-only)");
     assert_eq!(pe.steps_t, 20, "T changed (must be step_j-only)");
 
@@ -652,11 +652,11 @@ fn poc_b11_shared_alu_measure() {
 // The PRIMARY B1.2 deliverable: does folding the 5 immediate ops into the
 // SAME configurable ALU as Group A (fmt-selected A-source: rs-fetch for R,
 // IR-imm mask for I) and REMOVING the separate `group_b_shared` block from
-// `decode_execute` produce a real step_j win — i.e. did the group_b block
+// `decode_execute` produce a real step_j win -- i.e. did the group_b block
 // COLLAPSE into the shared adder/rotator, or did the fmt-select A-source
 // machinery eat the win? Reports decode_execute cells + fib step_j vs both
 // the committed baseline AND B1.1, and the unified-block cells vs
-// (B1.1 group_a 148414 + group_b 107642 = 256056) — the apples-to-apples
+// (B1.1 group_a 148414 + group_b 107642 = 256056) -- the apples-to-apples
 // "did we remove the group_b block" number. Prints only (goldens re-pinned
 // at finish, after adversarial review).
 #[test]
@@ -689,7 +689,7 @@ fn poc_b12_shared_alu_measure() {
         BASE_DECODE_CELLS as f64 / de_cells as f64,
     );
 
-    // (2) the UNIFIED reg+imm block vs (B1.1 group_a + group_b) — the
+    // (2) the UNIFIED reg+imm block vs (B1.1 group_a + group_b) -- the
     // apples-to-apples "did the group_b block collapse" number.
     let unified_cells: usize = {
         let _guard = LOWER_GATE.lock().unwrap();
@@ -740,7 +740,7 @@ fn poc_b12_shared_alu_measure() {
         pe.total_j, pe.steps_b, pe.step_j
     );
 
-    // B/T invariant (step_j-only change — same ROM, same trace).
+    // B/T invariant (step_j-only change -- same ROM, same trace).
     assert_eq!(pe.steps_b, 24, "B changed (must be step_j-only)");
     assert_eq!(pe.steps_t, 20, "T changed (must be step_j-only)");
 
@@ -753,11 +753,11 @@ fn poc_b12_shared_alu_measure() {
 // ── B1.3: universal 3-operand shared block measurement ──────────────
 //
 // The PRIMARY B1.3 deliverable: does folding Ccnot + Cswap into the shared
-// block via the universal (rd→D, rs→A, rt→B) bracket — removing their two
-// PRIVATE crossbars and dropping the top-level block count 5→3 — produce a
+// block via the universal (rd→D, rs→A, rt→B) bracket -- removing their two
+// PRIVATE crossbars and dropping the top-level block count 5→3 -- produce a
 // real further step_j win? Reports decode_execute cells + fib step_j vs the
 // committed baseline / B1.1 / B1.2, and the merged universal-block cells vs
-// the pre-B1.3 (reg_imm 185864 + ccnot 75520 + cswap 63770 = 325154) — the
+// the pre-B1.3 (reg_imm 185864 + ccnot 75520 + cswap 63770 = 325154) -- the
 // "did the two private crossbars collapse" number. Prints only (goldens
 // re-pinned at finish after adversarial review).
 #[test]
@@ -842,7 +842,7 @@ fn poc_b13_shared_alu_measure() {
         pe.total_j, pe.steps_b, pe.step_j
     );
 
-    // B/T invariant (step_j-only change — same ROM, same trace).
+    // B/T invariant (step_j-only change -- same ROM, same trace).
     assert_eq!(pe.steps_b, 24, "B changed (must be step_j-only)");
     assert_eq!(pe.steps_t, 20, "T changed (must be step_j-only)");
 
@@ -854,7 +854,7 @@ fn poc_b13_shared_alu_measure() {
 
 // B-1 re-sequencing measurement: per-block BALANCED cell mass of the
 // top-level blocks of decode_execute (with B1.1's Group-A fold applied).
-// Grounds where the un-shared *routing* mass lives — the controlled ops
+// Grounds where the un-shared *routing* mass lives -- the controlled ops
 // (Ccnot/Cswap/Xchg/Swapbr) each carry a PRIVATE crossbar (design §1.3),
 // whereas Group A/B were already route-shared by A-0. This tells us which
 // blocks the universal 3-operand shared bracket must absorb to capture the

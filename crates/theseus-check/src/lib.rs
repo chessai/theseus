@@ -1,18 +1,18 @@
-//! `theseus-check` — the elaborator and static-semantics checker.
+//! `theseus-check` -- the elaborator and static-semantics checker.
 //!
 //! The crate implements the four static-semantics stages in the order fixed by
-//! `docs/src/spec/static-semantics.md` — Names (T0101), Typing (T0102),
-//! Linearity (T0201/T0202), Coverage (T0301/T0302/T0303) — under **global gating**:
+//! `docs/src/spec/static-semantics.md` -- Names (T0101), Typing (T0102),
+//! Linearity (T0201/T0202), Coverage (T0301/T0302/T0303) -- under **global gating**:
 //! a later stage runs only if every earlier stage reported nothing. This makes
 //! diagnostics from a downstream stage trustworthy (they never depend on
 //! artifacts a failed upstream stage could not establish).
 //!
 //! # Module layout
-//! * [`diagnostics`] — the structured [`Diagnostic`] shared by every stage.
-//! * [`env`] — the resolution [`Env`] and surface→core type lowering.
-//! * [`testkit`] — the conformance harness (public; called from stage tests).
-//! * [`names`], [`typing`], [`linearity`], [`coverage`] — the four stages.
-//! * [`elaborate`] — surface→core iso elaboration.
+//! * [`diagnostics`] -- the structured [`Diagnostic`] shared by every stage.
+//! * [`env`] -- the resolution [`Env`] and surface→core type lowering.
+//! * [`testkit`] -- the conformance harness (public; called from stage tests).
+//! * [`names`], [`typing`], [`linearity`], [`coverage`] -- the four stages.
+//! * [`elaborate`] -- surface→core iso elaboration.
 
 pub mod coverage;
 pub mod diagnostics;

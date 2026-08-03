@@ -1,6 +1,6 @@
 #![cfg(feature = "heavy-tests")]
 // HEAVY tier: run under `--features heavy-tests --test-threads=1`.
-//! BVEQ-INVARIANT-MDE-SPILL — extend the inductive-invariant loop-proof method
+//! BVEQ-INVARIANT-MDE-SPILL -- extend the inductive-invariant loop-proof method
 //! (proven on vart_halve in `bveq_invariant_poc.rs`) to the **mde_spill** loop
 //! (`mde_spill.rs`'s `mde_spill_walk` Trace), retiring its slow #[ignore]
 //! real-CPU authority (`mde_spill_real_cpu`) with a fast symbolic proof.
@@ -23,21 +23,21 @@
 //! the paging Xchg's net-zero bracket) stays asserted 0 at the iteration
 //! boundary.
 //!
-//! Everything else — StepEngine, concrete-PC body composition, the come-from /
-//! re-entry glue, trip-count bound, negative controls — is REUSED from the
+//! Everything else -- StepEngine, concrete-PC body composition, the come-from /
+//! re-entry glue, trip-count bound, negative controls -- is REUSED from the
 //! vart_halve template, adapted to mde_spill's carrier + body function.
 //!
 //! ── PROVEN vs ARGUED (parity with the vart_halve template) ─────────────────
 //! PROVEN symbolically (whole carrier domain, real netlist): L1 body ≡
 //! mde_walk_bytes (spilled Scratch(2) as carrier), L2 come-from BR-router + aux
-//! exit + GAP-A PC landing, L0/L0-BASE re-entry welds — the FIELD-COMPLETE
+//! exit + GAP-A PC landing, L0/L0-BASE re-entry welds -- the FIELD-COMPLETE
 //! per-iteration relation, each with a NEGATIVE CONTROL (body, spill-is-carrier,
 //! mutated-ROM, come-from, re-entry, aux-exit) proving the asserts have teeth.
 //! ARGUED (same legs the template leaves argued): the tag∈{0,1} canonical carrier
 //! domain (case-split faithful at every real iteration boundary), the induction
 //! FRAME (iterating the field-complete per-iteration relation reproduces eval's
-//! fixpoint — a math induction, not a hidden unroll), and the PROLOGUE/EPILOGUE
-//! legs (marshal→first Ltop, done-exit→unmarshal) — anchored by the fast/heavy
+//! fixpoint -- a math induction, not a hidden unroll), and the PROLOGUE/EPILOGUE
+//! legs (marshal→first Ltop, done-exit→unmarshal) -- anchored by the fast/heavy
 //! run_rom_on_cpu==eval + quiescence bootstrap, not lemma-covered here.
 
 use std::collections::BTreeMap;
@@ -57,7 +57,7 @@ use theseus_tisc::step::step_with;
 use theseus_tisc::types::{state_ty_with, Layout, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH, W};
 
 // ══════════════════════════════════════════════════════════════════════════
-// Symbolic / concrete state SV construction (bit-interleaved varmap) — VERBATIM
+// Symbolic / concrete state SV construction (bit-interleaved varmap) -- VERBATIM
 // from bveq_invariant_poc.rs.  var(field f, bit b) = b*nf + f.
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -195,7 +195,7 @@ fn set_field(sv: &SV, f: usize, nf: usize, new: SV) -> SV {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// StepEngine — the MEMOIZED per-step evaluator (VERBATIM from the template;
+// StepEngine -- the MEMOIZED per-step evaluator (VERBATIM from the template;
 // fetch/unfetch short-circuited to `IR ^= rom[pc]`, decode_execute walked in
 // full symbolically). See bveq_invariant_poc.rs for the faithfulness argument.
 // ══════════════════════════════════════════════════════════════════════════
@@ -266,7 +266,7 @@ fn print_curve(tag: &str, samples: &[BodyStep]) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// ROM span geometry — REUSED from the template. mde_spill's lower_trace
+// ROM span geometry -- REUSED from the template. mde_spill's lower_trace
 // skeleton is IDENTICAL to vart_halve's (prologue 2, Ltop SWAPBR rc, JOIN 4,
 // body, ROUTE 4, Lend SWAPBR rb, epilogue 2), so LOOP_OVERHEAD=10.
 // ══════════════════════════════════════════════════════════════════════════
@@ -330,7 +330,7 @@ fn compile_loop_geom(iso: &Iso) -> LoopGeom {
     for pc in body_start..(lend_pc - ROUTE_LEN) {
         assert!(
             !matches!(instrs[pc], Instr::Swapbr { .. }),
-            "BODY SWAPBR-FREE: body instr at pc={pc} is a Swapbr ({:?}) — unsound",
+            "BODY SWAPBR-FREE: body instr at pc={pc} is a Swapbr ({:?}) -- unsound",
             instrs[pc]
         );
     }
@@ -409,7 +409,7 @@ fn build_walk_body() -> (Iso, Type, Type) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// DIAGNOSTIC — determine the carrier layout empirically.
+// DIAGNOSTIC -- determine the carrier layout empirically.
 //
 // The 5 leaf bytes [b0..b5] = [tag, p1, p2, p3, p4] marshal to some registers +
 // one scratch (the spilled leaf). We step the body span concretely with a
@@ -552,7 +552,7 @@ fn is_carrier_field(layout: &Layout, f: usize) -> bool {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// The mde_walk_bytes SYMBOLIC spec — mirrors compile::mde_walk_bytes on BDD
+// The mde_walk_bytes SYMBOLIC spec -- mirrors compile::mde_walk_bytes on BDD
 // byte-vectors. Takes the 5 carrier leaf byte-vectors (each Vec<Bdd> of W bits)
 // and returns the 5 output byte-vectors. This is the body-function reference L1
 // proves the composed body span equals, over the WHOLE carrier domain.
@@ -611,7 +611,7 @@ fn mde_walk_spec(leaves_in: &[Vec<Bdd>; 5], vs: &BddVariableSet) -> [Vec<Bdd>; 5
 
 
 // ══════════════════════════════════════════════════════════════════════════
-// L1 — BODY LEMMA (with the spilled leaf as CARRIER).
+// L1 -- BODY LEMMA (with the spilled leaf as CARRIER).
 //
 // Body-entry SV: the 5 carrier leaf homes are SYMBOLIC (whole carrier domain,
 // including Scratch(2) = the spilled leaf), EVERY other field = 0 (the body-
@@ -621,7 +621,7 @@ fn mde_walk_spec(leaves_in: &[Vec<Bdd>; 5], vs: &BddVariableSet) -> [Vec<Bdd>; 5
 // This is faithful: at body-entry the machine holds the register-resident carrier
 // in r0..r3, the spilled carrier in Scratch(2), and everything else at the
 // reversible-body invariant 0. The body's first instr (Xchg r7,s2) pages the
-// spilled leaf into r7; the last (Xchg r7,s2) pages it back — a net-zero bracket
+// spilled leaf into r7; the last (Xchg r7,s2) pages it back -- a net-zero bracket
 // that RESTORES s2 to the *transformed* spilled leaf and r7 to 0.
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -633,7 +633,7 @@ fn body_entry_sv(layout: &Layout, vs: &BddVariableSet, pc: usize) -> SV {
         } else if layout.pc_fields() >= 2 && f == layout.pc_hi_field() {
             const_word8(((pc >> 8) & 0xFF) as u8, vs)
         } else if is_carrier_field(layout, f) {
-            symbolic_word8(vs, nf, f) // carrier leaf (incl. Scratch(2)) — whole domain
+            symbolic_word8(vs, nf, f) // carrier leaf (incl. Scratch(2)) -- whole domain
         } else {
             const_word8(0, vs) // every non-carrier field at the body-entry invariant 0
         }
@@ -731,7 +731,7 @@ fn prove_body_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
             assert!(
                 got[b] == zero,
                 "BODY LEMMA: non-carrier field {f} bit {b} not restored to 0 (leak/stray write) \
-                 — e.g. paging spare r{SPILL_SPARE_REG} left dirty"
+                 -- e.g. paging spare r{SPILL_SPARE_REG} left dirty"
             );
         }
     }
@@ -740,7 +740,7 @@ fn prove_body_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     (peak, samples.last().unwrap().secs)
 }
 
-/// L1 — the mde_spill BODY LEMMA (spill-in-carrier). Body span ≡ mde_walk over
+/// L1 -- the mde_spill BODY LEMMA (spill-in-carrier). Body span ≡ mde_walk over
 /// the whole carrier domain (incl. Scratch(2)); everything else restored to 0.
 #[test]
 fn invariant_body_lemma_mde_spill() {
@@ -761,12 +761,12 @@ fn invariant_body_lemma_mde_spill() {
          MAX peak {} BDD nodes, {:.3}s.",
         geom.body_len, peak, secs
     );
-    assert!(peak < 50_000, "BODY LEMMA peak {peak} — expected tractable (< 50k)");
+    assert!(peak < 50_000, "BODY LEMMA peak {peak} -- expected tractable (< 50k)");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// L2 — COME-FROM / TERMINATION LEMMA (identical structure to vart_halve; the
-// come-from is a pure BR-router that must NOT disturb the carrier — INCLUDING
+// L2 -- COME-FROM / TERMINATION LEMMA (identical structure to vart_halve; the
+// come-from is a pure BR-router that must NOT disturb the carrier -- INCLUDING
 // the spilled leaf in Scratch(2), which must pass through as IDENTITY).
 //
 // Bracket at [route_start .. lend_pc]:
@@ -906,7 +906,7 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
         assert!(br_out[b] == want, "COME-FROM: BR out bit {b} != δu·[tag==0]");
     }
 
-    // GAP-A: Lend PC landing vs the w_pc=16 netlist — the sole BR≠0 PC-adder pass.
+    // GAP-A: Lend PC landing vs the w_pc=16 netlist -- the sole BR≠0 PC-adder pass.
     assert_eq!(layout.w_pc, 16, "GAP-A PC-landing assert requires w_pc=16 adder");
     let lend_plus_1 = geom.lend_pc + 1;
     let pc_lo_out = out_field_bits(&out, layout, layout.pc_field());
@@ -952,7 +952,7 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     }
 
     // FIELD-COMPLETE HAND-OFF C (L2 leg): scratch s2..s7 IDENTITY. s2 is the
-    // SPILLED CARRIER leaf — it MUST pass through unchanged (the come-from must not
+    // SPILLED CARRIER leaf -- it MUST pass through unchanged (the come-from must not
     // touch the loop-carried spilled leaf). s3..s7 identity (transient/untouched).
     for s in 2..NUM_SCRATCH {
         let f = layout.scratch_field(s);
@@ -1010,16 +1010,16 @@ fn invariant_come_from_lemma_mde_spill() {
          lands on Ltop; carrier (incl. SPILLED Scratch(2)) undisturbed. Peak {} nodes, {:.3}s.",
         cf.delta_u, peak, secs
     );
-    assert!(peak < 50_000, "COME-FROM LEMMA peak {peak} — expected tractable");
+    assert!(peak < 50_000, "COME-FROM LEMMA peak {peak} -- expected tractable");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// L0 — RE-ENTRY LEMMA (the induction weld: L2-continue-exit → L1-entry).
+// L0 -- RE-ENTRY LEMMA (the induction weld: L2-continue-exit → L1-entry).
 //
 // Glue [LTOP, BODY_START) = offsets [2,7): Ltop SWAPBR rc + 4 join-dispatch.
 // After L2's CONTINUE exit (back-edge: BR=δu, ctrl=1, temp=0, rb=0, rc=0,
 // tag0=0), the glue must re-establish L1's entry invariant: {ctrl=temp=rb=rc=BR=0},
-// PC=BODY_START, carrier identity — INCLUDING the SPILLED leaf in Scratch(2),
+// PC=BODY_START, carrier identity -- INCLUDING the SPILLED leaf in Scratch(2),
 // which is loop-carried and must pass through as IDENTITY (NOT zeroed).
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -1177,7 +1177,7 @@ fn check_l0_exit(layout: &Layout, geom: &LoopGeom, cf: &ComeFrom, vs: &BddVariab
             assert!(got[b] == zero, "RE-ENTRY: scratch field {f} bit {b} != 0");
         }
     }
-    // s2..s7 IDENTITY — s2 is the SPILLED CARRIER leaf (must survive the glue).
+    // s2..s7 IDENTITY -- s2 is the SPILLED CARRIER leaf (must survive the glue).
     for s in 2..NUM_SCRATCH {
         let f = layout.scratch_field(s);
         let got = out_field_bits(out, layout, f);
@@ -1212,7 +1212,7 @@ fn invariant_re_entry_lemma_mde_spill() {
     let (out, peak) = compose_re_entry_from(&layout, &geom, &vs, re_entry_sv(&layout, &geom, &cf, &vs));
     let secs = t0.elapsed().as_secs_f64();
     check_l0_exit(&layout, &geom, &cf, &vs, &out, 0);
-    assert!(peak < 50_000, "RE-ENTRY LEMMA peak {peak} — expected tractable");
+    assert!(peak < 50_000, "RE-ENTRY LEMMA peak {peak} -- expected tractable");
     eprintln!(
         "L0 RE-ENTRY LEMMA [mde_spill]: glue [{LTOP},{BODY_START}) welds L2-continue-exit → L1-entry \
          {{ctrl=temp=rb=rc=BR=0}} over the WHOLE carrier; PC→BODY_START; carrier identity incl. \
@@ -1232,7 +1232,7 @@ fn invariant_re_entry_base_lemma_mde_spill() {
     let (out, peak) = compose_re_entry_from(&layout, &geom, &vs, re_entry_base_sv(&layout, &geom, &cf, &vs));
     let secs = t0.elapsed().as_secs_f64();
     check_l0_exit(&layout, &geom, &cf, &vs, &out, 1);
-    assert!(peak < 50_000, "RE-ENTRY BASE peak {peak} — expected tractable");
+    assert!(peak < 50_000, "RE-ENTRY BASE peak {peak} -- expected tractable");
     eprintln!(
         "L0-BASE RE-ENTRY LEMMA [mde_spill]: glue lands the FIRST-traversal precondition \
          {{BR=0,ctrl=0,temp=δu,tag=1}} in L1's entry invariant (aux 0, PC→BODY_START, carrier \
@@ -1241,7 +1241,7 @@ fn invariant_re_entry_base_lemma_mde_spill() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// L3 — TRIP-COUNT BOUND + INDUCTION ANCHORS.
+// L3 -- TRIP-COUNT BOUND + INDUCTION ANCHORS.
 // ══════════════════════════════════════════════════════════════════════════
 
 /// Eval-side trajectory length: body applications from Right(input_bit) until the
@@ -1292,7 +1292,7 @@ fn invariant_trip_count_whole_domain_bound_mde_spill() {
 
     // The budget's own iteration capacity: the straight-through pass plus
     // ⌊(B − |instrs|)/iter_len⌋ back-edges. This is the number of come-from
-    // iterations B actually funds — it MUST be ≥ every input's trajectory_len.
+    // iterations B actually funds -- it MUST be ≥ every input's trajectory_len.
     let n_instrs = geom.lowered_instrs.len();
     let budget_iters = (geom.budget - n_instrs) / geom.iter_len + 1;
     assert_eq!(
@@ -1308,14 +1308,14 @@ fn invariant_trip_count_whole_domain_bound_mde_spill() {
         }
         assert!(
             tc <= k_max,
-            "TRIP-COUNT BOUND: input {input_bit} trajectory_len = {tc} > k_max {k_max} — \
+            "TRIP-COUNT BOUND: input {input_bit} trajectory_len = {tc} > k_max {k_max} -- \
              an input runs past the WCET budget (unsound induction / compiler k_max too small)"
         );
         // Directly: the budget must fund this input's come-from iterations.
         assert!(
             tc <= budget_iters,
             "TRIP-COUNT BOUND: input {input_bit} trajectory_len = {tc} > budget iteration-capacity \
-             {budget_iters} — B={} does not cover this input",
+             {budget_iters} -- B={} does not cover this input",
             geom.budget
         );
     }
@@ -1327,7 +1327,7 @@ fn invariant_trip_count_whole_domain_bound_mde_spill() {
 }
 
 /// L3 (fast anchor, ALWAYS-ON): run_on_cpu_fast == eval over the WHOLE Bit input
-/// domain — ties the structural lemmas to the real machine in seconds.
+/// domain -- ties the structural lemmas to the real machine in seconds.
 #[test]
 fn invariant_induction_anchor_fast_mde_spill() {
     let (body, u_ty, _carrier) = build_walk_body();
@@ -1349,7 +1349,7 @@ fn invariant_induction_anchor_fast_mde_spill() {
 }
 
 /// L3 (heavy anchor, ADVISOR-RUN #[ignore]): the REAL run_rom_on_cpu == eval +
-/// terminal QUIESCENCE (scratch all-zero, BR=0) — EXACTLY the mde_spill_real_cpu
+/// terminal QUIESCENCE (scratch all-zero, BR=0) -- EXACTLY the mde_spill_real_cpu
 /// authority's per-input path. This is the ground truth the invariant method
 /// REPLACES; kept #[ignore] because run_rom_on_cpu at budget 154 is slow. The
 /// scratch-all-zero terminal check confirms the SPILLED leaf's page-out bracket
@@ -1389,7 +1389,7 @@ fn invariant_induction_bootstrap_quiescence_mde_spill() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// NEGATIVE CONTROLS — teeth.
+// NEGATIVE CONTROLS -- teeth.
 // ══════════════════════════════════════════════════════════════════════════
 
 /// NEG-1 (body): the real composed body must EQUAL mde_walk_spec AND DIFFER from
@@ -1413,7 +1413,7 @@ fn invariant_negative_control_body_mde_spill() {
         assert!(out_l1[b] == want[1][b], "sanity: real body must match mde_walk_spec on leaf 1");
     }
 
-    // WRONG spec: mde_walk WITHOUT the final b[1]^=b[2] mix — leaf 1 differs.
+    // WRONG spec: mde_walk WITHOUT the final b[1]^=b[2] mix -- leaf 1 differs.
     let mut wb: Vec<Vec<Bdd>> = leaves_in.to_vec();
     wb[0] = xor_bytes(&wb[0], &wb[1]);
     wb[0] = xor_const1(&wb[0], &vs);
@@ -1431,12 +1431,12 @@ fn invariant_negative_control_body_mde_spill() {
     // (omit the final b[1]^=b[2])
     let differs = (0..W).any(|b| out_l1[b] != wb[1][b]);
     assert!(differs, "NEG-1 body: real body must DIFFER from the mixing-dropped spec (teeth)");
-    eprintln!("NEG-1 body [mde_spill]: real body ≡ mde_walk, ≠ mixing-dropped spec — teeth.");
+    eprintln!("NEG-1 body [mde_spill]: real body ≡ mde_walk, ≠ mixing-dropped spec -- teeth.");
 }
 
 /// NEG-SPILL (spill-in-carrier is load-bearing): if the spilled Scratch(2) leaf
 /// were treated as TRANSIENT (asserted 0 at body exit like vart_halve's scratch),
-/// the proof would be WRONG — the body leaves a NON-ZERO transformed leaf in
+/// the proof would be WRONG -- the body leaves a NON-ZERO transformed leaf in
 /// Scratch(2). This control asserts the real body output for Scratch(2) is NOT
 /// identically 0 (it carries the transformed spilled leaf), so the carrier
 /// treatment (asserting = mde_walk_spec[4], not 0) is genuinely required.
@@ -1459,7 +1459,7 @@ fn invariant_negative_control_spill_is_carrier() {
     let all_zero = (0..W).all(|b| out_spill[b] == zero);
     assert!(
         !all_zero,
-        "NEG-SPILL: body output for Scratch(2) is identically 0 — the spill would be transient, \
+        "NEG-SPILL: body output for Scratch(2) is identically 0 -- the spill would be transient, \
          not carrier. The spill-in-carrier treatment would be vacuous."
     );
 
@@ -1471,7 +1471,7 @@ fn invariant_negative_control_spill_is_carrier() {
     }
     eprintln!(
         "NEG-SPILL [mde_spill]: Scratch(2) at body exit ≡ mde_walk_spec[leaf 4] and is NOT \
-         identically 0 — the spilled leaf is genuine loop-carried CARRIER, not transient. \
+         identically 0 -- the spilled leaf is genuine loop-carried CARRIER, not transient. \
          Treating it as transient-0 would FAIL. The spill-in-carrier treatment is load-bearing."
     );
 }
@@ -1505,9 +1505,9 @@ fn invariant_negative_control_mutated_rom_mde_spill() {
     });
     assert!(
         !matches_all,
-        "NEG-3 mutated ROM: a body with one flipped instr STILL matched mde_walk — L1 has no teeth"
+        "NEG-3 mutated ROM: a body with one flipped instr STILL matched mde_walk -- L1 has no teeth"
     );
-    eprintln!("NEG-3 mutated ROM [mde_spill]: one flipped body instr ⇒ body ≠ mde_walk — L1 has teeth.");
+    eprintln!("NEG-3 mutated ROM [mde_spill]: one flipped body instr ⇒ body ≠ mde_walk -- L1 has teeth.");
 }
 
 /// NEG-2 (come-from): real BR ≠ inverted-predicate and ≠ unconditional-loop specs.
@@ -1542,11 +1542,11 @@ fn invariant_negative_control_come_from_mde_spill() {
         let du = if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
         assert!(br_out[b] == not_tag.and(&du), "sanity: true δu·[tag==0] must match");
     }
-    eprintln!("NEG-2 come-from [mde_spill]: real BR ≡ δu·[tag==0], ≠ {{inverted, unconditional}} — teeth.");
+    eprintln!("NEG-2 come-from [mde_spill]: real BR ≡ δu·[tag==0], ≠ {{inverted, unconditional}} -- teeth.");
 }
 
 /// NEG-4 (L0 re-entry, template parity): a BROKEN L0 exit expectation must DIFFER
-/// from the real glue output — so the re-entry lemma's welding asserts have teeth
+/// from the real glue output -- so the re-entry lemma's welding asserts have teeth
 /// (a glue that landed in the WRONG state would be caught). Two wrong
 /// expectations: (a) wrong exit PC (the glue does NOT fall through to BODY_START),
 /// and (b) wrong aux (ctrl != 0 at exit ⇒ L1's entry invariant violated). Reuses
@@ -1569,7 +1569,7 @@ fn invariant_negative_control_re_entry_mde_spill() {
     assert_ne!(
         got_pc,
         Some(BODY_START + 1),
-        "NEG-4 L0: real glue exit PC matched a WRONG landing (BODY_START+1) — no teeth"
+        "NEG-4 L0: real glue exit PC matched a WRONG landing (BODY_START+1) -- no teeth"
     );
     assert_eq!(got_pc, Some(BODY_START), "sanity: real glue lands on BODY_START");
 
@@ -1579,16 +1579,16 @@ fn invariant_negative_control_re_entry_mde_spill() {
     let wrong_ctrl_is_one = (0..W).all(|b| ctrl_out[b] == if b == 0 { one.clone() } else { zero.clone() });
     assert!(
         !wrong_ctrl_is_one,
-        "NEG-4 L0: real glue exit ctrl matched the WRONG value 1 — L0 welding has no teeth"
+        "NEG-4 L0: real glue exit ctrl matched the WRONG value 1 -- L0 welding has no teeth"
     );
     for b in 0..W {
         assert!(ctrl_out[b] == zero, "sanity: real glue exit ctrl == 0 (L1 entry invariant)");
     }
-    eprintln!("NEG-4 L0 re-entry [mde_spill]: real glue lands ctrl=0 @BODY_START, ≠ {{wrong PC, ctrl=1}} — teeth.");
+    eprintln!("NEG-4 L0 re-entry [mde_spill]: real glue lands ctrl=0 @BODY_START, ≠ {{wrong PC, ctrl=1}} -- teeth.");
 }
 
 /// NEG-5 (L2 aux-exit, template parity): a BROKEN come-from AUX-EXIT expectation
-/// must DIFFER from the real bracket output — so the per-branch aux pin (the
+/// must DIFFER from the real bracket output -- so the per-branch aux pin (the
 /// PRECONDITION L0 starts from) has teeth. Two wrong expectations:
 ///   (a) ctrl = tag (NOT tag^1): the real route sets ctrl = ¬tag on bit 0.
 ///   (b) temp = 0 unconditionally: the real exit keeps temp = δu on the EXIT
@@ -1614,14 +1614,14 @@ fn invariant_negative_control_aux_exit_mde_spill() {
     let differs_ctrl = (0..W).any(|b| ctrl_out[b] != tag_in[b]);
     assert!(
         differs_ctrl,
-        "NEG-5 aux-exit: real ctrl must DIFFER from the WRONG 'ctrl=tag' spec — no teeth"
+        "NEG-5 aux-exit: real ctrl must DIFFER from the WRONG 'ctrl=tag' spec -- no teeth"
     );
 
     // (b) WRONG temp spec: temp == 0 unconditionally (ignores the exit-branch δu).
     let differs_temp = (0..W).any(|b| temp_out[b] != zero);
     assert!(
         differs_temp,
-        "NEG-5 aux-exit: real temp must DIFFER from the WRONG 'temp=0 always' spec — no teeth"
+        "NEG-5 aux-exit: real temp must DIFFER from the WRONG 'temp=0 always' spec -- no teeth"
     );
 
     // sanity: the TRUE specs DO match (ties teeth to the right targets).
@@ -1631,5 +1631,5 @@ fn invariant_negative_control_aux_exit_mde_spill() {
         let du_bit = if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
         assert!(temp_out[b] == tag_in[0].and(&du_bit), "sanity: true temp = δu·[tag0==1] must match");
     }
-    eprintln!("NEG-5 aux-exit [mde_spill]: real ctrl≡tag^1, temp≡δu·[tag0==1], ≠ {{ctrl=tag, temp=0}} — teeth.");
+    eprintln!("NEG-5 aux-exit [mde_spill]: real ctrl≡tag^1, temp≡δu·[tag0==1], ≠ {{ctrl=tag, temp=0}} -- teeth.");
 }

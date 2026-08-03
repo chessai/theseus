@@ -1,13 +1,13 @@
-//! A-6 W.0 tests — the word/arithmetic-level IR (`WOp`/`WSpec`), its 1:1
+//! A-6 W.0 tests -- the word/arithmetic-level IR (`WOp`/`WSpec`), its 1:1
 //! transcriber (`transcribe_word`), and the reversible macros
 //! (`emit_wselect`, `emit_weqzero`).
 //!
 //! Two verification tiers, both with teeth (a corrupted expectation must FAIL):
 //!   * SYMBOLIC (`symbolic_exec` + `equiv`, all-register operands, whole domain)
-//!     — proves the emitted gate network equals the intended word function AND
+//!     -- proves the emitted gate network equals the intended word function AND
 //!     (for macros) that temps are net-zero (temp rows ≡ identity) and sources
 //!     preserved. Used for the core WOps and WSelect (≤ 8 register operands).
-//!   * WHOLE-DOMAIN EXEC (`exec_instr`, register carriers + scratch temps) — runs
+//!   * WHOLE-DOMAIN EXEC (`exec_instr`, register carriers + scratch temps) -- runs
 //!     the body from every one of the 256 concrete src bytes with temps = 0 and
 //!     asserts the dst bit and net-zero. Used for WEqZero (needs 11 operands, so
 //!     it cannot fit the 8-register symbolic model; whole-domain exec is complete
@@ -29,7 +29,7 @@ use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 fn assert_all_encode(body: &[Instr]) {
     for (i, &ins) in body.iter().enumerate() {
         encode(ins).unwrap_or_else(|e| {
-            panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} — not assemblable")
+            panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} -- not assemblable")
         });
     }
 }
@@ -89,7 +89,7 @@ fn transfer_zero_out(t: &RegTransfer, zero_regs: &[usize]) -> RegTransfer {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Part 1 — the core WOps, 1:1 transcription
+// Part 1 -- the core WOps, 1:1 transcription
 // ══════════════════════════════════════════════════════════════════════
 
 /// Each WOp maps to exactly the ISA gate the design specifies.
@@ -154,7 +154,7 @@ fn transcribe_word_symbolic_verifies() {
     assert_all_encode(&body);
     let got = symbolic_exec(&body).expect("symbolic_exec");
     // Independent reference: a second body built directly from the ISA gates in
-    // the SAME program order (differential — `equiv` compares BDDs).
+    // the SAME program order (differential -- `equiv` compares BDDs).
     let ref_body = vec![
         Instr::Xor { rd: 0, rs: 1 },
         Instr::Add { rd: 2, rs: 3 },
@@ -214,7 +214,7 @@ fn transcribe_word_rejects_reserved_and_oob_and_aliased() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Part 2 — WSelect (guarded word copy), symbolic
+// Part 2 -- WSelect (guarded word copy), symbolic
 // ══════════════════════════════════════════════════════════════════════
 
 /// Symbolic WSelect over registers: dst=0 (clean), guard=1, then=2, else=3,
@@ -222,7 +222,7 @@ fn transcribe_word_rejects_reserved_and_oob_and_aliased() {
 /// (without zeroing) that guard/then/else are preserved and mask is net-zero.
 ///
 /// The guard is a BIT WORD; symbolic_exec models guard as a free byte, so the
-/// broadcast reads only bit 0 — we verify the function under that contract by
+/// broadcast reads only bit 0 -- we verify the function under that contract by
 /// checking against `Mux(Var(guard,0), then, else)` at every bit.
 #[test]
 fn wselect_symbolic_both_branches() {
@@ -256,7 +256,7 @@ fn wselect_symbolic_both_branches() {
     // NET-ZERO + PRESERVE check: WITHOUT zeroing, mask/one return to their input
     // (identity rows) and guard/then/else are untouched (identity rows). dst is
     // allowed to change (it is the output). We check the non-dst rows equal
-    // identity — this proves mask/one net-zero for ANY init and sources preserved.
+    // identity -- this proves mask/one net-zero for ANY init and sources preserved.
     let preserved = spec(|r, b| v(r, b)); // full identity
                                           // Compare each preserved row: guard(1), then(2), else(3), mask(4), one(5).
     for r in [guard, then_w, else_w, mask, one] {
@@ -318,7 +318,7 @@ fn wselect_rejects_illegal_operands() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Part 3 — WEqZero (is-zero predicate), whole-domain exec
+// Part 3 -- WEqZero (is-zero predicate), whole-domain exec
 // ══════════════════════════════════════════════════════════════════════
 
 /// WEqZero over the WHOLE 256-value domain of `src`: for each src byte, run the
@@ -380,7 +380,7 @@ fn weqzero_whole_domain_exec_and_netzero() {
 }
 
 /// TEETH for WEqZero: if we DROP the final invert (`Xori dst,1`), the predicate
-/// becomes `src != 0` — i.e. the src=0 case now yields 0. A hand-built wrong body
+/// becomes `src != 0` -- i.e. the src=0 case now yields 0. A hand-built wrong body
 /// must disagree with the true is-zero on at least one input (proves the exec
 /// check is real, not vacuous).
 #[test]
@@ -433,7 +433,7 @@ fn weqzero_rejects_too_few_temps_and_aliases() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Part 4 — WLt / WGt (unsigned compare), whole-domain exec
+// Part 4 -- WLt / WGt (unsigned compare), whole-domain exec
 // ══════════════════════════════════════════════════════════════════════
 
 /// 9 temp words for WLt/WGt: regs 2,3,4 + scratch s2..s7 (idx 10..15).
@@ -525,7 +525,7 @@ fn wgt_whole_domain_exec_and_netzero() {
 }
 
 /// TEETH for WLt: dropping the `use` step (every gate writing the final borrow
-/// into dst) makes the predicate constant 0 — it must disagree with the true
+/// into dst) makes the predicate constant 0 -- it must disagree with the true
 /// `a<b` on some input. The final borrow node XOR-accumulates into `dst_bit` via
 /// `Ccnot`s; removing all of them (dst is never a Ccnot target elsewhere) zeroes
 /// the answer.

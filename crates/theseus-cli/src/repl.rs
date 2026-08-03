@@ -25,9 +25,9 @@ pub struct Repl {
 struct ActiveIso {
     name: String,
     iso: Iso,
-    /// Surface lhs type (iso domain — used for rendering input).
+    /// Surface lhs type (iso domain -- used for rendering input).
     lhs_ty: theseus_syntax::ast::Type,
-    /// Surface rhs type (iso codomain — used for rendering forward-step results).
+    /// Surface rhs type (iso codomain -- used for rendering forward-step results).
     rhs_ty: theseus_syntax::ast::Type,
     /// History stack: history[0] is the initial value; history.last() is the
     /// current value. `:step` pushes; `:unstep` pops.
@@ -159,7 +159,7 @@ impl Repl {
             }
 
             // If we are at the initial (plain) value (history has only the
-            // loaded value), wrap it as Right(input) — the a-side boundary
+            // loaded value), wrap it as Right(input) -- the a-side boundary
             // entry of the extended type (u + a).
             let ext_input = if active.history.len() == 1 {
                 Value::right(current)
@@ -454,7 +454,7 @@ iso spin : Bit <-> Bit
                        :step\n:step\n:step\n:step\n\
                        :quit\n";
         let lines = run_repl(SPIN_PROGRAM, script);
-        // lines[1..=4] are the 4 label states — all should be distinct.
+        // lines[1..=4] are the 4 label states -- all should be distinct.
         let label_states: Vec<&str> = lines[1..=4].iter().map(|s| s.as_str()).collect();
         for i in 0..label_states.len() {
             for j in (i + 1)..label_states.len() {
@@ -515,7 +515,7 @@ iso assoc : (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)
 
     #[test]
     fn asymmetric_iso_step_unstep_roundtrip() {
-        // Step forward then unstep back — initial value rendered with lhs_ty.
+        // Step forward then unstep back -- initial value rendered with lhs_ty.
         let script = ":load assoc (O, (I, O))\n:step\n:unstep\n:quit\n";
         let lines = run_repl(REASSOC_PROGRAM, script);
         assert_eq!(lines[0], "loaded: (O, (I, O))");

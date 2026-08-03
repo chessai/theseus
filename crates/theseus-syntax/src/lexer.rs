@@ -39,7 +39,7 @@ pub enum Tok {
     #[token("unfold")]
     Unfold,
     /// Reserved word (grammar.md): lexed as a keyword so it can never be an
-    /// identifier, but no production consumes it — using it is a parse error.
+    /// identifier, but no production consumes it -- using it is a parse error.
     #[token("for")]
     For,
 

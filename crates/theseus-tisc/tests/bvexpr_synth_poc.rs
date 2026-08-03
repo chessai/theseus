@@ -1,21 +1,21 @@
-//! TISC-2 KEYSTONE POC — `BvExpr`-spec → reversible gates → SYMBOLIC verify.
+//! TISC-2 KEYSTONE POC -- `BvExpr`-spec → reversible gates → SYMBOLIC verify.
 //!
 //! Design claim under test (docs/scratch/tisc2-design-synthesis.md §8): a WIDE
-//! SYMBOLIC prim — one admitted with a `BvExpr` spec and NO enumerable table,
-//! wider than the 12-rail `synthesize_prim` cap — lowers to TISC `Instr`s by a
+//! SYMBOLIC prim -- one admitted with a `BvExpr` spec and NO enumerable table,
+//! wider than the 12-rail `synthesize_prim` cap -- lowers to TISC `Instr`s by a
 //! mechanical transcription of its spec, and the emitted gates are verified
 //! SYMBOLICALLY (BvExpr → BDD via `symbolic_exec` + `equiv`) with NO enumeration.
 //!
 //! This is exactly the path the current `bveq_verify_emission` does NOT take
 //! (it has a vacuity guard rejecting empty-table/symbolic-only prims and verifies
-//! pointwise over the table). The building blocks it needs — `symbolic_exec`
-//! (Instr → per-bit BvExpr) and `equiv` (BDD equality) — already exist; this POC
+//! pointwise over the table). The building blocks it needs -- `symbolic_exec`
+//! (Instr → per-bit BvExpr) and `equiv` (BDD equality) -- already exist; this POC
 //! composes them into the symbolic verify the keystone requires.
 //!
 //! Scope (honest): these prims transcribe to in-place, ancilla-free gate networks
 //! (the common structured case). The general Bennett case (zero-init ancilla +
 //! backward-uncompute) composes this transcription with the frame discipline
-//! (which guarantees the zero-init) — verified there, not here.
+//! (which guarantees the zero-init) -- verified there, not here.
 
 use theseus_tisc::asm::Instr;
 use theseus_tisc::bveq::{equiv, symbolic_exec, BvExpr, RegTransfer, BITS};
@@ -37,7 +37,7 @@ fn v(r: usize, b: usize) -> BvExpr {
 
 /// Nonlinear, wide (3 leaves × 8 = 24 bits > 12-rail cap), symbolic-only.
 /// Prim: (x,y,z) ↦ (x ⊕ (y ∧ z), y, z). Forward spec transcribes to ONE
-/// byte-parallel Ccnot. Verified symbolically — no table, no enumeration.
+/// byte-parallel Ccnot. Verified symbolically -- no table, no enumeration.
 #[test]
 fn ccnot_mix_symbolic_transcribe_verify() {
     let body = vec![Instr::Ccnot {
@@ -78,10 +78,10 @@ fn affine_nonlinear_mix_multi_gate_verify() {
 }
 
 /// TEETH (anti-vacuity): a WRONG transcription MUST be rejected by the symbolic
-/// verifier — proving the check is real, not vacuously green (the f3.5 lesson).
+/// verifier -- proving the check is real, not vacuously green (the f3.5 lesson).
 #[test]
 fn wrong_transcription_is_symbolically_rejected() {
-    // Uses w (reg 3) instead of z (reg 2) in the AND term — a real bug.
+    // Uses w (reg 3) instead of z (reg 2) in the AND term -- a real bug.
     let wrong = vec![Instr::Ccnot {
         rd: 0,
         rs: 1,

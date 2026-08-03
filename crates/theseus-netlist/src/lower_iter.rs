@@ -3,24 +3,24 @@
 //! The three v0.2 bounded-loop primitives (ADR-0036/0037) lower to the
 //! k-CSWAP cell family by **full unrolling**, exactly like `TraceLoop`
 //! (ADR-0026 C2.4): the backend is unroll-only, and every one of these
-//! loops carries its iteration bound in its *type* — `|n| − 1` body
+//! loops carries its iteration bound in its *type* -- `|n| − 1` body
 //! applications for `iter n f`, spine depth − 1 for `fold`/`unfold l f`.
 //!
 //! # The one-hot tag observation
 //!
 //! Under the dual-rail encoding ([`rail_width`]/[`crate::lower::bits_of`]),
-//! both a numeral type `1 + (1 + (… + 0))` and a list-spine type
-//! `1 + (b × (1 + (b × (… + 0))))` flatten to a sequence of **tag
+//! both a numeral type `1 + (1 + (... + 0))` and a list-spine type
+//! `1 + (b × (1 + (b × (... + 0))))` flatten to a sequence of **tag
 //! pairs** (`Left`/nil = TRUE, `Right`/cons = FALSE), one per unroll
-//! layer — interleaved with the element payloads in the spine case.
+//! layer -- interleaved with the element payloads in the spine case.
 //! A numeral `k` (or a list of length `k`) encodes as tags that are
 //! FALSE at layers `0..k` and TRUE at layer `k`: **one-hot at `k`**,
 //! with all-FALSE padding after. So the predicate
 //!
 //! > "the loop is still running at step `t`"  ⟺  `k ≥ t`  ⟺
-//! > `¬tag₀ ∧ ¬tag₁ ∧ … ∧ ¬tag_{t−1}`
+//! > `¬tag₀ ∧ ¬tag₁ ∧ ... ∧ ¬tag_{t−1}`
 //!
-//! is a positive AND of rail-swapped tag reads — computable with one
+//! is a positive AND of rail-swapped tag reads -- computable with one
 //! `K2` AND-reduction cell per step (the `emit_mcnot` borrowed-ancilla
 //! trick: `K2(a, b, 0, 1)` puts `a ∧ b` on its first data output), and
 //! usable directly as the control for the same tag-promotion machinery
@@ -28,31 +28,31 @@
 //!
 //! # Constructions
 //!
-//! **`iter n f : n × a ↔ n × a`** — layout `[tag₀ … tag_{K−1} | x]`,
+//! **`iter n f : n × a ↔ n × a`** -- layout `[tag₀ ... tag_{K−1} | x]`,
 //! `K = |n|` = rail width of `n`. Emit the control chain
 //! `c₁ = ¬tag₀`, `c_{t+1} = c_t ∧ ¬tag_t`, then `K − 1` applications of
 //! `f` on `x`, application `t` controlled by `c_t`. A counter value `k`
-//! makes exactly `c₁ … c_k` true, so `f` fires `k` times — `⟦iter⟧`.
+//! makes exactly `c₁ ... c_k` true, so `f` fires `k` times -- `⟦iter⟧`.
 //! The tags thread through the AND cells and control positions
 //! unchanged, so the counter is preserved on output.
 //!
-//! **`fold/unfold l f : l × c ↔ l × c`** — layout
-//! `[tag₀ elem₀ tag₁ elem₁ … tag_{d−2} elem_{d−2} tag_{d−1} | c]`,
+//! **`fold/unfold l f : l × c ↔ l × c`** -- layout
+//! `[tag₀ elem₀ tag₁ elem₁ ... tag_{d−2} elem_{d−2} tag_{d−1} | c]`,
 //! `d` = spine depth. Same control chain over the tags; application `t`
 //! runs `f` on `[elem_{t−1}, acc]`, writing the rewritten element back
 //! into its slot and threading the accumulator. `fold` applies in
 //! ascending slot order (head-to-tail, `c₀ → c_k`); `unfold` applies
-//! the *same gated steps in descending order* — for a length-`k` list
-//! only steps `k, k−1, …, 1` fire, i.e. tail-to-head — which is exactly
+//! the *same gated steps in descending order* -- for a length-`k` list
+//! only steps `k, k−1, ..., 1` fire, i.e. tail-to-head -- which is exactly
 //! `⟦unfold⟧`'s data-dependent start position without any extra logic.
 //! Inactive slots hold all-FALSE padding and pass through the inactive
 //! (control-off) promoted cells untouched.
 //!
 //! Every emitted cell is a chain `K2` or a body cell promoted by one
 //! control (K0→K0, K1→K2, K2→K3, zero-cell rewiring→K1 or R1, R1→the
-//! K1–R1–K1 sandwich, ADR-0040), so the result stays within the
-//! K0–K3 + R1 vocabulary whenever the body itself lowers to ≤ K2/R1
-//! cells — the same promotion budget as `Branch`.
+//! K1-R1-K1 sandwich, ADR-0040), so the result stays within the
+//! K0-K3 + R1 vocabulary whenever the body itself lowers to ≤ K2/R1
+//! cells -- the same promotion budget as `Branch`.
 //!
 //! # Verification
 //!
@@ -76,7 +76,7 @@ use crate::lower::{
 ///
 /// `controlled_apply` promotes an arm's **cells** by one control, but
 /// any zero-cell *rewiring* mixed in among cells (e.g. the `swapˣ` in
-/// `cx ; swapˣ`) is pure wire routing and cannot be gated — it would
+/// `cx ; swapˣ`) is pure wire routing and cannot be gated -- it would
 /// fire even when the loop is done. (An arm that is *entirely*
 /// zero-cell is fine: `controlled_apply` synthesizes conditional
 /// permutation/NOT cells for that case.)
@@ -128,7 +128,7 @@ fn gate_safe_body(body: &TypedNode) -> Result<Cow<'_, TypedNode>, LowerError> {
 }
 
 /// Untimed functional evaluation of a standalone cell netlist (token
-/// propagation in cell order) — used only to tabulate loop bodies in
+/// propagation in cell order) -- used only to tabulate loop bodies in
 /// [`gate_safe_body`] over their finite domains.
 fn eval_net_untimed(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
     let mut line: Vec<Option<bool>> = vec![None; net.num_lines as usize];
@@ -159,8 +159,8 @@ fn eval_net_untimed(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
 impl Builder {
     /// Build the "still iterating" control chain over `tags` (the
     /// flattened one-hot tag pairs of a numeral or list spine):
-    /// returns `ctrls`, `ctrls[i] = ¬tag₀ ∧ … ∧ ¬tag_i` — the gate for
-    /// body application `i + 1` — one `K2` AND cell per element after
+    /// returns `ctrls`, `ctrls[i] = ¬tag₀ ∧ ... ∧ ¬tag_i` -- the gate for
+    /// body application `i + 1` -- one `K2` AND cell per element after
     /// the first (`ctrls[0]` is just the rail-swapped live `tags[0]`).
     ///
     /// Handle discipline (each rail pair is consumed exactly once):
@@ -306,7 +306,7 @@ impl Builder {
     }
 }
 
-/// Number of `1 + (b × …)` layers of a list-spine type — i.e. the
+/// Number of `1 + (b × ...)` layers of a list-spine type -- i.e. the
 /// number of tag pairs in its flattened dual-rail encoding. Refuses
 /// non-spine shapes (the canonicalizer already rejects them; this is
 /// the lowering's local re-check).

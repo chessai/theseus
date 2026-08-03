@@ -1,9 +1,9 @@
 //! Tests for the sub-quadratic canonicalize refactor.
 //!
 //! Verifies two properties:
-//! 1. EQUIVALENCE — the refactored canonicalize produces the same TypedNode
+//! 1. EQUIVALENCE -- the refactored canonicalize produces the same TypedNode
 //!    as before for all combinator shapes.
-//! 2. SCALING — large left-leaning and balanced Seq chains complete within
+//! 2. SCALING -- large left-leaning and balanced Seq chains complete within
 //!    normal test timeouts (the old per-node type_of made left-leaning
 //!    chains blow up to O(n²) time/memory; the bottom-up approach is O(n)).
 
@@ -137,7 +137,7 @@ fn scaling_left_leaning_500() {
 
 #[test]
 fn scaling_left_leaning_1000() {
-    // 1000-node left-leaning chain — would be ~500k node visits under
+    // 1000-node left-leaning chain -- would be ~500k node visits under
     // O(n²). The bottom-up approach handles this in O(n).
     let iso = left_leaning_chain(1000);
     let node = canonicalize(&iso).expect("canonicalize left-leaning 1000");

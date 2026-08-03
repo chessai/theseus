@@ -1,17 +1,17 @@
-//! A-3: tree-structured WCET fold — nested loops counted correctly.
+//! A-3: tree-structured WCET fold -- nested loops counted correctly.
 //!
 //! Closes review BLOCKER-2: `wcet()` used to sum `loop_terms` as a FLAT
 //! sibling list `(k_max, iter_len)` with `(k_max-1)·iter_len`, which
-//! UNDER-counts nested loops — an inner loop's cost was never multiplied by
+//! UNDER-counts nested loops -- an inner loop's cost was never multiplied by
 //! the enclosing `k_max`. Under-count → park guard passes a bogus budget →
 //! parked PC wraps mid-run → L15-class silent corruption.
 //!
 //! These are WHITE-BOX tests on the `CostTree` cost substrate + `Lowered::wcet`.
 //! Real nested PROGRAMS still reject at compile time (`has_inner_control` /
-//! `contains_trace` in `lower_trace`) — deleting those rejects is A-4's job,
+//! `contains_trace` in `lower_trace`) -- deleting those rejects is A-4's job,
 //! which must land after A-5. So we construct the nested cost tree directly
 //! (a test-only path that bypasses the reject) and assert the fold multiplies
-//! correctly. When A-4 lands, the SAME fold — not a reject — is what keeps `B`
+//! correctly. When A-4 lands, the SAME fold -- not a reject -- is what keeps `B`
 //! sound; see `docs/scratch/compositional-control-design.md` §1.
 //!
 //! Invariant under test: **`B_fold ≥ true_B`** (never under-count). This is the
@@ -28,7 +28,7 @@ use theseus_core::{Iso, Type};
 /// The exact scenario from the design doc / BLOCKER-2:
 ///   outer Trace k_max = 4, inner Trace k_max = 100, inner iter_len = 12.
 /// We give the outer loop iter_len = 12 as well (one straight-line pass of the
-/// outer body — which contains ONE straight-line pass of the inner body).
+/// outer body -- which contains ONE straight-line pass of the inner body).
 fn blocker2_outer_node() -> CostTree {
     let inner = CostTree {
         k_max: 100,
@@ -44,8 +44,8 @@ fn blocker2_outer_node() -> CostTree {
 
 /// The OLD flat-sum accounting, reproduced here to make the regression
 /// explicit: the inner term is treated as a SIBLING (never multiplied by the
-/// outer k_max), and — because the exact-k_max walk ran the body straight-line
-/// — the outer iter_len counted the inner body only ONCE. So the flat sum is:
+/// outer k_max), and -- because the exact-k_max walk ran the body straight-line
+/// -- the outer iter_len counted the inner body only ONCE. So the flat sum is:
 ///   (k_outer-1)·iter_outer + (k_inner-1)·iter_inner_counted_once
 /// but under the real defect the inner loop was DROPPED entirely (body_meta
 /// discarded), so the outer contribution alone is (4-1)·(12+one inner pass).
@@ -55,7 +55,7 @@ fn old_flat_sum_extra() -> usize {
     // outer loop's flat term survives, and its iter_len saw the inner body
     // straight-line once (defect (b)). Outer iter_len ≈ 12 + (inner body ~12)
     // seen once ≈ 24; (4-1)·24 ≈ 72 ... take the most generous flat reading
-    // (inner also a sibling term): (4-1)·12 + (100-1)·... no — under the real
+    // (inner also a sibling term): (4-1)·12 + (100-1)·... no -- under the real
     // defect the inner is gone. We pin the magnitude: flat ≪ 100.
     let outer_iter_counting_inner_once = 12 + 12; // outer spine + one inner pass
     (4 - 1) * outer_iter_counting_inner_once
@@ -76,7 +76,7 @@ fn blocker2_nested_wcet_is_multiplied_not_flat() {
 
     // The load-bearing soundness assertion: the folded extra is ON THE ORDER
     // of the true nested step count (≈ 4800), NOT the flat ≈ 88.
-    let true_b_lower_bound = 4 * 100 * 12; // 4800 — dynamic inner-body executions
+    let true_b_lower_bound = 4 * 100 * 12; // 4800 -- dynamic inner-body executions
     // extra() omits the single ROM pass already in instrs.len(); adding the one
     // ROM pass of the inner body (12) recovers ≥ true_b for the inner work:
     //   extra + inner_rom_pass = 4788 + 12 = 4800 = true_b.
@@ -118,7 +118,7 @@ fn blocker2_lowered_wcet_uses_tree_fold() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// CostTree::extra unit checks — the fold arithmetic in isolation.
+// CostTree::extra unit checks -- the fold arithmetic in isolation.
 // ─────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -205,7 +205,7 @@ fn regression_flat_program_wcet_unchanged() {
     assert_eq!(node.iter_len, 10);
     assert!(node.inner.is_empty(), "no nesting");
 
-    // B must equal instrs.len() + (k-1)·iter — byte-identical to the old flat.
+    // B must equal instrs.len() + (k-1)·iter -- byte-identical to the old flat.
     let k = 2usize;
     let iter = 10usize;
     let expected = lowered.instrs.len() + (k - 1) * iter;

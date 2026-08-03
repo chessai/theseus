@@ -8,7 +8,7 @@ deciding fact: **distrib is the only structural combinator that
 duplicates a type-tree leaf** ({a,b,c} → {a,b,a,c}); every other
 structural iso is a bijection on leaves. Mac Lane coherence then says a
 leaf permutation *is* the unique canonical form of any structural
-morphism between the same objects — coalescing becomes permutation
+morphism between the same objects -- coalescing becomes permutation
 composition (O(n), no case analysis), and structural equality is
 decidable by comparing σ. The two monoids must not mix: `Permute(monoid,
 σ)` acts on one flattened layer, applied at depth through Par/Branch.

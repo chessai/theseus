@@ -1,13 +1,13 @@
-//! A-6.D (D.0 + D.1) tests — the BDD→gates transcriber
+//! A-6.D (D.0 + D.1) tests -- the BDD→gates transcriber
 //! (`transcribe_bdd_into` via `transcribe_bdd_bennett`).
 //!
 //! BDD synthesis is the GENERAL, structure-preserving prim→gates mechanism: it
 //! walks the canonical ROBDD of each output bit and emits O(#nodes) gates. Each
-//! test reports `node_count` vs `gate_count` — the compactness evidence — plus
+//! test reports `node_count` vs `gate_count` -- the compactness evidence -- plus
 //! two verification tiers:
 //!
 //!   * SYMBOLIC (`symbolic_exec` + `equiv`, all-register carriers + ancilla +
-//!     helper words, total ≤ NUM_REGS): the COMPLETE whole-domain proof — carriers
+//!     helper words, total ≤ NUM_REGS): the COMPLETE whole-domain proof -- carriers
 //!     ≡ fwd AND every helper/ancilla row ≡ 0 (net-zero). Forces `bwd = fwd⁻¹`.
 //!     Feasible only when `2n + 1(temp) + max_node_count ≤ 8`; the BDD's per-node
 //!     ancilla words eat into the register file, so the deeper specs use...
@@ -46,7 +46,7 @@ fn spec(f: impl Fn(usize, usize) -> BvExpr) -> RegTransfer {
 fn assert_all_encode(body: &[Instr]) {
     for (i, &ins) in body.iter().enumerate() {
         encode(ins).unwrap_or_else(|e| {
-            panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} — body is not assemblable")
+            panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} -- body is not assemblable")
         });
     }
 }
@@ -89,7 +89,7 @@ fn transfer_zero_out(t: &RegTransfer, zero_regs: &[usize]) -> RegTransfer {
 }
 
 /// MAX single-output-bit ROBDD node count over the carrier rows of `fwd` and
-/// `bwd` — the node-word budget the transcriber needs and the headline node_count.
+/// `bwd` -- the node-word budget the transcriber needs and the headline node_count.
 fn max_node_count(fwd: &RegTransfer, bwd: &RegTransfer, n: usize) -> usize {
     let map = VarMap::new(NUM_REGS).unwrap();
     let mut mx = 0;
@@ -244,7 +244,7 @@ fn bdd_swap_symbolic_and_report() {
     eprintln!(
         "[REPORT swap]      n={n} max_node_count={nc} total_fwd_nodes={} gate_count={gates}  \
          COMPLETE symbolic. Each output bit = a single input Var ⇒ 1-node ROBDD; ANF here is \
-         degree-1 (same size) — the linear baseline.",
+         degree-1 (same size) -- the linear baseline.",
         total_fwd_nodes(&fwd, n)
     );
 }
@@ -273,7 +273,7 @@ fn bdd_swap_exec_netzero_scratch() {
 }
 
 // ── Spec (2): a Toffoli / CCNOT-mix permutation ───────────────────────
-//   (a,b,c) ↦ (a ⊕ (b∧c), b, c) — a byte-parallel controlled-controlled-NOT.
+//   (a,b,c) ↦ (a ⊕ (b∧c), b, c) -- a byte-parallel controlled-controlled-NOT.
 
 fn toffoli_fwd() -> RegTransfer {
     spec(|r, b| match r {
@@ -294,7 +294,7 @@ fn bdd_toffoli_report_and_exec() {
     // s2..s6 (10..15, five words for the 5-node output bit).
     let mut samples: Vec<Vec<u8>> = Vec::new();
     // Exhaustive over one bit position's (a,b,c) triples, broadcast to full bytes,
-    // plus corner bytes — the transfer is byte-parallel so per-bit coverage is
+    // plus corner bytes -- the transfer is byte-parallel so per-bit coverage is
     // representative; the corners exercise all-0 / all-1 / mixed.
     for a in [0x00u8, 0xFF, 0xA5, 0x5A, 0x0F, 0xF0] {
         for b in [0x00u8, 0xFF, 0xA5, 0x33] {
@@ -327,7 +327,7 @@ fn bdd_toffoli_report_and_exec() {
 //   reg0_b_new = reg0_b ⊕ (reg1_bit0 ∧ reg1_bit1)   for every b; reg1 unchanged.
 //
 // The control is the conjunction of two DISTINCT input bits (bit0 ∧ bit1 of
-// reg1) — a degree-2 monomial that ANF replicates into EVERY one of reg0's 8
+// reg1) -- a degree-2 monomial that ANF replicates into EVERY one of reg0's 8
 // output bits (8 AND-monomials), while the ROBDD shares that structure. It is an
 // involution (control reads only the untouched reg1), so bwd = fwd. This is
 // verified EXHAUSTIVELY over all 2^16 carrier states via net-zero exec, and its
@@ -379,7 +379,7 @@ fn bdd_nonlinear_report_and_exhaustive_exec() {
          ANF_gate_count={anf_gates}  EXHAUSTIVE 2^16 net-zero exec. Output bit x_b ⊕ (y0∧y1): a \
          degree-2 monomial of two DISTINCT input bits, which ANF replicates across ALL 8 output \
          bits (8 AND-monomials); the ROBDD shares it ⇒ {nc} nodes/bit. BDD gates scale with the \
-         node count; both are linear here (small degree), so the counts are the same ORDER — the \
+         node count; both are linear here (small degree), so the counts are the same ORDER -- the \
          BDD win is that it stays O(nodes) as degree grows (the gcd2 degree-7 blowup is D.2).",
         total_fwd_nodes(&fwd, n)
     );
@@ -391,7 +391,7 @@ fn bdd_nonlinear_report_and_exhaustive_exec() {
 /// the register budget). Identity is not swap⁻¹? swap IS an involution, so use a
 /// deliberately-broken bwd = identity against a NON-involution fwd. A rotate-by-1
 /// permutation reg0↦reg1, reg1↦reg0 is swap (involution). Instead corrupt via a
-/// CNOT: fwd reg0 = reg0⊕reg1 (not an involution alone) — but that touches only
+/// CNOT: fwd reg0 = reg0⊕reg1 (not an involution alone) -- but that touches only
 /// reg0; its inverse is itself for XOR... Use fwd=swap, wrong bwd=identity.
 #[test]
 fn bdd_wrong_backward_fails_symbolic() {

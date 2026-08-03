@@ -1,12 +1,12 @@
-//! A-6 STEP 1 — the general BDD prim-lowering fall-through, END-TO-END.
+//! A-6 STEP 1 -- the general BDD prim-lowering fall-through, END-TO-END.
 //!
 //! Proves coverage gap (2) is CLOSED in the compiler: a SMALL admitted bijection
-//! prim that matches NO finite recognizer arm nonetheless lowers — through
+//! prim that matches NO finite recognizer arm nonetheless lowers -- through
 //! `recognize_prim` → `general_synthesize_prim` (table → per-output-bit ANF →
 //! ROBDD → Bennett), verified fail-closed, then `run_on_cpu_fast == eval` on all
 //! inputs (the fast oracle), inside a straight-line composition, and inside a
 //! Trace-free product. We also confirm a KNOWN arm (Add / xorInto) still lowers
-//! via its fast arm path (no regression — the fall-through only fires on a miss).
+//! via its fast arm path (no regression -- the fall-through only fires on a miss).
 //!
 //! DETERMINISTIC construction: the prim table is fed straight through the general
 //! synthesizer; NO search, NO Python, NO sub-agents. The prim is a specific
@@ -32,11 +32,11 @@ use theseus_tisc::compile::{
 // forward(a, b) = ( a , b XOR (bit0(a) AND bit1(a)) )  over a, b ∈ {0,1,2,3}.
 //
 // A feistel-style triangular map: leaf 0 is preserved, leaf 1 is XORed by the
-// NONLINEAR term `bit0(a) ∧ bit1(a)` (a single AND — set iff a == 3). It is a
-// genuine bijection — for each fixed `a`, `b ↦ b XOR c(a)` is a bijection on
+// NONLINEAR term `bit0(a) ∧ bit1(a)` (a single AND -- set iff a == 3). It is a
+// genuine bijection -- for each fixed `a`, `b ↦ b XOR c(a)` is a bijection on
 // {0,1,2,3}, and `a` is carried through, so the whole map is a permutation of
 // the 16 states (checked by `admit` below). It is NOT any recognized arm:
-//   * not addInto (a, a+b) / subFrom / xorInto (a, a^b) / swap / rotl / rotr —
+//   * not addInto (a, a+b) / subFrom / xorInto (a, a^b) / swap / rotl / rotr --
 //     leaf 1's `a0∧a1` term is degree-2 in a's bits (nonlinear) and does not
 //     equal any of the linear/shift 2-reg forms the arm matchers require;
 //   * not the 3-cycle / kleaf / memexch name-gated arms.
@@ -117,7 +117,7 @@ fn small_prim_lowers_via_general_fallthrough() {
 // ── (2) run_on_cpu_fast == eval on ALL inputs (the fast oracle). ──────────────
 //
 // ADVISOR: the SLOW real `system_step` authority should be run for THIS case
-// (the bare prim over all 16 inputs) — it is the strongest end-to-end proof the
+// (the bare prim over all 16 inputs) -- it is the strongest end-to-end proof the
 // general body executes correctly on the real pipeline.
 #[test]
 fn small_prim_run_on_cpu_fast_eq_eval() {
@@ -146,7 +146,7 @@ fn small_prim_run_on_cpu_fast_eq_eval() {
 // program (proving the general body is a first-class citizen of a composition,
 // with canonical layout restored on exit so the next stage sees the right
 // state). `Id` compiles to zero instructions, so the composed body fits the
-// 256-word PC (a `f;f` self-composition would be 2×174 = 348 > 256 — that needs
+// 256-word PC (a `f;f` self-composition would be 2×174 = 348 > 256 -- that needs
 // widen-PC, and IS the "if it fits" caveat in the task).
 //
 // ADVISOR: a real-`system_step` run of this composed program is worthwhile
@@ -155,7 +155,7 @@ fn small_prim_run_on_cpu_fast_eq_eval() {
 fn small_prim_in_composition_run_on_cpu_fast_eq_eval() {
     let p = small_prim_iso();
     let ty = small_ty();
-    // f ; id — a straight-line composition of the general-synth prim with the
+    // f ; id -- a straight-line composition of the general-synth prim with the
     // structural identity on its own type (zero extra instructions).
     let iso = Iso::Seq(Box::new(p), Box::new(Iso::Id(ty.clone())));
     let mut checked = 0usize;
@@ -176,7 +176,7 @@ fn small_prim_in_composition_run_on_cpu_fast_eq_eval() {
 
 // ── (3) Regression: a KNOWN arm still lowers via its FAST arm path. ───────────
 //
-// xorInto (a, b) ↦ (a, a^b) on Flat(8)×Flat(8) is a recognized 2-reg arm — it
+// xorInto (a, b) ↦ (a, a^b) on Flat(8)×Flat(8) is a recognized 2-reg arm -- it
 // must NOT reach the general fall-through. We can't observe the internal path
 // directly, but the arm path emits a SINGLE `Xor` instruction, whereas the
 // general BDD body is many gates; so `body.len() == 1` proves the arm fired.
@@ -208,7 +208,7 @@ fn xor_prim_def() -> PrimDef {
 //
 // A 7-leaf `Flat(2)^7` permutation needs 7 carriers (regs 0..6) + 7 ancilla + 1
 // temp, but only 7 free operand words exist (r7 + s2..s7). The general synth
-// must return `NeedsProvisioning` (a clean fall-through) — NOT a panic and NOT a
+// must return `NeedsProvisioning` (a clean fall-through) -- NOT a panic and NOT a
 // wrong body. This is the "large prims land later" (widen-state) path.
 fn seven_leaf_ty() -> Type {
     let f = Type::Flat(2);
@@ -285,14 +285,14 @@ fn known_arm_still_lowers_via_fast_arm_path() {
         body.len(),
         1,
         "xorInto must emit a SINGLE Xor via the arm path (not the multi-gate general body); \
-         got {} instrs — the fall-through fired when it should not have",
+         got {} instrs -- the fall-through fired when it should not have",
         body.len()
     );
     eprintln!("regression: xorInto still lowers via the fast arm path (1 instr)");
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// A-6 STEP-1 FIX regression tests — the EXACT counterexamples from the Fable
+// A-6 STEP-1 FIX regression tests -- the EXACT counterexamples from the Fable
 // review (`docs/reviews/step1-general-lowering-review.md`). Each is a distinct
 // bug the review reproduced with real cargo; each here FAILS before the fix
 // (panic or false-reject) and PASSES after.
@@ -328,7 +328,7 @@ fn prim_from_byte_fn(
     }
 }
 
-// ── (a) MAJOR-1: LOOSE Sum `1 + Flat(2)` 3-cycle — was FALSELY REJECTED. ───────
+// ── (a) MAJOR-1: LOOSE Sum `1 + Flat(2)` 3-cycle -- was FALSELY REJECTED. ───────
 //
 // `1 + Flat(2)` has cardinality 5 (Left(Unit), Right(0..3)) but Σwidths = 1+2 = 3
 // → 8 byte rows, 3 of them junk (tag=0 with a nonzero pad byte). The OLD raw-byte
@@ -388,7 +388,7 @@ fn loose_sum_3cycle_run_on_cpu_fast_eq_eval() {
     eprintln!("MAJOR-1: loose Sum run_on_cpu_fast == eval on {checked}/5 inputs");
 }
 
-// ── (b) MAJOR-2a: unequal-branch Sum `Flat(1) + Flat(2)` — was a PANIC. ────────
+// ── (b) MAJOR-2a: unequal-branch Sum `Flat(1) + Flat(2)` -- was a PANIC. ────────
 //
 // The tag+payload marshaling gives leaf widths [1(tag), max(1,2)=2] on both
 // sides. The OLD cross-check enumerated `tag=0, payload=2` and parsed the payload
@@ -404,7 +404,7 @@ fn unequal_sum_cycle_def() -> PrimDef {
     let ty = unequal_sum_ty();
     let vals = enumerate_values(&ty);
     assert_eq!(vals.len(), 6);
-    // Cycle val[i] -> val[(i+1)%6] by VALUE (not bytes) — a clean permutation.
+    // Cycle val[i] -> val[(i+1)%6] by VALUE (not bytes) -- a clean permutation.
     let mut forward = BTreeMap::new();
     let mut backward = BTreeMap::new();
     for (i, v) in vals.iter().enumerate() {
@@ -428,7 +428,7 @@ fn unequal_branch_sum_lowers_no_panic() {
     let def = unequal_sum_cycle_def();
     admit(&def).expect("Flat(1)+Flat(2) 6-cycle must be an admissible bijection");
     let ctx = Ctx::new_canonical(2);
-    // Must return cleanly (Ok body, or a clean CompileError) — NEVER panic.
+    // Must return cleanly (Ok body, or a clean CompileError) -- NEVER panic.
     let res = recognize_prim(&def, &ctx);
     match res {
         Ok(body) => {
@@ -447,7 +447,7 @@ fn unequal_branch_sum_run_on_cpu_fast_eq_eval() {
     // The KEY proof (no panic + correct lowering, whole-domain exec-verified
     // inside general_synthesize_prim) is `unequal_branch_sum_lowers_no_panic`.
     // This body is ~302 instrs (a 6-cycle's ANF over a loose Sum is large) and
-    // OVERFLOWS the 8-bit PC (256) when assembled as a standalone ROM — a widen-PC
+    // OVERFLOWS the 8-bit PC (256) when assembled as a standalone ROM -- a widen-PC
     // limitation ORTHOGONAL to MAJOR-2a. So only run the eval-oracle when the ROM
     // fits; otherwise the internal exec-verify already certified correctness.
     let ctx = Ctx::new_canonical(2);
@@ -541,7 +541,7 @@ fn in_out_width_mismatch_run_on_cpu_fast_eq_eval() {
 //
 // The verifier must keep its teeth: a def whose backward table is NOT the true
 // inverse of forward must be rejected by the canonical-value cross-check
-// (`bwd∘fwd ≠ id`) with a CLEAN `EmissionVerificationFailed` — never a panic and
+// (`bwd∘fwd ≠ id`) with a CLEAN `EmissionVerificationFailed` -- never a panic and
 // never a wrong body. We forge such a def directly (it is not `admit`-able, but
 // `recognize_prim` may be reached by callers/tests, so it must fail closed).
 #[test]

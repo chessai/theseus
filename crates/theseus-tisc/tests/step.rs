@@ -8,9 +8,9 @@
 //! small straight-line test ROMs and sampled States we check:
 //!
 //!   1. lowering succeeds (unbalanced), netlist valid, max cell kind ≤ K3
-//!      — per-step cell counts are PRINTED (the M4 unroll-planning number);
+//!      -- per-step cell counts are PRINTED (the M4 unroll-planning number);
 //!   2. faithfulness: balance-then-simulate == bits of core eval
-//!      — `#[ignore]`d: the balanced netlist (~1.5M K0 buffers) exceeds
+//!      -- `#[ignore]`d: the balanced netlist (~1.5M K0 buffers) exceeds
 //!      host RAM; step correctness is verified via core-eval + component
 //!      lowering (fetch_isolated, pc_inc_isolated);
 //!   3. semantics: decode(eval(step, encode(s))) == ref_step(rom, s);
@@ -231,7 +231,7 @@ fn fetch_a15_boundary_no_aliasing() {
     for (pc, want_ir) in [
         (0x7FFFu16, word),
         (0x7FFEu16, 0u32),
-        (0x8000u16, 0u32), // probe B's aliasing target — MUST park
+        (0x8000u16, 0u32), // probe B's aliasing target -- MUST park
         (0x8001u16, 0u32),
         (0xFFFFu16, 0u32),
     ] {
@@ -386,7 +386,7 @@ fn pc_inc_sampled() {
 
 // ══════════════════════════════════════════════════════════════════════
 // 1b. ADR-0034 A-6.4 re-proof: the split-field PC update is exactly
-//     (PC + sext(BR) + 1) mod 2^W_PC — the mechanized injectivity witness
+//     (PC + sext(BR) + 1) mod 2^W_PC -- the mechanized injectivity witness
 //     for the `A : (PC,BR,rest) ↦ (PC+BR+1, BR, rest)` bijection at the
 //     widened width. See docs/src/adr/0034 D2/D4 (A-6.4 amendment).
 // ══════════════════════════════════════════════════════════════════════
@@ -422,14 +422,14 @@ fn adr0034_split_add_sampled() {
 
 // ── RETIRED: the 2^24 brute-force split-add re-proof (was HOURS; Tier-A). ──
 //
-// The full mechanized ADR-0034 re-proof at W_PC=16, W_BR=8 —
+// The full mechanized ADR-0034 re-proof at W_PC=16, W_BR=8 --
 //   (pc_add_br ; pc_inc)(PC,BR) == (PC + sext(BR) + 1) mod 2^W_PC
 // for ALL PC ∈ [0,2^16), BR ∈ [0,2^8) (2^24 = 16.7M pairs, HOURS by
-// simulation) — is now the SYMBOLIC BDD proof
+// simulation) -- is now the SYMBOLIC BDD proof
 // `tests/bveq_step_poc.rs::bveq_pc_update_wpc16` + `bveq_pc_update_negative_control_wpc16`
 // (drop-+1, zero-extend-BR, carry-less-byte-split teeth). It proves the SAME
-// identity over the WHOLE (PC,BR) domain — and MORE, with regs/IR/scratch held
-// SYMBOLIC — in ~0.15 s, domain-size-independent, in the FAST tier. The fast
+// identity over the WHOLE (PC,BR) domain -- and MORE, with regs/IR/scratch held
+// SYMBOLIC -- in ~0.15 s, domain-size-independent, in the FAST tier. The fast
 // reality anchors `adr0034_split_add_sampled` (above, eval vs pc_update at
 // boundaries) and `bveq_step_poc::bveq_pc_update_bootstrap_wpc16` tie the
 // symbolic model back to the real interpreter. This is the single authority; no
@@ -452,7 +452,7 @@ fn step1() -> &'static (Vec<u32>, Iso) {
 
 /// Lowering verification: lowers the full step (unbalanced only), prints
 /// per-step cell counts + max kind, asserts max kind <= K3.  Does NOT
-/// call balance() — the balanced netlist (~1.5M K0 buffers) exceeds host
+/// call balance() -- the balanced netlist (~1.5M K0 buffers) exceeds host
 /// RAM.
 fn verify_lowering() -> &'static () {
     static DONE: OnceLock<()> = OnceLock::new();
@@ -498,7 +498,7 @@ fn check_semantics(name: &str, s: &StateVals) {
         got, expected,
         "{name}: step semantics mismatch\n  got:      {got:?}\n  expected: {expected:?}"
     );
-    assert_eq!(got.ir, 0, "{name}: P4 violated — IR not re-zeroed");
+    assert_eq!(got.ir, 0, "{name}: P4 violated -- IR not re-zeroed");
     assert_eq!(got.scratch[1], 0, "{name}: s1 not restored");
 }
 

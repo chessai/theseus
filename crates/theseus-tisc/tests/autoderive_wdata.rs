@@ -1,17 +1,17 @@
 #![cfg(feature = "heavy-tests")]
 // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge.
-//! B-2.1c auto-derive — make the reduced-`w_data` win APPLY automatically to a
+//! B-2.1c auto-derive -- make the reduced-`w_data` win APPLY automatically to a
 //! narrow-data program, read off the SOURCE iso's `Type::Flat(n)`, with no
 //! manual `Layout`.
 //!
 //! - `derive_full_layout(iso, instrs)` auto-derives `w_data = next_pow2(
 //!   max_flat_width(iso))` (a Flat(4) program → w_data=4).
 //! - THE WIN: the auto-derived step net (priced step_j / balanced decode
-//!   cells) is smaller than the default (w_data=8) net — measured here.
+//!   cells) is smaller than the default (w_data=8) net -- measured here.
 //! - CORRECTNESS: `run_on_cpu == eval` on the Flat(4) kernel (now runs on the
 //!   auto-selected w_data=4 ring); a Flat(8) program auto-derives w_data=8 and
 //!   is byte-identical to the default (the `poc_step_net_bit_identical` fixture
-//!   in energy.rs/b21c is the netlist guard — untouched by this front-end
+//!   in energy.rs/b21c is the netlist guard -- untouched by this front-end
 //!   change).
 //!
 //! Run with `--test-threads=1`: lowers two full step nets (w_data=4 + w_data=8),
@@ -42,7 +42,7 @@ static LOWER_GATE: Mutex<()> = Mutex::new(());
 // ── Flat(n) kernel builders (a genuinely narrow-data program) ────────
 
 /// A byte-wise binary op prim over `Flat(n) × Flat(n)`: `(a,b) ↦ (a, op(a,b))`.
-/// Self-inverse iff `op` is (xor is; add is not — add's backward is sub).
+/// Self-inverse iff `op` is (xor is; add is not -- add's backward is sub).
 fn binop_prim(n: u8, fwd: fn(u8, u8) -> u8, bwd: fn(u8, u8) -> u8, name: &str) -> PrimDef {
     let flat = Type::Flat(n);
     let ty = Type::prod(flat.clone(), flat.clone());
@@ -75,7 +75,7 @@ fn xor_prim(n: u8) -> PrimDef {
 
 /// The Flat(n) kernel iso: a byte-wise `xor` over `Flat(n) × Flat(n)`
 /// (`(a,b) ↦ (a, a^b)`). A genuinely narrow-data program exercising the xor
-/// core. NOTE: `add` is deliberately NOT used — native `Add` is Flat(8)-only
+/// core. NOTE: `add` is deliberately NOT used -- native `Add` is Flat(8)-only
 /// (the Flat(w<8) `addInto` spec is rejected by the recognizer, per B-2.1c-2 /
 /// MINOR-4), so a Flat(4) add falls to the over-budget general synth. The win
 /// (a whole-datapath shrink) is independent of which instruction the ROM emits:
@@ -128,12 +128,12 @@ fn win_flat4_step_net_shrinks_vs_default_auto() {
     let lowered = compile_with_metadata(&iso).expect("compile Flat(4) kernel");
     let rom = assemble(&lowered.instrs).expect("assemble");
 
-    // AUTO layout (w_data=4, num_regs auto, AND w_pc auto per B-2.2c — this small
+    // AUTO layout (w_data=4, num_regs auto, AND w_pc auto per B-2.2c -- this small
     // kernel derives w_pc=8), and a w_data=8 variant with the SAME num_regs AND
-    // w_pc so the ONLY difference is w_data — isolating the datapath-width win.
+    // w_pc so the ONLY difference is w_data -- isolating the datapath-width win.
     // NOTE: use `derive_full_layout_from_lowered` (not `derive_full_layout`) so
     // this net matches what `rom_program_energy_auto` prices (it also derives
-    // w_pc from the Lowered) — the MAJOR-2 equivalence assert below depends on it.
+    // w_pc from the Lowered) -- the MAJOR-2 equivalence assert below depends on it.
     let auto = derive_full_layout_from_lowered(&iso, &lowered);
     assert_eq!(auto.w_data, 4);
     let default_wd8 = Layout { w_data: 8, ..auto };
@@ -227,7 +227,7 @@ fn kernel_flat4_run_on_cpu_eq_eval_whole_domain() {
 // 4. Flat(8) program stays byte-identical: auto w_data=8, run_on_cpu==eval
 // ══════════════════════════════════════════════════════════════════════
 //
-// A byte program auto-derives w_data=8, so run_on_cpu takes the byte ring —
+// A byte program auto-derives w_data=8, so run_on_cpu takes the byte ring --
 // byte-identical to the default. (The netlist-fingerprint guard is
 // `poc_step_net_bit_identical` in energy.rs / b21c_data_word.rs, run in the same
 // heavy suite; this test confirms the run oracle still agrees with eval at 8.)
@@ -292,7 +292,7 @@ fn blocker1_swapbr_program_pins_full_w_data() {
     use theseus_tisc::asm::Instr;
     let iso = kernel_iso(4); // Flat(4) source data → max_flat_width = 4
     assert_eq!(max_flat_width(&iso), 4);
-    // A ROM staging control in a register (big Addi immediate + Swapbr) — the
+    // A ROM staging control in a register (big Addi immediate + Swapbr) -- the
     // shape Trace / forward-skip emit.
     let control_rom = vec![
         Instr::Addi { rd: 0, imm: 0xF6 }, // δu-style control byte (≥ 0x80)

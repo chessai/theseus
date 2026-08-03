@@ -3,8 +3,8 @@
 //! The canonical adiabatic result is that a circuit driven by a slow trapezoidal
 //! power-clock recovers energy: dissipation per operation falls as `1/T` (log-log
 //! slope −1), versus a fixed `½CV²` for a step-driven CMOS gate. This module
-//! reproduces that on the 2LAL building block — a full CMOS **transmission gate**
-//! charging/recovering a load node through the power-clock — and is measured by
+//! reproduces that on the 2LAL building block -- a full CMOS **transmission gate**
+//! charging/recovering a load node through the power-clock -- and is measured by
 //! the [`crate::bench`] harness (`∫V·I` via a behavioral-power node + `.meas
 //! INTEG`, already self-validated against the closed-form RC dissipation).
 //!
@@ -16,7 +16,7 @@
 //! Physics notes (learned by bench iteration):
 //! * The PMOS bulk MUST tie to VDD; with a swinging clock node on the drain and
 //!   the bulk at 0 the P+/N-well junction forward-biases into a huge diode
-//!   current (energy grows *with* T — the opposite of adiabatic).
+//!   current (energy grows *with* T -- the opposite of adiabatic).
 //! * The transient timestep must resolve the device `R_on·C` (not just the
 //!   period), or the energy integral runs high at large T (same lesson as the
 //!   RC gate in [`crate::bench`]).
@@ -40,9 +40,9 @@ use crate::bench::{log_log_slope, parse_meas, run_energy, run_ngspice_raw};
 /// conduction), VDD = 1.8 V (the 01v8 core devices).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceRung {
-    /// Ideal level-1 models — the rung-0 physics sandbox.
+    /// Ideal level-1 models -- the rung-0 physics sandbox.
     Rung0Level1,
-    /// sky130A foundry models, `tt` corner — real silicon behavior.
+    /// sky130A foundry models, `tt` corner -- real silicon behavior.
     Rung1Sky130,
 }
 
@@ -63,7 +63,7 @@ impl DeviceRung {
     }
 
     /// The model-header card(s) for a deck at this rung: `.model` lines at
-    /// rung 0, the pinned sky130 `.lib … tt` include at rung 1.
+    /// rung 0, the pinned sky130 `.lib ... tt` include at rung 1.
     ///
     /// # Panics
     /// At rung 1, panics if `THESEUS_SKY130_LIB` is unset (the `.#char`
@@ -76,13 +76,13 @@ impl DeviceRung {
                 .to_string(),
             DeviceRung::Rung1Sky130 => {
                 let lib = std::env::var("THESEUS_SKY130_LIB")
-                    .expect("THESEUS_SKY130_LIB not set — run inside the .#char devShell");
+                    .expect("THESEUS_SKY130_LIB not set -- run inside the .#char devShell");
                 // gmin policy (uniform across ALL rung1 sky130 decks): ngspice's
                 // default gmin=1e-12 puts a ~1 pA/junction numerical shunt across
                 // every junction, a fake static-leakage floor ~20× real sky130 tt
                 // leakage. gmin=1e-16 cuts that artifact to ~0.2% of the real floor
                 // (so cross-cell leakage comparisons measure silicon, not the
-                // solver) while staying convergent. Do NOT go to 1e-18 — it buys
+                // solver) while staying convergent. Do NOT go to 1e-18 -- it buys
                 // nothing here and risks non-convergence.
                 format!(".lib \"{lib}\" tt\n.options gmin=1e-16")
             }
@@ -91,7 +91,7 @@ impl DeviceRung {
 
     /// One transistor instance card. `w_um`/`l_um` are in microns at both
     /// rungs (the sky130 lib sets `.option scale=1.0u`, so its geometry
-    /// parameters are plain micron numbers — `W=4`, not `W=4u`).
+    /// parameters are plain micron numbers -- `W=4`, not `W=4u`).
     ///
     /// Pin order is drain gate source bulk at both rungs.
     // A transistor card irreducibly has 4 pins + polarity + W + L; a
@@ -139,7 +139,7 @@ pub fn sky130_available() -> bool {
 // sky130 device-variant axes (M3a W5 bench DUT matrix; ADR-0024 B2.3)
 // ---------------------------------------------------------------------------
 
-/// Threshold-voltage flavor for rung-1 sky130 1.8 V core devices — one of the
+/// Threshold-voltage flavor for rung-1 sky130 1.8 V core devices -- one of the
 /// two ADR-0024 B2.3 characterization axes (Vt flavor is *measured*, not
 /// pre-decided).
 ///
@@ -150,7 +150,7 @@ pub fn sky130_available() -> bool {
 /// |--------|-------------------------------|-------------------------------|
 /// | std    | `sky130_fd_pr__nfet_01v8`     | `sky130_fd_pr__pfet_01v8`     |
 /// | lvt    | `sky130_fd_pr__nfet_01v8_lvt` | `sky130_fd_pr__pfet_01v8_lvt` |
-/// | hvt    | — (see below)                 | `sky130_fd_pr__pfet_01v8_hvt` |
+/// | hvt    | -- (see below)                 | `sky130_fd_pr__pfet_01v8_hvt` |
 ///
 /// Two real PDK constraints, handled explicitly rather than hidden:
 /// * **There is no hvt NMOS in the sky130 1.8 V core family** (the closest
@@ -161,7 +161,7 @@ pub fn sky130_available() -> bool {
 /// * The lvt PMOS is only binned for **L ≥ 0.35 µm** (`lmin = 3.5e-7` in
 ///   `sky130_fd_pr__pfet_01v8_lvt__tt.corner.spice`; ngspice hard-errors
 ///   "could not find a valid modelname" below it). [`Sky130Vt::fet`] clamps
-///   the lvt PMOS channel length up to 0.35 µm — the process minimum for
+///   the lvt PMOS channel length up to 0.35 µm -- the process minimum for
 ///   that flavor, not a tuning choice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Sky130Vt {
@@ -170,7 +170,7 @@ pub enum Sky130Vt {
     Std,
     /// Low Vt: lower R_on (T-gates like it), higher subthreshold leakage.
     Lvt,
-    /// High Vt (PMOS only on this PDK — see the type-level table).
+    /// High Vt (PMOS only on this PDK -- see the type-level table).
     Hvt,
 }
 
@@ -188,7 +188,7 @@ impl Sky130Vt {
     }
 
     /// The sky130 NMOS subcircuit for this flavor. `Hvt` falls back to the
-    /// std device — no hvt NMOS exists in the 1.8 V core family (see the
+    /// std device -- no hvt NMOS exists in the 1.8 V core family (see the
     /// type-level table).
     pub fn nmos_model(self) -> &'static str {
         match self {
@@ -236,21 +236,21 @@ impl Sky130Vt {
     }
 }
 
-/// NMOS body configuration — the other ADR-0024 B2.3 axis.
+/// NMOS body configuration -- the other ADR-0024 B2.3 axis.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BodyConfig {
-    /// Baseline: NMOS bulk tied to GND (and PMOS bulk to VDD) — the shared
+    /// Baseline: NMOS bulk tied to GND (and PMOS bulk to VDD) -- the shared
     /// p-substrate configuration every existing rung-1 cell uses. The NMOS
     /// pays the full body effect as its source swings above GND.
     #[default]
     BodyToRail,
     /// Deep-n-well isolated NMOS body: the NMOS sits in its own p-well,
-    /// tied to the cell's load node (source-tied body — the body-bias the
+    /// tied to the cell's load node (source-tied body -- the body-bias the
     /// DNW makes possible), inside a deep n-well tapped to VDD. The SPICE
     /// realization is (a) the NMOS bulk pin wired to the load node instead
     /// of GND, and (b) the PDK's DNW parasitic junction stack
-    /// ([`dnw_parasitic_stack`]) — the isolated p-well→DNW diode and the
-    /// substrate→DNW diode — so the isolation's capacitance and leakage are
+    /// ([`dnw_parasitic_stack`]) -- the isolated p-well→DNW diode and the
+    /// substrate→DNW diode -- so the isolation's capacitance and leakage are
     /// paid, not idealized away. The PMOS n-well is isolated by
     /// construction on this process and stays bulk-to-VDD.
     DeepNWell,
@@ -293,7 +293,7 @@ pub fn dnw_parasitic_stack(pw: &str, dnw: &str, psub: &str) -> String {
 }
 
 /// One point on the (Vt × body) variant grid for rung-1 sky130 cells.
-/// `Default` is `{Std, BodyToRail}` — exactly the devices and wiring the
+/// `Default` is `{Std, BodyToRail}` -- exactly the devices and wiring the
 /// existing rung-1 cells emit, so all pre-variant behavior is unchanged.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Sky130Variant {
@@ -320,7 +320,7 @@ impl Sky130Variant {
 
     /// The canonical adiabatic-TG device cards for this variant: the held-ON
     /// transmission gate between the power-clock node `pc` and the load node
-    /// `out` (gates `ing`/`inb`, W=4/8 µm N/P, L=0.15 µm — same geometry as
+    /// `out` (gates `ing`/`inb`, W=4/8 µm N/P, L=0.15 µm -- same geometry as
     /// the single-variant cell), with the NMOS bulk wired per [`BodyConfig`]
     /// and the DNW parasitic stack appended when isolated. Shared by the
     /// energy deck and the admission deck so the two always simulate the
@@ -346,9 +346,9 @@ impl Sky130Variant {
 // ---------------------------------------------------------------------------
 
 /// The minimum load of the M3a load axis, farads. Chosen so that 16×min =
-/// 1 pF — the canonical load the existing single-variant rung-1 TG cell is
+/// 1 pF -- the canonical load the existing single-variant rung-1 TG cell is
 /// hardcoded to (that cell is literally the (std, body-to-rail, 16×) corner
-/// of the matrix) — while still sitting well above the TG's own parasitics
+/// of the matrix) -- while still sitting well above the TG's own parasitics
 /// (a few fF of junction + gate capacitance at this geometry), so the load
 /// term stays the dominant capacitance at every axis point.
 pub const TG_LOAD_MIN_F: f64 = 62.5e-15;
@@ -422,7 +422,7 @@ pub struct TgVariantPoint {
     /// Power-clock share (the adiabatic/recoverable path).
     pub epc: f64,
     /// VDD-rail share: PMOS n-well bias, and under deep-n-well isolation the
-    /// DNW tap — the well/junction bookkeeping lives here.
+    /// DNW tap -- the well/junction bookkeeping lives here.
     pub evdd: f64,
     /// Input gate-driver share.
     pub egat: f64,
@@ -506,17 +506,17 @@ pub fn adiabatic_tg_netlist(period_s: f64) -> String {
 ///
 /// **Rung 1** (sky130 tt, VDD=1.8): the BSIM4 devices have real gate/junction
 /// capacitance, so cycle 0 pays a one-time charge-up of internal state. Two
-/// cycles are simulated (`PWL … r=0` repeats the clock) and all measurements
+/// cycles are simulated (`PWL ... r=0` repeats the clock) and all measurements
 /// integrate over the settled second cycle. Honest accounting (ADR-0028
-/// C3.3): EVERY source contributes to the measured total —
-/// * `etot` — total energy from all sources over the settled cycle (this is
+/// C3.3): EVERY source contributes to the measured total --
+/// * `etot` -- total energy from all sources over the settled cycle (this is
 ///   the per-op figure; also aliased into `esrc` semantics for the curve),
-/// * `epc`  — the power-clock (the recoverable/adiabatic path),
-/// * `evdd` — the bulk bias (junction/well leakage),
-/// * `egat` — the input gate drivers (real gate capacitance now exists; the
+/// * `epc`  -- the power-clock (the recoverable/adiabatic path),
+/// * `evdd` -- the bulk bias (junction/well leakage),
+/// * `egat` -- the input gate drivers (real gate capacitance now exists; the
 ///   inputs are DC here so the settled-cycle net is ≈ leakage-only, but it is
 ///   measured, not assumed),
-/// * `vmax` — output-rail peak, to prove the cell actually does work.
+/// * `vmax` -- output-rail peak, to prove the cell actually does work.
 pub fn adiabatic_tg_netlist_rung(period_s: f64, rung: DeviceRung) -> String {
     let q = period_s / 4.0; // ramp-up ends
     let h = period_s / 2.0; // hold ends
@@ -525,7 +525,7 @@ pub fn adiabatic_tg_netlist_rung(period_s: f64, rung: DeviceRung) -> String {
     // Resolve the device R_on·C (~150 ps rung0, ~660 ps rung1) as well as
     // the period: ≥4000 points/cycle, tightened to 50 ps when the period
     // allows. At rung 1 the 50 ps cap is floored at T/40000 (≤40k
-    // points/cycle) — a fixed 50 ps cap at T = 1 ms means 4×10⁸ steps and
+    // points/cycle) -- a fixed 50 ps cap at T = 1 ms means 4×10⁸ steps and
     // ngspice never finishes; the relaxed step was cross-checked against
     // the strict one at the T = 1e-5 overlap point (etot agrees to 0.45%).
     let step = match rung {
@@ -606,9 +606,9 @@ pub fn adiabatic_tg_curve(periods: &[f64]) -> MoneyPlotCurve {
 }
 
 /// Rung-aware variant of [`adiabatic_tg_curve`]: sweeps energy-per-op vs
-/// period at the given rung. At rung 1 the extracted energy is `etot` — the
+/// period at the given rung. At rung 1 the extracted energy is `etot` -- the
 /// sum over ALL sources (clock + bulk + gate drivers) over the settled
-/// second cycle — so gate-drive and leakage energy are counted, not hidden.
+/// second cycle -- so gate-drive and leakage energy are counted, not hidden.
 pub fn adiabatic_tg_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCurve {
     let (dut, meas) = match rung {
         DeviceRung::Rung0Level1 => ("adiabatic-tg", "esrc"),
@@ -635,7 +635,7 @@ pub fn adiabatic_tg_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCu
 /// Two copies of the cell hold the power-clock at its two rest states (high
 /// = output parked at VDD, low = output parked at 0), and the total power of
 /// every source attached to each copy is integrated over `window_s` after an
-/// equal settling window. `run_energy(…, "eh")/window_s` and `…("el")/…`
+/// equal settling window. `run_energy(..., "eh")/window_s` and `...("el")/...`
 /// give the static-power floor per state in watts; that floor times the
 /// period is the energy term that caps the adiabatic 1/T slope at slow T.
 pub fn adiabatic_tg_leakage_netlist(window_s: f64) -> String {
@@ -697,14 +697,14 @@ pub fn cmos_baseline_netlist(period_s: f64) -> String {
 /// capacitance, so cycle 0 pays a one-time charge-up of internal state. Two
 /// cycles are simulated (`PULSE` repeats the square wave) and all measurements
 /// integrate over the settled second cycle. Honest accounting (ADR-0028
-/// C3.3): EVERY source contributes to the measured total —
-/// * `etot` — total energy from all sources over the settled cycle (the
+/// C3.3): EVERY source contributes to the measured total --
+/// * `etot` -- total energy from all sources over the settled cycle (the
 ///   per-op figure for the curve),
-/// * `evdd` — the rail (the ~½CV² switching path),
-/// * `ein`  — the input gate driver (real gate capacitance now exists; the
+/// * `evdd` -- the rail (the ~½CV² switching path),
+/// * `ein`  -- the input gate driver (real gate capacitance now exists; the
 ///   input is a square wave so it delivers the gate-charge energy, measured
 ///   not assumed),
-/// * `vmax`/`vmin` — output-rail extremes, to prove full-swing operation.
+/// * `vmax`/`vmin` -- output-rail extremes, to prove full-swing operation.
 pub fn cmos_baseline_netlist_rung(period_s: f64, rung: DeviceRung) -> String {
     let half = period_s / 2.0;
     let edge = (period_s / 1000.0).min(1e-10); // fast edges: no energy recovery
@@ -779,8 +779,8 @@ pub fn cmos_baseline_curve(periods: &[f64]) -> MoneyPlotCurve {
 }
 
 /// Rung-aware CMOS baseline curve: energy per cycle vs period at the given
-/// rung. At rung 1 the extracted energy is `etot` — the sum over ALL sources
-/// (rail + input gate driver) over the settled second cycle — so the gate-
+/// rung. At rung 1 the extracted energy is `etot` -- the sum over ALL sources
+/// (rail + input gate driver) over the settled second cycle -- so the gate-
 /// charge energy is counted, not hidden. Energy is a positive magnitude.
 pub fn cmos_baseline_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCurve {
     let (dut, meas) = match rung {
@@ -814,7 +814,7 @@ pub fn pfal_netlist(period_s: f64) -> String {
 /// by the trapezoidal clock, with an NMOS evaluation pair. It recovers energy
 /// (slope −1) at fast periods but **floors**: a static/crowbar path in the
 /// resolved latch dissipates a roughly-constant power, so at slow periods
-/// energy stops falling (and rises) — the partially-adiabatic middle curve,
+/// energy stops falling (and rises) -- the partially-adiabatic middle curve,
 /// between 2LAL (keeps falling) and CMOS (flat everywhere). Devices are
 /// W=8 µm (P latch) / W=4 µm (N eval), L=0.15 µm at both rungs.
 ///
@@ -824,15 +824,15 @@ pub fn pfal_netlist(period_s: f64) -> String {
 ///
 /// **Rung 1** (sky130 tt, VDD=1.8): the BSIM4 devices have real gate/junction
 /// capacitance, so cycle 0 pays a one-time charge-up. Two cycles are simulated
-/// (`PWL … r=0` repeats the clock) and all measurements integrate over the
+/// (`PWL ... r=0` repeats the clock) and all measurements integrate over the
 /// settled second cycle. Honest accounting (ADR-0028 C3.3): EVERY source
-/// contributes to the measured total —
-/// * `etot` — total energy from all sources over the settled cycle (the
+/// contributes to the measured total --
+/// * `etot` -- total energy from all sources over the settled cycle (the
 ///   per-op figure for the curve),
-/// * `epc`  — the power-clock (the recoverable/adiabatic path; dominant here),
-/// * `evdd` — the PMOS-latch bulk bias (junction/well leakage),
-/// * `egat` — the DC input drivers (measured, not assumed to be 0),
-/// * `vmax` — output-rail peak, to prove the latch actually resolves.
+/// * `epc`  -- the power-clock (the recoverable/adiabatic path; dominant here),
+/// * `evdd` -- the PMOS-latch bulk bias (junction/well leakage),
+/// * `egat` -- the DC input drivers (measured, not assumed to be 0),
+/// * `vmax` -- output-rail peak, to prove the latch actually resolves.
 pub fn pfal_netlist_rung(period_s: f64, rung: DeviceRung) -> String {
     let q = period_s / 4.0; // ramp-up ends
     let h = period_s / 2.0; // hold ends
@@ -910,14 +910,14 @@ meas tran vmax MAX V(out) FROM={period_s:.9e} TO={stop:.9e}
     }
 }
 
-/// The PFAL curve at rung 0 (energy per op vs period) — falls then floors.
+/// The PFAL curve at rung 0 (energy per op vs period) -- falls then floors.
 /// Wrapper over [`pfal_curve_rung`].
 pub fn pfal_curve(periods: &[f64]) -> MoneyPlotCurve {
     pfal_curve_rung(periods, DeviceRung::Rung0Level1)
 }
 
 /// Rung-aware PFAL curve: energy per op vs period at the given rung. At rung 1
-/// the extracted energy is `etot` — the sum over ALL sources (clock + bulk +
+/// the extracted energy is `etot` -- the sum over ALL sources (clock + bulk +
 /// gate drivers) over the settled second cycle. Falls then floors on real
 /// devices: quasi-adiabatic recovery at fast periods, a non-recoverable
 /// residue at slow periods. Energy is a positive magnitude.
@@ -944,7 +944,7 @@ pub fn pfal_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCurve {
 /// (Athas' adiabatic amplifier + Frank's forward/reverse framework).
 ///
 /// Measured behavior (ngspice, level-1 models): log-log slope of clock energy
-/// vs period ≈ −0.99 sustained over **four decades** (10 ns … 100 µs) with
+/// vs period ≈ −0.99 sustained over **four decades** (10 ns ... 100 µs) with
 /// every stage's true rail reaching the full 1.0 V.
 ///
 /// # Topology
@@ -956,16 +956,16 @@ pub fn pfal_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCurve {
 /// ← complement rail).
 ///
 /// Four trapezoidal power-clock rails `p0..p3`, each with the canonical 2LAL
-/// shape — rise T/4, hold T/4, fall T/4, low T/4 — staggered by T/4. With this
+/// shape -- rise T/4, hold T/4, fall T/4, low T/4 -- staggered by T/4. With this
 /// shape `~φi = φ(i+2)`, so four rails supply both polarities.
 ///
 /// Data node `S_k` connects **only to clock rails** (there is no transistor
-/// path to GND or VDD anywhere — VDD is a bulk bias only):
+/// path to GND or VDD anywhere -- VDD is a bulk bias only):
 ///   * true rail `o{k}` ↔ `φ(k mod 4)`, complement `o{k}b` ↔ `φ(k+2 mod 4)`,
 ///   * each through **two parallel transmission gates**:
-///     - the *forward* TG, gated by `S_{k-1}` — charges the node while
+///     - the *forward* TG, gated by `S_{k-1}` -- charges the node while
 ///       `φ(k)` ramps up (tick k);
-///     - the *reverse* TG, gated by `S_{k+1}` (the downstream copy) — returns
+///     - the *reverse* TG, gated by `S_{k+1}` (the downstream copy) -- returns
 ///       the node's charge into the same clock rail while `φ(k)` ramps down
 ///       (tick k+2). This is the reversible-computing retraction: the input is
 ///       decomputed using the copy, never dumped to ground.
@@ -976,7 +976,7 @@ pub fn pfal_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCurve {
 /// `φ(k)` is low exactly during tick k−1 when the forward TG turns on, and the
 /// node is charged exactly when the reverse TG turns on during tick k+1. So no
 /// charge ever crosses a voltage gap, and at no instant does a conducting path
-/// from a high node to ground exist — all current is clock↔capacitor through
+/// from a high node to ground exist -- all current is clock↔capacitor through
 /// fully-enhanced TGs, dissipating only I²·R_on during the ramps (∝ 1/T).
 ///
 /// # Numerics
@@ -999,9 +999,9 @@ pub fn pfal_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCurve {
 /// arbitrary data it acks a 1-token if and only if a 1-token is actually
 /// retiring, so the tail decomputes correctly on 0-bits instead of being
 /// driven against an all-1s assumption (which burned ~CV², period-
-/// independent, per 0-bit — flattening the real-data energy curve).
-/// Both the input pair and the ack pair drive transistor **gates only** —
-/// there is no channel path from them to any data or clock node — and at
+/// independent, per 0-bit -- flattening the real-data energy curve).
+/// Both the input pair and the ack pair drive transistor **gates only** --
+/// there is no channel path from them to any data or clock node -- and at
 /// rung 0 the level-1 models have no gate capacitance (no `tox`/`cgso`/
 /// `cgdo`), so these sources deliver exactly zero energy. We do not rely on
 /// that argument alone: their delivered power is included in the measured
@@ -1132,8 +1132,8 @@ fn build_two_lal_sr(period_s: f64, n_stages: usize, bits: &[bool], bit_meas: boo
     lines.push(format!("Vint int 0 PWL({in_t})"));
     lines.push(format!("Vinc inc 0 PWL({in_c})"));
     // Data-aware terminator: the phantom successor S_n gating the last
-    // stage's reverse TGs is the SAME bit stream delayed by (n+1) ticks —
-    // exactly what a real stage n would hold — so the tail decomputes
+    // stage's reverse TGs is the SAME bit stream delayed by (n+1) ticks --
+    // exactly what a real stage n would hold -- so the tail decomputes
     // correctly for arbitrary data. Drives gates only (see doc above).
     let d_ack = d_in + (n_stages + 1) as f64 * q;
     let (ack_t, ack_c) = dual_rail_pwl(bits, period_s, d_ack, 0.015);
@@ -1172,7 +1172,7 @@ fn build_two_lal_sr(period_s: f64, n_stages: usize, bits: &[bool], bit_meas: boo
         lines.push(format!(".ic V({ot})=0 V({oc})=1"));
     }
 
-    // Honest power sum: EVERY V-source in the deck contributes to ptot —
+    // Honest power sum: EVERY V-source in the deck contributes to ptot --
     // the four clock rails (the real power supplies), the VDD bulk bias
     // (junction leakage only), and the gate-drive boundary sources (input
     // + ack replica; ~0 by the zero-gate-cap rung-0 idealization, but
@@ -1272,7 +1272,7 @@ pub fn money_plot(periods: &[f64]) -> Vec<MoneyPlotCurve> {
 }
 
 /// Rung-aware three-family money plot (W6): the same three families as
-/// [`money_plot`] — adiabatic transmission-gate, PFAL, static-CMOS control —
+/// [`money_plot`] -- adiabatic transmission-gate, PFAL, static-CMOS control --
 /// but generated at the given [`DeviceRung`] via the `_rung` curve functions.
 ///
 /// At [`DeviceRung::Rung1Sky130`] the dut names carry the `-sky130` suffix
@@ -1322,7 +1322,7 @@ mod tests {
     }
 
     /// The cell must actually charge (do work): source energy is non-trivial and
-    /// the load reaches near VDD — a circuit that dissipates ~0 by doing nothing
+    /// the load reaches near VDD -- a circuit that dissipates ~0 by doing nothing
     /// must not pass the slope check vacuously.
     #[test]
     fn adiabatic_tg_does_work() {
@@ -1335,7 +1335,7 @@ mod tests {
     }
 
     /// The CMOS control is FLAT: ~CV² per cycle regardless of period (slope ≈ 0),
-    /// and — crucially — at a slow period it dissipates FAR more than the
+    /// and -- crucially -- at a slow period it dissipates FAR more than the
     /// adiabatic cell (the whole point of the money plot).
     #[test]
     fn cmos_baseline_is_flat_and_dominates_adiabatic() {
@@ -1367,7 +1367,7 @@ mod tests {
     }
 
     /// PFAL is the middle family: it recovers energy (slope ≈ −1) at fast
-    /// periods but FLOORS — the energy stops falling (a static path dissipates
+    /// periods but FLOORS -- the energy stops falling (a static path dissipates
     /// ~constant power), so the minimum is reached at an intermediate period,
     /// unlike the pure-adiabatic cell which keeps falling.
     #[test]
@@ -1422,7 +1422,7 @@ mod tests {
     /// skipped otherwise, like the ngspice-gated rung-0 tests.
     ///
     /// Measured (sky130A tt, W=4/8 µm, L=0.15 µm, 1 pF load, settled 2nd
-    /// cycle, ALL sources summed): slope = −0.96 over 3.16e-8..1e-5 s —
+    /// cycle, ALL sources summed): slope = −0.96 over 3.16e-8..1e-5 s --
     /// real devices, not a clean −1. The curve is bounded on both ends:
     /// at T = 1e-8 s the ramp (T/4 = 2.5 ns) approaches the TG's R_on·C ≈
     /// 0.7 ns and the decade slope shallows to −0.78 (finite-ramp knee);
@@ -1484,7 +1484,7 @@ mod tests {
     /// Measured (sky130A tt, W=4/8 µm, L=0.15 µm, 1 pF load, settled 2nd
     /// cycle, ALL sources summed): etot ≈ 3.28e-12 J at every period from
     /// 1e-8..1e-6 s (rail evdd ≈ 3.27e-12 J dominates; input gate-drive
-    /// ein ≈ 6.5e-15 J is negligible), for slope ≈ 0 — a real static-CMOS
+    /// ein ≈ 6.5e-15 J is negligible), for slope ≈ 0 -- a real static-CMOS
     /// control that dumps a fixed CV² per cycle whatever the clock does. The
     /// output swings full rail (vmax ≈ 1.8 V, vmin ≈ 0). This is the baseline
     /// the adiabatic cells must beat at slow periods; it never falls.
@@ -1528,12 +1528,12 @@ mod tests {
     /// AND the sky130 PDK; skipped otherwise.
     ///
     /// Measured (sky130A tt, W=8 µm P / W=4 µm N, L=0.15 µm, 100 fF/rail,
-    /// settled 2nd cycle, ALL sources summed, etot ≈ epc — the clock is the
+    /// settled 2nd cycle, ALL sources summed, etot ≈ epc -- the clock is the
     /// whole story, bulk/gate ≈ 0):
     ///   T=1e-8: 2.71e-14   T=1e-7: 3.42e-15   T=1e-6: 6.19e-16 (min)
     ///   T=1e-5: 2.56e-15 (risen again)
     /// The fast half (1e-8..1e-6) falls at slope ≈ −0.82 (quasi-adiabatic,
-    /// NOT a clean −1 — real devices); the minimum is at T ≈ 1e-6 s and the
+    /// NOT a clean −1 -- real devices); the minimum is at T ≈ 1e-6 s and the
     /// curve turns UP by 1e-5 s, so the slow-end pair 1e-6→1e-5 has slope ≈
     /// +0.6, i.e. NOT still falling. The floor is the non-recoverable residue
     /// of the resolved latch (a static/crowbar path). Between CMOS (flat) and
@@ -1567,7 +1567,7 @@ mod tests {
         );
         // (b) It floors: the minimum is NOT at the slowest period (a clean
         // adiabatic cell would keep falling), and the slow-end pair is no
-        // longer falling — slope near 0 or positive (measured ≈ +0.6).
+        // longer falling -- slope near 0 or positive (measured ≈ +0.6).
         let min_i = curve
             .points
             .iter()
@@ -1589,7 +1589,7 @@ mod tests {
         );
     }
 
-    // ----- sky130 variant axes (pure emission — no simulator needed) -----
+    // ----- sky130 variant axes (pure emission -- no simulator needed) -----
 
     /// The default variant emits byte-identical device cards to the
     /// pre-variant rung-1 emitter, so every existing rung-1 cell is the
@@ -1669,12 +1669,12 @@ mod tests {
     /// Measured (canonical 4-phase forward/reverse-TG topology, see
     /// [`two_lal_sr_netlist`]): slope ≈ −0.99 over 1e-8..1e-5 s; all stage
     /// rails reach 1.0 V. NOTE: sustaining the 3rd decade (1e-6..1e-5 s)
-    /// requires `.options gmin=1e-16` + `is=1e-18` in the deck — ngspice's
+    /// requires `.options gmin=1e-16` + `is=1e-18` in the deck -- ngspice's
     /// default gmin=1e-12 junction shunts inject a fake ~5e-11 W static
     /// load that collapses the 3rd decade to slope ≈ −0.13. That is honest
     /// artifact removal, not tuning: a *real* DC leak in the topology would
     /// not be cured by lowering gmin (there is no channel path to GND or
-    /// VDD by construction — the circuit is powered only by the clocks).
+    /// VDD by construction -- the circuit is powered only by the clocks).
     #[test]
     fn two_lal_sr_slope_is_minus_one() {
         if !ngspice_available() {
@@ -1723,8 +1723,8 @@ mod tests {
     /// the vacuous all-1s `vo{k}max` check, which passes on a dead chain.
     ///
     /// Also asserts the energy stays adiabatic on real data: every settled
-    /// per-cycle energy — including the cycles where 0-bits retire at the
-    /// tail — is far below the ~1.25e-13 J period-independent CV² burn
+    /// per-cycle energy -- including the cycles where 0-bits retire at the
+    /// tail -- is far below the ~1.25e-13 J period-independent CV² burn
     /// that the old all-1s terminator paid per 0-bit, and the gate-only
     /// boundary sources (input + ack replica) deliver ~0 J (zero-gate-cap
     /// rung-0 models; verified, not assumed).

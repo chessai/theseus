@@ -1,15 +1,15 @@
-//! A-6.0 — the transcriber core: deterministic `RegTransfer` → `Instr` gates
+//! A-6.0 -- the transcriber core: deterministic `RegTransfer` → `Instr` gates
 //! for the IN-PLACE, ANCILLA-FREE structured class.
 //!
 //! This is the automation of the hand-written transcriptions in the keystone
 //! POC (`tests/bvexpr_synth_poc.rs`). It is **deterministic transcription**, a
-//! direct structural walk of each register row's `BvExpr` tree into ISA gates —
+//! direct structural walk of each register row's `BvExpr` tree into ISA gates --
 //! NOT search. There is no enumeration, no beam, no brute force.
 //!
 //! # The in-place ancilla-free class
 //!
 //! Each register row of the spec is one of:
-//! - **identity**: `Var(r, b)` at every bit `b` — the register is untouched →
+//! - **identity**: `Var(r, b)` at every bit `b` -- the register is untouched →
 //!   emit no gate.
 //! - **affine XOR of whole registers**: `x_new = Var(x, ·) ⊕ Σ Var(y_i, ·)`,
 //!   matching bit positions (bit `b` of the target is bit `b` of each source) →
@@ -18,12 +18,12 @@
 //!   one `Xori { rd: x, imm }` with `imm` the flip mask.
 //! - **byte-parallel Toffoli**: `x_new = Var(x, ·) ⊕ (Var(y, ·) ∧ Var(z, ·))` →
 //!   one `Ccnot { rd: x, rs: y, rt: z }`.
-//! - a **bit-0-controlled swap** across two registers (`Mux(Var(c,0), …)`) →
+//! - a **bit-0-controlled swap** across two registers (`Mux(Var(c,0), ...)`) →
 //!   one `Cswap { rd: c, rs: u, rt: v }`.
 //!
-//! Anything else — a row that is not `old ⊕ f(others)` in the ISA basis, or a
+//! Anything else -- a row that is not `old ⊕ f(others)` in the ISA basis, or a
 //! set of rows that cannot be ordered so every read happens before the
-//! corresponding write — is **rejected** with a [`SynthError`]. Those specs are
+//! corresponding write -- is **rejected** with a [`SynthError`]. Those specs are
 //! A-6.1's Bennett job (zero-init ancilla + backward uncompute), not this
 //! slice's.
 //!
@@ -31,7 +31,7 @@
 //!
 //! Callers verify the emission with the existing symbolic oracle:
 //! `equiv(symbolic_exec(&transcribe_inplace(spec)?), spec, BITS, &vars)`. The
-//! transcriber never claims correctness itself — the BDD oracle is the acceptance
+//! transcriber never claims correctness itself -- the BDD oracle is the acceptance
 //! gate (it has teeth: a wrong emission is rejected).
 
 use crate::asm::Instr;
@@ -90,7 +90,7 @@ enum Row {
         xor_sources: Vec<usize>,
         const_mask: u8,
     },
-    /// `x ^= Σ Var(y_i,·) ⊕ const ⊕ (Var(rs,·) ∧ Var(rt,·))` — the combined
+    /// `x ^= Σ Var(y_i,·) ⊕ const ⊕ (Var(rs,·) ∧ Var(rt,·))` -- the combined
     /// affine/const + single-Ccnot in-place row (POC `affine_nonlinear_mix`).
     /// Emits the Xor/Xori gates then the Ccnot; all XOR-accumulate onto target.
     AffineCcnot {
@@ -121,7 +121,7 @@ impl Row {
     ///
     /// For an in-place `x ^= f(others)` row the target is read too, but it is
     /// read AND written by the same gate in one step, so it does not constrain
-    /// ordering against itself — we only list the *other* registers it reads.
+    /// ordering against itself -- we only list the *other* registers it reads.
     fn reads_others(&self) -> Vec<usize> {
         match self {
             Row::Identity => vec![],
@@ -208,7 +208,7 @@ impl Row {
 /// sequence, or return a [`SynthError`] for specs outside that class.
 ///
 /// See the module docs for the exact class. The result, when `Ok`, satisfies
-/// `equiv(symbolic_exec(&result)?, spec, BITS, &operand_regs) == Ok(())` — but
+/// `equiv(symbolic_exec(&result)?, spec, BITS, &operand_regs) == Ok(())` -- but
 /// callers should still run that oracle; it is the acceptance gate, not this
 /// function.
 pub fn transcribe_inplace(spec: &RegTransfer) -> Result<Vec<Instr>, SynthError> {
@@ -324,7 +324,7 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
     let mut classes: Vec<BitClass> = Vec::with_capacity(BITS);
     for (b, terms) in per_bit_terms.iter().enumerate() {
         let mut sources = Vec::new();
-        // MINOR-1: const is a PARITY fold, not a bool — `x ⊕ 1 ⊕ 1` is identity,
+        // MINOR-1: const is a PARITY fold, not a bool -- `x ⊕ 1 ⊕ 1` is identity,
         // so two Const(true) terms at one bit cancel (no flip).
         let mut const_parity = false;
         let mut at_bit_and: Option<(usize, usize)> = None;
@@ -337,7 +337,7 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
                         return Err(SynthError::RowNotInPlace {
                             reg: r,
                             detail: format!(
-                                "bit {b} has more than one AND term (needs ≥2 Ccnots — Bennett)"
+                                "bit {b} has more than one AND term (needs ≥2 Ccnots -- Bennett)"
                             ),
                         });
                     }
@@ -360,7 +360,7 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
     }
 
     // Establish the affine source set and the and-term from bit 0, then require
-    // every bit to match (byte-parallel uniformity — one gate does all 8 bits).
+    // every bit to match (byte-parallel uniformity -- one gate does all 8 bits).
     let xor_sources = classes[0].sources.clone();
     let and_term = classes[0].and_term;
     for (b, c) in classes.iter().enumerate() {
@@ -369,7 +369,7 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
                 reg: r,
                 detail: format!(
                     "affine sources differ across bits (bit 0: {xor_sources:?}, bit {b}: {:?}) \
-                     — not a whole-register byte-parallel op",
+                     -- not a whole-register byte-parallel op",
                     c.sources
                 ),
             });
@@ -390,13 +390,13 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
 
     // A single in-place row realizes: {affine sources}·Xor + {const}·Xori + AT
     // MOST ONE Ccnot. If there is both an and-term AND affine/const work, that
-    // is still fine — but it is TWO gate kinds on one target. The POC's
+    // is still fine -- but it is TWO gate kinds on one target. The POC's
     // `affine_nonlinear_mix` is exactly `x ^= w ⊕ (y∧z)` → [Xor, Ccnot]. So we
     // support the combination on a single target (Ccnot after the Xor/Xori,
-    // both XOR-accumulate onto the target — order among them is immaterial).
+    // both XOR-accumulate onto the target -- order among them is immaterial).
     if let Some((y, z)) = and_term {
         // MINOR: the emitted `Ccnot { rd: r, rs: y, rt: z }` must have pairwise
-        // DISTINCT operands (ISA-illegal / non-bijective otherwise — asm::encode
+        // DISTINCT operands (ISA-illegal / non-bijective otherwise -- asm::encode
         // rejects it). The AND term touching the target (`y == r` or `z == r`, the
         // spec `x ^= x∧z` CE) is non-in-place anyway; `y == z` (`x ^= y∧y = y`)
         // is degenerate. Reject rather than emit an unassemblable body.
@@ -405,7 +405,7 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
                 reg: r,
                 detail: format!(
                     "Ccnot operands not pairwise-distinct (rd={r}, rs={y}, rt={z}); \
-                     the AND term touches the target or repeats an operand — non-bijective"
+                     the AND term touches the target or repeats an operand -- non-bijective"
                 ),
             });
         }
@@ -444,7 +444,7 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
 /// This is STRICTLY SIMPLER than the in-place case ([`transcribe_inplace`]):
 /// because the targets are fresh and disjoint from the sources, there is no
 /// self-term to peel, no read-after-write hazard among the outputs, and no
-/// scheduling — each output row is emitted independently, reading only sources
+/// scheduling -- each output row is emitted independently, reading only sources
 /// that are never written by this routine. It is the building block A-6.1's
 /// Bennett wrapper composes (compute `O ^= P(x)`, uncompute `O ^= P⁻¹(y)`).
 ///
@@ -501,7 +501,7 @@ pub fn transcribe_into(
 
     // ── MAJOR-2 / MINOR-3: validate the DESTINATION operand map. Only rows
     // that actually emit gates matter (a spec-identity row whose dst self-maps
-    // to its own src contributes nothing — MINOR-4). For every row that will
+    // to its own src contributes nothing -- MINOR-4). For every row that will
     // emit, the dst operand must be a legal operand and pairwise-distinct from
     // every OTHER emitting row's dst (aliased fresh targets clobber each other).
     let mut used_dsts: Vec<u8> = Vec::new();
@@ -509,7 +509,7 @@ pub fn transcribe_into(
         let dst = dst_ops[i];
         // MINOR-4: the skip fires ONLY on a genuine IDENTITY row that self-maps
         // (dst == src for its own reg). Any NON-identity row that happens to
-        // alias a source is a caller contract violation, not a no-op — never
+        // alias a source is a caller contract violation, not a no-op -- never
         // silently drop its gates.
         if is_identity_row(row, i) && dst == src_ops[i] {
             continue;
@@ -518,7 +518,7 @@ pub fn transcribe_into(
         if used_dsts.contains(&dst) {
             return Err(SynthError::MalformedSpec {
                 detail: format!(
-                    "dst operand {dst} used by two rows — fresh targets must be distinct"
+                    "dst operand {dst} used by two rows -- fresh targets must be distinct"
                 ),
             });
         }
@@ -529,11 +529,11 @@ pub fn transcribe_into(
     for (i, row) in spec.regs.iter().enumerate() {
         let dst = dst_ops[i];
         // Recognize this row as a byte-parallel `f(vars)` in the ISA basis.
-        // NOTE: unlike the in-place case, there is NO self-term to peel — the
+        // NOTE: unlike the in-place case, there is NO self-term to peel -- the
         // fresh target already holds 0 and we XOR the whole function onto it.
         let (xor_sources, const_mask, and_term) = recognize_into_row(row, i)?;
         // MINOR-4: only skip genuine identity self-maps (validated above). If we
-        // reach here with a non-identity row, every gate is emitted — no source
+        // reach here with a non-identity row, every gate is emitted -- no source
         // may alias the dst (that would be an ISA-illegal self-XOR / self-Ccnot).
         let is_id_selfmap = is_identity_row(row, i) && dst == src_ops[i];
         if is_id_selfmap {
@@ -563,7 +563,7 @@ pub fn transcribe_into(
         if let Some((y, z)) = and_term {
             let (rs, rt) = (src_ops[y], src_ops[z]);
             // MINOR: the Ccnot operands must be pairwise-distinct (ISA-illegal /
-            // non-bijective otherwise — asm::encode rejects it).
+            // non-bijective otherwise -- asm::encode rejects it).
             if rs == rt || rs == dst || rt == dst {
                 return Err(SynthError::RowNotInPlace {
                     reg: i,
@@ -589,7 +589,7 @@ const NUM_OPERAND_LOCS: usize = 16;
 /// Validate a raw operand index against the LEGAL operand space (mirrors
 /// `asm::check_operand`): `0..8` = registers, `10..16` = scratch s2..s7.
 /// Rejected: `8`/`9` (decoder-reserved s0/s1) and `≥16` (no crossbar route,
-/// and ≥16 would panic `operand_get`). Returns `Err(MalformedSpec)` — a
+/// and ≥16 would panic `operand_get`). Returns `Err(MalformedSpec)` -- a
 /// verification-time reject, not a ROM-time panic (MINOR-3).
 fn check_operand_legal(what: &str, op: u8) -> Result<(), SynthError> {
     // MEASUREMENT-ONLY relaxation: `transcribe_word_bennett_peak_measure` raises the
@@ -661,7 +661,7 @@ fn recognize_into_row(row: &[BvExpr], r: usize) -> Result<IntoRow, SynthError> {
     for (b, e) in row.iter().enumerate() {
         let terms = flatten_xor(e);
         let mut sources = Vec::new();
-        // MINOR-1: parity fold — even count of Const(true) is no flip.
+        // MINOR-1: parity fold -- even count of Const(true) is no flip.
         let mut const_parity = false;
         let mut at_bit_and: Option<(usize, usize)> = None;
         for t in terms {
@@ -673,7 +673,7 @@ fn recognize_into_row(row: &[BvExpr], r: usize) -> Result<IntoRow, SynthError> {
                         return Err(SynthError::RowNotInPlace {
                             reg: r,
                             detail: format!(
-                                "bit {b} has more than one AND term (needs ≥2 Ccnots — \
+                                "bit {b} has more than one AND term (needs ≥2 Ccnots -- \
                                  outside transcribe_into's single-Toffoli basis)"
                             ),
                         });
@@ -707,7 +707,7 @@ fn recognize_into_row(row: &[BvExpr], r: usize) -> Result<IntoRow, SynthError> {
                 reg: r,
                 detail: format!(
                     "affine sources differ across bits (bit 0: {xor_sources:?}, bit {b}: {:?}) \
-                     — not a whole-register byte-parallel op",
+                     -- not a whole-register byte-parallel op",
                     c.sources
                 ),
             });
@@ -736,17 +736,17 @@ fn recognize_into_row(row: &[BvExpr], r: usize) -> Result<IntoRow, SynthError> {
 /// zero by construction.
 ///
 /// Given carriers holding `x` and ancilla `O = 0`:
-/// 1. `O ^= P(x)`   — [`transcribe_into`]`(fwd, dst=ancilla, src=carrier)`.
+/// 1. `O ^= P(x)`   -- [`transcribe_into`]`(fwd, dst=ancilla, src=carrier)`.
 ///    Now `O = P(x)`, carriers still `x`.
 /// 2. swap carriers ↔ O, per carrier↔ancilla pair (`Exch` for reg↔reg,
 ///    `Xchg` when the ancilla is a scratch word). Now carriers `= P(x) = y`,
 ///    `O = x`.
-/// 3. `O ^= P⁻¹(y)` — [`transcribe_into`]`(bwd, dst=ancilla, src=carrier)`.
+/// 3. `O ^= P⁻¹(y)` -- [`transcribe_into`]`(bwd, dst=ancilla, src=carrier)`.
 ///    Since carriers now hold `y` and `bwd = P⁻¹`, this XORs `P⁻¹(y) = x` onto
 ///    `O(=x)` → `O = 0`. Net-zero ancilla, guaranteed by construction.
 ///
 /// Result: carriers hold `P(x)`, ancilla back to `0`. This is the ~2× body the
-/// A-1 finding predicted — CORRECT by construction; length is whatever it is.
+/// A-1 finding predicted -- CORRECT by construction; length is whatever it is.
 ///
 /// `carrier_ops` / `ancilla_ops` are raw operand indices (reg `0..8`, scratch
 /// `8..16`). `ancilla_ops` must be zero-init and have at least
@@ -795,7 +795,7 @@ pub fn transcribe_bennett(
 
     // MAJOR-2: the operand maps must be internally disjoint with no dups:
     //   * no carrier repeated; no USED ancilla word repeated (aliased ancilla
-    //     `[3,3]` defeats "ancilla returned to 0" teeth — CE);
+    //     `[3,3]` defeats "ancilla returned to 0" teeth -- CE);
     //   * carriers and used ancilla disjoint (Bennett requires fresh scratch).
     for i in 0..n {
         for j in (i + 1)..n {
@@ -826,7 +826,7 @@ pub fn transcribe_bennett(
     // `y ≥ n` reads a register OUTSIDE the carrier set; the src_map padding
     // below wired every such read to a bogus operand (operand 0), silently
     // producing a wrong body + dirty ancilla. A permutation spec on `n`
-    // carriers must be a function of those `n` carriers alone — reject.
+    // carriers must be a function of those `n` carriers alone -- reject.
     for spec in [fwd, bwd] {
         for r in 0..n {
             let mut reads: Vec<usize> = Vec::new();
@@ -847,7 +847,7 @@ pub fn transcribe_bennett(
     // Build NUM_REGS-length dst/src maps. For carrier rows 0..n, src = carrier,
     // dst = ancilla. For rows n..NUM_REGS (which must be spec-identity), point
     // both at the carrier operand so any (identity) emission is a self-noop we
-    // never actually emit — but to be safe reject non-identity there.
+    // never actually emit -- but to be safe reject non-identity there.
     for r in n..NUM_REGS {
         if !is_identity_row(&fwd.regs[r], r) || !is_identity_row(&bwd.regs[r], r) {
             return Err(SynthError::MalformedSpec {
@@ -919,7 +919,7 @@ fn swap_operands(a: u8, b: u8) -> Result<Instr, SynthError> {
 // ── A-6.2: general ANF emission (arbitrary-degree monomials via scratch) ──
 //
 // FINDING (A-6.2): `transcribe_into` (A-6.1) realizes only the SINGLE-Toffoli
-// basis — at most one degree-2 AND term per output bit, byte-parallel. A general
+// basis -- at most one degree-2 AND term per output bit, byte-parallel. A general
 // ANF (e.g. gcd2's) has per-bit XORs of *arbitrary-degree* monomials (gcd2 hits
 // degree 3, several per bit, mixing bit positions: e.g. `a1 ∧ b0 ∧ h0`). Those
 // are OUTSIDE that basis, so `transcribe_bennett` (which calls `transcribe_into`)
@@ -950,7 +950,7 @@ pub struct HelperBank<'a> {
 
 /// Transcribe a `RegTransfer` spec (already in register space; row `r` holds the
 /// BvExpr for register `r`) onto FRESH, DISJOINT zero-init destinations, for the
-/// **general ANF class** — XOR of arbitrary-degree AND-monomials, per bit.
+/// **general ANF class** -- XOR of arbitrary-degree AND-monomials, per bit.
 ///
 /// For each spec row `i` and output bit `b`, the expression is flattened to its
 /// ANF terms; each term is emitted into bit `b` of `dst_ops[i]` (which starts 0)
@@ -1002,7 +1002,7 @@ pub fn transcribe_into_general(
 /// (`dst` starts 0 at bit `b` for this term's turn; multiple terms XOR-accumulate).
 ///
 /// A term is `Const(true)`, a single `Var(y,c)`, or an AND-monomial
-/// `Var(y0,c0) ∧ … ∧ Var(y_{d-1},c_{d-1})` of any degree `d`; each `Var` reads
+/// `Var(y0,c0) ∧ ... ∧ Var(y_{d-1},c_{d-1})` of any degree `d`; each `Var` reads
 /// its OWN bit `c_k` (ANF monomials mix bit positions). Realization over the
 /// 2-input-Ccnot ISA, net-zero:
 ///   - `Const(true)`  → `Xori { dst, 1<<b }`.
@@ -1011,7 +1011,7 @@ pub fn transcribe_into_general(
 ///                      (dst bit b ^= src bit c0), unload mask, un-rotate.
 ///   - degree d ≥ 2   → align all factors to bit `b`; AND-tree:
 ///                        `Ccnot temp0, f0, f1`         (temp0 = f0∧f1)
-///                        `Ccnot temp1, temp0, f2`      (temp1 = f0∧f1∧f2) …
+///                        `Ccnot temp1, temp0, f2`      (temp1 = f0∧f1∧f2) ...
 ///                      then `mask = 1<<b`, `Ccnot dst, temp_last, mask`
 ///                      (dst bit b ^= product bit b only), unload mask, and run
 ///                      the AND-tree in REVERSE to clear every temp, then
@@ -1036,7 +1036,7 @@ fn emit_anf_term(
             });
             return Ok(());
         }
-        BvExpr::Const(false) => return Ok(()), // XOR identity — no-op
+        BvExpr::Const(false) => return Ok(()), // XOR identity -- no-op
         BvExpr::Var { operand, bit } => vec![(*operand, *bit)],
         BvExpr::And(_, _) => flatten_and(term)?,
         other => {
@@ -1081,7 +1081,7 @@ fn emit_anf_term(
     // single-bit accumulators, uncomputed for net-zero. Every factor is aligned
     // to bit `b` JUST FOR its Ccnot and un-aligned right after, so two factors
     // that share a source operand (multiplicity > 1) are never rotated
-    // simultaneously — the emitter is aliasing-safe without extra copy words.
+    // simultaneously -- the emitter is aliasing-safe without extra copy words.
     if helpers.temps.len() < degree - 1 {
         return Err(SynthError::MalformedSpec {
             detail: format!(
@@ -1108,7 +1108,7 @@ fn emit_anf_term(
     };
 
     // FORWARD LADDER (compute):
-    //   temp0 := 1<<b ∧ f0    (clean single bit b = f0's bit)  — mask seeds a
+    //   temp0 := 1<<b ∧ f0    (clean single bit b = f0's bit)  -- mask seeds a
     //   temp_{k-1} := temp_{k-2} ∧ f_k                          clean accumulator
     // Because temp0 is clean (0 outside bit b), every downstream AND stays clean,
     // so the final XOR onto dst needs no mask.
@@ -1271,7 +1271,7 @@ pub fn transcribe_bennett_general(
 /// This is the reusable, prim-agnostic front-half of the synthesizer: it turns
 /// *any* concrete permutation on a small carrier (given as a closure over the
 /// carrier bytes) into the symbolic `RegTransfer` the transcriber consumes. It
-/// is EXACT and DETERMINISTIC — no search, no enumeration of instruction
+/// is EXACT and DETERMINISTIC -- no search, no enumeration of instruction
 /// sequences; it enumerates only the carrier's input-bit assignments (2^Σwidths)
 /// and Möbius-transforms each output bit's truth table.
 ///
@@ -1298,7 +1298,7 @@ pub fn transcribe_bennett_general(
 /// Rows and bits outside the carrier, or beyond a leaf's width, are the identity
 /// `Var(r,b)` (and `Const(false)` for the above-width bits of carrier leaves).
 ///
-/// The result is ANF — length is whatever the ANF is (not minimised); A-6.4 /
+/// The result is ANF -- length is whatever the ANF is (not minimised); A-6.4 /
 /// widen-PC funds the resulting body size. Callers verify with the symbolic
 /// oracle (all-register operands) and/or the exec/net-zero path.
 pub fn table_to_regtransfer(
@@ -1461,7 +1461,7 @@ fn classify_term(t: &BvExpr, b: usize) -> Option<Term> {
         BvExpr::Const(true) => Some(Term::Const),
         BvExpr::Const(false) => None, // a false const term should not appear post-flatten; reject
         BvExpr::And(a, c) => {
-            // Require Var(y,b) ∧ Var(z,b) — matching bit, two distinct-or-not regs.
+            // Require Var(y,b) ∧ Var(z,b) -- matching bit, two distinct-or-not regs.
             if let (
                 BvExpr::Var {
                     operand: y,
@@ -1509,7 +1509,7 @@ impl Row {
 /// Peel a single `Var(r, b)` self-term off the top of an XOR tree, returning the
 /// remainder. If `e == Var(r,b)` exactly, the remainder is `Const(false)`.
 /// Returns `None` if there is no self-term at the top level (the row is not
-/// in-place: its new value is not `old ⊕ …`).
+/// in-place: its new value is not `old ⊕ ...`).
 fn peel_self_xor(e: &BvExpr, r: usize, b: usize) -> Option<BvExpr> {
     let terms = flatten_xor(e);
     // Count self-terms; there must be exactly one (odd count would leave one,
@@ -1640,7 +1640,7 @@ fn matches_swap_side(row: &[BvExpr], c: usize, then_reg: usize, self_reg: usize)
 /// values when it runs.
 ///
 /// For the ancilla-free in-place class the only hazard is a register that one
-/// row *reads* while another row *overwrites* it — a read-after-write where the
+/// row *reads* while another row *overwrites* it -- a read-after-write where the
 /// read must precede the write, but the write's own row might depend on the
 /// reader too (a cycle ⇒ Bennett). We do a Kahn-style topological sort with the
 /// edge "reader-before-writer": if row A reads register g and a *different* row
@@ -1649,7 +1649,7 @@ fn schedule(rows: &[Row]) -> Result<Vec<Row>, SynthError> {
     // writer_of[g] = index of the (unique) row that writes register g, if any.
     // A register written by two different rows is out of the simple in-place
     // class (only Cswap writes two regs, and it registers both indices to the
-    // SAME row instance — but our `rows` vec has one entry per register, so a
+    // SAME row instance -- but our `rows` vec has one entry per register, so a
     // Cswap appears twice; treat those two entries as the same logical unit).
     //
     // To keep it simple and correct: build a list of logical *units*. Cswap
@@ -1728,7 +1728,7 @@ fn schedule(rows: &[Row]) -> Result<Vec<Row>, SynthError> {
 // sum-of-products (degree blowup: gcd2 → 15,148 instrs), this walks the CANONICAL
 // ROBDD of each output bit and emits O(#nodes) gates. Same generality (any
 // BvExpr → BDD via `expr_to_bdd`, the representation `equiv`/`admit_symbolic`
-// already trust), but the node count — not the ANF degree — sets the length.
+// already trust), but the node count -- not the ANF degree -- sets the length.
 //
 // DETERMINISTIC: build the ROBDD, walk its nodes children-before-parents, emit a
 // fixed gate gadget per node, uncompute for net-zero. No search, no enumeration.
@@ -1744,7 +1744,7 @@ fn schedule(rows: &[Row]) -> Result<Vec<Row>, SynthError> {
 // is the output. `BddVariable::to_index()` inverts the shared `VarMap` mapping
 // (`idx = bit*num_operands + operand`), recovering the input `(operand, bit)`.
 //
-// We build ONE BDD per (carrier output operand, output bit) — per-bit BDDs, which
+// We build ONE BDD per (carrier output operand, output bit) -- per-bit BDDs, which
 // the design explicitly permits for this slice; node lines are allocated and
 // uncomputed per output bit, so the ancilla-word budget is the MAX single-bit
 // node count, not the sum.
@@ -1761,7 +1761,7 @@ fn schedule(rows: &[Row]) -> Result<Vec<Row>, SynthError> {
 // terminal contributes `Xori(word, 1)`. The output carrier bit reads the root
 // node's line (or the root terminal directly). Every node's 4-step gadget is its
 // own inverse (all XOR-accumulate), so the reverse pass replays it to return each
-// node word to 0 — Bennett net-zero.
+// node word to 0 -- Bennett net-zero.
 
 /// Zero-init helper bank for [`transcribe_bdd_into`]'s per-bit BDD synthesis.
 ///
@@ -1783,9 +1783,9 @@ pub struct BddHelpers<'a> {
 /// A clean bit-0 value source feeding a node gadget.
 #[derive(Clone, Copy)]
 enum Line {
-    /// Constant 0 (FALSE terminal) — contributes nothing.
+    /// Constant 0 (FALSE terminal) -- contributes nothing.
     Zero,
-    /// Constant 1 (TRUE terminal) — one `Xori(word, 1)`.
+    /// Constant 1 (TRUE terminal) -- one `Xori(word, 1)`.
     One,
     /// Bit 0 of node ancilla word `w` (clean: upper bits are 0).
     Node(u8),
@@ -1923,7 +1923,7 @@ fn emit_bdd_output_bit(
 
     // Copy the ROOT node line into dst bit b: dst bit b ^= root bit0.
     // Root is a non-terminal (handled the terminal cases above), so it's a clean
-    // node word — a single Ccnot against a bit-b mask realized by the temp word.
+    // node word -- a single Ccnot against a bit-b mask realized by the temp word.
     let root_word = node_word(root.to_index());
     // dst bit b ^= root_word bit0. Align root's bit0 to bit b, then a masked XOR.
     // root_word is clean (bit0 only). Rotate it so bit0 → bit b, XOR the whole
@@ -1951,7 +1951,7 @@ fn emit_bdd_output_bit(
 /// `word ^= lo ⊕ (x ∧ (hi ⊕ lo))`, all at bit 0, net-zero on `temp`.
 ///
 /// Because every step XOR-accumulates onto `word`/`temp`, re-emitting the SAME
-/// gadget is its own inverse — the reverse pass uses this to clear the word.
+/// gadget is its own inverse -- the reverse pass uses this to clear the word.
 fn emit_node_gadget(
     g: &NodeGadgetRef,
     src_ops: &[u8],
@@ -2041,7 +2041,7 @@ fn lines_equal(a: Line, b: Line) -> bool {
 
 /// BDD analog of [`transcribe_bennett_general`]: realize a permutation `P`
 /// (forward `fwd` + inverse `bwd`) in place on `carrier_ops`, computing the fwd
-/// BDD into `out_ancilla`, swapping, then the bwd BDD to clear the ancilla —
+/// BDD into `out_ancilla`, swapping, then the bwd BDD to clear the ancilla --
 /// but the compute/uncompute steps use [`transcribe_bdd_into`] (BDD synthesis,
 /// compact) instead of ANF. Same net-zero guarantee.
 ///
@@ -2181,8 +2181,8 @@ pub fn transcribe_bdd_bennett(
 // A small straight-line WORD-level IR (`WOp` / `WSpec`) whose ops map ~1:1 to
 // the ISA's byte/arithmetic gates, plus reversible MACROS (guarded copy, is-zero,
 // compare) that each expand to a small NET-ZERO gate sequence over clean temps
-// while preserving their source operands. This is DETERMINISTIC construction —
-// each `WOp` is a known gate, each macro a fixed gadget — NOT search.
+// while preserving their source operands. This is DETERMINISTIC construction --
+// each `WOp` is a known gate, each macro a fixed gadget -- NOT search.
 //
 // The transcriber is the word analogue of `transcribe_inplace`: it is for specs
 // already reversible in-place (an in-place bijection). The macros are the
@@ -2222,13 +2222,13 @@ pub type WSpec = Vec<WOp>;
 /// Direct 1:1 transcriber: map each [`WOp`] to its corresponding ISA [`Instr`].
 ///
 /// This is for specs that are already reversible IN PLACE (an in-place bijection
-/// — no separate output words). Every operand is validated with
+/// -- no separate output words). Every operand is validated with
 /// [`check_operand_legal`] (reject reserved s0/s1 = 8/9 and out-of-range ≥16);
 /// two-operand ops require `d != s` (the ISA's non-aliasing rule), and
 /// `WCcnot`/`WCswap` require pairwise-distinct operands (the MINOR-2 guard).
 ///
 /// The result, when `Ok`, is an assemblable body realizing the WSpec. Callers
-/// still verify with the symbolic oracle (`symbolic_exec` + `equiv`) — this
+/// still verify with the symbolic oracle (`symbolic_exec` + `equiv`) -- this
 /// function does not claim correctness, only faithful 1:1 transcription.
 pub fn transcribe_word(spec: &[WOp]) -> Result<Vec<Instr>, SynthError> {
     let mut out = Vec::with_capacity(spec.len());
@@ -2250,7 +2250,7 @@ fn check_two_distinct(mnemonic: &str, d: u8, s: u8) -> Result<(), SynthError> {
 }
 
 /// Reject a three-operand op whose operands are not pairwise distinct (Ccnot /
-/// Cswap ISA requirement; non-distinct is ISA-illegal / non-bijective — MINOR-2).
+/// Cswap ISA requirement; non-distinct is ISA-illegal / non-bijective -- MINOR-2).
 fn check_three_distinct(mnemonic: &str, a: u8, b: u8, c: u8) -> Result<(), SynthError> {
     if a == b || a == c || b == c {
         return Err(SynthError::MalformedSpec {
@@ -2323,17 +2323,17 @@ fn transcribe_word_op(op: WOp) -> Result<Instr, SynthError> {
 // Each macro emits a small NET-ZERO gate sequence: every temp word it touches
 // returns to its input value (so, starting from 0, it ends at 0), and every
 // SOURCE operand is preserved. The result-carrying `dst` is XOR-accumulated
-// (`dst ^= …`), so a clean (zero) `dst` receives the intended word/bit.
+// (`dst ^= ...`), so a clean (zero) `dst` receives the intended word/bit.
 //
 // Net-zero holds UNCONDITIONALLY (for any temp init) because every temp mutation
-// is paired with its exact inverse — this is what makes the symbolic oracle
+// is paired with its exact inverse -- this is what makes the symbolic oracle
 // (which models a temp's initial value as a free variable) able to PROVE
 // net-zero, not merely sample it. The `dst ^= f(guard,then,else)` contract, by
 // contrast, is only correct when the temps START at 0 (the mask/accumulator are
 // seeded from 0); callers/tests verify the dst function with the temp inputs
 // substituted by 0 (the `zero_out` pattern), exactly as the Bennett path does.
 
-/// `WSelect(dst, guard, then_w, else_w, mask_tmp, one)` — guarded word copy
+/// `WSelect(dst, guard, then_w, else_w, mask_tmp, one)` -- guarded word copy
 /// `dst ^= guard ? then_w : else_w`, selected by BIT 0 of `guard`.
 ///
 /// # Contract
@@ -2444,7 +2444,7 @@ pub fn emit_wselect(
     Ok(())
 }
 
-/// `WEqZero(dst_bit, src, temps)` — `dst_bit's bit 0 ^= (src == 0)` (byte-wide),
+/// `WEqZero(dst_bit, src, temps)` -- `dst_bit's bit 0 ^= (src == 0)` (byte-wide),
 /// with `src` PRESERVED and every temp word NET-ZERO.
 ///
 /// # Deviation from the design's single-`tmp` signature (REPORTED)
@@ -2499,7 +2499,7 @@ pub const fn weqzero_ntemp(width: usize) -> usize {
 ///
 /// The gadget is identical to the full-width construction (see [`emit_weqzero`]),
 /// merely stopping the OR-chain at bit `width-1`. `src`'s bits ≥ `width` are
-/// IGNORED — the caller guarantees they are 0 on the operand's meaningful domain
+/// IGNORED -- the caller guarantees they are 0 on the operand's meaningful domain
 /// (true for gcd2's bit-packed carriers), which the whole-domain exec confirms.
 ///
 /// `width` must be in `1..=BITS`. `src` is PRESERVED; every temp is NET-ZERO.
@@ -2606,14 +2606,14 @@ pub fn emit_weqzero_width(
 }
 
 /// Number of temp words [`emit_wlt`] / [`emit_wgt`] require: one clean borrow
-/// word for each of bits `0..BITS-1` (`BITS-1` words — the final borrow-out is
+/// word for each of bits `0..BITS-1` (`BITS-1` words -- the final borrow-out is
 /// folded straight into `dst_bit`, so no word for it) + one `na` scratch
 /// (holding `¬a_k` at bit 0) + one `one` mask word (`0x01`, to isolate a single
 /// bit under `Ccnot`). Kept at 9 so a `Lt`/`Gt` guard fits inside the word-Bennett
 /// wrapper's operand budget (2 carriers + 2 ancilla + ≤ 10 work ≤ 14 locations).
 pub const WLT_NTEMP: usize = (BITS - 1) + 2;
 
-/// `WLt(dst_bit, a, b, temps)` — `dst_bit's bit0 ^= (a < b)` (unsigned byte
+/// `WLt(dst_bit, a, b, temps)` -- `dst_bit's bit0 ^= (a < b)` (unsigned byte
 /// compare), `a`/`b` PRESERVED, every temp word NET-ZERO.
 ///
 /// # The predicate
@@ -2633,7 +2633,7 @@ pub const WLT_NTEMP: usize = (BITS - 1) + 2;
 /// uncomputed), and XOR-accumulates the three majority AND terms onto the target
 /// word. The final bit's borrow-out IS the answer, so it is XOR-accumulated
 /// straight into `dst_bit` (no chain word for it, and no reverse for that node's
-/// dst term — `dst_bit` is the output). The remaining `BITS-1` intermediate
+/// dst term -- `dst_bit` is the output). The remaining `BITS-1` intermediate
 /// borrows are clean chain words, each self-inverse, so the reverse pass clears
 /// them. `na` is uncomputed inside every node (including the final one).
 ///
@@ -2725,8 +2725,8 @@ pub fn emit_wlt_width(
     // `c` (a clean chain word, or `dst_bit` for the final bit), with `bin` = the
     // previous borrow word (`None` at bit 0 = seed 0). `a`/`b` are rotated so bit
     // `k` sits at bit 0 for the AND/Ccnot terms, then rotated back (preserved).
-    // The node XOR-accumulates onto `c` and self-inverse-uncomputes `na`, so —
-    // for the CHAIN words — the same closure, appended in reverse bit order,
+    // The node XOR-accumulates onto `c` and self-inverse-uncomputes `na`, so --
+    // for the CHAIN words -- the same closure, appended in reverse bit order,
     // clears the chain. (The final node targets `dst_bit` and is NOT reversed.)
     let emit_borrow_node = |out: &mut Vec<Instr>, k: usize, bin: Option<u8>, c: u8| {
         let rot = (k as u8) & 7;
@@ -2799,7 +2799,7 @@ pub fn emit_wlt_width(
     Ok(())
 }
 
-/// `WGt(dst_bit, a, b, temps)` — `dst_bit's bit0 ^= (a > b)` (unsigned), by the
+/// `WGt(dst_bit, a, b, temps)` -- `dst_bit's bit0 ^= (a > b)` (unsigned), by the
 /// identity `a > b ⇔ b < a`. Same temp budget ([`WLT_NTEMP`]) and net-zero /
 /// preserve contract as [`emit_wlt`].
 pub fn emit_wgt(
@@ -2827,19 +2827,19 @@ pub fn emit_wgt_width(
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// W.1 — the word-level Bennett wrapper
+// W.1 -- the word-level Bennett wrapper
 // ══════════════════════════════════════════════════════════════════════
 //
 // The word analogue of [`transcribe_bennett`]. A permutation is described by a
 // FORWARD word function [`WForward`] (each output word as a [`WValue`] of the
 // carriers) plus its inverse `bwd`; the wrapper emits the textbook reversible
 // in-place-permutation:
-//   1. O ^= fwd(x)   — XOR-accumulate each output value into a CLEAN ancilla O_i
+//   1. O ^= fwd(x)   -- XOR-accumulate each output value into a CLEAN ancilla O_i
 //                      via the Bennett-clean idiom (compute value → temp; XOR into
 //                      O_i; UNCOMPUTE temp so temp returns to 0). Keeping O a pure
 //                      XOR-accumulation is what makes step 3 cancel.
-//   2. swap carriers ↔ O   — Exch/Xchg per carrier↔ancilla pair.
-//   3. O ^= bwd(y)   — same idiom with the inverse; carriers now hold y = fwd(x),
+//   2. swap carriers ↔ O   -- Exch/Xchg per carrier↔ancilla pair.
+//   3. O ^= bwd(y)   -- same idiom with the inverse; carriers now hold y = fwd(x),
 //                      O holds x, so O ^= fwd⁻¹(y) = x → O = 0 (net-zero).
 //
 // Every carrier/ancilla/work guard from `transcribe_bennett` is carried: carrier
@@ -2886,14 +2886,14 @@ pub enum WValue {
     /// predicate; uses [`emit_weqzero_width`] → [`weqzero_ntemp`]`(width)` temps.
     EqZeroW { x: Box<WValue>, width: usize },
     /// Bit-0 boolean AND of two bit-0 predicates (A-6 W.2): `dst.bit0 =
-    /// x.bit0 ∧ y.bit0`. Realized by one `Ccnot` into the clean destination — far
+    /// x.bit0 ∧ y.bit0`. Realized by one `Ccnot` into the clean destination -- far
     /// cheaper than the `Select(x, y, 0)` idiom (no mask/one, no else-temp), which
     /// is the compactness key for gcd2's multi-predicate arm guards (`d`, etc.).
     /// Pure-XOR-top: composes into the clean ancilla without a value-temp.
     AndBit { x: Box<WValue>, y: Box<WValue> },
-    /// `guard.bit0 ? val : 0` (A-6 W.2) — a byte MASK-and-copy: broadcast `guard`'s
+    /// `guard.bit0 ? val : 0` (A-6 W.2) -- a byte MASK-and-copy: broadcast `guard`'s
     /// bit 0 to a `0x00/0xFF` mask, then `dst ^= val & mask`. Cheaper than
-    /// `Select(guard, val, 0)` (needs only ONE scratch mask word — no `one`, no
+    /// `Select(guard, val, 0)` (needs only ONE scratch mask word -- no `one`, no
     /// else-temp), so a FLAT XOR of disjoint `Masked` arm-corrections keeps the
     /// concurrent-work peak low. Pure-XOR-top.
     Masked {
@@ -2909,7 +2909,7 @@ pub enum WValue {
 }
 
 // `add`/`sub`/`xor` are builder names for the IR, not arithmetic on `WValue`
-// itself — intentionally not the std `Add`/`Sub` traits.
+// itself -- intentionally not the std `Add`/`Sub` traits.
 #[allow(clippy::should_implement_trait)]
 impl WValue {
     /// Convenience constructors.
@@ -3011,7 +3011,7 @@ pub type WorkOps = Vec<u8>;
 ///
 /// The returned `Vec<Instr>` is exactly what was appended to `out`; to uncompute,
 /// emit `invert_body(&compute)` (reverse order, each instr self-or-paired-inverse
-/// — see [`invert_instr`]). Every macro used (WSelect/WLt) is itself net-zero, so
+/// -- see [`invert_instr`]). Every macro used (WSelect/WLt) is itself net-zero, so
 /// inverting the whole compute list restores `dst` and all nested temps to 0.
 fn realize_wvalue(
     val: &WValue,
@@ -3103,7 +3103,7 @@ fn realize_wvalue(
             // TECHNIQUE 1 (guard/temp sequencing). A binary AND's concurrent-work peak
             // is `max(cost(first), 1 + cost(second))`: the first operand is realized
             // with nothing held, the second on top of the first's single held result
-            // bit. So realize the COSTLIER operand FIRST and the cheaper one SECOND —
+            // bit. So realize the COSTLIER operand FIRST and the cheaper one SECOND --
             // the cheaper leg's small is-zero/compare burst then lands on just one held
             // bit rather than forcing the costly leg's burst to sit atop a held bit.
             // This is a pure reordering of a commutative AND (same gates, same net-
@@ -3128,7 +3128,7 @@ fn realize_wvalue(
             // dst ^= val & broadcast(guard.bit0). Realize guard into a FRESH temp
             // (it is broadcast in place to a 0x00/0xFF byte mask), realize val into a
             // carrier/freed temp, then `dst ^= val & mask` (one Ccnot). Uncompute the
-            // broadcast + free. Only ONE scratch mask word beyond val — cheaper than
+            // broadcast + free. Only ONE scratch mask word beyond val -- cheaper than
             // Select(guard,val,0). `guard` must be bit-0-only (a predicate); the
             // broadcast `~m; m+1` = `0 - guard.bit0` assumes higher bits are 0.
             let gmark = *next;
@@ -3180,7 +3180,7 @@ fn realize_wvalue(
 }
 
 /// Estimate the CONCURRENT internal scratch a sub-value needs when realized into a
-/// temp — used only to ORDER the two legs of an `AndBit` (Technique 1: realize the
+/// temp -- used only to ORDER the two legs of an `AndBit` (Technique 1: realize the
 /// costlier leg first). A rough upper bound is sufficient; it never affects
 /// correctness, only the schedule. A bare carrier/const needs 0; an is-zero/compare
 /// needs its macro's temp count; a compound value takes 1 (its value temp) plus its
@@ -3225,7 +3225,7 @@ fn resolve_var(i: usize, carriers: &[u8]) -> Result<u8, SynthError> {
 
 /// Yield an OPERAND for a sub-value, plus its (compute-body, saved-mark) for
 /// uncompute+free. A bare `WValue::Var(i)` returns the carrier operand directly
-/// with an EMPTY body (nothing to uncompute, mark unchanged) — the carrier is
+/// with an EMPTY body (nothing to uncompute, mark unchanged) -- the carrier is
 /// read-only and preserved. Any other shape is realized into a freshly-allocated
 /// SCRATCH temp; the returned body/mark let the caller uncompute it and restore
 /// `next` (freeing the temp for reuse), keeping concurrent temp usage minimal.
@@ -3251,14 +3251,14 @@ fn operand_or_temp(
 /// carrier) is a no-op. `mark` is where `next` stood BEFORE the temp was alloc'd.
 fn free_temp(body: &[Instr], mark: usize, next: &mut usize, out: &mut Vec<Instr>) {
     if body.is_empty() {
-        return; // bare carrier — nothing allocated, nothing to uncompute
+        return; // bare carrier -- nothing allocated, nothing to uncompute
     }
     out.extend(invert_body(body));
     *next = mark;
 }
 
 /// Allocate one clean work word, advancing `next` and bumping the concurrent-use
-/// high-water mark `peak` (tracked because temps are FREED — the true peak is the
+/// high-water mark `peak` (tracked because temps are FREED -- the true peak is the
 /// max concurrent, not the total consumed).
 fn alloc_work(work: &[u8], next: &mut usize, peak: &mut usize) -> Result<u8, SynthError> {
     let w = *work.get(*next).ok_or_else(|| SynthError::MalformedSpec {
@@ -3297,7 +3297,7 @@ fn alloc_work_n(
 }
 
 /// The inverse of one emitted instruction. Only the instructions [`realize_wvalue`]
-/// and the macros emit are handled — every one is either self-inverse or has an
+/// and the macros emit are handled -- every one is either self-inverse or has an
 /// explicit paired inverse. A gate outside that set is a bug (unreachable).
 fn invert_instr(ins: Instr) -> Instr {
     match ins {
@@ -3319,7 +3319,7 @@ fn invert_instr(ins: Instr) -> Instr {
     }
 }
 
-/// Reverse a body and invert each instruction — the exact uncompute of a
+/// Reverse a body and invert each instruction -- the exact uncompute of a
 /// compute list built only from [`realize_wvalue`]/macro gates.
 fn invert_body(body: &[Instr]) -> Vec<Instr> {
     body.iter().rev().map(|&ins| invert_instr(ins)).collect()
@@ -3328,12 +3328,12 @@ fn invert_body(body: &[Instr]) -> Vec<Instr> {
 /// Whether a top-level [`WValue`] realizes touching its destination ONLY via
 /// XOR-accumulation (`Xor`/`Xori`/`Ccnot` into `dst`), never mutating it with
 /// `Add`/`Sub`/`Rotl`/`Rotr`. Such values can be realized STRAIGHT into the clean
-/// ancilla `O` (which starts at 0), skipping the value-temp — keeping `O` a pure
+/// ancilla `O` (which starts at 0), skipping the value-temp -- keeping `O` a pure
 /// XOR-accumulation, exactly the invariant the step-3 backward pass needs.
 ///
-/// - `Var`/`Const` write `O` with a single `Xor`/`Xori` — safe.
+/// - `Var`/`Const` write `O` with a single `Xor`/`Xori` -- safe.
 /// - `Lt`/`Gt`/`Select` realize ALL their operands into fresh temps (or bare
-///   carriers) and touch `O`/`dst` only through `Ccnot`/`Xor` accumulation — safe
+///   carriers) and touch `O`/`dst` only through `Ccnot`/`Xor` accumulation -- safe
 ///   regardless of operand shape.
 /// - `Add`/`Sub`/`Rotl`/`Rotr` (and `Xor`, whose FIRST operand is realized into
 ///   `dst` and may itself be arithmetic) mutate `dst` non-XOR-linearly → they MUST
@@ -3405,7 +3405,7 @@ pub fn transcribe_word_bennett(
 }
 
 /// Like [`transcribe_word_bennett`] but also returns the PEAK concurrent work-word
-/// count (the max scratch words live at once — the number the widen-state / free-
+/// count (the max scratch words live at once -- the number the widen-state / free-
 /// operand budget must cover; reported at W.2 for gcd2).
 pub fn transcribe_word_bennett_peak(
     fwd: &WForward,
@@ -3417,13 +3417,13 @@ pub fn transcribe_word_bennett_peak(
     transcribe_word_bennett_peak_impl(fwd, bwd, carrier_ops, out_ancilla, work_ops)
 }
 
-/// MEASUREMENT-ONLY entry — DO NOT USE for execution / ROM emission. Identical to
+/// MEASUREMENT-ONLY entry -- DO NOT USE for execution / ROM emission. Identical to
 /// [`transcribe_word_bennett_peak`] except the operand-legality cap is RELAXED
 /// (thread-local, RAII-scoped) so indices ≥ 16 (the future widen-state scratch
 /// slots and beyond) are permitted. This lets an over-budget body (e.g. word-level
 /// gcd2, whose peak concurrent work far exceeds the 6 free machine work operands)
 /// actually PLACE so its `body.len()` / peak can be COUNTED. The emitted body reads
-/// operand indices ≥ 16 that `exec_instr` panics on — it is a length/peak
+/// operand indices ≥ 16 that `exec_instr` panics on -- it is a length/peak
 /// measurement artifact, never a runnable program. The relaxation is scoped to this
 /// call: production behavior of every other entry is unchanged.
 pub fn transcribe_word_bennett_peak_measure(
@@ -3503,7 +3503,7 @@ fn transcribe_word_bennett_peak_impl(
     let mut fwd_slots = check_slots(fwd, "fwd")?;
     let mut bwd_slots = check_slots(bwd, "bwd")?;
     // fwd and bwd must touch the SAME carriers: an unlisted carrier is a pure
-    // identity pass-through (held in place — no ancilla, no swap). If a carrier is
+    // identity pass-through (held in place -- no ancilla, no swap). If a carrier is
     // active in one direction only, the swap/uncompute would desynchronize.
     fwd_slots.sort_unstable();
     bwd_slots.sort_unstable();
@@ -3544,7 +3544,7 @@ fn transcribe_word_bennett_peak_impl(
     let mut peak = 0usize;
 
     // Step 1: O ^= fwd(x)  (each active slot's clean ancilla XOR-accumulates the
-    // forward value; UNLISTED carriers are identity — untouched, held in place).
+    // forward value; UNLISTED carriers are identity -- untouched, held in place).
     for (slot, val) in &fwd.outputs {
         emit_clean_accumulate(
             ancilla_of(*slot),
@@ -3577,7 +3577,7 @@ fn transcribe_word_bennett_peak_impl(
 }
 
 /// Reject a [`WValue`] that reads a carrier index ≥ `n` (a permutation output
-/// must be a function of the carriers alone — the MAJOR-1 analogue).
+/// must be a function of the carriers alone -- the MAJOR-1 analogue).
 fn check_wvalue_vars(val: &WValue, n: usize, which: &str) -> Result<(), SynthError> {
     match val {
         WValue::Var(i) => {

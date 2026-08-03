@@ -123,7 +123,7 @@ fn check_pattern(
             // Check label args against the inferred carrier type.
             if let Some((_, carrier)) = labels.iter().find(|(n, _)| n == &name.text) {
                 match args.len() {
-                    0 => { /* nullary label — carrier is unit, nothing to check */ }
+                    0 => { /* nullary label -- carrier is unit, nothing to check */ }
                     1 => {
                         check_pattern(&args[0], carrier, env, side, clause_index, labels, false, var_types, diags);
                     }
@@ -135,7 +135,7 @@ fn check_pattern(
         }
         Pattern::Ctor(name, args, _) => {
             let Some(ctor_info) = env.ctor(&name.text) else {
-                // Unknown ctor — Names (T0101) already reported this; skip.
+                // Unknown ctor -- Names (T0101) already reported this; skip.
                 return;
             };
             // The ctor must belong to the type at this position.
@@ -150,7 +150,7 @@ fn check_pattern(
             // Recursively check the ctor's arguments against its payload type.
             match (&ctor_info.payload, args.as_slice()) {
                 (None, []) => {
-                    // Nullary ctor applied to no args — fine.
+                    // Nullary ctor applied to no args -- fine.
                 }
                 (Some(payload_ty), [arg]) => {
                     check_pattern(arg, payload_ty, env, side, clause_index, labels, false, var_types, diags);
@@ -211,7 +211,7 @@ fn check_curried_args(
         check_pattern(&args[0], ty_a, env, side, clause_index, labels, false, var_types, diags);
         check_curried_args(&args[1..], ty_b, env, side, clause_index, labels, var_types, diags);
     } else {
-        // More args than product components — arity error.
+        // More args than product components -- arity error.
         diags.push(
             Diagnostic::new(Code::T0102, args[0].span())
                 .with_side(side)
@@ -306,7 +306,7 @@ mod tests {
 
     #[test]
     fn carrier_not_inferable_emits_t0102() {
-        // H1: $go's carrier is never pinned — must not silently vanish.
+        // H1: $go's carrier is never pinned -- must not silently vanish.
         let src = "type Bit = O | I\n\
                     iso f : Bit <-> Bit\n\
                     | $go x <-> $go x\n\
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn nested_label_emits_t0102() {
-        // H2: $go inside a tuple is nested — must be rejected.
+        // H2: $go inside a tuple is nested -- must be rejected.
         let src = "type Bit = O | I\n\
                     iso g : (Bit, Bit) <-> (Bit, Bit)\n\
                     | (a, $go b) <-> (a, $go b)\n\

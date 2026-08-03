@@ -6,11 +6,11 @@
 //!
 //! FAST tier (default gate):
 //!   F1: large-|u| fast-exit Trace now compiles (was WCET-rejected under |u|+1)
-//!   F2: k_exact ≤ |u|+1 always (never looser) — property over several Traces
-//!   F3: soundness — run_on_cpu_fast == eval, k_max is correct
+//!   F2: k_exact ≤ |u|+1 always (never looser) -- property over several Traces
+//!   F3: soundness -- run_on_cpu_fast == eval, k_max is correct
 //!
 //! HEAVY tier (#[ignore], advisor pre-merge):
-//!   H1: run_on_cpu (real system_step) == eval — authoritative round-trip
+//!   H1: run_on_cpu (real system_step) == eval -- authoritative round-trip
 
 use std::collections::BTreeMap;
 use theseus_core::prim::{enumerate_values, PrimDef};
@@ -73,7 +73,7 @@ fn build_walk_body() -> (Iso, Type, Type) {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// F1: large-|u| fast-exit Trace — was REJECTED under |u|+1, now COMPILES
+// F1: large-|u| fast-exit Trace -- was REJECTED under |u|+1, now COMPILES
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -97,7 +97,7 @@ fn f1_large_u_fast_exit_compiles() {
     assert_eq!(old_wcet, 334);
     assert!(old_wcet > 256, "old WCET {old_wcet} should exceed 256 cap");
 
-    // A-6.4 widen-PC: the 334 > 256 rejection is ALSO lifted structurally —
+    // A-6.4 widen-PC: the 334 > 256 rejection is ALSO lifted structurally --
     // the PC address space is now 2^16, so even without exact-k_max a WCET
     // of 334 fits (see tests/widen_pc_payoff.rs for a program that actually
     // runs at B > 256). Here exact-k_max additionally shrinks it to 24.
@@ -125,7 +125,7 @@ fn f1_large_u_fast_exit_compiles() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// F2: k_exact ≤ |u|+1 always — never looser than the old bound
+// F2: k_exact ≤ |u|+1 always -- never looser than the old bound
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -160,14 +160,14 @@ fn f2_k_exact_never_looser() {
         let k_fallback = u_card + 1;
         assert!(
             k_max <= k_fallback,
-            "{name}: k_max={k_max} > |u|+1={k_fallback} — exact-k_max is LOOSER than fallback"
+            "{name}: k_max={k_max} > |u|+1={k_fallback} -- exact-k_max is LOOSER than fallback"
         );
         eprintln!("{name}: k_max={k_max} ≤ |u|+1={k_fallback} ✓");
     }
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// F3: soundness — k_max is correct, run_on_cpu_fast == eval
+// F3: soundness -- k_max is correct, run_on_cpu_fast == eval
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -225,11 +225,11 @@ fn f3_large_u_id_body_soundness() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// H1: HEAVY — real system_step authority (run_on_cpu == eval)
+// H1: HEAVY -- real system_step authority (run_on_cpu == eval)
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
-#[ignore = "HEAVY: real system_step authority — run_on_cpu (step-iso evaluator) == eval"]
+#[ignore = "HEAVY: real system_step authority -- run_on_cpu (step-iso evaluator) == eval"]
 fn h1_large_u_id_body_real_cpu() {
     // Flat(5) Id-body Trace with exact-k_max (k_max=2): run on the REAL
     // step-iso CPU (system_step). If k_max were unsound (too small), the
@@ -251,7 +251,7 @@ fn h1_large_u_id_body_real_cpu() {
 }
 
 #[test]
-#[ignore = "HEAVY: mde_walk on real system_step — existing variable-T Trace still sound"]
+#[ignore = "HEAVY: mde_walk on real system_step -- existing variable-T Trace still sound"]
 fn h1_mde_walk_real_cpu() {
     let (body, u_ty, _carrier) = build_walk_body();
     let bit = Type::sum(Type::One, Type::One);

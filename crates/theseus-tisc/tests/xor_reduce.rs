@@ -96,7 +96,7 @@ fn xor_prim() -> Iso {
         let bytes = value_to_leaf_bytes_pub(v, &ty);
         let a = bytes[0];
         let b_val = bytes[1];
-        // backward of (a, a^b) is (a, b) — i.e. same operation: (a, c) ↦ (a, a^c)
+        // backward of (a, a^b) is (a, b) -- i.e. same operation: (a, c) ↦ (a, a^c)
         let out_bytes = vec![a, a ^ b_val];
         let (out_val, _) = value_from_leaf_bytes_pub(&out_bytes, &ty);
         backward.insert(v.clone(), out_val);
@@ -342,7 +342,7 @@ fn t3_real_cpu_oracle() {
     let samples = vec![
         make_input(1, 1, 0, 1, 0, 1), // k=1, idx=1, acc=1, data=0, arr=[0,1]; data≠arr[1]=1
         make_input(2, 1, 1, 1, 0, 0), // k=2, idx=1, acc=1
-        make_input(2, 1, 0, 1, 1, 0), // k=2, idx=1, acc=1, data=0, arr=[1,0] (data==arr[1]=0 — reduce still visible via acc XOR); sample 1 covers data≠arr[idx]
+        make_input(2, 1, 0, 1, 1, 0), // k=2, idx=1, acc=1, data=0, arr=[1,0] (data==arr[1]=0 -- reduce still visible via acc XOR); sample 1 covers data≠arr[idx]
     ];
     for input in &samples {
         let expected = eval_xor_reduce(d, input);
@@ -537,9 +537,9 @@ fn t5_varying_address_exact_shape() {
         };
         assert_eq!(d_r_check, d_r);
 
-        // impl-review #1: a_r must be the ACCUMULATOR register — distinct from the address
+        // impl-review #1: a_r must be the ACCUMULATOR register -- distinct from the address
         // reg (ra) and the data reg (d_r). Without this, T5 alone would accept an
-        // acc-untouched "xor idx into data" slice (a_r==ra) — compositionally killed by
+        // acc-untouched "xor idx into data" slice (a_r==ra) -- compositionally killed by
         // T2/T4, but pin it here too so T5 has teeth in isolation.
         assert_ne!(
             a_r, ra,
@@ -554,7 +554,7 @@ fn t5_varying_address_exact_shape() {
         assert_eq!(
             instrs[pos1 + 2],
             Instr::Xor { rd: d_r, rs: a_r },
-            "copy {copy_idx}: F3-1 — Xor must be Xor{{rd:{d_r}(data), rs:{a_r}(acc)}}"
+            "copy {copy_idx}: F3-1 -- Xor must be Xor{{rd:{d_r}(data), rs:{a_r}(acc)}}"
         );
 
         // instrs[pos1+3] = Exch{a_r, d_r} (same as pos1+1)
@@ -574,7 +574,7 @@ fn t5_varying_address_exact_shape() {
         // Swapbr closes the body (pins body_len = 6).
         assert!(
             matches!(instrs[pos2 + 2], Instr::Swapbr { .. }),
-            "copy {copy_idx}: body must be exactly 6 instrs — Xori followed by closing Swapbr, got {:?}",
+            "copy {copy_idx}: body must be exactly 6 instrs -- Xori followed by closing Swapbr, got {:?}",
             instrs[pos2 + 2]
         );
     }
@@ -636,7 +636,7 @@ fn t6a_trace_histogram() {
     }
 }
 
-// ── T6b: park-tax histogram PRICING (joules — #[ignore]) ───────────
+// ── T6b: park-tax histogram PRICING (joules -- #[ignore]) ───────────
 
 #[test]
 #[ignore]
@@ -675,7 +675,7 @@ fn t6b_park_tax_pricing() {
     }
 }
 
-// ── T7: closure — MexchReg stays bus-quiescent (#[ignore]) ──────────
+// ── T7: closure -- MexchReg stays bus-quiescent (#[ignore]) ──────────
 
 #[test]
 #[ignore]

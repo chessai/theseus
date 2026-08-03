@@ -2,11 +2,11 @@
 
 **Status:** Accepted
 
-## Context — energy is (almost) static
+## Context -- energy is (almost) static
 Dual-rail: one rail high per valid signal regardless of value. Linearity:
 no data fanout. Unrolled loops: every value traverses every stage. So
 per-run energy is **data-independent to first order**, and the primary
-energy artifact is a *static compiler report* — a sum over cells and
+energy artifact is a *static compiler report* -- a sum over cells and
 occupied ticks of DB-characterized energies. The type system's linearity
 bought predictable physics; dynamic accounting demotes to validation.
 
@@ -15,12 +15,12 @@ bought predictable physics; dynamic accounting demotes to validation.
   (CV²·(RC/t_ramp)-scaled + leakage·t + residual) over (ramp, load,
   flavor, body). Interpolation within swept range only; **extrapolation
   is a hard error**. Fit adequacy is ledger TH-E3, checked at DB build.
-- **C3.2** Composition is additive — **declared assumption** (TH-E1,
+- **C3.2** Composition is additive -- **declared assumption** (TH-E1,
   empirical): total = Σ instances × occupied ticks, loads from actual
   netlist fanout. Validation battery: annotated prediction vs whole-block
   ngspice on every M3a bench design. Budget: absolute ±15%; **log-log
   slope of E vs period within ±0.1 of the theoretical −1** (canonical
-  axes per ADR-0023) — slope fidelity is the hard requirement (claims
+  axes per ADR-0023) -- slope fidelity is the hard requirement (claims
   are comparative and scaling-shaped). Fallback if
   additivity misses badly: characterize composite structures (DB
   granularity changes, architecture doesn't).
@@ -42,10 +42,10 @@ bought predictable physics; dynamic accounting demotes to validation.
   tracked optimization metric (closes the loop with C2.2).
 - **C3.6** Reports are first-class emissions (RON + plot-ready; the
   three-curve money-plot generator is the M3a acceptance artifact).
-  Bench energy reports are committed golden files — **energy regressions
+  Bench energy reports are committed golden files -- **energy regressions
   are reviewable PR diffs**. Fast tier recomputes static reports;
   nightly runs the TH-E1/E2 battery against SPICE.
 - **C3.7** Conservation cross-check independent of SPICE: the
   phased-sim's per-node ledger must sum to source-side totals within
-  tolerance — composition bugs fail bookkeeping before physics is
+  tolerance -- composition bugs fail bookkeeping before physics is
   consulted.

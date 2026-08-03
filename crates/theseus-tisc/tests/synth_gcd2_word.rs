@@ -1,27 +1,27 @@
-//! A-6 W.2 — the PAYOFF: gcd2 as a WORD-LEVEL forward circuit, synthesized via
+//! A-6 W.2 -- the PAYOFF: gcd2 as a WORD-LEVEL forward circuit, synthesized via
 //! the word-level Bennett wrapper, and MEASURED against the bit-level BDD/ANF
 //! results (BDD 5408/27094, ANF 15148/75794).
 //!
 //! DETERMINISTIC construction (no search, no Python at runtime): gcd2's forward
 //! rule and its (analytically-derived, table-verified) inverse are each expressed
-//! as a `WForward` — nested `WValue::Select` decision trees over WIDTH-AWARE word
+//! as a `WForward` -- nested `WValue::Select` decision trees over WIDTH-AWARE word
 //! guards (`EqZeroW`/`LtW`/`GtW` reducing only the meaningful low bits: a,b = 2
 //! bits, h = 3 bits) plus real word arithmetic (A4's `a-b` = one `WValue::Sub`).
 //!
 //! Verification tiers (each with teeth):
-//!   * WValue INTERPRETER on 256 states — fwd tree == `gcd2_hist_bytes`, bwd tree
+//!   * WValue INTERPRETER on 256 states -- fwd tree == `gcd2_hist_bytes`, bwd tree
 //!     == the inverse table, and bwd∘fwd = id, BEFORE synthesizing.
 //!   * WHOLE-DOMAIN EXEC (`exec_instr`) of the synthesized single-output bodies on
-//!     all 256 states — each byte lands at its rule value, the other carriers pass
+//!     all 256 states -- each byte lands at its rule value, the other carriers pass
 //!     through, and every ancilla/work word is net-zero (for bytes whose peak fits).
-//!   * DIFFERENTIAL cross-check — the word-level fwd WForward == the INDEPENDENT
+//!   * DIFFERENTIAL cross-check -- the word-level fwd WForward == the INDEPENDENT
 //!     ANF spec (`table_to_regtransfer`, a separate codepath) on all 256 states.
 //!
 //! FINDING (headline): gcd2's word-level forward function has 6 real arms with a
 //! degree-3-ish guard `d = a≠b & a≠0 & b≠0` that needs two concurrent width-2
 //! is-zero reductions; realized by the (depth-linear-in-concurrent-work) word
 //! Bennett realizer, each output byte peaks at ~10 work words. With 4 carriers + 4
-//! ancilla that is 18 operands — the word body needs SUBSTANTIAL widen-state (+4),
+//! ancilla that is 18 operands -- the word body needs SUBSTANTIAL widen-state (+4),
 //! NOT the "modest" amount the A-6(W) design projected (the design assumed guard
 //! words could be sequenced/shared; the tree realizer holds them concurrently).
 
@@ -34,7 +34,7 @@ use theseus_tisc::synth::{
 };
 use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
-// ── The pinned GCD rule (copied verbatim from `synth_gcd2.rs` — test DATA, not a
+// ── The pinned GCD rule (copied verbatim from `synth_gcd2.rs` -- test DATA, not a
 //    re-derivation). Carrier byte order [tag, a, b, h]. ────────────────────────
 fn gcd2_hist_bytes(bb: &mut [u8]) {
     let (t, a, b, h) = (bb[0], bb[1], bb[2], bb[3]);
@@ -176,10 +176,10 @@ fn gcd2_inv_bytes(y: [u8; 4]) -> [u8; 4] {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// WValue interpreter — evaluate a WForward on concrete carrier bytes. Semantics
+// WValue interpreter -- evaluate a WForward on concrete carrier bytes. Semantics
 // MATCH the ISA gates the synthesizer emits (8-bit wrap arithmetic/rotates;
 // width-aware predicates reduce only the low `width` bits, exactly as the macros
-// do — sound because carriers' high bits are 0 on the canonical domain).
+// do -- sound because carriers' high bits are 0 on the canonical domain).
 // ══════════════════════════════════════════════════════════════════════
 
 fn eval_wvalue(v: &WValue, c: &[u8]) -> u8 {
@@ -255,7 +255,7 @@ fn notp(p: WValue) -> WValue {
     WValue::xor(p, k(1))
 }
 // Boolean AND via the one-Ccnot AndBit primitive (a single gate, NOT a Select
-// level) — this keeps compound arm guards from DOUBLING the decision-tree depth
+// level) -- this keeps compound arm guards from DOUBLING the decision-tree depth
 // (each Select-based `and2` would add a full mask/one/broadcast level).
 fn and2(p: WValue, q: WValue) -> WValue {
     WValue::andbit(p, q)
@@ -292,7 +292,7 @@ fn peq(ca: u8, cb: u8) -> WValue {
     and2(eq(a(), ca, 2), eq(b(), cb, 2))
 }
 
-// derived guards (each a fresh subtree — WForward outputs are independent, and
+// derived guards (each a fresh subtree -- WForward outputs are independent, and
 // `emit_clean_accumulate` restarts scratch per output, so guards recomputed per
 // byte cost body length but NOT peak work).
 fn g_t1() -> WValue {
@@ -397,10 +397,10 @@ fn yr_h() -> WValue {
 
 // ── the forward WForward: BALANCED Select trees (shallow → low concurrent-work
 //    peak). Each byte is built by `fwd_byte` from that byte's per-arm values; the
-//    control structure is shared (recomputed per byte — free for peak). Arms:
+//    control structure is shared (recomputed per byte -- free for peak). Arms:
 //    A1, A2scat, A3zE, A3exit, A4, Yremap, id. The t==0 side is split by h-range
 //    (hge4 | h==1 | h∈{2,3} | h==0) to bound depth. ──────────────────────────────
-// Disjoint (mutually-exclusive) arm predicates — the exact firing condition of
+// Disjoint (mutually-exclusive) arm predicates -- the exact firing condition of
 // each arm, so their XOR-correction terms don't overlap.
 // Each predicate ANDs its factors with the COSTLIEST realized first (so it
 // collapses to one temp before the cheaper factors are computed) → lower peak.
@@ -484,7 +484,7 @@ fn gcd2_bwd_wforward() -> WForward {
     let h1 = || eq(h(), 1, 3);
     let h0 = || eqz(h(), 3);
 
-    // iYremap 8-entry LUT keyed on (a,b,h) — nested selects. Output per byte.
+    // iYremap 8-entry LUT keyed on (a,b,h) -- nested selects. Output per byte.
     // We split by (a,b) group then by h∈{2,3}.
     // (1,3): h2→(2,1,4) h3→(2,1,5) ; (3,1): h2→(2,1,6) h3→(2,1,7)
     // (2,3): h2→(1,2,4) h3→(1,2,5) ; (3,2): h2→(1,2,6) h3→(1,2,7)
@@ -525,7 +525,7 @@ fn gcd2_bwd_wforward() -> WForward {
         _ => unreachable!(),
     };
 
-    // Disjoint INVERSE-arm predicates (each arm's exact firing set — see
+    // Disjoint INVERSE-arm predicates (each arm's exact firing set -- see
     // gcd2_inv_bytes). Mutually exclusive, so their XOR-corrections don't overlap.
     // Costliest factor first (collapses before cheaper factors) → lower peak.
     let p_ia1 = || and2(h1(), notp(g_t1())); // t=0 & h==1
@@ -743,7 +743,7 @@ fn andbit_masked_exec_through_bennett() {
 }
 
 /// STEP B verification: the forward WForward tree evaluates to `gcd2_hist_bytes`
-/// on all 256 states (via the WValue interpreter) — BEFORE synthesizing.
+/// on all 256 states (via the WValue interpreter) -- BEFORE synthesizing.
 #[test]
 fn gcd2_fwd_wforward_matches_rule_256() {
     let fwd = gcd2_fwd_wforward();
@@ -818,8 +818,8 @@ fn gcd2_word_synthesize_measure_and_verify() {
     //   step1: Σ_i O_i ^= fwd_i(x)   ‖ step2: 4 swaps   ‖ step3: Σ_i O_i ^= bwd_i(y)
     // where each byte i's fwd/bwd accumulate reads ONLY the carriers, so combined
     // body.len() = Σ_i (single-output body length) and combined work peak = max_i.
-    // Each byte is synthesized alone (1 ancilla) and — where its peak fits the 9
-    // free single-output work words — EXEC-VERIFIED 256/256 (its byte lands at
+    // Each byte is synthesized alone (1 ancilla) and -- where its peak fits the 9
+    // free single-output work words -- EXEC-VERIFIED 256/256 (its byte lands at
     // fwd_i, the other carriers pass through, all work net-zero). For a byte whose
     // peak EXCEEDS 9, the true peak is recovered from the wrapper's pool diagnostic
     // and reported (it drives the widen-state requirement). See `synth_and_exec_wide`.
@@ -862,7 +862,7 @@ fn gcd2_word_synthesize_measure_and_verify() {
     );
     if total_operands <= 14 {
         eprintln!(
-            "VERDICT: FITS the 14-operand budget (peak {peak} ≤ 6 free work) — NO widen-state"
+            "VERDICT: FITS the 14-operand budget (peak {peak} ≤ 6 free work) -- NO widen-state"
         );
     } else {
         eprintln!(
@@ -873,12 +873,12 @@ fn gcd2_word_synthesize_measure_and_verify() {
         );
     }
     let exec = 256; // each byte exec-verified 256/256 above
-    eprintln!("EXEC-VERIFY: {exec}/256 per byte — carriers correct AND ancilla+work net-zero");
+    eprintln!("EXEC-VERIFY: {exec}/256 per byte -- carriers correct AND ancilla+work net-zero");
 
     // DIFFERENTIAL cross-check vs the INDEPENDENT ANF spec (Möbius transform of
-    // the rule via `table_to_regtransfer` — an entirely separate codepath from the
+    // the rule via `table_to_regtransfer` -- an entirely separate codepath from the
     // hand-authored word tree). The BDD/ANF gcd2 bodies themselves cannot run
-    // under `exec_instr` (they need widen-state / out-of-range node lines — the
+    // under `exec_instr` (they need widen-state / out-of-range node lines -- the
     // wall A-6.2/D.2 documented), so the independent oracle is the ANF spec
     // EVALUATED per output bit (which the BDD body would also realize). The task
     // permits "exec agreement on 256, OR equiv where operands fit"; here we use
@@ -886,7 +886,7 @@ fn gcd2_word_synthesize_measure_and_verify() {
     // We cross-check per byte: for each output byte, its single-output word body's
     // carrier output == the ANF spec's byte value on all 256 states.
     // The independent ANF spec (a fully separate codepath) is evaluated per bit and
-    // cross-checked against the word-level fwd WForward (via the interpreter — which
+    // cross-checked against the word-level fwd WForward (via the interpreter -- which
     // the exec-verify above already showed AGREES with the emitted body wherever a
     // byte fits). This proves the word tree ≡ the ANF/BDD path independently.
     let anf = table_to_regtransfer(gcd2_fwd_bytes, &SPEC_LEAVES, &WIDTHS);
@@ -904,7 +904,7 @@ fn gcd2_word_synthesize_measure_and_verify() {
     eprintln!("DIFFERENTIAL: word WForward == independent ANF spec on {diff_pass}/256");
 }
 
-/// A-6.4 SIZING MEASUREMENT (measurement-only, NOT executable) — place the COMBINED
+/// A-6.4 SIZING MEASUREMENT (measurement-only, NOT executable) -- place the COMBINED
 /// 4-carrier word-level gcd2 Bennett body under a RELAXED operand cap (permitting
 /// the future widen-state scratch slots and beyond) so its `body.len()` and
 /// peak_work can be COUNTED. The combined body's peak concurrent work far exceeds
@@ -913,7 +913,7 @@ fn gcd2_word_synthesize_measure_and_verify() {
 /// legality bound; the body reads operand indices ≥ 16 that `exec_instr` panics on,
 /// so it is a SIZING artifact, never a runnable program. Drives the A-6.4 widen
 /// budget B = 4 + 5·(len+10). HONEST FINDING: this flat XOR-correction realization
-/// is ~778k instrs / peak 23 — LARGER than the bit-level BDD/ANF, not smaller (the
+/// is ~778k instrs / peak 23 -- LARGER than the bit-level BDD/ANF, not smaller (the
 /// earlier "peak 10 / len 0" figure was an allocator-first-failure artifact, not a
 /// real placement).
 #[test]
@@ -980,7 +980,7 @@ fn gcd2_word_body_length_measurement() {
         if total_operands <= 18 {
             "YES"
         } else {
-            "NO — needs > 18"
+            "NO -- needs > 18"
         }
     );
 
@@ -1045,7 +1045,7 @@ fn synth_and_exec_wide(slot: usize, sf: &WForward, sb: &WForward) -> (usize, usi
             // machine-realizable for this byte (needs > 9 work); report peak only.
             let msg = format!("{e}");
             let peak = parse_peak(&msg).unwrap_or(0);
-            eprintln!("  byte {slot}: OVER single-output budget — {msg} → peak={peak}");
+            eprintln!("  byte {slot}: OVER single-output budget -- {msg} → peak={peak}");
             (0, peak)
         }
     }

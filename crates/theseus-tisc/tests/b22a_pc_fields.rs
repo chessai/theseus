@@ -1,16 +1,16 @@
-//! B-2.2a — the 2-PC-field builders generalized to `pc_fields()`.
+//! B-2.2a -- the 2-PC-field builders generalized to `pc_fields()`.
 //!
 //! This slice makes `fetch_fields`/`FetchWires`, `pc_add_br_with`/
 //! `pc_inc_with` field lists + wire-counts, and `encode_with`/`decode_with`
 //! PC marshalling all driven by `layout.pc_fields()` (= `w_pc / w_ctl`; 2 at
 //! the default w_pc=16, 1 at w_pc=8), plus threads the `fetch_addr_bits`
-//! clamp to `layout.w_pc`. Nothing derives w_pc=8 in the run path yet — this
+//! clamp to `layout.w_pc`. Nothing derives w_pc=8 in the run path yet -- this
 //! is the pure enabling refactor. Actual w_pc=8 run-correctness is B-2.2b.
 //!
 //! **The primary byte-identity guard lives elsewhere:** the
 //! `poc_step_net_bit_identical_across_type_repr` golden in `tests/energy.rs`
 //! (also `b21c_data_word.rs`) lowers `step(Layout::default())` and asserts a
-//! fixed netlist fingerprint — it proves the DEFAULT (w_pc=16) path is
+//! fixed netlist fingerprint -- it proves the DEFAULT (w_pc=16) path is
 //! unchanged. This file proves the NEW capability: a hand-built w_pc=8 layout
 //! is now well-formed (type-checks + lowers) and drops the PC_hi field.
 
@@ -70,7 +70,7 @@ fn w_pc8_drops_pc_hi_field() {
 // ══════════════════════════════════════════════════════════════════════
 // 2. `step_with(&layout_w_pc8, rom)` TYPE-CHECKS (the well-formedness proof).
 //    `type_of` walks the whole step iso and verifies every Seq/Times/etc.
-//    composition's boundary types agree — this is exactly where a bad PC
+//    composition's boundary types agree -- this is exactly where a bad PC
 //    field index or a wire-count/field-list mismatch (the R-1 misroute) would
 //    surface, without paying for a full `lower_iso`.
 // ══════════════════════════════════════════════════════════════════════
@@ -129,12 +129,12 @@ fn w_pc8_encode_decode_roundtrip() {
 // ══════════════════════════════════════════════════════════════════════
 //
 // `pc_fields()` is floor division, so `w_pc=12` (w_ctl=8) gives pc_fields()=1
-// but np=12 — the PC adder would route PC bits 8..11 onto BR/operand wires
+// but np=12 -- the PC adder would route PC bits 8..11 onto BR/operand wires
 // (silent corruption). The pre-refactor code panicked loudly (the
 // unconditional `pc_hi_field()` addressed one-past-the-last field). The
 // `assert_pc_carrier` guard restores that loud failure. This reproduces the
 // finding: without the guard the builder silently emits a corrupt adder; with
-// it, it panics. (No valid layout — w_pc ∈ {8,16} — trips it.)
+// it, it panics. (No valid layout -- w_pc ∈ {8,16} -- trips it.)
 
 #[test]
 #[should_panic(expected = "PC carrier invariant violated")]
@@ -158,7 +158,7 @@ fn major1_non_byte_multiple_w_pc_panics_inc() {
     let _ = theseus_tisc::step::pc_inc_with(&bad);
 }
 
-// And a w_pc=8 layout (a VALID multiple) must NOT panic — the guard is not
+// And a w_pc=8 layout (a VALID multiple) must NOT panic -- the guard is not
 // over-eager.
 #[test]
 fn valid_w_pc8_builders_do_not_panic() {

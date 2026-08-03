@@ -42,7 +42,7 @@ types.
 ```
 
 `assocr⁺ = sym assocl⁺`, `assocrˣ = sym assoclˣ`, `uniti = sym unite` (each
-monoid), and `factor = sym distrib` — they are named for readability but are
+monoid), and `factor = sym distrib` -- they are named for readability but are
 adjoints of the preceding form, not independent primitives. Full-Π's `0`-
 absorption isos (`0 × a ↔ 0`) are omitted: the v0.1 surface (ADR-0017) never
 produces an empty product, and `0`-absorption is a canonicalizer identity
@@ -106,11 +106,11 @@ Each core iso `f : a ↔ b` denotes a total bijection `eval f : ⟦a⟧ → ⟦b
   eval distrib (v, inl w)         = inl (v, w)
   eval distrib (v, inr x)         = inr (v, x)                  -- factor = its inverse
   eval (prim p)      v            = forward_p v                 -- registry forward function
-  eval (trace f)     v            = …                           -- deferred with labels
+  eval (trace f)     v            = ...                           -- deferred with labels
 ```
 
 Because every clause is a bijection, `eval (sym f) = (eval f)⁻¹` holds
-definitionally — the backward run is the same term read through `†`, and no
+definitionally -- the backward run is the same term read through `†`, and no
 separate inverse interpreter is needed. This is the operational side of the
 coverage-checker soundness result (`theory/coverage-bijectivity.md`, TH-4a
 adjoint corollary). `trace` evaluation (feed the `u`-carried state back until
@@ -123,7 +123,7 @@ application) is specified in `spec/dynamic-semantics.md` and elaborated in
 A `prim` supplies a `(forward, backward)` pair of finite functions from the
 registry. It is admitted **only if the pair are mutual inverses**:
 `backward ∘ forward = id_A` and `forward ∘ backward = id_B` over the finite
-domains — not merely that each is individually bijective. Bijectivity of
+domains -- not merely that each is individually bijective. Bijectivity of
 `forward` alone does not make `backward` its inverse; checking only that would
 let `(prim p)† = prim p̄` denote a `p̄` that is *a* bijection but not `p`'s
 inverse, silently breaking `f† ∘ f ≡ id` (ADR-0008 T1) at run time rather than

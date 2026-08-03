@@ -49,7 +49,7 @@ fn golden_pin_mexch_rom() {
     // RE-PINNED (advisor, da9ca8f-era): M-D.b (c229920) added the MexchReg decode
     // arm, growing the cpu_pre/cpu_post netlist (d_pre 2839→2976, d_post 152→289,
     // d_locked/period 3028→3304, delta1 1→0, delta_hold 37→36). validate() still
-    // returns Ok (physical lockstep intact) — a legitimate re-pin, not a regression.
+    // returns Ok (physical lockstep intact) -- a legitimate re-pin, not a regression.
     // M-D.b's scoped gate ran `--test ring_two_body` but not `ring_two_body_timing`,
     // so this golden staled undetected until the full-suite run around M-D.b2.f1.
     //
@@ -70,7 +70,7 @@ fn golden_pin_mexch_rom() {
     // 374→573, delta1 2→1, delta_hold 38→37, d_locked/period 3288→3544.
     // d_mem=35, delta2=1 unchanged. RE-MEASURED via the certificate (MEASURED
     // TUPLE printed by two_body_timing_certificate); validate()==Ok (physical
-    // lockstep intact — a re-pin from the netlist size change, not a
+    // lockstep intact -- a re-pin from the netlist size change, not a
     // regression). Behavior verified separately (step/branching real-CPU).
     // RE-PINNED (B-1 Unit-1, B1.1+B1.2): folding reg+imm into ONE bracket + ALU
     // and removing group_b → d_pre 2931→2349, d_locked/period 3544→2964.
@@ -215,7 +215,7 @@ fn line_audit_input_types() {
 /// multi-field correlated corruption that might pass re-derivation.
 ///
 /// Assertion G (bus-pad vector lengths) IS independently reachable by
-/// truncating a pad vector — re-derivation doesn't examine pad vectors.
+/// truncating a pad vector -- re-derivation doesn't examine pad vectors.
 fn validate_rejects_mutations() {
     // PHASE_COUNT = 4 (theseus_netlist::PHASE_COUNT)
     const P: u32 = 4;
@@ -316,7 +316,7 @@ fn validate_rejects_mutations() {
     );
 
     // d_post += P: d_post feeds d_locked via period-alignment (align-up to P), so a
-    // sub-period perturbation (+1) is ABSORBED by the delta_hold slack — that is correct
+    // sub-period perturbation (+1) is ABSORBED by the delta_hold slack -- that is correct
     // physics, not a cert gap (the old +1 happened to cross a boundary only because the
     // pre-M-D.b d_post=152 sat on one; the re-pinned d_post=289 does not). Perturb by a
     // full period P to shift the aligned d_locked → "d_locked mismatch". (delta1/delta2
@@ -340,7 +340,7 @@ fn validate_rejects_mutations() {
         }
     );
 
-    // Truncate mem_bus_pads: same — assertion G length check.
+    // Truncate mem_bus_pads: same -- assertion G length check.
     assert_rejects!(
         "truncate mem_bus_pads",
         |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {
@@ -348,7 +348,7 @@ fn validate_rejects_mutations() {
         }
     );
 
-    // Truncate post_bus_pads: same — assertion G length check.
+    // Truncate post_bus_pads: same -- assertion G length check.
     assert_rejects!(
         "truncate post_bus_pads",
         |t: &mut theseus_tisc::ring_run::TwoBodyTiming| {

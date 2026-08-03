@@ -1,17 +1,17 @@
-//! `theseus-syntax` — the surface language front end for the theseus
+//! `theseus-syntax` -- the surface language front end for the theseus
 //! reversible-computing compiler (M1 slice 1).
 //!
 //! This crate provides:
-//! * [`ast`] — the surface abstract syntax tree, with a [`ast::Span`] on every
+//! * [`ast`] -- the surface abstract syntax tree, with a [`ast::Span`] on every
 //!   node (spans cover the full offending token, for diagnostics).
-//! * [`lexer`] — a `logos`-based lexer. `†` and `~` share a token; `<->` is a
+//! * [`lexer`] -- a `logos`-based lexer. `†` and `~` share a token; `<->` is a
 //!   single token.
-//! * [`parser`] — a hand-written recursive-descent parser honoring the frozen
+//! * [`parser`] -- a hand-written recursive-descent parser honoring the frozen
 //!   precedence table (`~` > `*` > `+` > `;`, all infix left-associative). It
 //!   covers the whole grammar (`docs/src/spec/grammar.md`): `type`/`iso`/`prim`
 //!   declarations, clause and `= expr` iso bodies, `where` blocks, tuple and
 //!   label (`$go`) patterns, and `Nat` literals.
-//! * [`pretty`] — a pretty-printer emitting canonical surface syntax, plus
+//! * [`pretty`] -- a pretty-printer emitting canonical surface syntax, plus
 //!   [`pretty::normalize_program`] used for the `parse ∘ pretty ≡ id` property.
 //!
 //! Parse errors carry the error code `T0001` (see [`parser::ParseError`]);

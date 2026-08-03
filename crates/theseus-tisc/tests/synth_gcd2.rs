@@ -1,11 +1,11 @@
-//! A-6.2 — synthesize the gcd2 step through the GENERAL mechanism.
+//! A-6.2 -- synthesize the gcd2 step through the GENERAL mechanism.
 //!
 //! No hand-walk: the pinned GCD rule (`gcd2_hist_bytes`, copied verbatim below
 //! as test data) is fed through `synth::table_to_regtransfer` (per-output-bit
 //! ANF / Möbius transform) to produce a symbolic `RegTransfer`, then through the
 //! A-6.1 `transcribe_bennett` wrapper to produce the reversible body. The body
 //! is EXEC-VERIFIED on all 256 canonical states (carriers land at the rule's
-//! output AND every scratch ancilla returns to 0 — net-zero).
+//! output AND every scratch ancilla returns to 0 -- net-zero).
 //!
 //! This is DETERMINISTIC construction (ANF + the existing transcriber), NOT
 //! search. It reuses the `emit_verify_gcd2` oracle pattern (run the body through
@@ -23,7 +23,7 @@ use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 // ── The pinned GCD rule (copied verbatim from compile.rs `gcd2_hist_bytes`
 //    on branch a1-gcd; test DATA, not a re-derivation). Carrier byte order is
 //    [tag, a, b, h]. This is the concrete permutation the synthesizer must
-//    reproduce. It is NOT modified — it is the ground-truth spec. ─────────────
+//    reproduce. It is NOT modified -- it is the ground-truth spec. ─────────────
 fn gcd2_hist_bytes(bb: &mut [u8]) {
     let (t, a, b, h) = (bb[0], bb[1], bb[2], bb[3]);
     let d = a != b && a != 0 && b != 0;
@@ -139,9 +139,9 @@ fn zero_state() -> StateVals {
 /// but only bit0 meaningful here → we use full width 8 so equiv is over bytes).
 #[test]
 fn converter_swap_matches_spec() {
-    // map: (x, y) ↦ (y, x) over full bytes (width 8 each) — a linear permutation.
+    // map: (x, y) ↦ (y, x) over full bytes (width 8 each) -- a linear permutation.
     let fwd = table_to_regtransfer(|b| vec![b[1], b[0]], &[0, 1], &[8, 8]);
-    // transcribe_inplace realizes a whole-register swap? No — a swap is not
+    // transcribe_inplace realizes a whole-register swap? No -- a swap is not
     // in-place `old ⊕ f`. So verify the RegTransfer itself equals the spec via
     // its bit expressions (ANF of a pure copy is a single Var per bit).
     let expected = {
@@ -206,7 +206,7 @@ fn converter_teeth() {
 
 // ── Part 2: gcd2 synthesis ──────────────────────────────────────────────────
 
-/// The ANF forward spec reproduces `gcd2_hist_bytes` on all 256 states — a table
+/// The ANF forward spec reproduces `gcd2_hist_bytes` on all 256 states -- a table
 /// cross-check of the converter against the ground-truth rule (evaluating each
 /// per-bit BvExpr on the concrete input assignment).
 #[test]
@@ -256,7 +256,7 @@ fn eval_bit(e: &BvExpr, regvals: &[u8]) -> bool {
 }
 
 /// CROSS-CHECK: `bwd` is a true inverse of `fwd` on all 256 states BEFORE
-/// transcribing — compose the two byte maps and assert identity. This guards the
+/// transcribing -- compose the two byte maps and assert identity. This guards the
 /// Bennett wrapper's `bwd = fwd⁻¹` assumption.
 #[test]
 fn gcd2_bwd_is_inverse_of_fwd_256() {
@@ -327,7 +327,7 @@ fn general_emitter_small_map_netzero() {
 }
 
 /// ANF STATISTICS (the budget finding): report the max monomial degree and max
-/// per-operand multiplicity across the fwd+bwd specs. gcd2 reaches degree 7 —
+/// per-operand multiplicity across the fwd+bwd specs. gcd2 reaches degree 7 --
 /// the reversible AND-ladder therefore needs 6 accumulators + 1 mask = 7 helper
 /// words, which (with 4 output ancilla) exceeds the 10 non-carrier operands.
 #[test]
@@ -385,7 +385,7 @@ fn gcd2_anf_degree_report() {
 }
 
 /// THE AUTHORITY: synthesize the full Bennett body from the ANF fwd/bwd specs
-/// and exec-verify on all 256 states — carriers land at `gcd2_hist_bytes` AND
+/// and exec-verify on all 256 states -- carriers land at `gcd2_hist_bytes` AND
 /// every scratch ancilla word returns to 0 (net-zero). Report body.len() + B.
 #[test]
 fn gcd2_bennett_exec_verify_256_and_report() {
@@ -393,18 +393,18 @@ fn gcd2_bennett_exec_verify_256_and_report() {
     let inv = build_inverse();
     let bwd = table_to_regtransfer(inv, &SPEC_LEAVES, &WIDTHS);
 
-    // Output ancilla = scratch words s2,s3,s4,s5 (operand idx 10..14) — one per
+    // Output ancilla = scratch words s2,s3,s4,s5 (operand idx 10..14) -- one per
     // carrier byte. Bennett requires zero-init ancilla disjoint from carriers.
     let ancilla: [u8; 4] = [10, 11, 12, 13];
     // General-emitter helper bank (zero-init, disjoint): a mask word + AND-tree
     // accumulator temps. FINDING: gcd2's per-output-bit ANF reaches DEGREE 7
-    // (measured — every carrier bit has a degree-7 monomial), so the reversible
+    // (measured -- every carrier bit has a degree-7 monomial), so the reversible
     // AND-ladder needs degree-1 = 6 concurrent accumulators PLUS 1 mask = 7
     // helper words, ON TOP OF the 4 output ancilla. The non-carrier operand
     // budget is only 10 (regs r4..r7 + scratch s2..s7), so 4 + 7 = 11 EXCEEDS
     // it by one. For this fast-`exec_instr` proof we borrow s0 (operand 8) as
     // the 7th helper; s0/s1 are decoder-RESERVED on the REAL pipeline, so the
-    // real system_step GCD run (A-6.5) genuinely REQUIRES widen-state (A-6.4) —
+    // real system_step GCD run (A-6.5) genuinely REQUIRES widen-state (A-6.4) --
     // this is the budget wall the design predicted, now quantified.
     //   mask = r4 ; temps = r5,r6,r7, s6(14), s7(15), s0(8).
     let temps = [5u8, 6u8, 7u8, 14u8, 15u8, 8u8];
@@ -479,11 +479,11 @@ fn gcd2_bennett_exec_verify_256_and_report() {
         pass += 1;
     }
     assert_eq!(pass, 256, "all 256 states must pass carrier + net-zero");
-    eprintln!("exec-verify: {pass}/256 states — carriers correct AND ancilla net-zero");
+    eprintln!("exec-verify: {pass}/256 states -- carriers correct AND ancilla net-zero");
 }
 
 /// True iff an encode failure is SOLELY due to the borrowed decoder-reserved
-/// scratch s0/s1 (operand 8/9) — the KNOWN, documented budget wall the gcd2
+/// scratch s0/s1 (operand 8/9) -- the KNOWN, documented budget wall the gcd2
 /// synthesis hits (MAJOR-3 / A-6.4 widen-state). Any OTHER encode failure
 /// (non-distinct Ccnot, out-of-range, aliased regs) is a real bug.
 fn is_reserved_scratch_only(e: &AsmError) -> bool {
@@ -496,7 +496,7 @@ fn is_reserved_scratch_only(e: &AsmError) -> bool {
 /// MAJOR-3(1): run `asm::encode` on EVERY emitted instruction of the gcd2
 /// Bennett body. The permissive `exec_instr` (used by the 256-state authority)
 /// silently runs ISA-illegal gates; encode is the assemblability gate. This body
-/// is EXPECTED to have encode failures — but ONLY the documented reserved-s0
+/// is EXPECTED to have encode failures -- but ONLY the documented reserved-s0
 /// borrow (operand 8, the 7th helper the operand budget cannot fit). Assert
 /// every failure is that known wall and NOTHING else (no non-distinct Ccnot, no
 /// out-of-range, no aliased operands slipping through).
@@ -536,7 +536,7 @@ fn gcd2_body_encode_only_reserved_scratch_wall() {
     );
 }
 
-/// MAJOR-3(1) teeth: `assert_all_encode` (all-clean expectation) is meaningful —
+/// MAJOR-3(1) teeth: `assert_all_encode` (all-clean expectation) is meaningful --
 /// a body with a non-distinct Ccnot is rejected by encode (proving the check has
 /// teeth for the register/Bennett path where NO reserved borrow is allowed).
 #[test]

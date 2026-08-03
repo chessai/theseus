@@ -1,7 +1,7 @@
 # μ-types (v0.2, increment 1): bounded unrolling
 
 Decision record: ADR-0035. Dialect context: ADR-0006 (software dialect),
-ADR-0007 (totality), ADR-0009 (stratified loops — `iter`/`fold`/`unfold`
+ADR-0007 (totality), ADR-0009 (stratified loops -- `iter`/`fold`/`unfold`
 arrive as core primitives in a *later* increment).
 
 ## What landed
@@ -25,7 +25,7 @@ with `0` (the empty type):
 
 ```text
 Nat @ D=4   ⇒  1 + (1 + (1 + (1 + 0)))      -- numerals 0..=3
-BitList @ 4 ⇒  1 + (Bit × (1 + (Bit × …)))  -- lists of length ≤ 3
+BitList @ 4 ⇒  1 + (Bit × (1 + (Bit × ...)))  -- lists of length ≤ 3
 ```
 
 Mechanics (see `crates/theseus-check/src/env.rs`):
@@ -53,8 +53,8 @@ first become expressible and an annotation has something to say.
 ## Diagnostics at the depth boundary
 
 No new diagnostic code. A value needing ≥ `D` unfoldings does not inhabit
-the truncated domain, so an iso that escapes the depth — e.g. successor,
-whose image misses `Zero` and overflows the deepest numeral — fails
+the truncated domain, so an iso that escapes the depth -- e.g. successor,
+whose image misses `Zero` and overflows the deepest numeral -- fails
 ordinary coverage with `T0301` and a concrete witness
 (`coverage::tests::mu_depth_escaping_iso_rejected_t0301`). Accepted isos
 are exactly the bijections on the truncated domain, so evaluation can
@@ -86,20 +86,20 @@ shipped as adjoint pairs (ADR-0009), surface `fold`/`unfold`/`for`
 keywords (already reserved), and the depth-annotation surface syntax.
 
 **Update (increment 2):** `iter` has landed as a core primitive through
-the interpreter — `Iso::Iter(n, f) : n × a ↔ n × a` with the count
+the interpreter -- `Iso::Iter(n, f) : n × a ↔ n × a` with the count
 carried in the data as a unary numeral (`inrᵏ(inl ())`, the encoding
 this document's `Nat` unrolling already produces). See ADR-0036 for the
 denotation, typing, and totality argument. Surface syntax, `fold`/
 `unfold`, and the netlist counter-loop lowering remain follow-ups.
 
 **Update (increment 3):** `fold`/`unfold` have landed as a mutually
-adjoint pair of core primitives through the interpreter —
+adjoint pair of core primitives through the interpreter --
 `Iso::Fold(l, f), Iso::Unfold(l, f) : l × c ↔ l × c` where `l` is a
-list-spine type `1 + (b × (1 + (b × (… + 0))))` (the shape this
+list-spine type `1 + (b × (1 + (b × (... + 0))))` (the shape this
 document's bounded unrolling produces for `List b`) and
 `f : b × c ↔ b × c`. `fold` threads the accumulator head-to-tail
 through every node (a reversible `mapAccumL`), `unfold` is the
-tail-to-head dual, and `(fold l f)† = unfold l (f†)` — the spine is
+tail-to-head dual, and `(fold l f)† = unfold l (f†)` -- the spine is
 preserved in the data, so both directions are total by structural
 induction on the finite spine (bound = unroll depth − 1). See ADR-0037
 for the denotation, typing, adjoint, and totality argument. Surface

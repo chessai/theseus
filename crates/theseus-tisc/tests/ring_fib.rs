@@ -1,19 +1,19 @@
 #![cfg(feature = "heavy-tests")]
 // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
 //! M4-v2 HEADLINE DEMO: the TISC-1 CPU computes Fibonacci by
-//! RECIRCULATING one compact-balanced step — not by unrolling.
+//! RECIRCULATING one compact-balanced step -- not by unrolling.
 //!
 //! The same reversible Fibonacci ROM from `fib_cpu.rs` (N = 10 pairs,
 //! 20 words: `ADD r1,r2 ; EXCH r1,r2` × 10, seed r1 = r2 = 1) is
 //! assembled, lowered, and compact-balanced ONCE into a [`StepRing`].
 //! The machine then runs by recirculation: `StepRing::run(&seed, R)`
-//! for R = 0, 2, 4, …, 20 revolutions.
+//! for R = 0, 2, 4, ..., 20 revolutions.
 //!
 //! Verified:
 //!   1. After 2k revolutions the registers hold (fib(k), fib(k+1))
 //!      mod 256, matching both a Rust reference sequence AND the
 //!      eval-iterate oracle (`eval(step)^{2k}`).
-//!   2. The ring's cell inventory is IDENTICAL for every R — one body
+//!   2. The ring's cell inventory is IDENTICAL for every R -- one body
 //!      of silicon computes all 20 cycles.
 //!   3. Prints the Fibonacci sequence and a cells-per-body vs
 //!      cells-if-unrolled headline.
@@ -205,7 +205,7 @@ fn ring_fib_constant_area() {
     eprintln!();
     eprintln!(
         "HEADLINE: recirculating body = {} cells (+ {} k0 buffers = {} total), \
-         unrolled {}-step machine would be {} cells — {:.0}x area saving",
+         unrolled {}-step machine would be {} cells -- {:.0}x area saving",
         total_cells, k0, total_with_k0, unrolled_cycles, unrolled_cells, unrolled_cycles as f64,
     );
 }

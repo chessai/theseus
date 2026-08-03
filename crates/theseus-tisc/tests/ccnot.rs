@@ -213,7 +213,7 @@ fn t4_self_inverse() {
     }
 }
 
-// ── T-dense: dense-byte 0xAA/0x55 — full-byte AND over all 8 bits ──
+// ── T-dense: dense-byte 0xAA/0x55 -- full-byte AND over all 8 bits ──
 
 #[test]
 fn t_dense_full_byte_and() {
@@ -274,7 +274,7 @@ fn t_dense_full_byte_and() {
 
 #[test]
 fn t_neg_xor_not_ccnot() {
-    // Build a 2-leaf (c, t) ↦ (c, t⊕c) prim — this is Xor, NOT Ccnot.
+    // Build a 2-leaf (c, t) ↦ (c, t⊕c) prim -- this is Xor, NOT Ccnot.
     let b = bit();
     let ty = Type::prod(b.clone(), b.clone());
     let vals = enumerate_values(&ty);

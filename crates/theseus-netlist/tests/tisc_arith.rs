@@ -3,17 +3,17 @@
 //!
 //! Instructions (docs/src/design/tisc-1-spec.md section 2, W = 8, mod 256):
 //!
-//! * `ADD rd, rs`  — `rd <- rd + rs (mod 256)`, `rs` preserved.
-//! * `SUB rd, rs`  — `rd <- rd - rs (mod 256)`, `rs` preserved;
+//! * `ADD rd, rs`  -- `rd <- rd + rs (mod 256)`, `rs` preserved.
+//! * `SUB rd, rs`  -- `rd <- rd - rs (mod 256)`, `rs` preserved;
 //!   SUB = `Iso::sym(ADD)` (the spec's adjoint pairing).
-//! * `ADDI rd, imm8` — `rd <- rd + imm8`, imm a compile-time constant.
-//! * `SUBI rd, imm8` — `rd <- rd - imm8`; SUBI = `Iso::sym(ADDI)`.
+//! * `ADDI rd, imm8` -- `rd <- rd + imm8`, imm a compile-time constant.
+//! * `SUBI rd, imm8` -- `rd <- rd - imm8`; SUBI = `Iso::sym(ADDI)`.
 //!
 //! # Construction: shallow compositional ripple, max cell kind K2
 //!
 //! ADD is a COMPOSITION of 46 two/three-wire gate prims (32 CNOTs +
 //! 14 Toffolis) on the 16 flat wires `b_i` = rd bits (0..8) and `a_i`
-//! = rs bits (8..16) — a Takahashi–Kunihiro-style in-place ripple with
+//! = rs bits (8..16) -- a Takahashi-Kunihiro-style in-place ripple with
 //! ZERO ancilla wires. Each prim synthesizes on its own (CNOT -> K1,
 //! Toffoli -> K2), so nothing ever needs K3/K4: control nesting never
 //! exceeds depth 2 by construction.
@@ -21,10 +21,10 @@
 //! Why not the naive "3-wire full-adder stage (rd_i, rs_i, cin) ->
 //! (sum_i, rs_i, cout)": that map is NOT a bijection (e.g. inputs
 //! (cin,a,b) = (1,0,0) and (0,0,1) both yield (cout,a,s) = (0,0,1)),
-//! and no fix exists — a materialized ripple carry `c_i` is an
+//! and no fix exists -- a materialized ripple carry `c_i` is an
 //! UNBALANCED Boolean function of the operand bits (it is 1 on fewer
 //! than half of the inputs), so it cannot be a coordinate of any
-//! bijection on the 16 operand wires. The Takahashi–Kunihiro trick is
+//! bijection on the 16 operand wires. The Takahashi-Kunihiro trick is
 //! to keep carries only in the balanced combination `a_i XOR c_i`,
 //! stored transiently on the rs wires and unwound before the end:
 //!
@@ -46,7 +46,7 @@
 //! # ADDI/SUBI and the explicit aux word
 //!
 //! `x -> x + imm (mod 256)` with imm ODD is a single 256-cycle, i.e.
-//! an ODD permutation of the 8-wire state space — while every cell
+//! an ODD permutation of the 8-wire state space -- while every cell
 //! acting on fewer than 8 wires induces an EVEN permutation (it is
 //! 2^(8-m) >= 2 disjoint copies of the same m-wire permutation). So
 //! ADDI on exactly 8 wires is IMPOSSIBLE in this cell model, for any
@@ -58,7 +58,7 @@
 //! `(rd, 0) <-> (rd + imm mod 256, 0)`.
 //!
 //! Routing (getting a gate's 2-3 wires adjacent at the head) is pure
-//! product-structure plumbing — swap/assoc isos, zero-cell rewiring —
+//! product-structure plumbing -- swap/assoc isos, zero-cell rewiring --
 //! built as `route ; gate-at-head ; sym(route)`, exactly as in the
 //! sibling `tisc_controlled.rs`.
 
@@ -221,7 +221,7 @@ fn tof_prim() -> Iso {
     Iso::Prim(Box::new(def))
 }
 
-/// NOT on a single Bit = SwapSum(1,1) — zero cells, pure rail swap.
+/// NOT on a single Bit = SwapSum(1,1) -- zero cells, pure rail swap.
 fn not_iso() -> Iso {
     Iso::SwapSum(Type::One, Type::One)
 }
@@ -281,7 +281,7 @@ fn gate_at(n: usize, wires: &[usize], prim: Iso) -> Iso {
     Iso::seq(Iso::seq(route.clone(), headed), Iso::sym(route))
 }
 
-// ── The Takahashi–Kunihiro-style in-place ripple gate list ──────────
+// ── The Takahashi-Kunihiro-style in-place ripple gate list ──────────
 
 #[derive(Clone, Copy, Debug)]
 enum Gate {
@@ -429,7 +429,7 @@ fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
 
 /// Append the lowering's real ancilla init values to the data bits
 /// (the R1-based synthesis needs its chain scratch pairs seeded 0 and
-/// its constant controls seeded 1 — positional, from
+/// its constant controls seeded 1 -- positional, from
 /// `lower_iso_with_ancillas`).
 fn extend_with_ancilla(data_bits: &[bool], ancillas: &[bool]) -> Vec<bool> {
     let mut bits = data_bits.to_vec();
@@ -449,7 +449,7 @@ struct Lowered {
 }
 
 /// Lower + validate + balance; assert every cell kind is in the
-/// admitted vocabulary (K0–K3 CSWAPs + the R1 rail-role swap,
+/// admitted vocabulary (K0-K3 CSWAPs + the R1 rail-role swap,
 /// ADR-0040) and print the cell counts.
 fn prepare(name: &str, iso: &Iso) -> Lowered {
     let (in_ty, out_ty) = type_of(iso).expect("iso types");

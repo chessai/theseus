@@ -1,45 +1,45 @@
-//! TISC-1 `step`: the full fetch–decode/execute–unfetch–advance machine
+//! TISC-1 `step`: the full fetch-decode/execute-unfetch-advance machine
 //! cycle, `step(rom) : State <-> State` (tisc-1-spec §4, ADR-0034).
 //!
 //! The ROM is a compile-time-constant slice of 32-bit instruction words
 //! (A-0 widened the instruction word 16 → 32 bits);
 //! `step` is one iso composed of five phases:
 //!
-//! 1. **Fetch** — CNOT the ROM word at address PC onto the (zero) IR.
+//! 1. **Fetch** -- CNOT the ROM word at address PC onto the (zero) IR.
 //!    For each address `p` with `rom[p] != 0`, a predicate `PC == p`
 //!    (the AND of the 8 PC-bit literals, computed into s1 bit 0 via a
 //!    Toffoli chain through s1 bits 1..=6, exactly the decoder's
 //!    predicate technique) gates plain CNOTs from the predicate wire
-//!    onto the IR bits where `rom[p]` has a 1 — the constant is folded
+//!    onto the IR bits where `rom[p]` has a 1 -- the constant is folded
 //!    into *which* CNOTs exist, so each set bit costs one K1 CNOT and
 //!    the whole entry costs 14 Toffolis (7 compute + 7 uncompute) +
 //!    popcount(rom[p]) CNOTs. Addresses ≥ `rom.len()` (and zero words)
 //!    have no entry: IR stays 0.
 //!
 //!    Fetch is an XOR mask keyed on PC, hence self-inverse for a fixed
-//!    PC — the same iso serves as the unfetch.
+//!    PC -- the same iso serves as the unfetch.
 //!
-//! 2. **Decode + Execute** — [`decoder::decode_execute`] (already built):
+//! 2. **Decode + Execute** -- [`decoder::decode_execute`] (already built):
 //!    dispatches on IR's opcode bits and mutates the named registers,
 //!    preserving IR. Per ADR-0034 D1, **no instruction writes PC**:
 //!    SWAPBR swaps BR ↔ r[rd] (Pendulum semantics), and the execute
 //!    phase's write set is restricted to `{r0..r7, s0..s7, BR}`.
 //!
-//! 3. **Unfetch** — re-zero IR with the SAME ROM word (P4: IR provably
+//! 3. **Unfetch** -- re-zero IR with the SAME ROM word (P4: IR provably
 //!    zero between steps). Because PC is constant across fetch → execute
 //!    → unfetch (D1: nothing writes PC; the PC update runs after the
 //!    unfetch), the unfetch XORs the same ROM word the fetch did, for
 //!    every instruction including SWAPBR, and IR returns to 0
 //!    unconditionally (ADR-0034 D3).
 //!
-//! 4. **PC += BR** — add the branch register (an offset) into PC via
-//!    the Takahashi–Kunihiro zero-ancilla in-place ripple adder (≤ K2).
+//! 4. **PC += BR** -- add the branch register (an offset) into PC via
+//!    the Takahashi-Kunihiro zero-ancilla in-place ripple adder (≤ K2).
 //!    BR is preserved (it is the operand of the add). BR = 0 is
 //!    fall-through.
 //!
-//! 5. **PC += 1** — the existing 12-Toffoli / 7-CNOT ripple increment.
+//! 5. **PC += 1** -- the existing 12-Toffoli / 7-CNOT ripple increment.
 //!
-//! Together phases 4–5 implement the uniform end-of-step PC update
+//! Together phases 4-5 implement the uniform end-of-step PC update
 //! `PC += BR + 1 (mod 256)` (ADR-0034 D2). BR = 0 gives fall-through
 //! `PC += 0 + 1 = PC + 1`, so **every M4-v1 straight-line ROM (which
 //! never sets BR) runs bit-identically**.
@@ -55,7 +55,7 @@
 //! 3. Hence `E = fetch ; decode_execute ; fetch` is a bijection with
 //!    PC∘E = PC: it decomposes fiberwise, `E = ⊕_p E_p`, each `E_p` a
 //!    bijection of the fiber {PC = p} onto itself.
-//! 4. `A : (PC, BR, rest) ↦ (PC + BR + 1, BR, rest)` is a bijection —
+//! 4. `A : (PC, BR, rest) ↦ (PC + BR + 1, BR, rest)` is a bijection --
 //!    inverse `(PC, BR, rest) ↦ (PC − BR − 1, BR, rest)`.
 //! 5. `step = A ∘ E` is a composition of bijections. ∎
 //!
@@ -66,7 +66,7 @@
 //!
 //! Inherited from the decoder: s0 = 0 on entry whenever the fetched
 //! word is ADDI/SUBI **or zero** (IR = 0 decodes as `ADDI r0, #0`,
-//! which adds s0 to r0 — the identity only when s0 = 0); s1 = 0 on
+//! which adds s0 to r0 -- the identity only when s0 = 0); s1 = 0 on
 //! entry, restored to 0; no register aliasing in ROM words (P1
 //! checker's job).
 
@@ -89,7 +89,7 @@ use crate::types::{Layout, W_PC};
 // PC bits already distinguish every reachable PC. Each ROM entry's
 // address compare is therefore over only `A_fetch` bits, gated by a
 // SINGLE shared "high bits all zero" bit (`hz`, computed once per step)
-// — so the `W_PC`-dependent cost (the 16-A_fetch high-zero AND) is paid
+// -- so the `W_PC`-dependent cost (the 16-A_fetch high-zero AND) is paid
 // once, not once per entry, and the per-entry predicate cost is ∝ log₂ B,
 // independent of W_PC. This is the ADR-0034 fetch-injectivity witness:
 // `2^A_fetch ≥ B + S_max > every reachable PC`, so all reachable PCs are
@@ -102,10 +102,10 @@ use crate::types::{Layout, W_PC};
 // scratch bytes are AND-chain space: fetch runs first in the step (and the
 // unfetch after decode restores s0=0), so s0 and s1 are both 0 at
 // fetch/unfetch time. This gives 2·w_ctl-2 usable chain-intermediate bits,
-// enough for the up-to-(w_pc-1)-input high-zero AND — a single s1 byte (the
+// enough for the up-to-(w_pc-1)-input high-zero AND -- a single s1 byte (the
 // 8-bit-PC design) is too narrow for the wider high-zero gate.
 //
-// B-2.1a: the fetch core is entirely control-region — PC (`w_pc` bits over
+// B-2.1a: the fetch core is entirely control-region -- PC (`w_pc` bits over
 // `pc_fields` control words), the four IR bytes, and s0/s1 (`w_ctl`). The
 // `FetchWires` bundle below derives every wire base from `layout.w_ctl` /
 // `layout.w_pc`; at `Layout::default()` (w_ctl = 8, w_pc = 16) these are the
@@ -173,7 +173,7 @@ impl FetchWires {
         let wc = layout.w_ctl;
         // B-2.2a: the fetch core carrier is `[PC(pc_fields words), IR_b0..b3,
         // s0, s1]` = `pc_fields + 6` control words. At the default (pc_fields
-        // = 2) this is 8 words with s0 = 6·wc, s1 = 7·wc, n = 8·wc — the
+        // = 2) this is 8 words with s0 = 6·wc, s1 = 7·wc, n = 8·wc -- the
         // shipped layout (byte-identical). At w_pc = 8 (pc_fields = 1) the
         // core is 7 words: PC drops one field, so s0/s1/n each shift down by
         // one word. `fetch_fields` returns the matching field list.
@@ -205,10 +205,10 @@ impl FetchWires {
 
 /// A-6.4 widen-PC (F-2): the per-entry predicate `pc_pred(addr, a)` runs an
 /// `(a+1)`-input AND (the `hz` control + `a` low PC bits) whose chain needs
-/// `a-1` intermediate scratch slots `fetch_chain(0..a-1)` — the highest is
+/// `a-1` intermediate scratch slots `fetch_chain(0..a-1)` -- the highest is
 /// `fetch_chain(a-2)`. There are only 14 usable slots (s0 bits 0..8 + s1 bits
 /// 1..7): `fetch_chain(13) = 62` (s1 bit 6) is safe, but `fetch_chain(14) =
-/// 63 = FETCH_HZ_WIRE` — the chain intermediate lands ON the shared high-zero
+/// 63 = FETCH_HZ_WIRE` -- the chain intermediate lands ON the shared high-zero
 /// bit and INVERTS the predicate (review probe B: rom_len 32770, a=16, word at
 /// 0x8000 not fetched, 0x8001 falsely fetched). No collision requires
 /// `a-2 ≤ 13`, i.e. `A_fetch ≤ 15`, i.e. `rom_len ≤ 2^15 = 32768`. Beyond
@@ -296,7 +296,7 @@ fn pc_high_zero(layout: &Layout, a: usize) -> Iso {
         gates.push(gate_at(fw.n, &[hi[0], fw.hz], cnot_prim()));
     } else {
         // Compute the AND chain into intermediate scratch (NOT hz), CNOT
-        // the final AND onto hz, then UNCOMPUTE the chain — so hz alone is
+        // the final AND onto hz, then UNCOMPUTE the chain -- so hz alone is
         // set and every fetch_chain scratch bit is restored to 0 before
         // the per-entry predicates reuse them.
         let mut chain: Vec<Iso> = Vec::new();
@@ -332,7 +332,7 @@ fn pc_pred(layout: &Layout, addr: usize, a: usize) -> Iso {
     // AND chain over controls [hz, PC0, PC1, ..., PC_{a-1}] → pred.
     let controls: Vec<usize> = std::iter::once(fw.hz).chain(0..a).collect();
     if controls.len() == 1 {
-        // a == 0 (impossible, a≥1) — pred = hz.
+        // a == 0 (impossible, a≥1) -- pred = hz.
         gates.push(gate_at(fw.n, &[controls[0], fw.pred], cnot_prim()));
     } else {
         let mut acc = controls[0];
@@ -422,7 +422,7 @@ pub fn fetch_with(layout: &Layout, rom: &[u32]) -> Iso {
 //   pc_inc    : 43  →  162   (+119)   16-bit TK add of constant 1
 //   fetch(len8): 372 → 326   (−46)    narrow-A (A_fetch=3 vs full-8 compare)
 // Net PC-dependent delta ≈ +193 cells on a ~4846-cell step ≈ +4.0% for the
-// whole 8→16-bit widen (8 added PC bits) ≈ ~0.5 %/bit — under the design's
+// whole 8→16-bit widen (8 added PC bits) ≈ ~0.5 %/bit -- under the design's
 // "<1 %/bit" target, and narrow-A fetch pays for part of it (the fetch
 // predicate SHRANK). The absolute step_j re-pin (me_a3) is deferred: the
 // wider state OOMs balance()/lower_iso on the host (see energy.rs), but
@@ -442,7 +442,7 @@ pub fn fetch_with(layout: &Layout, rom: &[u32]) -> Iso {
 //
 // Adder: an in-place ripple-carry (Cuccaro MAJ/UMA, RC 2004) `PC += op`
 // with ONE ancilla carry (s1 bit 0, restored to 0), where the operand
-// bit for PC position i is `sext(BR)[i] = BR[min(i, 7)]` — the sign bit
+// bit for PC position i is `sext(BR)[i] = BR[min(i, 7)]` -- the sign bit
 // BR[7] is fanned out (read-only control) into PC bits 8..15. BR itself
 // is preserved (it is only a control). Wire layout over the 4 fields
 // [PC_lo, PC_hi, BR, s1] (n = 32): PC bit i (0..16) = wire i; BR bit j
@@ -451,10 +451,10 @@ pub fn fetch_with(layout: &Layout, rom: &[u32]) -> Iso {
 /// `PC += sext(BR) (mod 2^W_PC)`. BR (operand) is preserved; PC (target,
 /// 16-bit) is modified.
 ///
-/// Approach (reuses the PROVEN zero-ancilla Takahashi–Kunihiro in-place
+/// Approach (reuses the PROVEN zero-ancilla Takahashi-Kunihiro in-place
 /// adder that shipped at 8-bit): materialize the 16-bit sign-extended
-/// operand `op = sext(BR)` in scratch — low byte in s0 (copied from BR),
-/// high byte in s1 (all eight bits = BR[7]) — run the `W_PC`-bit TK adder
+/// operand `op = sext(BR)` in scratch -- low byte in s0 (copied from BR),
+/// high byte in s1 (all eight bits = BR[7]) -- run the `W_PC`-bit TK adder
 /// `PC += op`, then uncompute `op`. BR is only ever a CNOT *control*, so
 /// it is preserved. Requires s0 = 0 and s1 = 0 on entry (the standing
 /// decoder scratch conventions; asserted by the step tests), restored on
@@ -653,7 +653,7 @@ pub fn step_ops(rom: &[u32], ops: &[Op]) -> Iso {
     seq_balanced(phases)
 }
 
-/// `step(rom) : CpuState <-> CpuState` — the ring machine cycle
+/// `step(rom) : CpuState <-> CpuState` -- the ring machine cycle
 /// (decode_execute′, 15 non-MEXCH/MEXCHR ops). Total bijection on CpuState;
 /// SWAPBR is functional, branching works via `PC += BR + 1`.
 ///
@@ -666,7 +666,7 @@ pub fn step(rom: &[u32]) -> Iso {
     step_with(&Layout::default(), rom)
 }
 
-/// B-2.1a: layout-parameterized [`step`] — the CORE builder threaded end to
+/// B-2.1a: layout-parameterized [`step`] -- the CORE builder threaded end to
 /// end (`fetch_with`, `decode_execute_l`, `pc_add_br_with`, `pc_inc_with`).
 /// The zero-arg [`step`] delegates at `Layout::default()`, so the produced
 /// step net is byte-identical to the pre-B-2.1a code (the `poc_step_net`
@@ -683,19 +683,19 @@ pub fn step_with(layout: &Layout, rom: &[u32]) -> Iso {
     seq_balanced(phases)
 }
 
-/// `system_step(rom) : ((CpuState, MemState), BusMsg) <-> ((CpuState, MemState), BusMsg)` —
+/// `system_step(rom) : ((CpuState, MemState), BusMsg) <-> ((CpuState, MemState), BusMsg)` --
 /// the full machine cycle including MEXCH/MEXCHR on the 3-factor carrier
 /// (Stage 1b-A, ADR-0046 §4.5.8; M-D.b).
 ///
 /// Eight phases in the in-revolution order:
-/// 1. fetch         — IR ^= rom[PC]
-/// 2. decode_execute — non-MEXCH/MEXCHR instructions
-/// 3. emit — MEXCH: addr from IR.rt; MEXCHR: addr from reg[ra] (AUX_PRED-gated)
-/// 4. mem — route MemState[addr]→head keyed on BusMsg.addr, gated-swap BusMsg.word ↔ MemState[0]
-/// 5. absorb        — sym(emit): un-swap, zero BusMsg
-/// 6. unfetch       — re-zero IR (same ROM word, P4)
-/// 7. pc_add_br     — PC += BR
-/// 8. pc_inc        — PC += 1
+/// 1. fetch         -- IR ^= rom[PC]
+/// 2. decode_execute -- non-MEXCH/MEXCHR instructions
+/// 3. emit -- MEXCH: addr from IR.rt; MEXCHR: addr from reg[ra] (AUX_PRED-gated)
+/// 4. mem -- route MemState[addr]→head keyed on BusMsg.addr, gated-swap BusMsg.word ↔ MemState[0]
+/// 5. absorb        -- sym(emit): un-swap, zero BusMsg
+/// 6. unfetch       -- re-zero IR (same ROM word, P4)
+/// 7. pc_add_br     -- PC += BR
+/// 8. pc_inc        -- PC += 1
 ///
 /// CpuState-only phases are lifted to the 3-factor carrier via
 /// `(cpu_phase ⊗ id_Mem) ⊗ id_Bus`. The decode+execute phase (composite,
@@ -725,7 +725,7 @@ pub fn system_step(rom: &[u32]) -> Iso {
 
 // ── Two-body decomposition (Stage 2a) ─────────────────────────────
 
-/// `cpu_pre(rom) : (CpuState, BusMsg) <-> (CpuState, BusMsg)` — the first
+/// `cpu_pre(rom) : (CpuState, BusMsg) <-> (CpuState, BusMsg)` -- the first
 /// body of the two-body ring (Stage 2a).
 ///
 /// Three phases on the reduced `(Cpu, Bus)` carrier:
@@ -745,7 +745,7 @@ pub fn cpu_pre(rom: &[u32]) -> Iso {
     seq_balanced(phases)
 }
 
-/// `cpu_post(rom) : (CpuState, BusMsg) <-> (CpuState, BusMsg)` — the third
+/// `cpu_post(rom) : (CpuState, BusMsg) <-> (CpuState, BusMsg)` -- the third
 /// body of the two-body ring (Stage 2a).
 ///
 /// Four phases on the reduced `(Cpu, Bus)` carrier:

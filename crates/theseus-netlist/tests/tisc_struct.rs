@@ -1,9 +1,9 @@
 //! TISC-1 structural + immediate instruction isos (M4-L1-G1).
 //!
-//! EXCH / SWAPBR / XCHG — pure word-pair swaps (SwapProd, 0 cells).
-//! XORI  — per-bit conditional NOT (0 cells, rail swaps).
-//! ROTLI / ROTRI — bit-position rotations (structural permutation, 0 cells).
-//! XOR   — 8 per-bit CNOTs via interleave-CNOT-deinterleave (K1 cells).
+//! EXCH / SWAPBR / XCHG -- pure word-pair swaps (SwapProd, 0 cells).
+//! XORI  -- per-bit conditional NOT (0 cells, rail swaps).
+//! ROTLI / ROTRI -- bit-position rotations (structural permutation, 0 cells).
+//! XOR   -- 8 per-bit CNOTs via interleave-CNOT-deinterleave (K1 cells).
 //!
 //! Every iso is oracle-verified: lower_iso + untimed eval agrees with
 //! theseus_eval::eval, and eval matches the reference semantics.
@@ -130,7 +130,7 @@ fn right_nested_prod(types: &[Type]) -> Type {
 
 // ── Instruction iso builders ─────────────────────────────────────────
 
-/// NOT on a single Bit = SwapSum(1,1) — zero cells, pure rail swap.
+/// NOT on a single Bit = SwapSum(1,1) -- zero cells, pure rail swap.
 fn not_iso() -> Iso {
     Iso::SwapSum(Type::One, Type::One)
 }
@@ -256,7 +256,7 @@ fn extract_first_pair(a: Type, b: Type, c: Type, d: Type) -> Iso {
 }
 
 /// Interleave (zip) two right-nested n-element products of Bit:
-///   (a0×…×a_{n-1}) × (b0×…×b_{n-1}) → (a0×b0) × ((a1×b1) × … × (a_{n-1}×b_{n-1}))
+///   (a0×...×a_{n-1}) × (b0×...×b_{n-1}) → (a0×b0) × ((a1×b1) × ... × (a_{n-1}×b_{n-1}))
 fn zip_products(n: usize) -> Iso {
     let b = bit();
     if n == 1 {
@@ -597,7 +597,7 @@ fn xor_rd_rs_self_inverse() {
 fn xor_rd_rs_exhaustive() {
     let iso = xor_rd_rs_iso();
 
-    // Full 256×256 domain via core eval only (no netlist per-input — too slow).
+    // Full 256×256 domain via core eval only (no netlist per-input -- too slow).
     for rd in 0..=255u8 {
         for rs in 0..=255u8 {
             let input = encode_pair(rd, rs);

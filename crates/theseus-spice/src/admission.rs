@@ -4,19 +4,19 @@
 //!
 //! # The five gates
 //!
-//! 1. **Functional verdict** (B5.3) — the cell's truth table reproduced via
+//! 1. **Functional verdict** (B5.3) -- the cell's truth table reproduced via
 //!    *typed decode*: rails thresholded at 0.3·VDD / 0.7·VDD with a
 //!    hysteresis dead-band between them (a rail reads high only above
-//!    0.7·VDD and low only below 0.3·VDD; the band never decodes — TBD-4),
+//!    0.7·VDD and low only below 0.3·VDD; the band never decodes -- TBD-4),
 //!    sampled mid-validity (the middle 60% of the output hold tick, the
 //!    harness convention), for every control/data combination. Built on
 //!    [`run_cswap_functional`]. The full (ramp, load) matrix of the spec is
 //!    the bench DUT matrix's scope; admission evaluates the rung's canonical
 //!    functional point.
-//! 2. **Conservation closure** (TBD-1, 1%) — per-cycle source energy =
+//! 2. **Conservation closure** (TBD-1, 1%) -- per-cycle source energy =
 //!    dissipation + ΔE_stored within 1%. What is *measured*: a short
 //!    **closure orbit** of tokens (chosen per cell so every token line
-//!    pulses and every branch conducts — otherwise unexercised wires float
+//!    pulses and every branch conducts -- otherwise unexercised wires float
 //!    and their rung-1 leak drift reads as a spurious ΔE_stored) is
 //!    repeated until settled, then (a) two consecutive orbits' source-energy
 //!    integrals agree (periodicity ⇒ the device and node state returns to
@@ -29,11 +29,11 @@
 //!    (BSIM) charge at rung 1 is covered indirectly by the periodicity
 //!    check (a). Tolerance: 1% of the per-orbit source energy with an
 //!    absolute floor of [`CLOSURE_ABS_FLOOR_J`] (solver noise).
-//! 3. **Token conservation** (INV-TOKEN) — asserted-rail count invariant at
+//! 3. **Token conservation** (INV-TOKEN) -- asserted-rail count invariant at
 //!    every sampled valid tick: in the 1-of-2 token-line encoding exactly
 //!    one line of each signal pair decodes asserted, so the total across
 //!    the cell's pairs is constant (= the signal count).
-//! 4. **Reverse drive** (TH-6) — the 4-phase power-clock phase sequence
+//! 4. **Reverse drive** (TH-6) -- the 4-phase power-clock phase sequence
 //!    reversed and the *adjoint* truth table checked (the k-CSWAP cells are
 //!    self-inverse, so the adjoint table is the forward table). For the
 //!    single-stage cell the two clock phases it touches (φ0, φ2 = ~φ0) form
@@ -45,7 +45,7 @@
 //!    unchanged). Per the spec the verdict is **recorded even on failure**
 //!    (failure routes to the mirrored-netlist fallback, not rejection), so
 //!    this gate does not block [`AdmissionReport::admitted`].
-//! 5. **Adiabatic scaling** (ADR-0028, TBD-5) — the cell's own E(period)
+//! 5. **Adiabatic scaling** (ADR-0028, TBD-5) -- the cell's own E(period)
 //!    fits E = k_adia/t + k_leak·t + k_res with R² ≥ 0.99 over the swept
 //!    range, and the leakage share is reported separately (C3.3).
 //!    R² alone is necessary but **not sufficient**: a flat (CMOS) curve fits
@@ -61,9 +61,9 @@
 //!
 //! # Candidate cells
 //!
-//! The reversible library cells — the k-CSWAP family (k ∈ {0, 1, 2, 3}), the
+//! The reversible library cells -- the k-CSWAP family (k ∈ {0, 1, 2, 3}), the
 //! R1 rail-role swap (ADR-0040, same TG fabric with one routed conductor
-//! pair), and the adiabatic TG buffer primitive — plus the two baseline DUTs (static CMOS
+//! pair), and the adiabatic TG buffer primitive -- plus the two baseline DUTs (static CMOS
 //! inverter, PFAL buffer), which the checklist must *reject*: that the same
 //! five gates admit the reversible cells and reject the baselines is the
 //! discrimination test of the checklist itself. Note the raw TG buffer is
@@ -118,7 +118,7 @@ pub enum RailState {
     Asserted,
     /// At or below 0.3·VDD.
     Deasserted,
-    /// In the hysteresis dead-band — refuses to decode.
+    /// In the hysteresis dead-band -- refuses to decode.
     Undefined,
 }
 
@@ -159,7 +159,7 @@ pub enum CandidateCell {
     CswapK2,
     /// k = 3 CSWAP: the 3-controlled swap.
     CswapK3,
-    /// R1 rail-role swap (ADR-0040): CNOT in one cell — the K1 TG fabric
+    /// R1 rail-role swap (ADR-0040): CNOT in one cell -- the K1 TG fabric
     /// with one routed conductor pair instead of two. Runs the same full
     /// B5 battery as the k-CSWAP cells.
     RoleSwapR1,
@@ -242,7 +242,7 @@ pub struct AdmissionReport {
     pub conservation: GateResult,
     /// Gate 3: INV-TOKEN asserted-rail invariance.
     pub token_invariant: GateResult,
-    /// Gate 4: reverse drive (TH-6) — recorded, NON-blocking.
+    /// Gate 4: reverse drive (TH-6) -- recorded, NON-blocking.
     pub reverse_drive: GateResult,
     /// Gate 5: adiabatic scaling fit (ADR-0028).
     pub scaling: GateResult,
@@ -263,7 +263,7 @@ impl AdmissionReport {
 
     /// A multi-line human-readable rendering of the whole report.
     pub fn summary(&self) -> String {
-        let g = |r: &GateResult| format!("{} — {}", if r.passed { "PASS" } else { "FAIL" }, r.detail);
+        let g = |r: &GateResult| format!("{} -- {}", if r.passed { "PASS" } else { "FAIL" }, r.detail);
         format!(
             "ADMISSION {:?} @ {:?}: {}\n  [1 functional]   {}\n  [2 conservation] {}\n  [3 inv-token]    {}\n  [4 reverse]      {} (recorded, non-blocking)\n  [5 scaling]      {}",
             self.cell,
@@ -432,10 +432,10 @@ fn scaling_verdict(points: Vec<(f64, f64)>) -> (GateResult, ScalingEvidence) {
     );
     // A negative k_leak means the sweep window never reaches the leakage
     // knee, so k_leak is collinear with k_res and not separately resolvable
-    // — the share numbers are then a fit artifact, not physics.
+    // -- the share numbers are then a fit artifact, not physics.
     let detail = if fit.k_leak < 0.0 {
         format!(
-            "{detail}; NOTE: k_leak < 0 — the leakage term is not resolvable over this window \
+            "{detail}; NOTE: k_leak < 0 -- the leakage term is not resolvable over this window \
              (collinear with k_res); use the dedicated static-leakage deck for the floor"
         )
     } else {
@@ -458,7 +458,7 @@ fn scaling_verdict(points: Vec<(f64, f64)>) -> (GateResult, ScalingEvidence) {
 // TG-fabric cell admission (k-CSWAP family + R1 rail-role swap)
 // ---------------------------------------------------------------------------
 
-/// Token-line base name for (signal, polarity) — mirrors the (private)
+/// Token-line base name for (signal, polarity) -- mirrors the (private)
 /// convention in `cswap.rs`: `at`/`af`, `c1t`/`c1f`, ...
 fn line_name(sig: &str, pol: bool) -> String {
     format!("{sig}{}", if pol { 't' } else { 'f' })
@@ -484,7 +484,7 @@ fn token_sig(t: CswapToken, sig: &str) -> bool {
 /// and re-parked within each orbit instead of floating. (An all-active
 /// token repeated forever leaves the 0-lines' wires permanently floating;
 /// on sky130 they leak-drift for many cycles and the explicit-cap
-/// ΔE_stored reads their drift, not a closure violation — measured:
+/// ΔE_stored reads their drift, not a closure violation -- measured:
 /// −1.76 fJ/cycle on k0 at T = 1e-7 with the all-active token, versus
 /// ≈ 0 with this orbit.)
 fn closure_orbit(topo: CellTopo) -> Vec<CswapToken> {
@@ -609,7 +609,7 @@ fn cell_token_verdict(topo: CellTopo, rung: DeviceRung, readings: &[CswapReading
     // consecutive pairs are one signal's two token lines at one tick.
     for pair in readings.chunks(2) {
         let [r1, r0] = pair else {
-            violations.push("odd reading count — line pair split".to_string());
+            violations.push("odd reading count -- line pair split".to_string());
             continue;
         };
         debug_assert_eq!(r1.token_idx, r0.token_idx);
@@ -708,7 +708,7 @@ fn replace_pwl_payload(line: &str, payload: &str) -> String {
 }
 
 /// Generate the reversed-phase deck: exchange the input token-line stimuli
-/// with the delayed-replica stimuli (see module docs — for the single-stage
+/// with the delayed-replica stimuli (see module docs -- for the single-stage
 /// cell this IS the time-reversed phase sequence, modulo a global one-tick
 /// shift absorbed by keeping the measurement grid fixed).
 fn swap_input_replica_sources(deck: &str, topo: CellTopo) -> String {
@@ -746,7 +746,7 @@ fn cell_reverse_verdict(topo: CellTopo, rung: DeviceRung, period: f64) -> GateRe
         Ok(out) => out,
         Err(e) => {
             return GateResult::fail(format!(
-                "reverse-drive simulation failed outright ({e}) — recorded; routes to the \
+                "reverse-drive simulation failed outright ({e}) -- recorded; routes to the \
                  mirrored-netlist fallback, not rejection"
             ))
         }
@@ -793,7 +793,7 @@ fn cell_reverse_verdict(topo: CellTopo, rung: DeviceRung, period: f64) -> GateRe
     } else {
         let shown: Vec<String> = mismatches.iter().take(4).cloned().collect();
         GateResult::fail(format!(
-            "reverse drive off the adjoint table on {}/{total} readings ({}{}) — recorded; routes \
+            "reverse drive off the adjoint table on {}/{total} readings ({}{}) -- recorded; routes \
              to the mirrored-netlist fallback, not rejection",
             mismatches.len(),
             shown.join("; "),
@@ -899,11 +899,11 @@ fn admit_tg(rung: DeviceRung) -> io::Result<AdmissionReport> {
 }
 
 /// Run the five TG-buffer admission gates for one rung-1 sky130 (Vt × body)
-/// `variant` at load `c_load_f` — the per-variant admission of the M3a W5
+/// `variant` at load `c_load_f` -- the per-variant admission of the M3a W5
 /// bench DUT matrix.
 ///
 /// `scaling_points` is the variant's own `(period_s, energy_J)` sweep
-/// (ascending, ≥ 5 points — the gate-5 minimum), normally the very curve the
+/// (ascending, ≥ 5 points -- the gate-5 minimum), normally the very curve the
 /// matrix driver just characterized into the DB, so admission re-simulates
 /// only the gate-1..4 functional/closure/reverse decks and never repeats the
 /// sweep. Gates and thresholds are identical to [`admit`] on
@@ -936,7 +936,7 @@ fn admit_tg_impl(
     {
         GateResult::pass(format!(
             "typed decode ({DECODE_LO_FRAC:.1}/{DECODE_HI_FRAC:.1}·VDD): buffer truth row reproduced \
-             — out {vh2:.4} V (min, hold tick) / {vr2:.4} V (max, rest tick), VDD {vdd}"
+             -- out {vh2:.4} V (min, hold tick) / {vr2:.4} V (max, rest tick), VDD {vdd}"
         ))
     } else {
         GateResult::fail(format!(
@@ -944,7 +944,7 @@ fn admit_tg_impl(
         ))
     };
 
-    // Gate 3: single-ended primitive — the invariant degenerates (see docs).
+    // Gate 3: single-ended primitive -- the invariant degenerates (see docs).
     let holds: Vec<f64> = (1..=3).map(|c| meas(&out, &format!("vh{c}"))).collect();
     let all_asserted = holds.iter().all(|&v| decode_rail(v, vdd) == RailState::Asserted);
     let token_invariant = if all_asserted {
@@ -977,7 +977,7 @@ fn admit_tg_impl(
     // adjoint), so the same single-row table must decode.
     let reverse_drive = match run_ngspice_raw(&tg_admission_deck(rung, period, true, variant, c_load_f)) {
         Err(e) => GateResult::fail(format!(
-            "reverse-drive simulation failed outright ({e}) — recorded, non-blocking"
+            "reverse-drive simulation failed outright ({e}) -- recorded, non-blocking"
         )),
         Ok(rout) => {
             let rvh = meas(&rout, "vh2");
@@ -991,14 +991,14 @@ fn admit_tg_impl(
                 ))
             } else {
                 GateResult::fail(format!(
-                    "reversed clock failed decode (hold min {rvh:.4} V, rest max {rvr:.4} V) — \
+                    "reversed clock failed decode (hold min {rvh:.4} V, rest max {rvr:.4} V) -- \
                      recorded, non-blocking"
                 ))
             }
         }
     };
 
-    // Gate 5: the cell's own E(period) curve — the caller-supplied variant
+    // Gate 5: the cell's own E(period) curve -- the caller-supplied variant
     // sweep when given (the matrix path), else the canonical-cell sweep.
     let points = match scaling_points {
         Some(p) => p,
@@ -1083,7 +1083,7 @@ fn admit_cmos(rung: DeviceRung) -> io::Result<AdmissionReport> {
     {
         GateResult::pass(format!(
             "inverter truth table reproduced via typed decode (out {vhigh:.4} V min on in=0, \
-             {vlow:.4} V max on in=1) — the baseline computes; its rejection is reversibility, \
+             {vlow:.4} V max on in=1) -- the baseline computes; its rejection is reversibility, \
              not function"
         ))
     } else {
@@ -1106,7 +1106,7 @@ fn admit_cmos(rung: DeviceRung) -> io::Result<AdmissionReport> {
 
     let token_invariant = GateResult::fail(
         "single-rail static gate: no dual-rail token pairs exist, so the INV-TOKEN \
-         asserted-rail invariant is not satisfiable — irreversible encoding"
+         asserted-rail invariant is not satisfiable -- irreversible encoding"
             .to_string(),
     );
     let reverse_drive = GateResult::fail(
@@ -1201,7 +1201,7 @@ fn admit_pfal(rung: DeviceRung) -> io::Result<AdmissionReport> {
         let row_ok = decode_pair(va, vi, vdd) == RailState::Asserted;
         functional_ok &= row_ok;
         functional_notes.push(format!(
-            "in={}: active rail {va:.4} V (min), inactive {vi:.4} V (max) — {}",
+            "in={}: active rail {va:.4} V (min), inactive {vi:.4} V (max) -- {}",
             u8::from(bit),
             if row_ok { "decodes" } else { "FAILS decode" }
         ));
@@ -1279,7 +1279,7 @@ mod tests {
     use crate::bench::ngspice_available;
 
     /// `admitted()` is gates 1∧2∧3∧5; gate 4 (reverse drive) is recorded but
-    /// never blocks — pure predicate logic, no simulation.
+    /// never blocks -- pure predicate logic, no simulation.
     #[test]
     fn admitted_predicate_gates_1_2_3_5_not_4() {
         let pass = || GateResult::pass("p".into());
@@ -1378,7 +1378,7 @@ mod tests {
     }
 
     /// ADR-0040 phase A: the R1 rail-role swap passes the SAME full B5
-    /// battery as the k-CSWAP cells — no placeholder arm, no reduced bar.
+    /// battery as the k-CSWAP cells -- no placeholder arm, no reduced bar.
     /// The reverse-drive gate is additionally asserted (stronger than
     /// `admitted()`, which records it non-blocking): R1 is self-inverse and
     /// its physical-adjointness story is inherited from K1 verbatim, so a
@@ -1418,7 +1418,7 @@ mod tests {
         }
         let r = admit(CandidateCell::CmosBaseline, DeviceRung::Rung0Level1).expect("ngspice failed");
         eprintln!("{}", r.summary());
-        // The inverter WORKS — rejection is about reversibility, not function.
+        // The inverter WORKS -- rejection is about reversibility, not function.
         assert!(r.functional.passed, "the CMOS baseline should compute:\n{}", r.summary());
         // No token discipline, and a flat E(T) has no recoverable term.
         assert!(!r.token_invariant.passed, "gate 3 must fail for CMOS:\n{}", r.summary());
@@ -1439,7 +1439,7 @@ mod tests {
         }
         let r = admit(CandidateCell::PfalBuffer, DeviceRung::Rung0Level1).expect("ngspice failed");
         eprintln!("{}", r.summary());
-        // PFAL computes as a clocked buffer — its failure is the energy floor.
+        // PFAL computes as a clocked buffer -- its failure is the energy floor.
         assert!(r.functional.passed, "the PFAL baseline should compute:\n{}", r.summary());
         assert!(
             !r.scaling.passed,

@@ -10,16 +10,16 @@
 //! | `Reg(n)` | `n` K0 buffer stages per bit (C2.1) | `n·width` |
 //! | `Seq` / `Par` | composition / wiring | 0 |
 //! | `Branch(f,g)` | CSWAP demux/merge with K1 Fredkin routing (ADR-0031) | varies |
-//! | `Distrib`/`Factor` | tag-pair regrouping — pure rail reordering | 0 |
+//! | `Distrib`/`Factor` | tag-pair regrouping -- pure rail reordering | 0 |
 //! | `TraceLoop` | full unroll ≤ \|u\|+1 iterations (ADR-0026 C2.4) | varies |
 //! | `IterLoop`/`FoldLoop` | tag-gated full unroll (ADR-0039, [`crate::lower_iter`]) | varies |
 //!
 //! Every template is verified **per instance** against the prim's finite
-//! `(forward)` semantics before use — exhaustive over the domain
-//! (ADR-0031: "each per-instance checkable — exhaustive small").
+//! `(forward)` semantics before use -- exhaustive over the domain
+//! (ADR-0031: "each per-instance checkable -- exhaustive small").
 //! Phase = depth mod P throughout (ADR-0026 C2.3).
 //!
-//! # General prim synthesis (B4.2, garbage-free via R1 — ADR-0040 phase C)
+//! # General prim synthesis (B4.2, garbage-free via R1 -- ADR-0040 phase C)
 //!
 //! A prim that matches no fast-path template is *synthesized*: its finite
 //! truth table is flattened to a permutation of `{0,1}^w`, decomposed into
@@ -30,9 +30,9 @@
 //! the self-inverse chain is replayed to restore every control and every
 //! scratch pair to its init ([`Builder::emit_mcnot`]). No cell above `K1`
 //! is emitted, so [`Builder::controlled_apply`] can still promote every
-//! cell by one extra control (`R1` promotes via the K1–R1–K1 sandwich).
+//! cell by one extra control (`R1` promotes via the K1-R1-K1 sandwich).
 //! The gate list is verified against the truth table over the whole valid
-//! domain before any cell is placed — the same per-instance discipline as
+//! domain before any cell is placed -- the same per-instance discipline as
 //! the fast-path templates.
 //!
 //! # Deferred (honest list, with owners)
@@ -60,11 +60,11 @@ pub enum LowerError {
     /// Node vocabulary deferred to a later slice (see module docs).
     Deferred { node: &'static str, plan: &'static str },
     /// No dual-rail encoding for this type (`0`-typed nets are
-    /// statically dead — `Absurd` pruning is a later pass).
+    /// statically dead -- `Absurd` pruning is a later pass).
     UnsupportedType(Type),
     /// The prim could not be synthesized: its flattened width exceeds
     /// the B4.2 synthesis cap ([`MAX_SYNTH_WIDTH`]) or its truth table
-    /// is not total (an inadmissible def — refused, never guessed at).
+    /// is not total (an inadmissible def -- refused, never guessed at).
     UnsupportedPrim { name: String },
 }
 
@@ -111,7 +111,7 @@ impl From<TypedError> for LowerError {
 /// An *uninhabited* sum arm occupies zero payload rails: the tag can
 /// never select it, so no encoding is required. This makes the
 /// `0`-terminated numeral and list-spine types (ADR-0036/0037)
-/// encodable — e.g. `numeral_ty(k)` is `k` tag pairs, one-hot at the
+/// encodable -- e.g. `numeral_ty(k)` is `k` tag pairs, one-hot at the
 /// numeral's value (ADR-0039). `0` itself (and any other uninhabited
 /// type) stays unencodable at top level: such nets are statically dead.
 pub fn rail_width(ty: &Type) -> Result<usize, LowerError> {
@@ -186,7 +186,7 @@ pub fn bits_of(value: &Value, ty: &Type) -> Result<Vec<bool>, LowerError> {
     }
 }
 
-/// Rebuild a value of `ty` from its flattened bit string — the inverse
+/// Rebuild a value of `ty` from its flattened bit string -- the inverse
 /// of [`bits_of`]. The tag bit selects the arm; only the first `wA`
 /// (or `wB`) payload bits are decoded; padding bits are ignored.
 ///
@@ -242,7 +242,7 @@ pub fn value_from_bits(ty: &Type, bits: &[bool]) -> Result<Value, LowerError> {
 ///
 /// # Panics
 ///
-/// Panics if the resulting def fails [`admit`] — i.e. `f` is not a
+/// Panics if the resulting def fails [`admit`] -- i.e. `f` is not a
 /// bijection between the two types' bit strings (a caller bug).
 pub fn prim_from_bits(
     name: &str,
@@ -301,7 +301,7 @@ pub(crate) struct Builder {
     /// Each entry is (pair, depth).  These are appended to the netlist's
     /// primary outputs by `lower()`.
     ancilla_outputs: Vec<(RailPair, u32)>,
-    /// Which lowering mechanism allocated / discharged each ancilla —
+    /// Which lowering mechanism allocated / discharged each ancilla --
     /// parallel to `ancilla_inputs` / `ancilla_outputs`. Diagnostic
     /// only (per-construct dirty-ancilla attribution, ADR-0033 ring
     /// closure work); never affects the emitted cells.
@@ -385,7 +385,7 @@ impl Builder {
                 Ok(out)
             }
 
-            // Lemma (ADR-0031): Permute(×, σ) is rail-pair rewiring —
+            // Lemma (ADR-0031): Permute(×, σ) is rail-pair rewiring --
             // zero cells, zero ticks, both directions.
             NodeKind::Permute { monoid: Monoid::Prod, sigma } => {
                 let layer = flatten_layer(Monoid::Prod, &node.input);
@@ -478,7 +478,7 @@ impl Builder {
                 self.lower_branch(f, g, ins)
             }
 
-            // Lemma (ADR-0031): Distrib/Factor is pure rail regrouping —
+            // Lemma (ADR-0031): Distrib/Factor is pure rail regrouping --
             // zero cells. The tag pair moves between positions and the
             // payload rails concatenate differently, but no logic is
             // needed because both sides share the same rail pairs.
@@ -543,10 +543,10 @@ impl Builder {
         }
     }
 
-    /// Prim lowering (B4.2): fast-path templates first — a fixed table
+    /// Prim lowering (B4.2): fast-path templates first -- a fixed table
     /// of candidate CSWAP networks, each **verified against the prim's
     /// finite forward semantics** (exhaustive over the domain) before it
-    /// is used — then general CSWAP-network synthesis
+    /// is used -- then general CSWAP-network synthesis
     /// ([`Builder::synthesize_prim`]) for everything else. A prim is
     /// never guessed at: the synthesized gate list is verified over the
     /// whole valid domain before any cell is placed.
@@ -595,16 +595,16 @@ impl Builder {
     /// 2. Extend the resulting partial injection to a full permutation
     ///    of `{0,1}^w` (identity on free patterns where possible).
     /// 3. Decompose the permutation into multi-controlled NOTs by
-    ///    transformation-based synthesis ([`mmd_gates`]) — always
+    ///    transformation-based synthesis ([`mmd_gates`]) -- always
     ///    terminates for a permutation.
     /// 4. **Verify** the gate list reproduces the truth table on every
-    ///    valid input (per-instance, exhaustive — the same discipline as
+    ///    valid input (per-instance, exhaustive -- the same discipline as
     ///    the fast-path templates).
     /// 5. Emit each gate ancilla-clean via [`Builder::emit_mcnot`]
     ///    (ADR-0040 phase C); every emitted cell is `K1` or `R1`, so
     ///    [`Builder::controlled_apply`] can still promote the network by
     ///    one extra control inside `Branch`/`TraceLoop` (`K1 → K2`,
-    ///    `R1 →` the K1–R1–K1 sandwich).
+    ///    `R1 →` the K1-R1-K1 sandwich).
     fn synthesize_prim(&mut self, def: &PrimDef, ins: &[BitAt]) -> Result<Vec<BitAt>, LowerError> {
         let prev_origin = self.set_origin("prim_synth");
         let out = self.synthesize_prim_inner(def, ins);
@@ -693,7 +693,7 @@ impl Builder {
         Ok(current)
     }
 
-    /// Emit one multi-controlled NOT, in place on `current` —
+    /// Emit one multi-controlled NOT, in place on `current` --
     /// **garbage-free** via the `R1` rail-role-swap cell (ADR-0040
     /// phase C). This replaces the old splitter/selector CSWAP
     /// construction, whose 2 dirty pairs per instance were the parity
@@ -701,12 +701,12 @@ impl Builder {
     /// obstruction is void and every case below restores every ancilla
     /// to its init on every input.
     ///
-    /// - `k = 1`: a single `R1(c, t)` — CNOT in one cell, zero
+    /// - `k = 1`: a single `R1(c, t)` -- CNOT in one cell, zero
     ///   ancillas; the control passes through live.
     /// - `k ≥ 2` (ADR-0040 D3, iterated): AND-reduce the controls down
     ///   a `K1` chain (`K1(a, b, 0)`'s third port carries `a ∧ b`),
-    ///   fire one `R1(chain_head, t)` — which reads its control
-    ///   without modifying it — then replay the self-inverse chain in
+    ///   fire one `R1(chain_head, t)` -- which reads its control
+    ///   without modifying it -- then replay the self-inverse chain in
     ///   reverse, restoring every control to its live value and every
     ///   scratch pair to `0`. Ancilla-clean per instance, for any `k`.
     /// - `k = 0`: `R1(one, t)` with a constant-TRUE ancilla control;
@@ -748,7 +748,7 @@ impl Builder {
 
                 // Uncompute: replay the self-inverse chain in reverse.
                 // Each replayed K1 regenerates (partial-AND, control,
-                // 0) — the control returns live, the scratch clean.
+                // 0) -- the control returns live, the scratch clean.
                 let mut back = fired[0];
                 for (i, &(pass_and, pass_ctrl)) in steps.iter().enumerate().rev() {
                     let outs = self.emit(CellKind::K1, &[pass_and, pass_ctrl, back]);
@@ -844,9 +844,9 @@ impl Builder {
     ///   AND c are true.
     /// - K2 → would need K3 (not in vocabulary): error.
     ///
-    /// - R1(c, t) → the K1–R1–K1 sandwich (ADR-0040 D3): `K1(tag, c, 0)`
+    /// - R1(c, t) → the K1-R1-K1 sandwich (ADR-0040 D3): `K1(tag, c, 0)`
     ///   computes `tag ∧ c` on a scratch pair, `R1(scratch, t)` fires,
-    ///   and replaying the self-inverse K1 restores `(tag, c, 0)` —
+    ///   and replaying the self-inverse K1 restores `(tag, c, 0)` --
     ///   ancilla-clean controlled-R1 without needing R2 in the
     ///   vocabulary.
     ///
@@ -875,7 +875,7 @@ impl Builder {
             anc_origin: self.anc_origin,
         };
         // Create sub-builder inputs with the same pairs but depth 0
-        // for line allocation purposes — we'll fix up depths below.
+        // for line allocation purposes -- we'll fix up depths below.
         let sub_outs = sub.apply(node, data_ins)?;
 
         // Claim the sub-builder's line range.
@@ -966,10 +966,10 @@ impl Builder {
                 }
             }
 
-            // Phase 2: conditional rail swaps (NOT) — one R1 per
+            // Phase 2: conditional rail swaps (NOT) -- one R1 per
             // flipped bit (ADR-0040 phase C): `R1(tag, bit)` flips the
             // bit iff the tag is 1 and passes the tag through live.
-            // Zero ancillas, zero garbage — contrast the old
+            // Zero ancillas, zero garbage -- contrast the old
             // splitter/selector K1 pair (2 ancillas + 2 garbage pairs
             // per conditional NOT, the parity obstruction's floor).
             for (i, &flip) in flipped.iter().enumerate() {
@@ -994,8 +994,8 @@ impl Builder {
         }
 
         // Check for K3 cells in the sub-builder (can't promote K3 to
-        // K4 — not in the vocabulary). R1 is fine: it promotes via the
-        // K1–R1–K1 sandwich below.
+        // K4 -- not in the vocabulary). R1 is fine: it promotes via the
+        // K1-R1-K1 sandwich below.
         for cell in &sub.cells {
             if cell.kind == CellKind::K3 {
                 return Err(LowerError::Deferred {
@@ -1064,7 +1064,7 @@ impl Builder {
                     };
 
                     // Recompute depth from actual arrivals (looking up
-                    // both rail orientations — a consumer may see the
+                    // both rail orientations -- a consumer may see the
                     // producer's pair swapped by a zero-cell NOT).
                     let mut latest = control_tag.depth;
                     for ip in &cell.inputs {
@@ -1110,13 +1110,13 @@ impl Builder {
                     cur_tag = tag_out;
                 }
                 CellKind::R1 => {
-                    // Promote R1(c, t) — "flip t iff c" — to "flip t
+                    // Promote R1(c, t) -- "flip t iff c" -- to "flip t
                     // iff tag ∧ c" WITHOUT R2, via the ADR-0040 D3
                     // sandwich: K1(tag, c, anc=0) computes tag ∧ c on
                     // a scratch pair; R1(scratch, t) fires without
                     // modifying its control; replaying the
                     // self-inverse K1 restores (tag, c, 0). The
-                    // scratch exits equal to its init on every input —
+                    // scratch exits equal to its init on every input --
                     // promotion stays ancilla-clean.
                     let control_tag = if invert_tag {
                         cur_tag.rail_swapped()
@@ -1360,7 +1360,7 @@ impl McNot {
     }
 }
 
-/// Transformation-based reversible synthesis (Miller–Maslov–Dueck):
+/// Transformation-based reversible synthesis (Miller-Maslov-Dueck):
 /// decompose the permutation `perm` of `{0,1}^w` into multi-controlled
 /// NOTs, returned in **circuit order** (apply left to right).
 ///
@@ -1372,13 +1372,13 @@ impl McNot {
 /// phase 2 clears each extra bit, with controls = the other 1-bits
 /// (which include all of `i`'s bits, since the working value ⊇ `i` by
 /// then). In both phases a settled row `k < i` would have to be a
-/// bit-superset of a value `> k` to fire — impossible — so earlier
+/// bit-superset of a value `> k` to fire -- impossible -- so earlier
 /// rows are never disturbed and the loop terminates for every
 /// permutation. Controls never exceed `w - 1`.
 ///
-/// The collected gates satisfy `G_m ∘ … ∘ G_1 ∘ perm = id`; each gate
-/// is self-inverse, so `perm = G_1 ∘ G_2 ∘ … ∘ G_m` (composition
-/// applies innermost first) — i.e. the *circuit* runs the list in
+/// The collected gates satisfy `G_m ∘ ... ∘ G_1 ∘ perm = id`; each gate
+/// is self-inverse, so `perm = G_1 ∘ G_2 ∘ ... ∘ G_m` (composition
+/// applies innermost first) -- i.e. the *circuit* runs the list in
 /// reverse generation order, which is the order returned.
 fn mmd_gates(perm: &[u32], w: usize) -> Vec<McNot> {
     fn apply_all(t: &mut [u32], g: &McNot) {
@@ -1450,7 +1450,7 @@ pub fn lower_with_ancillas(net: &TypedNode) -> Result<(PhasedCellNetlist, Vec<bo
     lower_inner(net).map(|(netlist, inits, _)| (netlist, inits))
 }
 
-/// Which lowering mechanism allocated / discharged each ancilla —
+/// Which lowering mechanism allocated / discharged each ancilla --
 /// diagnostic attribution for the ring-closure (ancilla restoration)
 /// work. `inputs[i]` labels the i-th ancilla *input* (parallel to the
 /// init vector); `outputs[j]` labels the j-th ancilla *output* (the
@@ -1678,7 +1678,7 @@ mod tests {
 
     #[test]
     fn not_via_swap_sum_is_rail_swap() {
-        // Lemma: NOT-in-Permute — rail swap, zero cells.
+        // Lemma: NOT-in-Permute -- rail swap, zero cells.
         let net = assert_lowering_agrees(&Iso::SwapSum(Type::One, Type::One));
         assert!(net.cells.is_empty());
         assert_eq!(net.outputs[0].line0, net.inputs[0].line1);
@@ -1720,7 +1720,7 @@ mod tests {
     #[test]
     fn sym_of_fredkin_lowers_to_the_same_cell() {
         // Adjoint of a self-inverse prim: still one K1 (C2.5's syntactic
-        // fallback — mirrored netlist — degenerates to the same network).
+        // fallback -- mirrored netlist -- degenerates to the same network).
         let iso = Iso::sym(Iso::Prim(Box::new(fredkin_prim())));
         let net = assert_lowering_agrees(&iso);
         assert_eq!(net.cell_counts(), BTreeMap::from([(CellKind::K1, 1)]));
@@ -1777,7 +1777,7 @@ mod tests {
 
     #[test]
     fn unbalanced_par_records_skew_and_imbalance() {
-        // (Reg(1) × id × id) ; fredkin — the control arrives one tick
+        // (Reg(1) × id × id) ; fredkin -- the control arrives one tick
         // late, so the K1 fires at depth 1 and reports the imbalance the
         // future balancer must repair.
         let id_bit = TypedNode {
@@ -1956,7 +1956,7 @@ mod tests {
     #[test]
     fn toffoli_prim_synthesizes_to_k1_r1_k1_sandwich() {
         // Toffoli (c1, c2, t) ↦ (c1, c2, t ⊕ (c1 ∧ c2)): the ADR-0040
-        // D3 sandwich — K1 computes c1 ∧ c2 onto a 0-scratch, R1 flips
+        // D3 sandwich -- K1 computes c1 ∧ c2 onto a 0-scratch, R1 flips
         // t, the replayed K1 restores the scratch. One ancilla in, one
         // ancilla out, clean on every input (tests/ancilla_clean.rs
         // verifies the zero residue).
@@ -2027,7 +2027,7 @@ mod tests {
     fn too_wide_prim_is_refused_not_guessed() {
         // The synthesis cap is honest: an over-wide prim reports
         // UnsupportedPrim instead of attempting a 2^w enumeration.
-        // (Constructed structurally — no truth-table enumeration needed
+        // (Constructed structurally -- no truth-table enumeration needed
         // to hit the width check, which fires before the table walk...
         // but enumerate_values does run, so keep the domain tiny by
         // using a wide type with only Unit payloads.)

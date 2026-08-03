@@ -1,4 +1,4 @@
-//! A-6.0 transcriber-core tests — the AUTOMATION of `bvexpr_synth_poc.rs`.
+//! A-6.0 transcriber-core tests -- the AUTOMATION of `bvexpr_synth_poc.rs`.
 //!
 //! The POC hand-wrote the gate sequences; here the transcriber PRODUCES them
 //! and the same symbolic oracle (`symbolic_exec` + `equiv`) verifies the
@@ -56,7 +56,7 @@ fn ccnot_mix_produces_and_verifies() {
     );
 }
 
-/// (2) POC `affine_nonlinear_mix`: (x,y,z,w) ↦ (x ⊕ w ⊕ (y∧z), …)
+/// (2) POC `affine_nonlinear_mix`: (x,y,z,w) ↦ (x ⊕ w ⊕ (y∧z), ...)
 /// → PRODUCE `[Xor{0,3}, Ccnot{0,1,2}]`.
 #[test]
 fn affine_nonlinear_mix_produces_and_verifies() {
@@ -168,7 +168,7 @@ fn cswap_produces_and_verifies() {
 }
 
 /// (5) TEETH: a spec the transcriber emits for VERIFIES, and a DELIBERATELY
-/// CORRUPTED expected-spec FAILS equiv against the same emission — proving the
+/// CORRUPTED expected-spec FAILS equiv against the same emission -- proving the
 /// oracle is real, not vacuous (the f3.5 lesson).
 #[test]
 fn teeth_corrupted_spec_fails_equiv() {
@@ -181,7 +181,7 @@ fn teeth_corrupted_spec_fails_equiv() {
     let got = symbolic_exec(&body).unwrap();
     equiv(&got, &real, BITS, &[0, 1, 2]).expect("real spec verifies");
 
-    // Corrupt the spec: use w-analog by swapping the AND to (y ∧ y-shifted) —
+    // Corrupt the spec: use w-analog by swapping the AND to (y ∧ y-shifted) --
     // here use reg 1 twice differently: x ⊕ (y ∧ y) = x ⊕ y (a real difference).
     let corrupted = spec(|r, b| match r {
         0 => v(0, b).xor(v(1, b)), // NOT equal to x ⊕ (y∧z)
@@ -194,10 +194,10 @@ fn teeth_corrupted_spec_fails_equiv() {
 }
 
 /// (6) OUT-OF-CLASS: a spec outside the in-place ancilla-free class returns
-/// `Err` (NOT a wrong body). A pure register PERMUTATION — reg0 ← reg1, reg1 ←
+/// `Err` (NOT a wrong body). A pure register PERMUTATION -- reg0 ← reg1, reg1 ←
 /// reg0 written WITHOUT the swap-mux shape (i.e. each new value is the OTHER
-/// register's old value, not `old ⊕ f`) — is not in-place realizable: neither
-/// row is `old ⊕ …`, so `peel_self_xor` fails.
+/// register's old value, not `old ⊕ f`) -- is not in-place realizable: neither
+/// row is `old ⊕ ...`, so `peel_self_xor` fails.
 #[test]
 fn out_of_class_permutation_returns_err() {
     // (a,b) ↦ (b, a): row 0 is Var(1,b) (no self-term), row 1 is Var(0,b).
@@ -215,7 +215,7 @@ fn out_of_class_permutation_returns_err() {
 
 /// (6b) OUT-OF-CLASS: a cyclic in-place dependency needs ancilla → `Err`.
 /// (x,y) ↦ (x⊕y, y⊕x_new?) is impossible; instead build the classic cycle:
-/// row0 = x ⊕ y, row1 = y ⊕ x — each is `old ⊕ (other)`, but they mutually read
+/// row0 = x ⊕ y, row1 = y ⊕ x -- each is `old ⊕ (other)`, but they mutually read
 /// each other's INPUT while writing it, so no ordering preserves both reads.
 #[test]
 fn out_of_class_cyclic_ordering_returns_err() {

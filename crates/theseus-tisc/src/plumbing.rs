@@ -17,7 +17,7 @@ use theseus_core::{Iso, Type};
 
 use crate::types::{bit, flat};
 
-/// NOT on a single Bit = `SwapSum(1, 1)` — zero cells, pure rail swap.
+/// NOT on a single Bit = `SwapSum(1, 1)` -- zero cells, pure rail swap.
 pub(crate) fn not_iso() -> Iso {
     Iso::SwapSum(Type::One, Type::One)
 }
@@ -137,7 +137,7 @@ pub(crate) fn head_k(n: usize, k: usize, prim: Iso) -> Iso {
 }
 
 /// Apply a k-wire prim at the given leaves of `flat(n)` (bubble-route
-/// the leaves to the head, apply, route back — all routing zero cells).
+/// the leaves to the head, apply, route back -- all routing zero cells).
 pub(crate) fn gate_at(n: usize, wires: &[usize], prim: Iso) -> Iso {
     let k = wires.len();
     assert!((1..=5).contains(&k));

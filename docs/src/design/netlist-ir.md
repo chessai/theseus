@@ -10,7 +10,7 @@ Hierarchical, typed, direction-symmetric (ADR-0013). Ports are
 | `Permute(monoid, σ)` | canonical structural plumbing (ADR-0014) | ×: zero gates; +: tag remap |
 | `Distrib`/`Factor` | the only leaf-duplicating pair | quarantined per-backend |
 | `TraceLoop` | finite trace; WCET ≤ \|u\| attribute | unroll or counter (profile) |
-| `Iter` | reserved v0.2 bounded iteration | — |
+| `Iter` | reserved v0.2 bounded iteration | -- |
 | `HandshakeLoop` | v0.2+ partial loops | valid/done |
 | `Prim` | registry leaf; (fwd,bwd) semantics + HDL template | template |
 | `Reg(n)` | semantic identity; retiming always sound | flops |

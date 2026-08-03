@@ -8,14 +8,14 @@ underwriting ADR-0004's "coverage is the invertibility, not a style lint,"
 and publication item #1 ("totality-for-free"). It is proved for the **plain
 fragment**: finite types, no labels, no guards (v0.1 first M1 slice). The
 label-extended case reduces to this one once label elaboration is specified
-(deferred); the *encoding* half — that the bijection's mux/demux lowering is
-invertible under the padded bit encoding — is a separate downstream
+(deferred); the *encoding* half -- that the bijection's mux/demux lowering is
+invertible under the padded bit encoding -- is a separate downstream
 obligation (TH-4b, ADR-0012, M2) and is **not** claimed here.
 
 ## Setup
 
 Fix finite types `A`, `B` in the rig fragment. An iso is a clause list
-`C = [(l₁,r₁), …, (lₙ,rₙ)]` in declaration order, where each `lᵢ` is a
+`C = [(l₁,r₁), ..., (lₙ,rₙ)]` in declaration order, where each `lᵢ` is a
 pattern over `A` and each `rᵢ` a pattern over `B`. A **pattern** is built
 from constructors, tuples, and pattern *variables*; it is **linear** when no
 variable occurs more than once in it. Write `vars(p)` for the set of
@@ -45,8 +45,8 @@ inverse. Hence `σ_p` is a bijection `⟦p⟧ ≅ Env(p)`.
 *Proof.* Structural induction on `p`.
 - `p = x` (variable): `⟦x⟧ = T`, `Env(x) = T`, `σ_x(t) = {x ↦ t}`,
   `x[ρ] = ρ(x)`; mutually inverse.
-- `p = C p₁ … p_k` (constructor, `C` of arity `k`): a value matches iff it is
-  `C v₁ … v_k` with `vⱼ ∈ ⟦pⱼ⟧`. Constructors are injective and their images
+- `p = C p₁ ... p_k` (constructor, `C` of arity `k`): a value matches iff it is
+  `C v₁ ... v_k` with `vⱼ ∈ ⟦pⱼ⟧`. Constructors are injective and their images
   are disjoint (distinct constructors, distinct data), so matching decomposes
   uniquely into the `vⱼ`. Linearity makes `vars(p)` the *disjoint* union of
   the `vars(pⱼ)`, so `Env(p) = ∏ⱼ Env(pⱼ)`. By the IH each
@@ -79,8 +79,8 @@ inverse `φᵢ⁻¹(b) = lᵢ[σ_{rᵢ}(b)]`. ∎
 Define `F : A → B` by `F(a) = φᵢ(a)`, where `i` is the unique index with
 `a ∈ ⟦lᵢ⟧`. Then `F` is a bijection, and the map `G : B → A` defined
 symmetrically from the RHS partition and the `φᵢ⁻¹` is its inverse. Moreover
-`G` is exactly what the clause list read right-to-left, `[(r₁,l₁), …]`,
-denotes — so the syntactic adjoint is semantically the inverse.
+`G` is exactly what the clause list read right-to-left, `[(r₁,l₁), ...]`,
+denotes -- so the syntactic adjoint is semantically the inverse.
 
 *Proof.* `F` is well-defined and total: by (Coverage), `{⟦lᵢ⟧}` partitions
 `A`, so every `a` lies in exactly one `⟦lᵢ⟧` and `φᵢ(a) ∈ ⟦rᵢ⟧ ⊆ B` is
@@ -106,13 +106,13 @@ adjoint denotes `F⁻¹`. ∎
   `spec/static-semantics.md` denotes a total bijection `A ≅ B`; a rejected
   one fails one of the four necessary conditions (necessity: each check
   negated exhibits a value with 0 or ≥2 forward/backward images, i.e. a
-  non-bijection — so the checks are also *complete*, no false rejections).
+  non-bijection -- so the checks are also *complete*, no false rejections).
   Coverage is therefore invertibility, exactly as ADR-0004 states, now with
   a proof rather than an assertion.
 - **The two columns are independent.** The proof uses the LHS partition and
   the RHS partition separately; neither implies the other. This is why the
   checker enumerates both columns (a variable pattern can make one side
-  exhaustive while the other is not — e.g. `| a <-> Just a : Bit <-> MaybeBit`
+  exhaustive while the other is not -- e.g. `| a <-> Just a : Bit <-> MaybeBit`
   is right-non-exhaustive only), matching diagnostic `0001` and `0008`.
 - **Adjoint corollary** ties to the Core Π adjoint (`design/core-pi.md`): the
   right-to-left reading is the semantic inverse, so `~` on a checked iso needs

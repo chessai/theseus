@@ -97,7 +97,7 @@ fn i2_eval_via_spec_matches_table_flat4() {
     // F1 FIX: build a SYMBOLIC-ONLY twin (same spec, empty table) and a
     // TABLE twin (full table, no spec). Route through theseus_eval::eval
     // so the REAL interp.rs eval-via-spec path is exercised (the old test
-    // re-implemented the loop — the L19 self-written-checker class).
+    // re-implemented the loop -- the L19 self-written-checker class).
     let w = 4u8;
     let spec = masked_accum_spec(w);
     let table_def = masked_accum_table_prim(w);
@@ -276,7 +276,7 @@ fn bveq_verify_emission_rejects_empty_table() {
         symbolic: Some(spec),
     };
 
-    // A dummy body — the guard should reject BEFORE reaching symbolic_exec.
+    // A dummy body -- the guard should reject BEFORE reaching symbolic_exec.
     let body = [Instr::Ccnot {
         rd: 0,
         rs: 1,
@@ -349,8 +349,8 @@ fn eval_via_spec_symbolic_only() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// F1–F5 REPRODUCING / REGRESSION TESTS (L20)
-// Each test reproduces the finding — fails without the fix, passes with it.
+// F1-F5 REPRODUCING / REGRESSION TESTS (L20)
+// Each test reproduces the finding -- fails without the fix, passes with it.
 // ═══════════════════════════════════════════════════════════════════════
 
 // ── F1 CONTROL: a corrupted spec is detected by eval-via-spec ──────
@@ -389,7 +389,7 @@ fn f1_control_corrupted_spec_detected_by_eval() {
     let spec_out = theseus_eval::eval(&sym_iso, input, &mut 1000).expect("spec eval");
     assert_ne!(
         spec_out, table_out,
-        "F1 CONTROL: corrupted spec MUST diverge from table — \
+        "F1 CONTROL: corrupted spec MUST diverge from table -- \
          if this passes, the test has no teeth"
     );
 }
@@ -457,7 +457,7 @@ fn f3_spec_too_wide_width_rejected() {
 fn f3_spec_wrong_leaf_count_rejected() {
     let w = 4u8;
     let mut spec = masked_accum_spec(w);
-    // Remove a leaf from forward — 2 leaves for a 3-leaf type.
+    // Remove a leaf from forward -- 2 leaves for a 3-leaf type.
     spec.forward.leaves.pop();
     let mut def = masked_accum_table_prim(w);
     def.symbolic = Some(spec);
@@ -580,7 +580,7 @@ fn f5_cross_crate_decompose_agreement() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// SLICE 3b — SELECTION-BY-EQUIV TESTS
+// SLICE 3b -- SELECTION-BY-EQUIV TESTS
 // ═══════════════════════════════════════════════════════════════════════
 
 // ── R1: validate_against rejects out-of-range Var indices ─────────────
@@ -724,7 +724,7 @@ fn payoff_flat8_masked_accum_recognized_as_ccnot() {
     let f = Type::Flat(w);
     let ty = Type::prod(f.clone(), Type::prod(f.clone(), f));
 
-    // Build a symbolic-only prim (no table — the 2^24 table NEVER built).
+    // Build a symbolic-only prim (no table -- the 2^24 table NEVER built).
     let def = PrimDef {
         forward_name: "maskacc8".into(),
         backward_name: "maskacc8_inv".into(),
@@ -900,11 +900,11 @@ fn non_vacuity_wrong_spec_rejected() {
 
 /// Every other selection test homes the operands at the IDENTITY mapping
 /// Reg(0),Reg(1),Reg(2), so the suite is blind to a bug in
-/// `remap_expr_operands` (disabling the remap leaves them all green — the
+/// `remap_expr_operands` (disabling the remap leaves them all green -- the
 /// exact attack-A coverage hole the impl-review found). This test homes the
 /// three Flat(8) operands at SCRAMBLED, non-identity registers Reg(4),Reg(2),
 /// Reg(7) and asserts selection recognizes the masked-accum prim as exactly
-/// `Ccnot{rd:4, rs:2, rt:7}` — the assignment the TYPE-derived homes dictate.
+/// `Ccnot{rd:4, rs:2, rt:7}` -- the assignment the TYPE-derived homes dictate.
 ///
 /// Teeth (both proven in the impl-review): at HEAD this passes; disabling the
 /// operand→register remap makes selection over-reject (Deferred) so the

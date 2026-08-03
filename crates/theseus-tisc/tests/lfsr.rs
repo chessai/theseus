@@ -136,7 +136,7 @@ fn t2_lfsr_whole_domain_oracle() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// T3: real CPU oracle — maximal k=5 trajectory from seed 0b0001
+// T3: real CPU oracle -- maximal k=5 trajectory from seed 0b0001
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -145,7 +145,7 @@ fn t3_lfsr_real_cpu() {
     let iso = elaborate(LFSR_SRC, "lfsr");
 
     // Rescoped: single maximal-k=5 trajectory from nonzero seed 0b0001 only
-    // (whole-domain sweep takes hours — design explicitly rejected it).
+    // (whole-domain sweep takes hours -- design explicitly rejected it).
     let seed = 1u8;
     let expected_outputs: [u8; 5] = [9, 13, 15, 14, 7];
     for (k_idx, &expected_out) in expected_outputs.iter().enumerate() {
@@ -154,7 +154,7 @@ fn t3_lfsr_real_cpu() {
         let cpu_out =
             cpu_run(&iso, &input).unwrap_or_else(|e| panic!("real CPU failed for k={k}: {e}"));
 
-        // Output is (Nat@6, Reg) — extract both parts.
+        // Output is (Nat@6, Reg) -- extract both parts.
         let (out_k, reg_val) = match &cpu_out {
             Value::Pair(nat, reg) => {
                 // Decode k from output nat to verify iter preserves ⟨k,·⟩.
@@ -184,12 +184,12 @@ fn t3_lfsr_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// T4: orbit correctness — pins the polynomial
+// T4: orbit correctness -- pins the polynomial
 // ══════════════════════════════════════════════════════════════════════
 
 /// Encode a 4-bit register value as a nested Bit product Value.
 /// b0 = lsb = first tuple component.
-/// Layout: (Bit, (Bit, (Bit, Bit))) — right-nested.
+/// Layout: (Bit, (Bit, (Bit, Bit))) -- right-nested.
 fn encode_reg(val: u8) -> Value {
     let bit = |b: u8| -> Value {
         if b == 0 {
@@ -292,7 +292,7 @@ fn t4_orbit_correctness() {
         let output = theseus_eval::eval(&iso, input.clone(), &mut fuel)
             .unwrap_or_else(|e| panic!("eval failed for k={k}: {e:?}"));
 
-        // Output is (Nat@6, Reg) — extract both parts; iter must preserve ⟨k,·⟩.
+        // Output is (Nat@6, Reg) -- extract both parts; iter must preserve ⟨k,·⟩.
         let (out_k, reg_val) = match &output {
             Value::Pair(nat, reg) => {
                 let mut depth = 0usize;
@@ -422,7 +422,7 @@ fn t5_park_tax_trace() {
     );
 }
 
-// ── T5b: energy pricing (joules — #[ignore], step-net lowering costly) ──
+// ── T5b: energy pricing (joules -- #[ignore], step-net lowering costly) ──
 
 #[test]
 #[ignore = "step-net lowering at ROM=104 is expensive (>9min release CPU, never yet run to completion); assertions (step_j>0, total_j==B·step_j) are sound but costly"]
@@ -442,7 +442,7 @@ fn t5b_energy_pricing() {
     let b = lowered.wcet();
     let seed = 1u8;
 
-    // Run at k=5 (maximum — zero park tax).
+    // Run at k=5 (maximum -- zero park tax).
     let input = Value::pair(encode_nat6(5), encode_reg(seed));
     let pe =
         rom_program_energy(&iso, &input, &db, t_ramp, &step_net).expect("rom_program_energy lfsr");

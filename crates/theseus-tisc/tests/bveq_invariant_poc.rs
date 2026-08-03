@@ -1,11 +1,11 @@
-//! BVEQ-INVARIANT-POC — the THIRD go/no-go experiment: prove a DATA-DEPENDENT
+//! BVEQ-INVARIANT-POC -- the THIRD go/no-go experiment: prove a DATA-DEPENDENT
 //! LOOP program correct SYMBOLICALLY, without unrolling, via the
 //! **inductive-invariant method**.
 //!
 //! ── Why this file exists ──────────────────────────────────────────────────
 //! `bveq_multistep_poc.rs` established: straight-line symbolic step-composition
 //! (PC CONCRETE each step) is tractable (peak < 500 nodes), but NAIVE symbolic
-//! composition of a data-dependent LOOP OOMs (>8 GB) — once PC is symbolic the
+//! composition of a data-dependent LOOP OOMs (>8 GB) -- once PC is symbolic the
 //! fetched IR is symbolic, so `decode_execute` must represent every opcode at
 //! once (exponential). This file SIDESTEPS the blow-up.
 //!
@@ -22,28 +22,28 @@
 //!  L1 BODY LEMMA (whole carrier domain, symbolic, concrete PC → tractable):
 //!     Compose `step` across the `body_len` = `iter_len − LOOP_OVERHEAD` body
 //!     instructions (97, not the full 107-instr iteration; EXCLUDING the loop
-//!     glue — Ltop SWAPBR + join-dispatch [L0] and the route + come-from Swapbr
+//!     glue -- Ltop SWAPBR + join-dispatch [L0] and the route + come-from Swapbr
 //!     [L2]), concrete PC through it, SYMBOLIC carrier registers, and
 //!     prove the resulting carrier transform ≡ the Trace body function (the
 //!     `rot_step` bit-rotation reference for vart_halve) over the WHOLE carrier
 //!     domain. Straight-line composition ⇒ tractable.
 //!  L0 RE-ENTRY LEMMA (5-step glue, whole carrier domain, concrete PC):
-//!     Compose the loop glue [Ltop, body_start) = offsets [2,7) — Ltop's SWAPBR
-//!     rc + the 4 join-dispatch instrs — from L2's proven CONTINUE exit state and
+//!     Compose the loop glue [Ltop, body_start) = offsets [2,7) -- Ltop's SWAPBR
+//!     rc + the 4 join-dispatch instrs -- from L2's proven CONTINUE exit state and
 //!     prove the exit ≡ L1's entry invariant {ctrl=temp=rb=rc=BR=0}, carrier
 //!     identity, PC=body_start. This WELDS L2-exit→L1-entry so the induction step
 //!     closes on lemmas (L2→L0→L1 covers the whole per-iteration span [2,108)),
 //!     not on hand-tracing. Straight-line concrete PC ⇒ tractable (peak tiny).
 //!  L2 COME-FROM / TERMINATION LEMMA (single step, whole carrier domain):
 //!     Prove the come-from bracket at the loop tail sets BR = the back-jump δu
-//!     WHEN the loop continues (¬done) and BR = 0 WHEN done — i.e. the loop takes
+//!     WHEN the loop continues (¬done) and BR = 0 WHEN done -- i.e. the loop takes
 //!     the back-edge iff ¬done(carrier), and `done` matches the Trace's exit
 //!     condition (tag = 1). Single step ⇒ tractable.
 //!  L3 INDUCTION ARGUMENT (documented + anchored):
 //!     (L1 ∧ L2) ⟹ `run_on_cpu(rom) == eval(trace)` over the WHOLE input
 //!     domain, by induction on the (data-dependent) trip count. Anchored by a
 //!     CONCRETE bootstrap (sampled inputs through the real per-step `eval` loop
-//!     agree) + terminal quiescence (BR = 0, scratch clean) — the same
+//!     agree) + terminal quiescence (BR = 0, scratch clean) -- the same
 //!     properties the ~4 h real-CPU authority checks, now established
 //!     STRUCTURALLY rather than by exhaustive loop-unrolling.
 //!
@@ -51,13 +51,13 @@
 //! the body / break the come-from ⇒ DETECTED) give the oracle teeth.
 //!
 //! ── MEASURED RESULT (vart_halve K=3, HB=1; iter_len=107, body_len=97, B=646) ──
-//!   L1 BODY LEMMA  : MAX peak 3 BDD nodes over 97 composed body instrs — the
+//!   L1 BODY LEMMA  : MAX peak 3 BDD nodes over 97 composed body instrs -- the
 //!                    body ≡ rot_step over the whole reachable carrier domain.
 //!                    TRACTABLE (contrast: naive loop composition OOMs >8 GB).
 //!   L2 COME-FROM   : peak 3 BDD nodes; BR = δu·[tag==0], δu=0x95=256−107 lands
 //!                    exactly on Ltop; per-branch aux exit pinned; carrier
 //!                    undisturbed.
-//!   L0 RE-ENTRY    : the [2,7) glue welds L2-exit → L1-entry — tiny BDD. With
+//!   L0 RE-ENTRY    : the [2,7) glue welds L2-exit → L1-entry -- tiny BDD. With
 //!                    L1+L2 this closes the per-iteration relation on LEMMAS
 //!                    (offsets [2,108)); the induction step no longer hand-traces.
 //!                    Field-complete: scratch s2..s7 IDENTITY + IR=0 also welded
@@ -67,7 +67,7 @@
 //!                    (GAP-A: the only BR≠0 PC-adder pass).
 //!   L3 anchor      : real-CPU bootstrap == eval + terminal quiescence across
 //!                    trip counts T ∈ {1,2,3}; whole-domain trip_count+1 ≤ k_max.
-//!   Both lemmas are TINY BDDs — the blow-up is genuinely sidestepped. This
+//!   Both lemmas are TINY BDDs -- the blow-up is genuinely sidestepped. This
 //!   retires the loop-based whole-domain sweeps + the ~4 h real-CPU authority
 //!   for this loop, replacing them with two small-BDD lemmas + an induction
 //!   argument.
@@ -75,7 +75,7 @@
 //! ── PERFORMANCE (fetch-mux memoization, `StepEngine`) ─────────────────────
 //!   Profiling the per-step `eval_bdd` (peak stays 3 nodes, so the cost is gate
 //!   COUNT not BDD growth) showed each step was ~3.05 s, of which the FETCH
-//!   phase — walking the 111-entry ROM address-compare MUX as BDD ops — was
+//!   phase -- walking the 111-entry ROM address-compare MUX as BDD ops -- was
 //!   ~1.36 s and appears TWICE per step (fetch + unfetch) ⇒ ~2.7 s wasted on a
 //!   mux whose answer at a CONCRETE PC is the compile-time constant `rom[pc]`.
 //!   `StepEngine` builds the ROM-invariant phases (decode_execute, pc_add_br,
@@ -164,7 +164,7 @@ fn build_state<F: Fn(usize) -> SV>(layout: &Layout, mk: F) -> SV {
 /// Read a field of `out` as a CONCRETE integer, requiring every bit to be a BDD
 /// constant. Returns `None` if any bit is symbolic. Used for the PC-agreement
 /// soundness assert (item 4 of the review): before we re-pin PC to a compile-time
-/// constant we CONFIRM the datapath's own PC output is exactly that constant — a
+/// constant we CONFIRM the datapath's own PC output is exactly that constant -- a
 /// PC-datapath bug would otherwise be masked by the re-pin.
 fn read_concrete_field(out: &SV, layout: &Layout, f: usize) -> Option<u32> {
     let bits = out_field_bits(out, layout, f);
@@ -254,13 +254,13 @@ struct BodyStep {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// StepEngine — the MEMOIZED per-step evaluator.
+// StepEngine -- the MEMOIZED per-step evaluator.
 //
 // PROFILE (measured, 97-instr vart_halve body, w_pc=8): per-step `eval_bdd` on
 // the whole `step_with` iso was ~3.05 s, of which the FETCH phase (walking the
 // 111-entry ROM address-compare MUX as BDD ops) was ~1.36 s and it appears
 // TWICE per step (fetch + unfetch) ⇒ ~2.7 s of the 3.05 s. decode_execute was
-// ~0.44 s; the PC adders the rest. The BDDs are TINY (peak 3 nodes) — the cost
+// ~0.44 s; the PC adders the rest. The BDDs are TINY (peak 3 nodes) -- the cost
 // is the sheer count of (constant-valued) BDD gate ops in the mux, NOT node
 // growth. step_with construction was a one-time 3.5 s (already hoisted out of
 // the loop).
@@ -268,25 +268,25 @@ struct BodyStep {
 // THE MEMOIZATION. The step is `fetch ; decode_execute ; unfetch ; pc_add_br ;
 // pc_inc`. At a CONCRETE PC the fetch is exactly `IR ^= rom[PC]` with `rom[PC]`
 // a COMPILE-TIME CONSTANT: walking the whole mux to discover which entry fires
-// is pure waste — the answer is `rom[pc]`. So we:
+// is pure waste -- the answer is `rom[pc]`. So we:
 //   * build the four ROM-invariant NON-fetch phases (decode_execute, pc_add_br,
 //     pc_inc) ONCE and reuse them every step;
 //   * SHORT-CIRCUIT fetch/unfetch: fetch sets the four IR bytes to const rom[pc]
 //     (IR enters 0, so IR^=rom[pc] == rom[pc]); unfetch re-zeroes them (IR is
 //     still rom[pc] because D1 lets nothing write PC and decode_execute
-//     preserves IR — the real unfetch XORs the SAME rom[pc]). No mux walk.
+//     preserves IR -- the real unfetch XORs the SAME rom[pc]). No mux walk.
 //
 // This is byte-faithful to what the real fetch produces at a concrete PC: the
 // fetch's job (address-compare selects rom[pc]) is exactly what we substitute.
 // NOTE (post-b3238b9 memoization): NO always-on lemma walks the real fetch mux
-// any more — L2's come-from bracket also runs through this same StepEngine, so it
+// any more -- L2's come-from bracket also runs through this same StepEngine, so it
 // too short-circuits fetch/unfetch. Fetch FAITHFULNESS therefore rests entirely
 // on (a) the netlist-reconciliation tier and (b) the #[ignore] heavy anchor
 // `invariant_induction_bootstrap_quiescence`, which runs the REAL
 // `run_rom_on_cpu` (full fetch mux) on a sample. Retiring the real-CPU authority
 // is contingent on keeping that anchor as an advisor-run re-anchor (see L3).
-// The SEMANTICALLY-load-bearing phase for the body lemma — decode_execute (the
-// rot_step logic) — is still walked symbolically in full, unchanged.
+// The SEMANTICALLY-load-bearing phase for the body lemma -- decode_execute (the
+// rot_step logic) -- is still walked symbolically in full, unchanged.
 // ══════════════════════════════════════════════════════════════════════════
 
 /// Replace field `f` of a right-nested `nf`-field state SV with `new`.
@@ -328,10 +328,10 @@ impl StepEngine {
         }
     }
 
-    /// XOR the constant word `w` into the four IR bytes — the faithful fetch /
+    /// XOR the constant word `w` into the four IR bytes -- the faithful fetch /
     /// unfetch effect (`IR ^= rom[pc]`). Done bit-wise on the current (BDD) IR
     /// so it is exact even if IR is symbolic: on fetch IR enters 0 (⇒ IR = w),
-    /// on unfetch IR enters rom[pc] (⇒ IR = 0). NOT an overwrite — that would
+    /// on unfetch IR enters rom[pc] (⇒ IR = 0). NOT an overwrite -- that would
     /// mask an IR-preservation violation by decode_execute.
     fn xor_ir(&self, sv: &SV, w: u32, _vs: &BddVariableSet) -> SV {
         let mut out = sv.clone();
@@ -366,11 +366,11 @@ impl StepEngine {
         let word = self.rom[pc];
         // 1. fetch: IR ^= rom[pc]  (IR enters 0 ⇒ IR = rom[pc]).
         let after_fetch = self.xor_ir(&cur, word, vs);
-        // 2. decode_execute (the real symbolic walk — the load-bearing phase).
+        // 2. decode_execute (the real symbolic walk -- the load-bearing phase).
         let after_de = eval_bdd(&self.decode_execute, after_fetch, vs, ctx)?;
         // 3. unfetch: IR ^= rom[pc] again ⇒ IR back to 0 (decode_execute
         //    preserves IR = rom[pc]; nothing writes PC, so it XORs the SAME
-        //    rom[pc]) — computed as an exact BDD XOR, so a stray IR write by
+        //    rom[pc]) -- computed as an exact BDD XOR, so a stray IR write by
         //    decode_execute would survive rather than be masked.
         let after_unfetch = self.xor_ir(&after_de, word, vs);
         // 4. pc_add_br ; 5. pc_inc.
@@ -382,18 +382,18 @@ impl StepEngine {
 /// Body-ENTRY state at concrete PC = `pc`, faithful to the real machine at the
 /// top of the body: the CARRIER registers (tag,v,h) are SYMBOLIC (the whole
 /// carrier domain), and EVERY other data field is at its body-entry INVARIANT
-/// value — 0. The four come-from aux {rc,rb,temp,ctrl} are 0 at body entry (the
+/// value -- 0. The four come-from aux {rc,rb,temp,ctrl} are 0 at body entry (the
 /// join-dispatch bracket burns temp/ctrl to 0 before the body), scratch s0..s7
 /// = 0 (decoder convention + the crossbar restores it to 0), IR = 0, BR = 0.
 ///
 /// This matches the concrete body-step diagnostic (which set only the carrier
 /// and everything else 0 and reproduced rot_step exactly). Making the aux/scratch
 /// symbolic is UNFAITHFUL: the body's Xchg crossbar uses scratch as workspace and
-/// only restores it when it enters at the invariant 0 — a symbolic scratch entry
+/// only restores it when it enters at the invariant 0 -- a symbolic scratch entry
 /// is not a state the real machine is ever in at body top.
 /// `carrier_regs` maps each carrier register to the number of LOW bits that are
 /// symbolic (its width in the reachable carrier); higher bits enter 0 (the
-/// reachable domain never has them set — the carrier is a (1+HB+K)-bit window
+/// reachable domain never has them set -- the carrier is a (1+HB+K)-bit window
 /// spread across the low bits of tag/v/h). Every non-carrier field enters 0.
 fn body_entry_sv(
     layout: &Layout,
@@ -430,7 +430,7 @@ fn body_entry_sv(
 /// Returns the output SV after the last body instruction and the growth curve.
 ///
 /// We use the WHOLE ROM in `step_with` (so fetch reads the real body words) but
-/// only step over the body span, re-pinning PC — the come-from Swapbr at
+/// only step over the body span, re-pinning PC -- the come-from Swapbr at
 /// `pc_top+span` is NEVER executed here (that is L2's job).
 fn compose_body(
     layout: &Layout,
@@ -453,7 +453,7 @@ fn compose_body(
         // Re-pin PC to the concrete next value; carry every other field forward.
         let next_pc = pc_top + i + 1;
         // SOUNDNESS (item 4.ii): the datapath's OWN PC output must already equal
-        // the concrete constant we are about to re-pin — else a PC bug is masked.
+        // the concrete constant we are about to re-pin -- else a PC bug is masked.
         assert_eq!(
             read_concrete_pc(&out, layout),
             Some(next_pc),
@@ -502,7 +502,7 @@ const V2_K: u8 = 3;
 const V2_HB: u8 = 1;
 
 /// One reversible step: right-rotate the (1+HB+K)-bit `(tag ‖ h ‖ v)` register
-/// by 1 — the vart_halve body function (the `rot_step` reference).
+/// by 1 -- the vart_halve body function (the `rot_step` reference).
 fn rot_step(tag: u8, v: u8, h: u8, k: u8, hb: u8) -> (u8, u8, u8) {
     let width = (1 + hb + k) as u32;
     let w: u32 = ((tag as u32) << (hb + k)) | ((h as u32) << k) | (v as u32);
@@ -603,7 +603,7 @@ fn compile_loop_geom(iso: &Iso) -> LoopGeom {
     let body_start = BODY_START;
     let lend_pc = LTOP + iter_len - 1;
 
-    // Validate the skeleton at the located offsets — the come-from bracket.
+    // Validate the skeleton at the located offsets -- the come-from bracket.
     let instrs = &lowered.instrs;
     assert!(
         matches!(instrs[LTOP], Instr::Swapbr { .. }),
@@ -643,7 +643,7 @@ fn compile_loop_geom(iso: &Iso) -> LoopGeom {
     for pc in body_start..(lend_pc - ROUTE_LEN) {
         assert!(
             !matches!(instrs[pc], Instr::Swapbr { .. }),
-            "BODY SWAPBR-FREE: body instr at pc={pc} is a Swapbr ({:?}) — \
+            "BODY SWAPBR-FREE: body instr at pc={pc} is a Swapbr ({:?}) -- \
              concrete-PC pinning is UNSOUND (skip-block hazard)",
             instrs[pc]
         );
@@ -679,7 +679,7 @@ fn v2_carrier_regs() -> (usize, usize, usize) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// L1 — BODY LEMMA for vart_halve.
+// L1 -- BODY LEMMA for vart_halve.
 //
 // Compose `step` across the body span with symbolic carrier + concrete PC, then
 // prove the output (tag,v,h) registers ≡ rot_step(tag,v,h) over the WHOLE
@@ -691,7 +691,7 @@ fn v2_carrier_regs() -> (usize, usize, usize) {
 //
 // rot_step is a fixed bit-permutation of the (tag<<4 | h<<3 | v) 5-bit window
 // (K=3, HB=1): right-rotate by 1. We express it as an explicit per-output-bit
-// selection of an input carrier bit — a permutation spec at the BDD level.
+// selection of an input carrier bit -- a permutation spec at the BDD level.
 // ══════════════════════════════════════════════════════════════════════════
 
 /// The rot_step bit-permutation as a spec on the symbolic carrier bits.
@@ -743,7 +743,7 @@ fn v2_carrier_spec() -> Vec<(usize, usize)> {
 }
 
 /// The body-entry symbolic bit vector for a carrier register: low `wbits`
-/// symbolic vars, high bits 0 — CONSISTENT with `body_entry_sv`.
+/// symbolic vars, high bits 0 -- CONSISTENT with `body_entry_sv`.
 fn entry_carrier_bits(vs: &BddVariableSet, nf: usize, layout: &Layout, reg: usize, wbits: usize) -> Vec<Bdd> {
     (0..W)
         .map(|b| if b < wbits { field_bit_var(vs, nf, layout.reg_field(reg), b) } else { vs.mk_false() })
@@ -759,7 +759,7 @@ fn prove_body_lemma_vart(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     print_curve("vart_halve BODY (rot_step) [full ROM, PC concrete]", &samples);
 
     let (tag_reg, v_reg, h_reg) = v2_carrier_regs();
-    // Body-entry carrier bits (low window symbolic, high 0) — CONSISTENT with
+    // Body-entry carrier bits (low window symbolic, high 0) -- CONSISTENT with
     // the entry SV, so the rot_step spec is expressed over the same variables.
     let tag_in = entry_carrier_bits(&vs, nf, layout, tag_reg, 1);
     let v_in = entry_carrier_bits(&vs, nf, layout, v_reg, V2_K as usize);
@@ -810,7 +810,7 @@ fn prove_body_lemma_vart(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
 // TESTS.
 // ══════════════════════════════════════════════════════════════════════════
 
-// Concrete stepping through the body span (fast) — used to EMPIRICALLY determine
+// Concrete stepping through the body span (fast) -- used to EMPIRICALLY determine
 // the carrier register mapping + bit order before the symbolic proof.
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -868,7 +868,7 @@ fn diag_body_register_mapping() {
     }
 }
 
-/// L1 — the vart_halve BODY LEMMA. The headline tractability result: does
+/// L1 -- the vart_halve BODY LEMMA. The headline tractability result: does
 /// composing the straight-line body span with symbolic carrier stay small AND
 /// equal rot_step over the whole carrier domain?
 #[test]
@@ -894,12 +894,12 @@ fn invariant_body_lemma_vart_halve() {
         geom.body_len, peak, secs
     );
     // Tractability gate: the body must stay far below the loop-composition blow-up.
-    assert!(peak < 50_000, "BODY LEMMA peak {peak} — expected tractable (< 50k)");
+    assert!(peak < 50_000, "BODY LEMMA peak {peak} -- expected tractable (< 50k)");
     let _ = geom.lowered_instrs.len();
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// L2 — COME-FROM / TERMINATION LEMMA.
+// L2 -- COME-FROM / TERMINATION LEMMA.
 //
 // The come-from bracket at the loop tail (the last ROUTE_LEN instrs + Lend):
 //   XOR ctrl,tag ; XORI ctrl,1   → ctrl := ¬tag  (1 = continue/Left, 0 = exit)
@@ -915,7 +915,7 @@ fn invariant_body_lemma_vart_halve() {
 //
 // This is a SINGLE bracket (5 steps, PC concrete each step) ⇒ tractable.
 // The δu back-jump reach itself (sext(δu) = −iter_len across the wide PC) is a
-// SEPARATE property proven by co-factoring the PC output — see below.
+// SEPARATE property proven by co-factoring the PC output -- see below.
 // ══════════════════════════════════════════════════════════════════════════
 
 /// Read the aux registers from the compiled come-from bracket, so L2 is robust
@@ -963,7 +963,7 @@ fn read_come_from(geom: &LoopGeom) -> ComeFrom {
 }
 
 /// Pre-route entry SV: SYMBOLIC tag (only its bit 0 matters), everything the
-/// bracket reads set to the machine invariant — ctrl=temp=rb=0, BR=0 — and PC
+/// bracket reads set to the machine invariant -- ctrl=temp=rb=0, BR=0 -- and PC
 /// concrete at `route_start`. Carrier v/h and other regs symbolic (identity
 /// witnesses; the bracket must not touch them). IR=0, s0/s1=0.
 fn come_from_entry_sv(layout: &Layout, cf: &ComeFrom, vs: &BddVariableSet) -> SV {
@@ -992,7 +992,7 @@ fn come_from_entry_sv(layout: &Layout, cf: &ComeFrom, vs: &BddVariableSet) -> SV
 
 /// Compose the come-from bracket [route_start .. lend_pc] inclusive, re-pinning
 /// PC concrete BUT letting the FINAL Lend step's PC/BR go free (that is the whole
-/// point — Lend writes BR). Returns the output SV after Lend + max peak nodes.
+/// point -- Lend writes BR). Returns the output SV after Lend + max peak nodes.
 fn compose_come_from(
     layout: &Layout,
     geom: &LoopGeom,
@@ -1072,7 +1072,7 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     // Lend is the SOLE step in the whole proof where `pc_add_br` sees BR≠0 (= δu
     // on the continue branch): the back-jump. Everywhere else BR=0 so PC_out=pc+1
     // (the PC-agreement asserts). Until now Lend's LANDING was only checked as the
-    // closed-form arithmetic identity below (sext(δu)+1 lands on LTOP) — NEVER
+    // closed-form arithmetic identity below (sext(δu)+1 lands on LTOP) -- NEVER
     // against the datapath's own PC output SV. That leaves a sext/carry defect in
     // the w_pc=16 adder's HIGH byte unasserted (LTOP=2 and lend+1=109 differ in
     // the low byte but a high-byte carry bug would still be invisible to a low-
@@ -1081,8 +1081,8 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     //   PC_out = ite(tag0, lend+1, LTOP)
     //     continue (tag0=0): PC = LTOP        (δu back-jump landed)
     //     exit     (tag0=1): PC = lend+1      (fall through to epilogue)
-    // This is run under Layout::default() (w_pc=16) — the REAL δu sign-extension
-    // reach — so it exercises the wide adder's high byte on the live back-jump.
+    // This is run under Layout::default() (w_pc=16) -- the REAL δu sign-extension
+    // reach -- so it exercises the wide adder's high byte on the live back-jump.
     assert_eq!(layout.w_pc, 16, "GAP-A PC-landing assert requires the real w_pc=16 adder");
     let lend_plus_1 = geom.lend_pc + 1;
     let pc_lo_out = out_field_bits(&out, layout, layout.pc_field());
@@ -1105,12 +1105,12 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
         assert!(
             pc_lo_out[b] == want_lo,
             "GAP-A PC-LANDING: PC-lo bit {b} != ite(tag0, lend+1={lend_plus_1}, LTOP={LTOP}) \
-             — w_pc=16 adder low-byte sext/carry defect on the δu back-jump"
+             -- w_pc=16 adder low-byte sext/carry defect on the δu back-jump"
         );
         assert!(
             pc_hi_out[b] == want_hi,
             "GAP-A PC-LANDING: PC-hi bit {b} != ite(tag0, lend+1={lend_plus_1}, LTOP={LTOP}) \
-             — w_pc=16 adder HIGH-byte sext/carry defect on the δu back-jump"
+             -- w_pc=16 adder HIGH-byte sext/carry defect on the δu back-jump"
         );
     }
 
@@ -1171,7 +1171,7 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     // `come_from_entry_sv` sets s0/s1 = 0 explicitly but lets s2..s7 enter
     // SYMBOLIC (the else branch). L1's body-entry invariant requires ALL scratch
     // = 0, so the weld L1(0)→L2→L0→L1 needs L2 to pass s2..s7 through UNCHANGED
-    // (identity) for any value — strictly stronger than "0-in ⇒ 0-out", and it
+    // (identity) for any value -- strictly stronger than "0-in ⇒ 0-out", and it
     // closes the previously-unasserted s2..s7 fields on the loop cycle. (IR is
     // already pinned to 0 above; here the fields entered symbolic ⇒ must be the
     // SAME symbolic vars at exit.)
@@ -1206,13 +1206,13 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     let landed = (geom.lend_pc.wrapping_add(sext).wrapping_add(1)) & mask;
     assert_eq!(landed, LTOP, "back-jump δu must land on Ltop (offset {LTOP})");
 
-    // The come-from must NOT disturb the carrier (v,h,tag) or other data regs —
+    // The come-from must NOT disturb the carrier (v,h,tag) or other data regs --
     // it is a pure BR-router. tag/v/h + all non-aux regs identity.
     let (tag_reg, v_reg, h_reg) = v2_carrier_regs();
     for r in 0..layout.num_regs {
         if r == cf.ctrl || r == cf.temp || r == cf.rb {
             // Aux registers the bracket legitimately mints/routes (temp/rb hold δu
-            // mid-bracket; the epilogue SUBI burns temp — OUTSIDE this span). We
+            // mid-bracket; the epilogue SUBI burns temp -- OUTSIDE this span). We
             // do not constrain them here; terminal quiescence (L3 bootstrap:
             // scratch clean + BR=0) confirms the whole loop restores them.
             continue;
@@ -1231,7 +1231,7 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     (peak, secs)
 }
 
-/// L2 — the COME-FROM / TERMINATION LEMMA.
+/// L2 -- the COME-FROM / TERMINATION LEMMA.
 #[test]
 fn invariant_come_from_lemma_vart_halve() {
     let layout = Layout::default(); // w_pc=16: the REAL δu sign-extension reach
@@ -1250,14 +1250,14 @@ fn invariant_come_from_lemma_vart_halve() {
          → the loop takes the back-edge IFF ¬done (done := tag==1). TRACTABLE.",
         cf.delta_u, peak, secs
     );
-    assert!(peak < 50_000, "COME-FROM LEMMA peak {peak} — expected tractable");
+    assert!(peak < 50_000, "COME-FROM LEMMA peak {peak} -- expected tractable");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// L0 — RE-ENTRY LEMMA (the induction weld: L2-exit → L1-entry).
+// L0 -- RE-ENTRY LEMMA (the induction weld: L2-exit → L1-entry).
 //
-// The 5 glue instructions [LTOP, BODY_START) = offsets [2,7) — Ltop's SWAPBR rc
-// + the 4 join-dispatch instrs — are covered by NEITHER L1 (which starts at
+// The 5 glue instructions [LTOP, BODY_START) = offsets [2,7) -- Ltop's SWAPBR rc
+// + the 4 join-dispatch instrs -- are covered by NEITHER L1 (which starts at
 // BODY_START) NOR L2 (which ends at Lend). The induction step needs: after the
 // come-from takes the back-edge (L2 continue exit), the machine re-enters the
 // body at BODY_START in EXACTLY L1's entry invariant. L0 PROVES that weld.
@@ -1268,7 +1268,7 @@ fn invariant_come_from_lemma_vart_halve() {
 //   Compose offsets [2,7) with the StepEngine (concrete PC each step).
 //   EXIT must ≡ body_entry_sv's L1-entry invariant:
 //     {ctrl=temp=rb=rc=BR=0}, PC=BODY_START, v/h/scratch/other identity,
-//     tag as L1 expects (unchanged — the join-dispatch does not touch tag).
+//     tag as L1 expects (unchanged -- the join-dispatch does not touch tag).
 //
 // Hand-trace (continue, tag0=0):
 //   2 SWAPBR rc     : BR↔rc ⇒ rc=δu, BR=0        (post-swap BR=0 ⇒ PC=3)
@@ -1279,7 +1279,7 @@ fn invariant_come_from_lemma_vart_halve() {
 //   ⇒ {ctrl=0,temp=0,rb=0,rc=0,BR=0} = the L1 entry invariant. QED.
 //
 // The entry BR=δu is a compile-time constant here; the Ltop SWAPBR consumes it
-// (post-swap BR=0), so PC stays concrete in [2,7) and the StepEngine applies —
+// (post-swap BR=0), so PC stays concrete in [2,7) and the StepEngine applies --
 // no symbolic PC, no new BDD machinery (peak stays tiny).
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -1363,7 +1363,7 @@ fn re_entry_base_sv(layout: &Layout, geom: &LoopGeom, cf: &ComeFrom, vs: &BddVar
 
 /// Compose the re-entry glue [LTOP, BODY_START) with the StepEngine, concrete PC
 /// each step, from a given `entry` SV. Ltop's SWAPBR consumes BR (post-swap BR=0
-/// ⇒ PC+1), so PC stays concrete throughout — the PC-agreement assert confirms
+/// ⇒ PC+1), so PC stays concrete throughout -- the PC-agreement assert confirms
 /// it. Returns exit SV. The entry SV varies by leg (back-edge L0 vs first-
 /// traversal L0-base); the glue instructions are identical.
 fn compose_re_entry_from(
@@ -1408,7 +1408,7 @@ fn compose_re_entry_from(
     (cur, peak)
 }
 
-/// L0 — the RE-ENTRY LEMMA. Prove [LTOP, BODY_START) welds L2-continue-exit to
+/// L0 -- the RE-ENTRY LEMMA. Prove [LTOP, BODY_START) welds L2-continue-exit to
 /// L1's entry invariant over the WHOLE symbolic carrier. Returns (peak, secs).
 #[test]
 fn invariant_re_entry_lemma_vart_halve() {
@@ -1487,7 +1487,7 @@ fn invariant_re_entry_lemma_vart_halve() {
     // s2..s7 enter SYMBOLIC (else branch). To weld L0-exit → L1-entry(0) for
     // those 7 currently-unproven fields we assert:
     //   * s2..s7 ≡ IDENTITY (their entry vars): the glue must pass them through
-    //     unchanged for any value (strictly stronger than 0-in⇒0-out — proves the
+    //     unchanged for any value (strictly stronger than 0-in⇒0-out -- proves the
     //     join-dispatch never touches s2..s7). Combined with L2's s2..s7 identity
     //     and L1's s2..s7=0-in/0-out, the s2..s7 fields are closed on the cycle.
     //   * IR (all 4 bytes) == 0 at exit: L1's entry needs IR=0. (IR entered 0
@@ -1515,7 +1515,7 @@ fn invariant_re_entry_lemma_vart_halve() {
     }
     let _ = (v_reg, h_reg);
 
-    assert!(peak < 50_000, "RE-ENTRY LEMMA peak {peak} — expected tractable");
+    assert!(peak < 50_000, "RE-ENTRY LEMMA peak {peak} -- expected tractable");
     eprintln!(
         "L0 RE-ENTRY LEMMA [vart_halve]: glue [{LTOP},{BODY_START}) welds L2-continue-exit \
          → L1-entry invariant {{ctrl=temp=rb=rc=BR=0}} over the WHOLE symbolic carrier; \
@@ -1524,12 +1524,12 @@ fn invariant_re_entry_lemma_vart_halve() {
     );
 }
 
-/// L0-BASE — the FIRST-TRAVERSAL glue lemma (fix #3). The induction STEP is L0
-/// (from the back-edge precondition {BR=δu,ctrl=1,temp=0,tag=0}); the BASE case —
+/// L0-BASE -- the FIRST-TRAVERSAL glue lemma (fix #3). The induction STEP is L0
+/// (from the back-edge precondition {BR=δu,ctrl=1,temp=0,tag=0}); the BASE case --
 /// the first entry into the glue after the prologue, precondition {BR=0,ctrl=0,
-/// temp=δu,tag=1} — was in NO lemma. This proves the SAME glue [LTOP,BODY_START)
+/// temp=δu,tag=1} -- was in NO lemma. This proves the SAME glue [LTOP,BODY_START)
 /// also lands the base precondition in L1's entry invariant (aux all 0, PC=
-/// BODY_START, carrier identity — with tag=1 concrete, the Right-tagged base
+/// BODY_START, carrier identity -- with tag=1 concrete, the Right-tagged base
 /// carrier), so L1 applies on the FIRST iteration too. Hand-trace (tag=1):
 ///   2 SWAPBR rc      : BR=0↔rc=0 ⇒ rc=0, BR=0            (PC=3)
 ///   3 CSWAP ctrl,rc,temp (ctrl=0) ⇒ no-op: rc=0, temp=δu
@@ -1580,7 +1580,7 @@ fn invariant_re_entry_base_lemma_vart_halve() {
         "RE-ENTRY BASE: exit PC != BODY_START"
     );
 
-    // tag must be 1 (the prologue's Right tag, unchanged by the glue) — this is
+    // tag must be 1 (the prologue's Right tag, unchanged by the glue) -- this is
     // the base carrier's tag; L1 handles it as a carrier value.
     let got_tag = out_field_bits(&out, &layout, layout.reg_field(tag_reg));
     for b in 0..W {
@@ -1626,7 +1626,7 @@ fn invariant_re_entry_base_lemma_vart_halve() {
         }
     }
 
-    assert!(peak < 50_000, "RE-ENTRY BASE peak {peak} — expected tractable");
+    assert!(peak < 50_000, "RE-ENTRY BASE peak {peak} -- expected tractable");
     eprintln!(
         "L0-BASE RE-ENTRY LEMMA [vart_halve]: glue [{LTOP},{BODY_START}) lands the FIRST-traversal \
          precondition {{BR=0,ctrl=0,temp=δu,tag=1}} in L1's entry invariant (aux all 0, PC→BODY_START, \
@@ -1635,7 +1635,7 @@ fn invariant_re_entry_base_lemma_vart_halve() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// L3 — INDUCTION ARGUMENT + BOOTSTRAP ANCHOR + TERMINAL QUIESCENCE.
+// L3 -- INDUCTION ARGUMENT + BOOTSTRAP ANCHOR + TERMINAL QUIESCENCE.
 //
 // The meta-argument (what L1 ∧ L2 buy us), stated explicitly. Let `C_i` be the
 // carrier (tag,v,h) at the top of iteration i, `C_0` = the marshalled input
@@ -1657,11 +1657,11 @@ fn invariant_re_entry_base_lemma_vart_halve() {
 //     produces C_{i+1} = body(C_i) = body^{i+1}(C_0) (L1) and the come-from
 //     loops iff ¬done(C_{i+1}) (L2). On ¬done, L2's CONTINUE exit is exactly L0's
 //     entry, and L0 proves the glue [Ltop, body_start) re-establishes L1's entry
-//     invariant at PC=body_start — so L1 applies again, unchanged, on the next
+//     invariant at PC=body_start -- so L1 applies again, unchanged, on the next
 //     iteration. The three lemmas COVER the whole per-iteration span [2,108):
 //     L2 [104,108] → L0 [2,7) → L1 [7,104). No new symbolic PC is introduced;
 //     every iteration is the SAME concrete-PC glue+body+come-from. This is why
-//     the loop needs NO unrolling — the lemmas are iteration-INDEPENDENT, and the
+//     the loop needs NO unrolling -- the lemmas are iteration-INDEPENDENT, and the
 //     induction step now closes on LEMMAS, not on hand-tracing.
 //   * Termination: `theseus_eval::eval` defines the Trace's fixpoint as the first
 //     C_T with done(C_T)=Right. The come-from exits at exactly that C_T (L2), and
@@ -1669,7 +1669,7 @@ fn invariant_re_entry_base_lemma_vart_halve() {
 //     the Right tag). Hence `run_on_cpu(rom) == eval(trace)` for every input whose
 //     trajectory reaches a done state within the WCET budget B.
 //
-// WHAT IS BVEQ-PROVEN vs ARGUED (re-review closure — FIELD-COMPLETE welds):
+// WHAT IS BVEQ-PROVEN vs ARGUED (re-review closure -- FIELD-COMPLETE welds):
 //   * PROVEN symbolically (whole carrier domain), covering the FULL per-iteration
 //     relation, offsets [2,108), with EVERY field/netlist link on the loop cycle
 //     now asserted (the re-review's 5 gaps closed):
@@ -1678,43 +1678,43 @@ fn invariant_re_entry_base_lemma_vart_halve() {
 //         nothing else.
 //       - L2 [104,108]: come-from routes BR by ¬done (BR=δu iff ¬done, else 0);
 //         pins the per-branch aux exit (ctrl/temp/rb); scratch s0/s1 + IR=0 AND
-//         **scratch s2..s7 ≡ IDENTITY** (fix #1 — they entered symbolic, must
+//         **scratch s2..s7 ≡ IDENTITY** (fix #1 -- they entered symbolic, must
 //         pass through unchanged); **Lend's PC landing asserted vs the NETLIST
-//         at w_pc=16** — PC_out ≡ ite(tag0, lend+1, LTOP) per bit incl. the high
+//         at w_pc=16** -- PC_out ≡ ite(tag0, lend+1, LTOP) per bit incl. the high
 //         byte (fix #2 GAP-A: the sole BR≠0 PC-adder pass, previously only the
 //         closed-form arith identity).
 //       - L0 [2,7): the STEP glue welds L2's continue exit → L1's entry invariant
 //         {ctrl=temp=rb=rc=BR=0}, PC→body_start, carrier identity, **scratch
-//         s2..s7 ≡ IDENTITY and IR (all 4 bytes) = 0** (fix #1 — the 7 hand-off-C
+//         s2..s7 ≡ IDENTITY and IR (all 4 bytes) = 0** (fix #1 -- the 7 hand-off-C
 //         fields L0/L2 previously left unconstrained now welded L1(0)→L2→L0→L1).
 //       - L0-BASE [2,7): the SAME glue also lands the FIRST-traversal precondition
-//         {BR=0,ctrl=0,temp=δu,tag=1} (post-prologue) in L1's entry invariant —
+//         {BR=0,ctrl=0,temp=δu,tag=1} (post-prologue) in L1's entry invariant --
 //         the induction BASE case, now on a lemma (fix #3), not hand-traced.
 //     ⇒ the per-iteration relation is FIELD-COMPLETE across all three welds
 //     (L1↔L2, L2↔L0, L0↔L1) with NO unasserted field or netlist link on the
 //     loop cycle; the induction STEP *and* BASE close on lemmas.
 //   * PROVEN as closed-form / whole-domain enumeration (not swept as a loop):
-//     the WCET budget B covers every input — `invariant_trip_count_whole_domain_bound`
+//     the WCET budget B covers every input -- `invariant_trip_count_whole_domain_bound`
 //     asserts max over the WHOLE (v0,h0) domain of (trip_count+1) ≤ k_max
 //     (INCLUDING the v0=0 park case), so no input runs past B.
-//   * ARGUED (the induction FRAME + the prologue/epilogue legs — the re-review
+//   * ARGUED (the induction FRAME + the prologue/epilogue legs -- the re-review
 //     deemed these acceptable):
 //       - that iterating the (now field-complete) per-iteration relation
-//         reproduces eval's fixpoint — a genuine mathematical induction (each
+//         reproduces eval's fixpoint -- a genuine mathematical induction (each
 //         iteration byte-identical: same ROM, same concrete PCs), not a hidden
 //         unroll. ANCHORED to reality by the fast/heavy bootstrap below.
 //       - the PROLOGUE [0,2) (marshal → first Ltop entry with tag=1) and EPILOGUE
 //         [109,111) (done-exit → unmarshal): NOT lemma-covered here; they are
 //         ANCHORED by the bootstrap (run_on_cpu == eval, terminal quiescence) and
-//         remain the ARGUED legs of the FULL marshal→…→unmarshal chain. (These are
+//         remain the ARGUED legs of the FULL marshal→...→unmarshal chain. (These are
 //         the only remaining ARGUED legs; the loop cycle itself is field-complete.)
 //
 // ANCHOR (two tiers):
 //   * FAST (always-on, `invariant_induction_anchor_fast`): `run_on_cpu_fast ==
-//     eval` on the T ∈ {1,2,3} sample — seconds, the same reality tie vart_t2 uses.
+//     eval` on the T ∈ {1,2,3} sample -- seconds, the same reality tie vart_t2 uses.
 //   * HEAVY (#[ignore], `invariant_induction_bootstrap_quiescence`): the REAL
 //     system-ring `run_rom_on_cpu == eval` + terminal quiescence (BR=0, scratch
-//     all-zero) — the exact ~4 h-authority path (vart_t3), on a 3-input sample.
+//     all-zero) -- the exact ~4 h-authority path (vart_t3), on a 3-input sample.
 //     This is the ground truth the invariant method REPLACES; kept #[ignore]
 //     because run_rom_on_cpu at budget 646 is minutes/input.
 //
@@ -1762,14 +1762,14 @@ fn trip_sample(u_ty: &Type) -> Vec<Value> {
     inputs
 }
 
-/// WHOLE-DOMAIN TRIP-COUNT BOUND (item 5 — closes residual (a) against L1).
+/// WHOLE-DOMAIN TRIP-COUNT BOUND (item 5 -- closes residual (a) against L1).
 ///
 /// L1 proves one body pass ≡ rot_step; the induction reproduces eval's fixpoint
 /// PROVIDED no input's trajectory runs past the WCET budget B. The compiler's
 /// k_max is the trajectory-derived body-application bound; here we INDEPENDENTLY
 /// confirm, using the same `rot_step` reference L1 ties to the gate, that
 ///   max over ALL (v0,h0) in the WHOLE carrier domain of (trip_count + 1) ≤ k_max
-/// — INCLUDING the v0=0 park case (which `vart_variable_t_proof` leaves
+/// -- INCLUDING the v0=0 park case (which `vart_variable_t_proof` leaves
 /// unbounded). trip_count+1 mirrors the compiler's k_exact = max_t + 1. This
 /// proves every input reaches a done state within the budget ⇒ the induction's
 /// residual (a) is discharged over the whole domain, not just the sample.
@@ -1793,19 +1793,19 @@ fn invariant_trip_count_whole_domain_bound() {
         }
         assert!(
             tc1 <= k_max,
-            "TRIP-COUNT BOUND: (v0={v0},h0={h0}) trip_count+1 = {tc1} > k_max {k_max} — \
+            "TRIP-COUNT BOUND: (v0={v0},h0={h0}) trip_count+1 = {tc1} > k_max {k_max} -- \
              an input runs past the WCET budget (unsound induction / compiler k_max too small)"
         );
     }
     assert!(saw_park, "domain must include the v0=0 park case");
     eprintln!(
         "TRIP-COUNT BOUND [vart_halve]: max over the WHOLE (v0,h0) domain of (trip_count+1) = {} \
-         (at v0={},h0={}) ≤ k_max {} (incl. v0=0 park). B={} covers every input — residual (a) closed.",
+         (at v0={},h0={}) ≤ k_max {} (incl. v0=0 park). B={} covers every input -- residual (a) closed.",
         worst.0, worst.1, worst.2, k_max, geom.budget
     );
 }
 
-/// L3 (fast anchor, ALWAYS-ON) — the induction anchor via the FAST oracle
+/// L3 (fast anchor, ALWAYS-ON) -- the induction anchor via the FAST oracle
 /// (`run_on_cpu_fast`, the same reality tie vart_t2 uses over the whole domain):
 /// on the T ∈ {1,2,3} sample the compiled loop's CPU semantics == eval, tying the
 /// two structural lemmas to the real machine in SECONDS. The heavy real-CPU
@@ -1832,12 +1832,12 @@ fn invariant_induction_anchor_fast() {
     eprintln!(
         "L3 INDUCTION ANCHOR (fast) [vart_halve]: run_on_cpu_fast == eval across trip counts \
          T ∈ {{1,2,3}}. With L1 (body ≡ rot_step) + L2 (come-from loops iff ¬done) this \
-         establishes run_on_cpu == eval over the WHOLE input domain by induction on T — \
+         establishes run_on_cpu == eval over the WHOLE input domain by induction on T -- \
          WITHOUT unrolling."
     );
 }
 
-/// L3 (heavy anchor, ADVISOR-RUN #[ignore]) — the REAL system-ring `run_rom_on_cpu`
+/// L3 (heavy anchor, ADVISOR-RUN #[ignore]) -- the REAL system-ring `run_rom_on_cpu`
 /// == eval + terminal QUIESCENCE (scratch clean, BR=0) on the same sample. This is
 /// EXACTLY the ~4 h authority's per-input path (vart_t3), run on a 3-input sample:
 /// it is the ground-truth tie that the invariant method REPLACES. Kept #[ignore]
@@ -1865,7 +1865,7 @@ fn invariant_induction_bootstrap_quiescence() {
         let mut fuel = 1_000_000_000u64;
         let ev = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval");
         assert_eq!(cpu_out, ev, "BOOTSTRAP: real CPU != eval on v0={v0} (T={t})");
-        // Terminal quiescence — the same properties the 4h authority checks.
+        // Terminal quiescence -- the same properties the 4h authority checks.
         assert_eq!(
             final_state.scratch, [0u8; NUM_SCRATCH],
             "BOOTSTRAP: scratch must be all-zero at exit (v0={v0})"
@@ -1883,12 +1883,12 @@ fn invariant_induction_bootstrap_quiescence() {
         "L3 INDUCTION ANCHOR [vart_halve]: real-CPU bootstrap == eval + terminal quiescence \
          across trip counts T ∈ {{1,2,3}}. With L1 (body ≡ rot_step) + L2 (come-from loops \
          iff ¬done) this establishes run_on_cpu == eval over the WHOLE input domain by \
-         induction on T — WITHOUT unrolling. B={budget} ≥ T·iter_len for all inputs (k_max)."
+         induction on T -- WITHOUT unrolling. B={budget} ≥ T·iter_len for all inputs (k_max)."
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// NEGATIVE CONTROLS — break the body / break the come-from ⇒ DETECTED (teeth).
+// NEGATIVE CONTROLS -- break the body / break the come-from ⇒ DETECTED (teeth).
 // ══════════════════════════════════════════════════════════════════════════
 
 /// NEG-1 (body): a WRONG body spec (rotate LEFT instead of right, or wrong reg)
@@ -1928,7 +1928,7 @@ fn invariant_negative_control_body() {
     let wp_left: Vec<Bdd> = (0..width).map(|i| w[(i + width - 1) % width].clone()).collect();
     let differs = (0..V2_K as usize).any(|b| out_v[b] != wp_left[b]);
     assert!(differs, "NEG body: real body must DIFFER from a LEFT-rotate spec (teeth)");
-    eprintln!("NEG-1 body: real body ≡ right-rotate rot_step, ≠ left-rotate — teeth.");
+    eprintln!("NEG-1 body: real body ≡ right-rotate rot_step, ≠ left-rotate -- teeth.");
 }
 
 /// NEG-3 (mutated ROM): flip ONE body instruction in the ROM ⇒ the composed body
@@ -1979,14 +1979,14 @@ fn invariant_negative_control_mutated_rom() {
         && out_t[0] == tp[0];
     assert!(
         !matches_rot,
-        "NEG-3 mutated ROM: a body with one flipped instr STILL matched rot_step — \
+        "NEG-3 mutated ROM: a body with one flipped instr STILL matched rot_step -- \
          L1 has no teeth (would pass a wrong body)"
     );
-    eprintln!("NEG-3 mutated ROM: one flipped body instr ⇒ body ≠ rot_step — L1 has teeth.");
+    eprintln!("NEG-3 mutated ROM: one flipped body instr ⇒ body ≠ rot_step -- L1 has teeth.");
 }
 
 /// NEG-2 (come-from): the come-from output BR must DIFFER from wrong routing
-/// specs — (a) inverted predicate (BR=δu when tag==1), and (b) unconditional
+/// specs -- (a) inverted predicate (BR=δu when tag==1), and (b) unconditional
 /// BR=δu (never exits). Both would break termination and MUST be detected.
 #[test]
 fn invariant_negative_control_come_from() {
@@ -2025,11 +2025,11 @@ fn invariant_negative_control_come_from() {
         let du = if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
         assert!(br_out[b] == not_tag.and(&du), "sanity: true δu·[tag==0] must match");
     }
-    eprintln!("NEG-2 come-from: real BR ≡ δu·[tag==0], ≠ {{inverted, unconditional}} — teeth.");
+    eprintln!("NEG-2 come-from: real BR ≡ δu·[tag==0], ≠ {{inverted, unconditional}} -- teeth.");
 }
 
 /// NEG-4 (L0 re-entry, fix #5): a BROKEN L0 exit expectation must DIFFER from the
-/// real glue output — so the re-entry lemma's welding asserts have teeth (a glue
+/// real glue output -- so the re-entry lemma's welding asserts have teeth (a glue
 /// that landed in the WRONG state would be caught). Two wrong expectations:
 ///   (a) wrong exit PC (the glue does NOT fall through to BODY_START), and
 ///   (b) wrong aux (ctrl != 0 at exit ⇒ L1's entry invariant violated).
@@ -2052,7 +2052,7 @@ fn invariant_negative_control_re_entry() {
     assert_ne!(
         got_pc,
         Some(BODY_START + 1),
-        "NEG-4 L0: real glue exit PC matched a WRONG landing (BODY_START+1) — no teeth"
+        "NEG-4 L0: real glue exit PC matched a WRONG landing (BODY_START+1) -- no teeth"
     );
     assert_eq!(got_pc, Some(BODY_START), "sanity: real glue lands on BODY_START");
 
@@ -2062,17 +2062,17 @@ fn invariant_negative_control_re_entry() {
     let wrong_ctrl_is_one = (0..W).all(|b| ctrl_out[b] == if b == 0 { one.clone() } else { zero.clone() });
     assert!(
         !wrong_ctrl_is_one,
-        "NEG-4 L0: real glue exit ctrl matched the WRONG value 1 — L0 welding has no teeth"
+        "NEG-4 L0: real glue exit ctrl matched the WRONG value 1 -- L0 welding has no teeth"
     );
     // sanity: real ctrl IS 0.
     for b in 0..W {
         assert!(ctrl_out[b] == zero, "sanity: real glue exit ctrl == 0 (L1 entry invariant)");
     }
-    eprintln!("NEG-4 L0 re-entry: real glue lands ctrl=0 @BODY_START, ≠ {{wrong PC, ctrl=1}} — teeth.");
+    eprintln!("NEG-4 L0 re-entry: real glue lands ctrl=0 @BODY_START, ≠ {{wrong PC, ctrl=1}} -- teeth.");
 }
 
 /// NEG-5 (L2 aux-exit, fix #5): a BROKEN come-from AUX-EXIT expectation must
-/// DIFFER from the real bracket output — so the per-branch aux pin (the
+/// DIFFER from the real bracket output -- so the per-branch aux pin (the
 /// PRECONDITION L0 starts from) has teeth. Two wrong expectations:
 ///   (a) ctrl = tag (NOT tag^1): the real route sets ctrl = ¬tag on bit 0.
 ///   (b) temp = 0 unconditionally: the real exit keeps temp = δu on the EXIT
@@ -2101,14 +2101,14 @@ fn invariant_negative_control_aux_exit() {
     });
     assert!(
         differs_ctrl,
-        "NEG-5 aux-exit: real ctrl must DIFFER from the WRONG 'ctrl=tag' spec — no teeth"
+        "NEG-5 aux-exit: real ctrl must DIFFER from the WRONG 'ctrl=tag' spec -- no teeth"
     );
 
     // (b) WRONG temp spec: temp == 0 unconditionally (ignores the exit-branch δu).
     let differs_temp = (0..W).any(|b| temp_out[b] != zero);
     assert!(
         differs_temp,
-        "NEG-5 aux-exit: real temp must DIFFER from the WRONG 'temp=0 always' spec — no teeth"
+        "NEG-5 aux-exit: real temp must DIFFER from the WRONG 'temp=0 always' spec -- no teeth"
     );
 
     // sanity: the TRUE specs DO match (ties teeth to the right targets).
@@ -2118,5 +2118,5 @@ fn invariant_negative_control_aux_exit() {
         let du_bit = if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
         assert!(temp_out[b] == tag_in[0].and(&du_bit), "sanity: true temp = δu·[tag0==1] must match");
     }
-    eprintln!("NEG-5 aux-exit: real ctrl≡tag^1, temp≡δu·[tag0==1], ≠ {{ctrl=tag, temp=0}} — teeth.");
+    eprintln!("NEG-5 aux-exit: real ctrl≡tag^1, temp≡δu·[tag0==1], ≠ {{ctrl=tag, temp=0}} -- teeth.");
 }

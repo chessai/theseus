@@ -5,7 +5,7 @@
 //!
 //! T-instr: system-ring dense-byte Ccnot (byte-parallelism proof, all 8 bits).
 //! T-prog: Flat(4) masked fold, whole-domain (69888 inputs), HOISTED.
-//! T-prog-disc: discriminating case — elems=[2], key=2, proves 4-bit parallel AND.
+//! T-prog-disc: discriminating case -- elems=[2], key=2, proves 4-bit parallel AND.
 //! T-real: real CPU (#[ignore]).
 //! T7: SystemRing ancillas_restored + bus_quiescent (closure).
 
@@ -35,7 +35,7 @@ fn thermo(k: usize) -> Value {
 }
 
 /// Build a list-spine value from a slice of element bytes.
-/// list_spine_ty(Flat(w), D) — elements are innermost-first:
+/// list_spine_ty(Flat(w), D) -- elements are innermost-first:
 ///   nil = Left(Unit)
 ///   cons(h, t) = Right(Pair(thermo(h), t))
 /// Includes round-trip assert via value_to/from_leaf_bytes.

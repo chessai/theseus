@@ -163,8 +163,8 @@ fn trace_validate_and_inv_token_label_loop() {
 fn spin_balances_and_sims_with_inv_token() {
     // End-to-end for the synthesized trace body: lower spin (whose body
     // is a 4-bit prim handled by B4.2 general synthesis), balance, and
-    // run the TIMED phased sim — which asserts dynamic INV-TOKEN for
-    // every rail pair on every tick — against core eval on both inputs.
+    // run the TIMED phased sim -- which asserts dynamic INV-TOKEN for
+    // every rail pair on every tick -- against core eval on both inputs.
     let src = include_str!("../../../conformance/programs/0011-label-loop.thse");
     let iso = elaborate(src, "spin");
     let (net, ancilla_values) = lower_iso_with_ancillas(&iso).expect("lowers");

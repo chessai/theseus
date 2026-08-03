@@ -1,4 +1,4 @@
-//! `theseus` — minimal CLI driver.
+//! `theseus` -- minimal CLI driver.
 
 use std::fs;
 use std::process;

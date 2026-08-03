@@ -1,4 +1,4 @@
-//! BVEQ-HIERARCHICAL-POC — feasibility of the HIERARCHICAL inductive-invariant
+//! BVEQ-HIERARCHICAL-POC -- feasibility of the HIERARCHICAL inductive-invariant
 //! method for NESTED loops (the last uncovered loop shape: `synth_gcd2` / any
 //! program with an INNER loop whose Swapbr makes PC data-dependent WITHIN the
 //! outer body).
@@ -15,13 +15,13 @@
 //! DATA-DEPENDENT (it jumps back to the inner-loop top a data-dependent number of
 //! times), so the straight-line concrete-PC pinning that licenses the flat body
 //! lemma is invalid across the outer body: the fetched IR becomes symbolic and
-//! `decode_execute` must represent every opcode at once — the exponential blow-up
+//! `decode_execute` must represent every opcode at once -- the exponential blow-up
 //! the flat method sidesteps.
 //!
 //! ── The HIERARCHICAL method (what this file prototypes + MEASURES) ──────────
-//!   INNER PROOF: prove the inner loop as its OWN flat invariant proof — an inner
+//!   INNER PROOF: prove the inner loop as its OWN flat invariant proof -- an inner
 //!     body lemma (StepEngine walk of the inner straight-line body, concrete PC)
-//!     + an inner come-from/termination lemma + trip-count induction — yielding an
+//!     + an inner come-from/termination lemma + trip-count induction -- yielding an
 //!     INNER-LOOP TRIPLE: {inner-entry precondition} inner-loop {inner-exit
 //!     postcondition}, whole carrier domain, as a symbolic carrier→carrier
 //!     transform `T_inner`.
@@ -30,7 +30,7 @@
 //!     APPLY `T_inner` (opaque) ; <outer-suffix steps>. Compose the outer prefix
 //!     via the StepEngine (concrete PC), SUBSTITUTE the proven `T_inner`
 //!     transform at the inner-loop site (NOT walking the inner Swapbr symbolically
-//!     — that is the whole point), compose the outer suffix, then close the outer
+//!     -- that is the whole point), compose the outer suffix, then close the outer
 //!     loop with its own flat come-from + induction.
 //!
 //! ── The tractability concern the batch review flagged ──────────────────────
@@ -43,12 +43,12 @@
 //!
 //! ── Scope honesty (see the module-tail VERDICT) ────────────────────────────
 //! `synth_gcd2` DOES NOT LOWER on v2 today: its recognizer emits `Deferred`
-//! (compile.rs — "no TISC-1 emission fits the Trace WCET budget; needs widen-PC
+//! (compile.rs -- "no TISC-1 emission fits the Trace WCET budget; needs widen-PC
 //! or a conditional-arithmetic ISA op"), and its degree-7 body ANF blows the
 //! operand-word budget (needs widen-STATE, A-6.4, deferred). There is NO nested
 //! gcd2 ROM to walk. So this file proves the CONCEPT on a MINIMAL HAND-ASSEMBLED
 //! genuine nested loop (real inner backward Swapbr inside the outer body),
-//! anchored by a real-CPU run — the machinery is ready for gcd2 WHEN it lowers.
+//! anchored by a real-CPU run -- the machinery is ready for gcd2 WHEN it lowers.
 
 #![cfg(feature = "heavy-tests")]
 // HEAVY tier: run under `--features heavy-tests --test-threads=1`.
@@ -156,7 +156,7 @@ fn sv_bdd_sizes(sv: &SV) -> (usize, usize) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// StepEngine — memoized per-step evaluator (copied from bveq_invariant_poc.rs).
+// StepEngine -- memoized per-step evaluator (copied from bveq_invariant_poc.rs).
 // At CONCRETE PC the fetch is `IR ^= rom[pc]` with rom[pc] a compile-time const,
 // so we short-circuit fetch/unfetch and walk only decode_execute + PC adders.
 // This is the machinery the flat method uses to walk a straight-line body span.
@@ -219,7 +219,7 @@ impl StepEngine {
         out
     }
     /// One full `step_with` cycle at concrete `pc` (fetch short-circuited). The
-    /// step's OWN PC output drives the next step — faithful to a Swapbr back-edge
+    /// step's OWN PC output drives the next step -- faithful to a Swapbr back-edge
     /// (BR set ⇒ pc_add_br jumps), so this ALSO walks the inner loop's Swapbr.
     fn eval_step(
         &self,
@@ -270,14 +270,14 @@ fn repin_pc(out: &SV, layout: &Layout, next_pc: usize, vs: &BddVariableSet) -> S
 //     Swapbr rc                           ; OUTER backward jump
 //
 // This is a DELIBERATELY simple carrier (the tractability question is about the
-// PC/BR/Swapbr machinery of nesting, not about a complex body — a complex body is
+// PC/BR/Swapbr machinery of nesting, not about a complex body -- a complex body is
 // the ORTHOGONAL operand-budget wall gcd2 hits). The inner Swapbr is the exact
 // feature that breaks the flat method's concrete-PC pinning across the outer body.
 //
 // We assemble it BY HAND at the Instr level because the compiler REJECTS nested
 // control lowering on v2 (compile.rs M-D.alloc2 "safely rejects doubly-nested
 // skip-block control; correct nested compilation deferred"), so there is no
-// compiled nested ROM to obtain — mirroring gcd2's own non-lowering.
+// compiled nested ROM to obtain -- mirroring gcd2's own non-lowering.
 // ══════════════════════════════════════════════════════════════════════════
 
 const R_N: u8 = 0; // outer count (consumed as outer index i)
@@ -313,13 +313,13 @@ fn build_nested(delta_hint: u8) -> (Vec<u32>, Vec<Instr>, NestGeom) {
     let _ = delta_hint;
     let mut ins: Vec<Instr> = Vec::new();
 
-    // PC 0..: OUTER preamble — move N into r3 (outer index). We use r0 directly as
+    // PC 0..: OUTER preamble -- move N into r3 (outer index). We use r0 directly as
     // the outer index to keep it simple: treat r0 as i. So no preamble; outer top
     // reloads r4=M then runs the inner loop.
     //
     // OUTER TOP (reload inner count): r4 += M. r4 enters each outer pass at 0
     // (it starts 0 and the inner loop drains it back to 0), so r4 += M → r4 = M.
-    // (Xor r4,r4 is illegal — rd!=rs required — so we rely on the r4==0 invariant.)
+    // (Xor r4,r4 is illegal -- rd!=rs required -- so we rely on the r4==0 invariant.)
     let outer_top = ins.len();
     ins.push(Instr::Add { rd: R_J, rs: R_M }); // r4 += M  (r4 was 0 ⇒ r4 = M)
 
@@ -331,12 +331,12 @@ fn build_nested(delta_hint: u8) -> (Vec<u32>, Vec<Instr>, NestGeom) {
 
     // INNER come-from: the canonical flat-loop idiom `Addi rb,δ ; Swapbr rb`.
     // δ_back makes the Swapbr's next_pc land on inner_top (continue). The DONE
-    // masking (rb→0 when j==0, so the loop exits) is the come-from PREDICATE — the
+    // masking (rb→0 when j==0, so the loop exits) is the come-from PREDICATE -- the
     // flat method proves it as a separate come-from lemma, and the structured
     // concrete runner (`run_nested_structured`) ENFORCES it (back-edge WHILE j!=0).
     // The SYMBOLIC hierarchical proof only ever walks the straight-line inner BODY
     // (which precedes this Swapbr), so these two instrs are never symbolically
-    // walked — exactly as the flat method excludes the come-from Swapbr from its
+    // walked -- exactly as the flat method excludes the come-from Swapbr from its
     // body lemma. rb enters at 0 (the structured runner re-pins PC per span).
     let (mut cf, delta_back) = append_inner_comefrom(inner_top, ins.len());
     ins.append(&mut cf);
@@ -401,7 +401,7 @@ fn append_outer_comefrom(outer_top: usize, gadget_start: usize) -> (Vec<Instr>, 
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// CONCRETE reference interpreter — the AUTHORITY. Runs the nested loop directly
+// CONCRETE reference interpreter -- the AUTHORITY. Runs the nested loop directly
 // (structured), independent of the ROM, to give the ground-truth (acc, final).
 // ══════════════════════════════════════════════════════════════════════════
 fn nested_reference(n: u8, m: u8) -> u8 {
@@ -427,10 +427,10 @@ fn zero_state() -> StateVals {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// TEST 1 — CONCRETE ANCHOR: the hand-assembled nested ROM runs on the real CPU
+// TEST 1 -- CONCRETE ANCHOR: the hand-assembled nested ROM runs on the real CPU
 // (run_rom_fast, real Swapbr/pc_update semantics) and computes n*m for a grid of
 // (n,m), with the inner/outer indices cleaned to 0. This proves the nesting +
-// both come-from back-edges are REAL and correct — the ground truth the symbolic
+// both come-from back-edges are REAL and correct -- the ground truth the symbolic
 // hierarchical proof must reproduce.
 // ══════════════════════════════════════════════════════════════════════════
 #[test]
@@ -508,7 +508,7 @@ fn run_nested_structured(rom: &[u32], geom: &NestGeom, n: u8, m: u8) -> u8 {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// TEST 2 — THE HIERARCHICAL MEASUREMENT (the GO/NO-GO).
+// TEST 2 -- THE HIERARCHICAL MEASUREMENT (the GO/NO-GO).
 //
 // (B) HIERARCHICAL: prove the INNER straight-line body symbolically once
 //     (StepEngine walk, concrete PC, symbolic carrier) → the inner body triple
@@ -524,7 +524,7 @@ fn run_nested_structured(rom: &[u32], geom: &NestGeom, n: u8, m: u8) -> u8 {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// Symbolic entry state at `pc` with the listed registers symbolic (low `wbits`
-/// bits), everything else 0 — the flat method's `body_entry_sv`.
+/// bits), everything else 0 -- the flat method's `body_entry_sv`.
 fn entry_sv(
     layout: &Layout,
     vs: &BddVariableSet,
@@ -672,7 +672,7 @@ fn hierarchical_inner_body_triple_and_substitution() {
 
     // Substitute the inner-loop TRIPLE opaquely: the inner-loop postcondition is
     // acc' = acc + M, j' = 0 (from the inner body triple acc+=1,j-=1 iterated M
-    // times — an INDUCTION over the inner trip count, the flat come-from + trip-
+    // times -- an INDUCTION over the inner trip count, the flat come-from + trip-
     // count argument applied to the inner loop). We construct T_inner's effect as a
     // symbolic transform and apply it to `after_prefix` WITHOUT any inner Swapbr
     // walk. Measure the peak of the resulting state.
@@ -691,7 +691,7 @@ fn hierarchical_inner_body_triple_and_substitution() {
     });
     let _ = nf;
     let (sub_peak, _sub_sum) = sv_bdd_sizes(&sub_state);
-    eprintln!("=== (B.3) SUBSTITUTED inner triple (acc += M, j := 0) — OPAQUE, no inner-Swapbr walk ===");
+    eprintln!("=== (B.3) SUBSTITUTED inner triple (acc += M, j := 0) -- OPAQUE, no inner-Swapbr walk ===");
     eprintln!("post-substitution state peak = {sub_peak} nodes (acc = acc0 + M, whole domain)");
 
     // The hierarchical peak = max over the inner triple proof and the outer
@@ -702,7 +702,7 @@ fn hierarchical_inner_body_triple_and_substitution() {
     // ── (A) NAIVE baseline: try to cross the inner loop with a SYMBOLIC counter,
     //        i.e. walk from outer_top through the inner Swapbr with j SYMBOLIC.
     //        Once the inner Swapbr executes with a symbolic done-bit, PC becomes
-    //        data-dependent and the step's PC output goes SYMBOLIC — the flat
+    //        data-dependent and the step's PC output goes SYMBOLIC -- the flat
     //        method cannot re-pin. We detect that and report the peak at the point
     //        of divergence (the blow-up onset).
     let (naive_peak, naive_conc_steps, naive_diverged_at) =
@@ -718,16 +718,16 @@ fn hierarchical_inner_body_triple_and_substitution() {
     eprintln!("→ The hierarchical decomposition KEEPS THE BDDs TINY ({hier_peak} nodes); the inner Swapbr is never walked symbolically.");
 
     // The core feasibility assertion: the hierarchical peak is small (bounded,
-    // single-digit-ish — the inner triple + substitution are all tiny transforms).
+    // single-digit-ish -- the inner triple + substitution are all tiny transforms).
     assert!(
         hier_peak <= 64,
-        "HIERARCHICAL peak {hier_peak} unexpectedly large — substituting the inner triple re-inflated the BDDs (would be a NO-GO signal)"
+        "HIERARCHICAL peak {hier_peak} unexpectedly large -- substituting the inner triple re-inflated the BDDs (would be a NO-GO signal)"
     );
     // And the naive method demonstrably could NOT keep PC concrete across the nest
     // (that is the wall the hierarchy sidesteps).
     assert!(
         naive_diverged_at.is_some(),
-        "NAIVE walk unexpectedly stayed concrete across the inner Swapbr — the nest is not exercising a data-dependent PC (prototype is not testing nesting)"
+        "NAIVE walk unexpectedly stayed concrete across the inner Swapbr -- the nest is not exercising a data-dependent PC (prototype is not testing nesting)"
     );
 }
 
@@ -735,14 +735,14 @@ fn hierarchical_inner_body_triple_and_substitution() {
 /// inner come-from Swapbr with a genuinely DATA-DEPENDENT back-jump register.
 ///
 /// A FAITHFUL nested come-from sets rb = δ_back WHEN the inner loop continues
-/// (j != 0) and rb = 0 WHEN it exits (j == 0) — so rb is a function of the
+/// (j != 0) and rb = 0 WHEN it exits (j == 0) -- so rb is a function of the
 /// SYMBOLIC carrier j. (The anchor ROM simplifies this to an unconditional δ with
 /// the predicate enforced externally by the structured runner, purely to keep the
 /// hand-assembly short; the honest model of what the flat method faces at a nested
 /// Swapbr is a data-dependent rb, constructed here.) We build that rb symbolically,
 /// place it in the Swapbr entry state, step the Swapbr, and observe whether the
 /// datapath's PC output stays concrete. It does NOT: PC becomes a symbolic
-/// function of j — the flat method's concrete-PC pinning is invalid, so the fetch
+/// function of j -- the flat method's concrete-PC pinning is invalid, so the fetch
 /// at the next step reads a symbolic IR and decode_execute must model every opcode
 /// at once (the documented exponential blow-up). Returns (peak, #concrete inner-
 /// body steps walked, Some(swapbr_pc) if PC diverged / None if it stayed concrete).
@@ -753,7 +753,7 @@ fn naive_cross_inner(
     geom: &NestGeom,
 ) -> (usize, usize, Option<usize>) {
     let nf = n_fields(layout);
-    // 1. Walk the inner straight-line body with j symbolic (concrete PC — fine).
+    // 1. Walk the inner straight-line body with j symbolic (concrete PC -- fine).
     let sym = [(R_ACC as usize, W), (R_J as usize, W)];
     let inner_entry = entry_sv(layout, vs, geom.inner_top, &sym);
     let (after_body, body_peak, _conc, _s) =
@@ -807,7 +807,7 @@ fn naive_cross_inner(
     let peak = body_peak.max(p);
     match read_concrete_pc(&out, layout) {
         Some(_) => (peak, steps, None), // stayed concrete (would mean no data-dep)
-        None => (peak, steps, Some(geom.inner_swapbr)), // PC symbolic — the wall
+        None => (peak, steps, Some(geom.inner_swapbr)), // PC symbolic -- the wall
     }
 }
 

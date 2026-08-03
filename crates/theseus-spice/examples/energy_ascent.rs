@@ -65,12 +65,12 @@ fn main() {
     show("fredkin (c,a,b), c=1 swaps", &fredkin, &[true, true, false], &db, t_ramp);
 
     // 2. A Reg(3) buffer on one bit: three K0 stages (holding costs
-    //    motion — storage has per-tick energy, C2.1).
+    //    motion -- storage has per-tick energy, C2.1).
     let reg3 = lower(&TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(3) })
         .expect("reg3 lowers");
     show("reg(3) buffer on one bit", &reg3, &[true], &db, t_ramp);
 
-    // 3. A composite: (Reg(1) on 3 bits) ; fredkin — mixed breakdown.
+    // 3. A composite: (Reg(1) on 3 bits) ; fredkin -- mixed breakdown.
     let composite = lower(&TypedNode {
         input: three_bits(),
         output: three_bits(),

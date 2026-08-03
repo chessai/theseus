@@ -7,19 +7,19 @@
 //! = `Xor`; constant/NOT = `Xori`; output parking = `Xchg` to scratch.
 //!
 //! WHY PRESENT-4 and NOT AES-8 (settled by the register-pressure analysis in
-//! `docs/reviews/sbox-aes-design-review.md`): a bit-sliced Boyar–Peralta AES
-//! S-box has a PEAK of 30 simultaneously-live signals — this machine has 8
+//! `docs/reviews/sbox-aes-design-review.md`): a bit-sliced Boyar-Peralta AES
+//! S-box has a PEAK of 30 simultaneously-live signals -- this machine has 8
 //! registers + 6 usable Scratch slots + 4 Mem words = 18 addressable live
 //! slots. 30 >> 18 → AES-8 does NOT fit garbage-free. PRESENT-4 fits in 6
 //! registers with a single product temp and no paging.
 //!
-//! Rust-composed instruction ROM (`Vec<Instr>` assembled directly — NEVER
+//! Rust-composed instruction ROM (`Vec<Instr>` assembled directly -- NEVER
 //! enters the lowering/recognition path; no source Iso, no recognize_prim,
 //! no Deferred risk).
 //!
 //! ## STANDALONE garbage-free framing
 //!
-//! The 47-instruction PRESENT S-box is **STANDALONE garbage-free** — strictly
+//! The 47-instruction PRESENT S-box is **STANDALONE garbage-free** -- strictly
 //! stronger than χ's garbage-free-under-adjoint-only (Rev-A).
 //!
 //! Because inputs r0..r3 are **never mutated**, every product temp is
@@ -32,7 +32,7 @@
 //!   - outputs y0..y3 in scratch s2..s5
 //!
 //! No dirty-ancilla caveat. The `sbox_whole_domain_packed` test asserts
-//! r4=0, r5=0, r0..r3=original after every run — the L20 garbage-free
+//! r4=0, r5=0, r0..r3=original after every run -- the L20 garbage-free
 //! regression guard.
 //!
 //! Register map:
@@ -175,7 +175,7 @@ fn out_nibble(s: &StateVals, b: u8) -> u8 {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// FAST TIER (5 tests — default gate: `cargo test -p theseus-tisc --test sbox`)
+// FAST TIER (5 tests -- default gate: `cargo test -p theseus-tisc --test sbox`)
 // ══════════════════════════════════════════════════════════════════════
 
 // ── 1. Whole per-byte domain: all 16 inputs packed ×8, run_rom == TABLE ──
@@ -296,7 +296,7 @@ fn sbox_forward_bijective() {
         let y = out_nibble(&out, 0);
         assert!(
             seen.insert(y),
-            "collision: S maps two inputs to {y:#X} — not a permutation"
+            "collision: S maps two inputs to {y:#X} -- not a permutation"
         );
     }
     assert_eq!(
@@ -344,7 +344,7 @@ fn sbox_instruction_inventory() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// HEAVY TIER (3 tests — `cargo test -p theseus-tisc --test sbox -- --ignored --test-threads=1`)
+// HEAVY TIER (3 tests -- `cargo test -p theseus-tisc --test sbox -- --ignored --test-threads=1`)
 // ══════════════════════════════════════════════════════════════════════
 
 // ── 6. Reversibility: forward ROM then adjoint restores input + temps ──

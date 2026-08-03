@@ -8,8 +8,8 @@ signature value is native cosimulation: circuit-as-host-code, tested with
 the same tooling as the semantics. The project owner prefers Rust.
 
 ## Decision
-The entire implementation — language frontend, core, interpreter, netlist
-IR, simulators, emitters, verification — is Rust. No Clash.
+The entire implementation -- language frontend, core, interpreter, netlist
+IR, simulators, emitters, verification -- is Rust. No Clash.
 
 ## Consequences
 We lose native cosimulation and repay it by owning a cycle-level netlist

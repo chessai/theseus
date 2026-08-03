@@ -98,7 +98,7 @@ fn surface_fib_lowers_and_agrees_with_eval() {
 
 // ── Pin the compiled Fibonacci-mod-2 sequence ───────────────────────
 
-/// Build the Nat numeral for `k` (Zero / Succ … at depth D = 4: k ≤ 3).
+/// Build the Nat numeral for `k` (Zero / Succ ... at depth D = 4: k ≤ 3).
 fn nat(k: u32) -> Value {
     // Nat = Zero | Succ Nat  ⇒  Sum(One, Nat); Zero = Left(unit),
     // Succ n = Right(n).

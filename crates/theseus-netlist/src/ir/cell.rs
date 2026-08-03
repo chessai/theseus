@@ -1,11 +1,11 @@
 //! The phased cell netlist (ADR-0026 C2.7): dual-rail, cell-mapped,
-//! phase-attributed — the adiabatic backend's own artifact, with its own
+//! phase-attributed -- the adiabatic backend's own artifact, with its own
 //! tick-level simulator (next slice).
 //!
 //! # Encoding
 //!
 //! Every logical bit is a **rail pair**: two token lines, a 0-line and a
-//! 1-line; exactly one pulses per token (1-of-2 — the structural face of
+//! 1-line; exactly one pulses per token (1-of-2 -- the structural face of
 //! INV-TOKEN, ADR-0031). At netlist granularity a token line is atomic;
 //! its own electrical (rail, mirror) SR pair lives below this IR, inside
 //! the characterized cell (`theseus-spice::cswap` module docs).
@@ -15,8 +15,8 @@
 //! Cells are the k-CSWAP family (ADR-0027): `K0` buffer, `K1` Fredkin,
 //! `K2` 2-controlled swap. Every cell takes one tick and *is* a register
 //! (2LAL: data advances one stage per clock phase, ADR-0026). A cell at
-//! `depth` d fires on tick d — consumes inputs arriving at d, produces
-//! outputs arriving at d + 1 — and `phase = d mod P` (C2.3) says which
+//! `depth` d fires on tick d -- consumes inputs arriving at d, produces
+//! outputs arriving at d + 1 -- and `phase = d mod P` (C2.3) says which
 //! clock trapezoid drives it.
 //!
 //! # What the next slice consumes
@@ -44,7 +44,7 @@ pub const PHASE_COUNT: u8 = 4;
 pub struct LineId(pub u32);
 
 /// A logical bit: a 1-of-2 pair of token lines. `line1` pulses for a `1`
-/// token, `line0` for a `0` token. NOT is swapping the two roles — pure
+/// token, `line0` for a `0` token. NOT is swapping the two roles -- pure
 /// rewiring, zero cells (ADR-0031 "NOT-in-Permute").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RailPair {
@@ -82,7 +82,7 @@ pub enum CellKind {
 
 impl CellKind {
     /// Number of logical ports (rail pairs), equal on input and output:
-    /// `K0` is `[a]`, `K1` is `[c, a, b]`, `K2` is `[c1, c2, a, b]` —
+    /// `K0` is `[a]`, `K1` is `[c, a, b]`, `K2` is `[c1, c2, a, b]` --
     /// matching `theseus-spice::cswap::cswap_signals`.
     pub fn arity(self) -> usize {
         match self {
@@ -142,12 +142,12 @@ impl CellKind {
 /// Controlled rail-role swap (ADR-0040 proof-of-concept): `Rk` exchanges
 /// the two token lines *within* its one target pair iff all `k` control
 /// pairs carry `1` tokens. Value level:
-/// `(c₁, …, c_k, t) → (c₁, …, c_k, t ⊕ (c₁ ∧ … ∧ c_k))` — `R1` *is*
+/// `(c₁, ..., c_k, t) → (c₁, ..., c_k, t ⊕ (c₁ ∧ ... ∧ c_k))` -- `R1` *is*
 /// CNOT, `R2` *is* Toffoli, with zero ancillas.
 ///
-/// Physically the same act as a k-CSWAP — a controlled exchange of two
+/// Physically the same act as a k-CSWAP -- a controlled exchange of two
 /// conductors' charge, token-conserving and 1-hot-preserving
-/// (INV-TOKEN holds) — but the two swapped conductors are the two rails
+/// (INV-TOKEN holds) -- but the two swapped conductors are the two rails
 /// of ONE pair, so unlike the K-family it does **not** permute
 /// pair-values: it flips the target's value-vs-encoding relationship.
 /// That voids the parity law (`bennett.rs` module docs) and is what
@@ -185,7 +185,7 @@ impl RoleSwapKind {
     }
 
     /// The cell's truth function on logical bits, port order
-    /// `[c₁, …, c_k, t]`. Controls pass; the target's value flips iff
+    /// `[c₁, ..., c_k, t]`. Controls pass; the target's value flips iff
     /// all controls are `1` (line level: its two token lines are
     /// exchanged, which is why this is still pure charge routing).
     /// Self-inverse.
@@ -314,7 +314,7 @@ impl fmt::Display for CellNetError {
     }
 }
 
-/// A cell whose inputs arrive on different ticks — a *wrong circuit*
+/// A cell whose inputs arrive on different ticks -- a *wrong circuit*
 /// under ADR-0026 C2.2 until the tick-exact balancer (later slice)
 /// inserts `K0` stages to equalize arrivals.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -338,7 +338,7 @@ fn check_pair_arrival(arrivals: &[u32], p: &RailPair) -> Result<u32, CellNetErro
 }
 
 impl PhasedCellNetlist {
-    /// Per-(kind, phase) cell counts — the occupancy table the phased-sim
+    /// Per-(kind, phase) cell counts -- the occupancy table the phased-sim
     /// and the energy annotation index by.
     pub fn occupancy(&self) -> BTreeMap<(CellKind, u8), usize> {
         let mut map = BTreeMap::new();
@@ -434,12 +434,12 @@ impl PhasedCellNetlist {
     /// ports (intentionally stronger than the old first-`n_data` check
     /// in the timing certificate).
     ///
-    /// Does NOT call [`Self::validate`] — the check is scoped to
+    /// Does NOT call [`Self::validate`] -- the check is scoped to
     /// output-pair co-arrival only, so it can be applied to nets that
     /// fail `validate`'s other structural checks.
     ///
     /// **Reachability:** the skew `Err` is structurally unreachable on
-    /// every crate-produced net — every `RailPair` construction site
+    /// every crate-produced net -- every `RailPair` construction site
     /// allocates a pair whole from one driver, so both rails always
     /// co-arrive by construction. This accessor is a formalized
     /// tripwire (+ negative test) for a future optimization that
@@ -471,10 +471,10 @@ impl PhasedCellNetlist {
         Ok(out)
     }
 
-    /// Structural validation — everything about INV-TOKEN and the phase
+    /// Structural validation -- everything about INV-TOKEN and the phase
     /// discipline that is checkable without running tokens:
     ///
-    /// 1. every cell conserves rail pairs (`arity` in = out) — swap cells
+    /// 1. every cell conserves rail pairs (`arity` in = out) -- swap cells
     ///    only route charge;
     /// 2. every rail pair is two *distinct* lines (1-of-2 needs both);
     /// 3. every line is driven exactly once and consumed exactly once
@@ -483,7 +483,7 @@ impl PhasedCellNetlist {
     ///    agrees with graph arrival times.
     ///
     /// The dynamic half of INV-TOKEN (exactly one line of each pair high
-    /// per token, every tick) is the phased-sim's per-tick assertion —
+    /// per token, every tick) is the phased-sim's per-tick assertion --
     /// next slice.
     ///
     /// Note: tick-exact balance (C2.2) is *not* required here; see

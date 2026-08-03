@@ -1,4 +1,4 @@
-//! A-7.0 — wide data words (`Flat(n>8)` as multi-byte-leaf `Prod(Flat(8),…)`).
+//! A-7.0 -- wide data words (`Flat(n>8)` as multi-byte-leaf `Prod(Flat(8),...)`).
 //!
 //! GOAL: prove wide BITWISE ops over a 2-byte word `w = Prod(Flat(8),Flat(8))`
 //! lower for the bitwise class via the EXISTING synthesizer with ZERO new
@@ -8,19 +8,19 @@
 //! KEY FINDING (the representation claim, refined):
 //!
 //! The claim "a wide bitwise op is recognized as just more leaves by the
-//! existing synthesizer" is CONFIRMED — **but only for the COMPOSITIONAL form**
+//! existing synthesizer" is CONFIRMED -- **but only for the COMPOSITIONAL form**
 //! `Iso::Times(byteOp, byteOp)` over an INTERLEAVED byte-lane layout, NOT for a
 //! monolithic multi-leaf `PrimDef` table.
 //!
 //!   * COMPOSITIONAL (works, zero new lowering): a wide word laid out with one
-//!     inner product per byte-LANE — `Prod( Prod(a0,b0), Prod(a1,b1) )` — and the
+//!     inner product per byte-LANE -- `Prod( Prod(a0,b0), Prod(a1,b1) )` -- and the
 //!     wide op written as `Times(byteXor, byteXor)`. Each inner byte-pair is an
 //!     EXACT 2-leaf spec, so the existing `n_in==2` (Xor) / `n_in==3` (Ccnot,
 //!     Cswap) ARM matchers fire per lane and emit ONE byte-op per leaf. The
 //!     emission shape is IDENTICAL at Flat(2) and Flat(8) (parametric pin). This
-//!     is the A-7.0 wide-word lowering path — no compiler change.
+//!     is the A-7.0 wide-word lowering path -- no compiler change.
 //!
-//!   * MONOLITHIC (does NOT work — documented negative pin `mono_*`): a single
+//!   * MONOLITHIC (does NOT work -- documented negative pin `mono_*`): a single
 //!     `PrimDef` over `Prod(w, w)` = 4 leaves. The arm matchers are gated on
 //!     EXACT leaf counts (`n_in == 2` / `n_in == 3`), so a 4-leaf prim skips them
 //!     ALL and falls into `general_synthesize_prim`, which enumerates the joint
@@ -29,25 +29,25 @@
 //!     `total_bits > 20` with
 //!     `NeedsProvisioning`. The per-leaf affine-row recognizer (`synth.rs:277`)
 //!     does NOT rescue this: it recognizes each REGISTER ROW *after*
-//!     `table_to_regtransfer` has already enumerated the joint table — it never
+//!     `table_to_regtransfer` has already enumerated the joint table -- it never
 //!     decomposes a 4-leaf prim into independent per-byte 2-leaf ops.
 //!
 //! So: wide bitwise lowers with ZERO new lowering, but the wide op must be
 //! AUTHORED as a composition of byte ops over a byte-lane layout (which is how a
-//! real wide program — e.g. a `fold` accumulator — is built anyway). A-7.1's wide
+//! real wide program -- e.g. a `fold` accumulator -- is built anyway). A-7.1's wide
 //! ADD is genuinely different: cross-byte carry cannot be a `Times` of independent
 //! byte adds, so it needs the new ripple iso the design calls out.
 //! ─────────────────────────────────────────────────────────────────────────
 //!
 //! Tests:
-//!   compositional_wide_xor_shape_pin   — Times(byteXor²) → [Xor,Xor], same at F2/F8
-//!   compositional_wide_xor_fast_small  — fast==eval whole-domain at Flat(2)
-//!   compositional_wide_xor_fast_strided_flat8 — strided at Flat(8) byte lanes
-//!   compositional_wide_ccnot_*         — wide masked-AND / Ccnot per-lane
-//!   compositional_wide_cswap_*         — wide controlled-swap per-lane
-//!   wide_xor_real_cpu (#[ignore])      — run_on_cpu==eval witness (small wide)
-//!   mono_wide_xor_not_per_leaf         — NEGATIVE pin: monolithic 4-leaf ≠ [Xor,Xor]
-//!   mono_wide_binary_over_cap          — the 20-bit cap on the general path
+//!   compositional_wide_xor_shape_pin   -- Times(byteXor²) → [Xor,Xor], same at F2/F8
+//!   compositional_wide_xor_fast_small  -- fast==eval whole-domain at Flat(2)
+//!   compositional_wide_xor_fast_strided_flat8 -- strided at Flat(8) byte lanes
+//!   compositional_wide_ccnot_*         -- wide masked-AND / Ccnot per-lane
+//!   compositional_wide_cswap_*         -- wide controlled-swap per-lane
+//!   wide_xor_real_cpu (#[ignore])      -- run_on_cpu==eval witness (small wide)
+//!   mono_wide_xor_not_per_leaf         -- NEGATIVE pin: monolithic 4-leaf ≠ [Xor,Xor]
+//!   mono_wide_binary_over_cap          -- the 20-bit cap on the general path
 //!   harness A-7.1 (build_wide_prim_iso / assert_wide_eval) exercised by
 //!     harness_wide_xor_via_helper
 
@@ -155,11 +155,11 @@ fn byte_cswap_def(n: u8) -> PrimDef {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// (1) COMPOSITIONAL wide XOR — the confirmed zero-new-lowering path
+// (1) COMPOSITIONAL wide XOR -- the confirmed zero-new-lowering path
 // ══════════════════════════════════════════════════════════════════════════
 
 /// Byte-lane-interleaved wide type for a 2-byte word binary op:
-/// `Prod( Prod(a0,b0), Prod(a1,b1) )` — each inner pair is one byte lane.
+/// `Prod( Prod(a0,b0), Prod(a1,b1) )` -- each inner pair is one byte lane.
 fn interleaved2_ty(n: u8) -> Type {
     let f = Type::Flat(n);
     Type::prod(Type::prod(f.clone(), f.clone()), Type::prod(f.clone(), f.clone()))
@@ -275,7 +275,7 @@ fn compositional_wide_xor_fast_strided_flat8() {
 // ══════════════════════════════════════════════════════════════════════════
 
 /// Byte-lane-interleaved wide type for a 3-operand op:
-/// `Prod( Prod(x0, Prod(y0,z0)), Prod(x1, Prod(y1,z1)) )` — two 3-leaf lanes.
+/// `Prod( Prod(x0, Prod(y0,z0)), Prod(x1, Prod(y1,z1)) )` -- two 3-leaf lanes.
 fn interleaved3_ty(n: u8) -> Type {
     let f = Type::Flat(n);
     let lane = Type::prod(f.clone(), Type::prod(f.clone(), f.clone()));
@@ -294,7 +294,7 @@ fn compositional_wide_ccnot_shape_pin() {
     // Two-width parametric pin at Flat(2) and Flat(4). (Flat(8) is skipped for the
     // 3-leaf ops: a Flat(8) 3-leaf byte prim table is 2^24 = 16M values → OOM to
     // BUILD in the test. The shape is width-parametric, proven at 2 widths; the
-    // per-lane arm fires on structure, not bit-width — see the 3-leaf-Ccnot-at-
+    // per-lane arm fires on structure, not bit-width -- see the 3-leaf-Ccnot-at-
     // Flat(7)/21-bit datapoint in the finding notes, which lowered to ONE Ccnot.)
     for n in [2u8, 4u8] {
         let iso = wide3_times(|| byte_ccnot_def(n));
@@ -394,7 +394,7 @@ fn wide_xor_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// (4) NEGATIVE PINS — the monolithic multi-leaf prim path (documents the finding)
+// (4) NEGATIVE PINS -- the monolithic multi-leaf prim path (documents the finding)
 // ══════════════════════════════════════════════════════════════════════════
 
 /// A MONOLITHIC 4-leaf wide-Xor `PrimDef` over `Prod(w, w)`, leaf order
@@ -427,7 +427,7 @@ fn mono_wide_xor_def(n: u8) -> PrimDef {
 fn mono_wide_xor_not_per_leaf() {
     // A 4-leaf monolithic wide-Xor is NOT recognized as [Xor, Xor]. It skips the
     // exact-leaf-count arms (n_in==2/3) and hits the general BDD fall-through,
-    // which emits a large Bennett body — even at Flat(2), too big for the 8-bit
+    // which emits a large Bennett body -- even at Flat(2), too big for the 8-bit
     // PC. This is the finding: the "just more leaves" claim FAILS for the
     // monolithic form; the compositional Times form (above) is the real path.
     let def = mono_wide_xor_def(2);
@@ -437,7 +437,7 @@ fn mono_wide_xor_not_per_leaf() {
     assert!(
         body.len() > 2,
         "the monolithic 4-leaf wide Xor does NOT emit 2 per-leaf Xors; it produced \
-         {} general-synth instrs — proving the arm path is NOT reached for >3 leaves",
+         {} general-synth instrs -- proving the arm path is NOT reached for >3 leaves",
         body.len()
     );
     // `compile_with_metadata` SUCCEEDS with a large general body (Flat(2): 356
@@ -485,7 +485,7 @@ fn mono_wide_binary_over_cap() {
     assert!(
         body.len() > 2,
         "even at Flat(3) the monolithic 4-leaf wide Xor takes the general path \
-         ({} instrs), not per-leaf arms — the 20-bit cap governs this route",
+         ({} instrs), not per-leaf arms -- the 20-bit cap governs this route",
         body.len()
     );
     eprintln!(
@@ -497,13 +497,13 @@ fn mono_wide_binary_over_cap() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// (5) A-7.1 HARNESS — build a wide byte-lane op over Prod(Flat(8)×k) + assert eval
+// (5) A-7.1 HARNESS -- build a wide byte-lane op over Prod(Flat(8)×k) + assert eval
 // ══════════════════════════════════════════════════════════════════════════
 
 /// Build a byte-lane-interleaved wide BINARY op over `k` byte lanes as
-/// `Times(byteOp, Times(byteOp, …))`, right-nested. Layout per lane = the byte
+/// `Times(byteOp, Times(byteOp, ...))`, right-nested. Layout per lane = the byte
 /// prim's own input type (a 2- or 3-leaf byte pair/triple), lanes right-nested:
-///   `Prod(lane0, Prod(lane1, … lane_{k-1}))`.
+///   `Prod(lane0, Prod(lane1, ... lane_{k-1}))`.
 ///
 /// This is the reusable A-7.1 harness: pass a byte-prim builder (e.g. the wide Add
 /// step once the ripple iso lands) and a lane count; it returns the composed wide
@@ -517,7 +517,7 @@ pub fn build_wide_lane_iso(k: usize, byte_def: impl Fn() -> PrimDef) -> Iso {
     iso
 }
 
-/// The right-nested lane type matching `build_wide_lane_iso`: `Prod(lane, Prod(lane, …))`.
+/// The right-nested lane type matching `build_wide_lane_iso`: `Prod(lane, Prod(lane, ...))`.
 pub fn wide_lane_ty(k: usize, lane_ty: &Type) -> Type {
     assert!(k >= 1);
     let mut ty = lane_ty.clone();

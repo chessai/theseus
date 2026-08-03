@@ -1,10 +1,10 @@
-//! Fuel-based interpreter over core Π — stage one of the oracle chain.
+//! Fuel-based interpreter over core Π -- stage one of the oracle chain.
 //!
 //! - Partiality per join-inverse-category semantics (ADR-0005): fuel in
 //!   software, valid/done handshakes in hardware.
 //! - The interpreter is the semantic root: typed-sim, bit-sim, and
 //!   Verilator are all differentially tested against it (ADR-0008/0018).
-//! - Powers the REPL's `:step`/`:unstep` — the software preview of the
+//! - Powers the REPL's `:step`/`:unstep` -- the software preview of the
 //!   FPGA time-travel demo (workspace plan, ADR-0016 provenance).
 
 pub mod enumerate;
@@ -308,7 +308,7 @@ mod tests {
         v
     }
 
-    /// `rot3 : Three ↔ Three`, the successor mod 3 — a successor-like,
+    /// `rot3 : Three ↔ Three`, the successor mod 3 -- a successor-like,
     /// NOT self-inverse body, so `iterᵏ` distinguishes every k mod 3.
     fn rot3() -> Iso {
         let t0 = Value::left(Value::Unit);
@@ -350,7 +350,7 @@ mod tests {
         assert_round_trip(&Iso::iter(Type::numeral_ty(5), body));
     }
 
-    /// Depth-generic law: `iter n f ⟨k, x⟩ == ⟨k, fᵏ(x)⟩` — the n-fold
+    /// Depth-generic law: `iter n f ⟨k, x⟩ == ⟨k, fᵏ(x)⟩` -- the n-fold
     /// composition oracle, swept over every `k` in `N₆` and every `x`
     /// in `Three`.
     #[test]
@@ -476,7 +476,7 @@ mod tests {
     }
 
     /// A NON-self-inverse body: `cx ; swapˣ : Bit × Bit ↔ Bit × Bit`,
-    /// ⟨x, a⟩ ↦ ⟨a⊕x, x⟩ — order- and direction-sensitive, so it
+    /// ⟨x, a⟩ ↦ ⟨a⊕x, x⟩ -- order- and direction-sensitive, so it
     /// distinguishes head-to-tail from tail-to-head threading.
     fn cx_swap() -> Iso {
         Iso::seq(cx(), Iso::SwapProd(bool_ty(), bool_ty()))
@@ -496,7 +496,7 @@ mod tests {
         assert_round_trip(&Iso::unfold(bit_list_ty(4), cx()));
     }
 
-    /// Round-trip with the non-self-inverse, order-sensitive body —
+    /// Round-trip with the non-self-inverse, order-sensitive body --
     /// the strongest exerciser of the fold/unfold adjoint pairing.
     #[test]
     fn round_trip_fold_nonselfinverse_body() {
@@ -623,7 +623,7 @@ mod tests {
 
     /// Length-style structural consumption: fold `id × rot3` counts the
     /// list length (mod 3) into a `Three` accumulator, preserving the
-    /// list — swept over the whole domain and round-tripped.
+    /// list -- swept over the whole domain and round-tripped.
     #[test]
     fn fold_length_mod3_into_accumulator() {
         let l = bit_list_ty(4);

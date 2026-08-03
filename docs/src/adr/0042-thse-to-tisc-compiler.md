@@ -1,6 +1,6 @@
 # ADR-0042: Surface theseus → TISC-1 ROM compiler architecture
 
-**Status:** Accepted — **M-A implemented** (`theseus-tisc::compile`,
+**Status:** Accepted -- **M-A implemented** (`theseus-tisc::compile`,
 `tests/compile.rs`): the non-recursive fragment compiles to a TISC-1 ROM that
 runs on the CPU, verified `run_on_cpu == eval` over the whole domain, with
 out-of-scope constructs cleanly rejected. M-B design is ADR-0043; M-C/M-D/M-E
@@ -8,17 +8,17 @@ follow.
 
 > **Revision (advisor review, before M-A implementation).** The first
 > draft drew the M-A/M-B line at "any sum type → M-B" and used
-> `fibStep = swap ; cnot` as the M-A example — but a controlled operation
+> `fibStep = swap ; cnot` as the M-A example -- but a controlled operation
 > does **not** stay a `Prim`: `synthesize_controlled`
 > ([`elaborate.rs:668`](../../../crates/theseus-check/src/elaborate.rs))
 > lowers every controlled op to `SwapProd ; Distrib ; Plus(f,g) ; Factor ;
-> SwapProd`. So `cnot`/`xor`/`toffoli` — the *substance* of reversible
-> computing — all elaborate to `Distrib`/`Plus`/`Factor`, which the draft
+> SwapProd`. So `cnot`/`xor`/`toffoli` -- the *substance* of reversible
+> computing -- all elaborate to `Distrib`/`Plus`/`Factor`, which the draft
 > excluded; M-A as first drawn could compile nothing but pure register
 > rearrangement, not even its own example. **The correct M-A/M-B line is
-> recursion, not sums.** M-A now includes the **controlled-op idiom** —
+> recursion, not sums.** M-A now includes the **controlled-op idiom** --
 > the fixed, non-recursive, structurally-reconverging `Distrib ; Plus(f,g)
-> ; Factor` shape — recognized *as a whole* and mapped to CPU
+> ; Factor` shape -- recognized *as a whole* and mapped to CPU
 > instructions (controlled-NOT → `XOR`, controlled-swap → `CSWAP`),
 > WITHOUT implementing general `Plus`/branching. Deferred to M-B+ is only
 > what genuinely needs new machinery: general/unrecognized controlled-`f`
@@ -31,61 +31,61 @@ follow.
 
 **Goal.** A simulated TISC-1 CPU fetches and executes ROMs compiled from
 arbitrary well-formed `.thse` programs. "Arbitrary well-formed" means
-bounded at unroll depth D — theseus is already bounded (ADR-0007,
+bounded at unroll depth D -- theseus is already bounded (ADR-0007,
 ADR-0035); every well-typed program over finite types denotes a bijection
 on a finite domain, so the target is finite.
 
 **Milestone decomposition:**
 
-- **M-A — Register-only, non-recursive compiler (this ADR's focus).**
+- **M-A -- Register-only, non-recursive compiler (this ADR's focus).**
   Compile the product/composition fragment PLUS the **controlled-op
   idiom** (§2) and **constant-count `iter`** to TISC-1 ROMs. Values fit in
   registers; no memory bus, no recursion, no data-dependent control flow.
   Controlled ops (`cnot`/`xor`/`toffoli`) are recognized structurally and
-  mapped to `XOR`/`CSWAP` — no general `Plus`/branch codegen. The
+  mapped to `XOR`/`CSWAP` -- no general `Plus`/branch codegen. The
   acceptance test is the run-on-CPU differential oracle (§6).
 
-- **M-B — Conditional execution + data-dependent control.** The cases the
+- **M-B -- Conditional execution + data-dependent control.** The cases the
   M-A idiom-recognizer rejects: a controlled op whose branch `f`/`g` is
   *not* a recognized single-instruction pattern (needs conditional
-  execution of an instruction *sequence* — CSWAP-guarded predication or
+  execution of an instruction *sequence* -- CSWAP-guarded predication or
   SWAPBR branching, ADR-0034 D5, with Bennett-style uncompute of the
   branch witness), and **data-dependent `iter`** counts (guard each
   unrolled body on a runtime count comparison). Bare (non-idiom) sum
   values also land here.
 
-- **M-C — Memory subsystem.** Wakes Option-B (ADR-0029): LOAD/STORE/
+- **M-C -- Memory subsystem.** Wakes Option-B (ADR-0029): LOAD/STORE/
   EXCH-mem via a swap-bus interface. Needed for recursive/heap values
   that exceed the register file.
 
-- **M-D — Full algebraic codegen.** Heap value representation,
+- **M-D -- Full algebraic codegen.** Heap value representation,
   `Fold`/`Unfold`/`Trace`, reversible calling convention. Depends on M-B
   (sum dispatch) and M-C (heap storage).
 
-  **Status — IN PROGRESS (theseus-v2 `c229920`).** Key reframe (design
+  **Status -- IN PROGRESS (theseus-v2 `c229920`).** Key reframe (design
   `docs/scratch/md-design.md`, adversarially reviewed): theseus finitizes
   recursive types by bounded unrolling (ADR-0035, depth 4), so `Fold`/`Unfold`
-  are *bounded* and compile via M-B's guarded static unroll — the genuinely new
+  are *bounded* and compile via M-B's guarded static unroll -- the genuinely new
   work is heap + data-dependent addressing; `Trace` is *not* unrollable
   (carrier-cardinality bound; its guard is the exit tag the body flips) and
   becomes a reversible while-loop. **Done + merged:** **M-D.a** (`cf0639a`) list
   `Fold`/`Unfold` codegen (per-copy displaced `Ctx`, real-CPU oracle); **M-D.alloc1**
-  (`13ca492`) occupancy-aware register allocation (`OccSet` bitmask — fixed a
+  (`13ca492`) occupancy-aware register allocation (`OccSet` bitmask -- fixed a
   reproduced *pre-existing* M-B silent-corruption bug where a sub-context's "free"
   register held live data); **M-D.alloc2** (`a8b8fcc`) doubly-nested skip-block
   control safely *rejected* (reject-don't-corrupt; correct nested compilation is a
   deferred reservation-ordering problem); **M-D.b** (`c229920`) data-dependent memory
-  addressing — a `MEXCHR rd,ra` instruction (`reg[rd] ↔ mem[reg[ra] % N]`) whose
+  addressing -- a `MEXCHR rd,ra` instruction (`reg[rd] ↔ mem[reg[ra] % N]`) whose
   address is a *register value*, preserving the Stage-1b bus-quiescence closure via
   `absorb=sym(emit)` cancellation (requires `ra≠rd`; the correct emit is a *sequential*
-  `select_reg(R_RS)` bracket before the `select_reg(R_RD)` bracket — nesting reads the
+  `select_reg(R_RS)` bracket before the `select_reg(R_RD)` bracket -- nesting reads the
   wrong register while still passing the certificate). **Remaining:** heap value rep
   (needs MEM_WORDS widening), the `run_on_cpu` halting-model/WCET harness (assumes
   monotone PC; breaks on backward jumps), `Trace`/labels reversible while-loop +
   reversible calling convention. Design docs: `md-design.md`, `md-alloc-design.md`,
   `mdb-design.md`.
 
-- **M-E — Polish + optional energy pricing.** Optimization passes,
+- **M-E -- Polish + optional energy pricing.** Optimization passes,
   energy annotation of compiled ROMs via the char-DB fits
   (`theseus-tisc::energy`).
 
@@ -95,17 +95,17 @@ on a finite domain, so the target is finite.
 
 | Constructor | Source | Why in M-A |
 |---|---|---|
-| `Id(Type)` | `iso.rs:17` | Identity — zero instructions |
-| `Sym(Box<Iso>)` | `iso.rs:19` | Adjoint — reverse + per-instruction inverse |
-| `Seq(Box<Iso>, Box<Iso>)` | `iso.rs:21` | Composition — concatenation |
-| `Times(Box<Iso>, Box<Iso>)` | `iso.rs:24` | Parallel product — disjoint register regions |
-| `SwapProd(Type, Type)` | `iso.rs:41` | Product swap — register exchange |
-| `AssocLProd(Type, Type, Type)` | `iso.rs:43` | Product re-association — register rename |
-| `AssocRProd(Type, Type, Type)` | `iso.rs:45` | Product re-association — register rename |
-| `UniteProd(Type)` | `iso.rs:47` | Drop unit from product — register rename |
-| `UnitiProd(Type)` | `iso.rs:49` | Introduce unit into product — register rename |
-| `Prim(Box<PrimDef>)` | `iso.rs:107` | Opaque bijection — instruction selection |
-| `Iter(Type, Box<Iso>)` | `iso.rs:80` | Bounded iteration — static unroll |
+| `Id(Type)` | `iso.rs:17` | Identity -- zero instructions |
+| `Sym(Box<Iso>)` | `iso.rs:19` | Adjoint -- reverse + per-instruction inverse |
+| `Seq(Box<Iso>, Box<Iso>)` | `iso.rs:21` | Composition -- concatenation |
+| `Times(Box<Iso>, Box<Iso>)` | `iso.rs:24` | Parallel product -- disjoint register regions |
+| `SwapProd(Type, Type)` | `iso.rs:41` | Product swap -- register exchange |
+| `AssocLProd(Type, Type, Type)` | `iso.rs:43` | Product re-association -- register rename |
+| `AssocRProd(Type, Type, Type)` | `iso.rs:45` | Product re-association -- register rename |
+| `UniteProd(Type)` | `iso.rs:47` | Drop unit from product -- register rename |
+| `UnitiProd(Type)` | `iso.rs:49` | Introduce unit into product -- register rename |
+| `Prim(Box<PrimDef>)` | `iso.rs:107` | Opaque bijection -- instruction selection |
+| `Iter(Type, Box<Iso>)` | `iso.rs:80` | Bounded iteration -- static unroll |
 
 Products nest into tuples of registers; constant-count `Iter` is
 statically unrolled; `Prim` maps declared primitives to TISC-1 sequences
@@ -123,19 +123,19 @@ emits every controlled op as the fixed shape
 SwapProd(c,t) ; Distrib(t, cₗ, cᵣ) ; Plus(f, g) ; Factor(t, cₗ, cᵣ) ; SwapProd(t,c)
 ```
 
-This is **not** general sum computation — it is a *closed, non-recursive,
+This is **not** general sum computation -- it is a *closed, non-recursive,
 structurally-reconverging idiom*: `Distrib` splits the target by the
 control's tag, `Plus(f,g)` applies one transform per tag, `Factor`
 immediately recombines. No spine, no loop, no data-dependent PC change;
 the control value is preserved. M-A therefore treats this whole
 five-constructor shape as **one recognized macro** (§4.1) and maps it to a
-single CPU instruction — it does **not** implement `Distrib`/`Plus`/
+single CPU instruction -- it does **not** implement `Distrib`/`Plus`/
 `Factor` as general constructors. Recognized cases for M-A:
 
 | Idiom (control `c`, target `t`) | CPU instruction |
 |---|---|
-| `Plus(Id, Not)` — controlled-NOT | `XOR t, c` |
-| `Plus(Id, Swap)` — controlled-swap (Fredkin) | `CSWAP c, t₀, t₁` |
+| `Plus(Id, Not)` -- controlled-NOT | `XOR t, c` |
+| `Plus(Id, Swap)` -- controlled-swap (Fredkin) | `CSWAP c, t₀, t₁` |
 
 An idiom whose `Plus(f,g)` branch is not one of these single-instruction
 patterns is rejected by M-A (→ M-B, conditional execution of a sequence).
@@ -146,17 +146,17 @@ patterns is rejected by M-A (→ M-B, conditional execution of a sequence).
 |---|---|---|
 | `Plus(f,g)` outside a recognized controlled idiom, or with non-trivial `f`/`g` | M-B | Needs conditional execution of an instruction *sequence* (CSWAP-guarded predication / SWAPBR) + Bennett uncompute of the branch witness |
 | bare `SwapSum`, `AssocLSum`, `AssocRSum`, `UniteSum`, `UnitiSum` (not part of an idiom) | M-B | Tag-bit routing on first-class sum values |
-| `Trace` | M-B/M-D | Iteration over the sum spine `u + a ↔ u + b` — data-dependent branching (M-B) + possibly heap for `u` (M-C) |
-| `Fold`, `Unfold` | M-D | Structural **recursion** over a list spine `1 + (b × …)` — needs branching (M-B) + heap for spine values exceeding registers (M-C) |
-| data-dependent `Iter` (count read from data, varies per input) | M-B | Each unrolled body must be guarded on a runtime count comparison — conditional execution |
+| `Trace` | M-B/M-D | Iteration over the sum spine `u + a ↔ u + b` -- data-dependent branching (M-B) + possibly heap for `u` (M-C) |
+| `Fold`, `Unfold` | M-D | Structural **recursion** over a list spine `1 + (b × ...)` -- needs branching (M-B) + heap for spine values exceeding registers (M-C) |
+| data-dependent `Iter` (count read from data, varies per input) | M-B | Each unrolled body must be guarded on a runtime count comparison -- conditional execution |
 
-**Reasoning — the line is recursion, not sums.** The controlled-op idiom
+**Reasoning -- the line is recursion, not sums.** The controlled-op idiom
 is finite, non-recursive, and reconverges by construction, so it costs one
 instruction (above). What genuinely needs new machinery is: (1)
-*conditional execution of a whole instruction sequence* — a controlled-`f`
-where `f` isn't a single native op — which requires CSWAP-guarded
+*conditional execution of a whole instruction sequence* -- a controlled-`f`
+where `f` isn't a single native op -- which requires CSWAP-guarded
 predication or SWAPBR branching with witness uncompute (M-B); (2)
-*recursion over a spine* — `Trace`/`Fold`/`Unfold` walk a `1 + (b × …)`
+*recursion over a spine* -- `Trace`/`Fold`/`Unfold` walk a `1 + (b × ...)`
 structure a data-dependent number of times (M-B for the branch, M-C/M-D
 for heap-sized spine values); and (3) *data-dependent iteration counts*,
 which are conditional execution in disguise (M-B). M-A is exactly the
@@ -167,29 +167,29 @@ which are conditional execution in disguise (M-B). M-A is exactly the
 An M-A value is a **product of word-sized leaves**. Each leaf is a
 bounded word type:
 
-- `Bit = 1 + 1` — 1 bit, but in the M-A word-subset representation, a
+- `Bit = 1 + 1` -- 1 bit, but in the M-A word-subset representation, a
   Bit occupies **one 8-bit register** (zero-extended: `Left(Unit) = 0`,
   `Right(Unit) = 1`). This matches `StateVals` byte semantics
   (`types.rs:113`).
-- Bounded `Nat` as an iteration count — encoded as a `u8` numeral value
+- Bounded `Nat` as an iteration count -- encoded as a `u8` numeral value
   (0..=255), occupying one register.
-- `u8` (8-bit word) — one register, directly.
+- `u8` (8-bit word) -- one register, directly.
 
 A product `a × b` is a tuple: the leaves of `a` occupy consecutive
 registers starting at some base, followed by the leaves of `b`. The
 **field assignment** is type-directed: flatten the product tree into its
-leaf sequence left-to-right; assign registers `r0, r1, …` in order.
+leaf sequence left-to-right; assign registers `r0, r1, ...` in order.
 
-**Bound:** The TISC-1 has 8 general registers (`r0`–`r7`,
-`types.rs:19`) and 6 usable scratch words (`s2`–`s7`; `s0`/`s1` are
+**Bound:** The TISC-1 has 8 general registers (`r0`-`r7`,
+`types.rs:19`) and 6 usable scratch words (`s2`-`s7`; `s0`/`s1` are
 decoder-reserved, `asm.rs:136`). M-A programs are restricted to values
-with **at most 8 leaf fields** (fitting in `r0`–`r7`). Scratch words
-`s2`–`s7` are available for temporaries within instruction sequences but
+with **at most 8 leaf fields** (fitting in `r0`-`r7`). Scratch words
+`s2`-`s7` are available for temporaries within instruction sequences but
 are not part of the value representation. Programs needing >8 fields are
 a compile-time error in M-A (deferred to M-C with memory).
 
 **Marshalling.** The existing `StateVals::encode`/`decode`
-(`types.rs:122–162`) convert between the byte-level `StateVals` struct
+(`types.rs:122-162`) convert between the byte-level `StateVals` struct
 and the `Value` inhabiting `state_ty()`, using `value_from_bits` and
 `bits_of` from `theseus-netlist`. For the compiler's marshal/unmarshal,
 the value type's product structure maps to a subsequence of the
@@ -198,7 +198,7 @@ reads `regs[i]`. All other state fields (PC, BR, IR, scratch) are
 initialized to zero for marshalling and ignored (except PC, which is
 verified to equal the instruction count after execution).
 
-## 4. Code generation — lowering rules
+## 4. Code generation -- lowering rules
 
 The compiler translates a core `Iso` (M-A subset) into a `Vec<Instr>`
 (TISC-1 instruction sequence). The translation is parameterized by a
@@ -207,18 +207,18 @@ which product fields.
 
 A context `Ctx` is a mapping from the value type's flattened leaf
 positions to register indices. Initially, `Ctx` assigns leaves
-left-to-right to `r0, r1, …`. Structural isos (swap, assoc, unite) may
+left-to-right to `r0, r1, ...`. Structural isos (swap, assoc, unite) may
 permute this mapping without emitting instructions.
 
 ### 4.1. Per-constructor lowering
 
-**`Id(ty)`** — Zero instructions. Context unchanged.
+**`Id(ty)`** -- Zero instructions. Context unchanged.
 
 ```
 lower(Id(ty), ctx) = []
 ```
 
-**`Seq(f, g)`** — Concatenate the code for `f` and `g`, threading the
+**`Seq(f, g)`** -- Concatenate the code for `f` and `g`, threading the
 context: `f` transforms `ctx` to `ctx'`, then `g` is lowered under
 `ctx'`.
 
@@ -227,9 +227,9 @@ lower(Seq(f, g), ctx) = lower(f, ctx) ++ lower(g, ctx')
   where ctx' = apply_context(f, ctx)
 ```
 
-**`Times(f, g)`** — `f : a ↔ b` and `g : c ↔ d`. The context splits
+**`Times(f, g)`** -- `f : a ↔ b` and `g : c ↔ d`. The context splits
 into two disjoint regions: the first `|a|` leaf registers for `f`, the
-remaining `|c|` for `g`. Code is concatenated (order does not matter —
+remaining `|c|` for `g`. Code is concatenated (order does not matter --
 they touch disjoint registers).
 
 ```
@@ -238,7 +238,7 @@ lower(Times(f, g), ctx) =
   lower(f, ctx_f) ++ lower(g, ctx_g)
 ```
 
-**`SwapProd(a, b)`** — Exchange the registers holding the `a`-fields
+**`SwapProd(a, b)`** -- Exchange the registers holding the `a`-fields
 with those holding the `b`-fields. If the context can absorb this as a
 rename (permute the context mapping), emit zero instructions. Otherwise,
 emit `EXCH` instructions to physically swap the registers.
@@ -258,7 +258,7 @@ lower(SwapProd(a, b), ctx) =
   update ctx: swap the two field groups
 ```
 
-**`AssocLProd(a, b, c)` / `AssocRProd(a, b, c)`** — Re-association of
+**`AssocLProd(a, b, c)` / `AssocRProd(a, b, c)`** -- Re-association of
 products. This changes the nesting `a × (b × c) ↔ (a × b) × c` but
 does not change the flat leaf sequence. **Zero instructions.** The
 context mapping is unchanged (the same registers hold the same leaves in
@@ -269,7 +269,7 @@ lower(AssocLProd(a, b, c), ctx) = []   -- context type updated, mapping unchange
 lower(AssocRProd(a, b, c), ctx) = []
 ```
 
-**`UniteProd(a)` / `UnitiProd(a)`** — Drop or introduce a `1` factor.
+**`UniteProd(a)` / `UnitiProd(a)`** -- Drop or introduce a `1` factor.
 The unit `1` has zero leaf fields (no register). `UniteProd : 1 × a ↔ a`
 strips the unit prefix; `UnitiProd : a ↔ 1 × a` prepends it. **Zero
 instructions.** The context type changes but the register mapping is
@@ -280,7 +280,7 @@ lower(UniteProd(a), ctx) = []   -- type: 1 × a → a; register map unchanged
 lower(UnitiProd(a), ctx) = []   -- type: a → 1 × a; register map unchanged
 ```
 
-**`Sym(f)`** — The adjoint (inverse). Reverse the instruction sequence
+**`Sym(f)`** -- The adjoint (inverse). Reverse the instruction sequence
 of `f` and replace each instruction with its inverse from the table
 below.
 
@@ -301,7 +301,7 @@ has a unique inverse):
 | `ROTL rd, rs` | `ROTR rd, rs` | Left-rotate ↔ right-rotate |
 | `ROTR rd, rs` | `ROTL rd, rs` | |
 | `CSWAP rd, rs, rt` | `CSWAP rd, rs, rt` | Self-inverse (conditional swap) |
-| `XCHG rd, sx` | `XCHG rd, sx` | Self-inverse (register–scratch swap) |
+| `XCHG rd, sx` | `XCHG rd, sx` | Self-inverse (register-scratch swap) |
 | `SWAPBR rd` | `SWAPBR rd` | Self-inverse (swap is involution) |
 | `ADDI rd, imm` | `SUBI rd, imm` | `rd += imm` ↔ `rd -= imm` |
 | `SUBI rd, imm` | `ADDI rd, imm` | |
@@ -309,7 +309,7 @@ has a unique inverse):
 | `ROTLI rd, imm` | `ROTRI rd, imm` | |
 | `ROTRI rd, imm` | `ROTLI rd, imm` | |
 
-**`Prim(def)`** — Instruction selection for opaque primitive bijections.
+**`Prim(def)`** -- Instruction selection for opaque primitive bijections.
 The `PrimDef` (`prim.rs:71`) carries a clause table (`forward:
 BTreeMap<Value, Value>`). The compiler recognizes known patterns and maps
 them to TISC-1 instruction sequences:
@@ -335,7 +335,7 @@ does not match any recognized pattern, the compiler emits an
 "unsupported primitive in M-A" error. M-B and beyond may lower
 arbitrary small-domain prims via a reversible lookup-table synthesis.
 
-**The controlled-op idiom** — This is where `cnot`/`xor`/`toffoli` and
+**The controlled-op idiom** -- This is where `cnot`/`xor`/`toffoli` and
 every other clause-defined controlled bijection actually arrive (they are
 NOT `Prim`; see §2). The compiler pattern-matches the whole
 `synthesize_controlled` shape as a unit:
@@ -345,37 +345,37 @@ match:  SwapProd(c,t) ; Distrib(t,cₗ,cᵣ) ; Plus(f,g) ; Factor(t,cₗ,cᵣ) ;
 ```
 
 and lowers by the recognized `(f, g)` (matching is *structural on the core
-Iso*, robust — not a dense clause-table enumeration):
+Iso*, robust -- not a dense clause-table enumeration):
 
 | `(f, g)` | Meaning | Emission |
 |---|---|---|
-| `(Id, SwapSum(1,1))` — i.e. `Plus(Id, Not)` | controlled-NOT: `t ⊕= c` | `XOR { rd: reg_t, rs: reg_c }` |
+| `(Id, SwapSum(1,1))` -- i.e. `Plus(Id, Not)` | controlled-NOT: `t ⊕= c` | `XOR { rd: reg_t, rs: reg_c }` |
 | `(Id, SwapProd(_,_))` | controlled-swap of the two target sub-registers | `CSWAP { rd: reg_c, rs: reg_t0, rt: reg_t1 }` |
 
 An idiom whose `(f,g)` is neither pattern (e.g. a controlled *add* or a
 controlled instruction *sequence*) is rejected → **M-B** (conditional
 execution of a sequence). Multi-bit controlled ops (e.g. a `u8` XOR that
 elaborates to a per-bit CNOT ripple) lower to the corresponding *sequence*
-of `XOR`/`CSWAP` instructions — correct, though not yet using a single
+of `XOR`/`CSWAP` instructions -- correct, though not yet using a single
 native `ADD`/`XOR` word op (that instruction-selection optimization is
 M-E). Verified by the §6 oracle.
 
-**`Iter(n_ty, body)`** — Bounded iteration. `iter n f : n × a ↔ n × a`
+**`Iter(n_ty, body)`** -- Bounded iteration. `iter n f : n × a ↔ n × a`
 applies `f : a ↔ a` exactly `k` times, where `k` is the numeral in the
 first component.
 
-**M-A handles only *constant-count* iteration** — where `k` is fixed at
+**M-A handles only *constant-count* iteration** -- where `k` is fixed at
 compile time (the same for every input, e.g. an `iter` applied at a
 statically-known count, or a program whose count component is a literal).
-The compiler statically unrolls: `lower(Iter, ctx) = lower(body) ++ … ++
-lower(body)` (`k` copies), threading `ctx`. No guards, no branching — a
+The compiler statically unrolls: `lower(Iter, ctx) = lower(body) ++ ... ++
+lower(body)` (`k` copies), threading `ctx`. No guards, no branching -- a
 straight-line body repeated `k` times.
 
 **Data-dependent counts are deferred to M-B.** When `k` is read from
-*input data* and varies per input (the general `iter n f` semantics — e.g.
+*input data* and varies per input (the general `iter n f` semantics -- e.g.
 `conformance/programs/0022-fib.thse`'s `iter Nat fibStep` run at different
 `k`), each unrolled body must be *guarded* on a runtime comparison `i < k`
-— conditional execution of a sequence, which is M-B machinery (CSWAP
+-- conditional execution of a sequence, which is M-B machinery (CSWAP
 predication or a SWAPBR decrement-and-branch loop with come-from
 re-convergence, ADR-0034 D5). M-A rejects data-dependent `iter`; the
 first end-to-end demo is a **constant-count** program (§7: a fixed
@@ -394,9 +394,9 @@ M-A register allocation is trivial:
    Many are absorbed as renames; `SwapProd` emits `EXCH` only when the
    physical registers must actually swap.
 
-3. **Scratch words** (`s2`–`s7`, via `XCHG rd, sx`, `asm.rs:53`) are
+3. **Scratch words** (`s2`-`s7`, via `XCHG rd, sx`, `asm.rs:53`) are
    available for multi-instruction prim sequences that need temporaries.
-   In M-A's recognized-prim table (§4.1), all entries are 1–2
+   In M-A's recognized-prim table (§4.1), all entries are 1-2
    instructions with no temporaries needed.
 
 4. **No spilling.** M-A programs that exceed 8 registers are rejected.
@@ -406,7 +406,7 @@ M-A register allocation is trivial:
 M-A programs are restricted to the **garbage-free** fragment: every
 intermediate value produced by the computation is consumed by a
 subsequent operation. No Bennett uncompute is needed. This is
-**not** a general property of all `Iso` programs — sum-type dispatch
+**not** a general property of all `Iso` programs -- sum-type dispatch
 produces tag-bit garbage that must be reversibly erased. M-A avoids this
 by excluding sum types entirely.
 
@@ -428,8 +428,8 @@ ROMs:
    (revolutions). After `B` steps, the PC has advanced past the last
    instruction.
 
-3. Addresses `≥ rom.len()` fetch a zero word (`step.rs:128–138`): the
-   fetch phase produces `IR = 0`, which decodes as `ADDI r0, #0` — the
+3. Addresses `≥ rom.len()` fetch a zero word (`step.rs:128-138`): the
+   fetch phase produces `IR = 0`, which decodes as `ADDI r0, #0` -- the
    identity when `s0 = 0` (which holds by convention). The machine idles:
    all registers are invariant, PC increments by 1 each cycle.
 
@@ -437,7 +437,7 @@ ROMs:
    machine performs `B` meaningful steps, then idles. The ring is run for
    exactly `B` revolutions; the final `StateVals` contains the output.
 
-This model requires no halt detection — the runner's revolution count IS
+This model requires no halt detection -- the runner's revolution count IS
 the halting mechanism. For programs with data-dependent iteration counts
 (M-B's SWAPBR loops), the budget becomes an upper bound, and the
 machine idles for the remaining cycles. The period-2 halt orbit
@@ -446,7 +446,7 @@ but M-A's static-unroll programs have known-at-compile-time budgets.
 
 ## 6. Run-on-CPU differential oracle
 
-The acceptance test for M-A — to be implemented as an integration test:
+The acceptance test for M-A -- to be implemented as an integration test:
 
 ```text
 compile(program_iso) -> rom: Vec<u16>         // via asm::assemble
@@ -472,7 +472,7 @@ disagreement on any input falsifies the compiler.
 
 Implementation note: `enumerate_values` (`prim.rs:42`) enumerates all
 inhabitants of a finite type. For word-sized types this is at most 256
-values per leaf, and products multiply: `u8 × u8` has 65536 values —
+values per leaf, and products multiply: `u8 × u8` has 65536 values --
 tractable for exhaustive testing. Larger product types may require
 sampling (but M-A's ≤ 8 registers × 8-bit words remain feasible for
 many practical programs).
@@ -483,7 +483,7 @@ many practical programs).
 > native add prim (→ `ADD`) to show the ROM *shape* against the existing
 > `fib_cpu.rs`. In the actual 1-bit `conformance/programs/0022-fib.thse`,
 > `addInto = cnot`, which elaborates to the controlled-NOT **idiom**, so
-> M-A emits `XOR reg_t, reg_c` (§4.1) — i.e. `fibStep` compiles to
+> M-A emits `XOR reg_t, reg_c` (§4.1) -- i.e. `fibStep` compiles to
 > `EXCH r1,r2 ; XOR r2,r1`, verified below to compute `(a,b) ↦ (b, a⊕b)`.
 > A `u8` add would elaborate to a per-bit CNOT ripple and compile to a
 > *sequence* of `XOR`/`CSWAP` (native-`ADD` instruction selection is M-E).
@@ -554,7 +554,7 @@ physical register contents instead:
 
 **Step 3: lower `Prim(addInto_def)` under the post-swap state**
 
-The `addInto` prim has the pattern `(x, y) ↦ (x, x + y)` — recognized
+The `addInto` prim has the pattern `(x, y) ↦ (x, x + y)` -- recognized
 as "add-into-second" from the prim recognition table (§4.1). The
 first leaf (physical `r1`) is the source; the second (physical `r2`) is
 the target.
@@ -565,7 +565,7 @@ Emit:
 ADD r2, r1         ;; r2 += r1  →  r2 = a + b, r1 = b
 ```
 
-Wait — the `addInto` pattern is `(x, y) ↦ (x, x + y)`. After the swap,
+Wait -- the `addInto` pattern is `(x, y) ↦ (x, x + y)`. After the swap,
 the pair in registers is `(r1, r2) = (b, a)`. So `addInto` applied to
 `(b, a)` gives `(b, b + a) = (b, a + b)`. The target is the second
 register:
@@ -587,7 +587,7 @@ Instruction 1: ADD  r2, r1     →  encode: 0x8240  (R-format, opcode 0000, rd=2
 ```
 
 Wait, let me double-check. The existing `fib_cpu.rs:81` uses
-`ADD { rd: 1, rs: 2 }` then `EXCH { rd: 1, rs: 2 }` — the *opposite*
+`ADD { rd: 1, rs: 2 }` then `EXCH { rd: 1, rs: 2 }` -- the *opposite*
 order. Let me reconcile.
 
 The existing fib ROM implements `(a, b) ↦ (b, a + b)` as:
@@ -606,15 +606,15 @@ ADD  r2, r1     ;; r2 += r1  →  r2 = a + b, r1 = b
 ```
 
 Both produce `(r1, r2) = (b, a + b)` from `(a, b)`. The instruction
-sequences differ but compute the same bijection — which is exactly what
+sequences differ but compute the same bijection -- which is exactly what
 the differential oracle (§6) would verify.
 
 ### 7.5. ROM encoding
 
 | Address | Instruction | Encoding |
 |---|---|---|
-| 0 | `EXCH r1, r2` | `0x9940` — R-format: `1 | 0011 | 001 | 010 | 000 | 00` |
-| 1 | `ADD r2, r1` | `0x8220` — R-format: `1 | 0000 | 010 | 001 | 000 | 00` |
+| 0 | `EXCH r1, r2` | `0x9940` -- R-format: `1 | 0011 | 001 | 010 | 000 | 00` |
+| 1 | `ADD r2, r1` | `0x8220` -- R-format: `1 | 0000 | 010 | 001 | 000 | 00` |
 
 ROM = `[0x9940, 0x8220]`. Budget `B = 2`.
 
@@ -642,7 +642,7 @@ Result: `(b, a + b)`. Matches the CPU execution. QED.
 
 For the iterated Fibonacci `iter Nat fibStep` with seed `(1, 1)` and
 count `k = 10`, the compiler would unroll `fibStep` 10 times, producing
-a 20-instruction ROM. This is exactly the ROM in `tests/fib_cpu.rs:79–84`
+a 20-instruction ROM. This is exactly the ROM in `tests/fib_cpu.rs:79-84`
 (with the instruction order `ADD; EXCH` instead of `EXCH; ADD`, but
 computing the same sequence). The differential oracle would confirm
 agreement on all 256 × 256 = 65536 inputs of type `u8 × u8`.
@@ -651,7 +651,7 @@ agreement on all 256 × 256 = 65536 inputs of type `u8 × u8`.
 
 ### Decisions
 
-1. **Register-only.** No memory subsystem — values must fit in 8
+1. **Register-only.** No memory subsystem -- values must fit in 8
    registers. Memory is M-C (wakes Option-B, ADR-0029).
 
 2. **Bounded at depth D.** All types are finite; `Iter` unrolls to the
@@ -661,15 +661,15 @@ agreement on all 256 × 256 = 65536 inputs of type `u8 × u8`.
    sub-iso is inlined at the call site. This is tractable because M-A
    programs are small (register-width values, bounded iteration).
 
-4. **Garbage-free by construction.** M-A's fragment — products, the
+4. **Garbage-free by construction.** M-A's fragment -- products, the
    controlled-op idiom (`Distrib ; Plus(f,g) ; Factor` reconverges
-   structurally), and constant-count iter — produces no residual garbage,
+   structurally), and constant-count iter -- produces no residual garbage,
    so no Bennett uncompute is emitted. Rejected (→ M-B) is exactly what
    *would* leave a witness: conditional execution of an instruction
    sequence, and data-dependent branching.
 
 5. **Constant-count Iter only.** The body is inlined `k` times where `k`
-   is fixed at compile time — straight-line, no guards. Data-dependent
+   is fixed at compile time -- straight-line, no guards. Data-dependent
    counts (the general `iter` semantics) are M-B (guarded unroll). The
    differential oracle (§6) catches any disagreement.
 
@@ -699,19 +699,19 @@ agreement on all 256 × 256 = 65536 inputs of type `u8 × u8`.
 
 ## Cross-references
 
-- ADR-0007 — totality: every well-typed term terminates
-- ADR-0008 — differential testing methodology
-- ADR-0029 — memory: exchange; Option-A/B/C stratification
-- ADR-0034 — reversible branching: SWAPBR / come-from
-- ADR-0035 — μ-types: bounded unrolling at lowering
-- ADR-0036 — iter: bounded-iteration core primitive
-- ADR-0041 — execution models: spatial vs temporal
-- `crates/theseus-core/src/iso.rs` — the `Iso` enum (codegen source)
-- `crates/theseus-core/src/prim.rs` — `Value`, `PrimDef`, `enumerate_values`
-- `crates/theseus-tisc/src/asm.rs` — TISC-1 ISA: `Instr`, `encode`/`decode`
-- `crates/theseus-tisc/src/types.rs` — `StateVals`, `state_ty()`, field indices
-- `crates/theseus-tisc/src/step.rs` — fetch/decode/execute/PC-update cycle
-- `crates/theseus-tisc/src/ring_run.rs` — `StepRing::run`, ring recirculation
-- `crates/theseus-eval/src/interp.rs` — interpreter (`eval`)
-- `conformance/programs/0022-fib.thse` — surface Fibonacci
-- `crates/theseus-tisc/tests/fib_cpu.rs` — CPU Fibonacci test (the existing ROM)
+- ADR-0007 -- totality: every well-typed term terminates
+- ADR-0008 -- differential testing methodology
+- ADR-0029 -- memory: exchange; Option-A/B/C stratification
+- ADR-0034 -- reversible branching: SWAPBR / come-from
+- ADR-0035 -- μ-types: bounded unrolling at lowering
+- ADR-0036 -- iter: bounded-iteration core primitive
+- ADR-0041 -- execution models: spatial vs temporal
+- `crates/theseus-core/src/iso.rs` -- the `Iso` enum (codegen source)
+- `crates/theseus-core/src/prim.rs` -- `Value`, `PrimDef`, `enumerate_values`
+- `crates/theseus-tisc/src/asm.rs` -- TISC-1 ISA: `Instr`, `encode`/`decode`
+- `crates/theseus-tisc/src/types.rs` -- `StateVals`, `state_ty()`, field indices
+- `crates/theseus-tisc/src/step.rs` -- fetch/decode/execute/PC-update cycle
+- `crates/theseus-tisc/src/ring_run.rs` -- `StepRing::run`, ring recirculation
+- `crates/theseus-eval/src/interp.rs` -- interpreter (`eval`)
+- `conformance/programs/0022-fib.thse` -- surface Fibonacci
+- `crates/theseus-tisc/tests/fib_cpu.rs` -- CPU Fibonacci test (the existing ROM)

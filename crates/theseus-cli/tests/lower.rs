@@ -25,7 +25,7 @@ fn fib_surface_to_cells_validates_and_oracle_agrees() {
     assert_eq!(n, 16, "fib domain should have exactly 16 inputs");
 }
 
-/// `Bit` and `cnot` come from the implicit prelude — no local declarations.
+/// `Bit` and `cnot` come from the implicit prelude -- no local declarations.
 #[test]
 fn prelude_cnot_lowers_and_oracle_agrees() {
     // Neither Bit nor cnot are declared; both come from the prelude.

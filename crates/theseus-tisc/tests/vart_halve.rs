@@ -1,7 +1,7 @@
 //! FIRST REAL variable-iteration-count program on the reversible CPU.
 //!
-//! Every prior `Trace` (reversible while-loop) test — `mde_spill.rs`,
-//! `exact_kmax.rs`, the A-3/A-4/A-5 compose tests — wraps a SYNTHETIC walk body
+//! Every prior `Trace` (reversible while-loop) test -- `mde_spill.rs`,
+//! `exact_kmax.rs`, the A-3/A-4/A-5 compose tests -- wraps a SYNTHETIC walk body
 //! (`mde_walk_bytes`, a pinned thermometer bijection) that computes nothing
 //! meaningful; the loop machinery is exercised but the program is a
 //! "machinery-proof, not a useful program" (docs/scratch/mde-variable-t-scoping.md).
@@ -9,7 +9,7 @@
 //! This is the first Trace whose body computes a genuine, named arithmetic
 //! quantity: **halve-until-odd**, i.e. the **2-adic valuation** `v_2(n)` (the
 //! number of trailing zero bits of the input). Its iteration count is
-//! DATA-DEPENDENT — it equals the trailing-zero count — so `T` genuinely VARIES
+//! DATA-DEPENDENT -- it equals the trailing-zero count -- so `T` genuinely VARIES
 //! with the input, not a fixed unrolled bound.
 //!
 //! ## The reversible encoding (why it lowers)
@@ -36,13 +36,13 @@
 //! For every reachable input value `v0 ≥ 1`:
 //!     T(v0) = v_2(v0) + 1
 //! The `+1` is the terminal step that surfaces the odd bit and flips the tag to
-//! exit. For K=3 this gives T ∈ {1,2,3} across v0 ∈ 1..8 — genuinely variable.
+//! exit. For K=3 this gives T ∈ {1,2,3} across v0 ∈ 1..8 -- genuinely variable.
 //! `v0 = 0` has no trailing-one bit (v_2 undefined); the rotation parks a full
 //! period until the lone tag bit cycles back, an honest reversible fixed point.
 //!
 //! NOTE ON SEMANTICS: the *iteration count* `T` carries the v_2 meaning (the
 //! number of even-halvings before an odd bit surfaces). The exit *payload*
-//! (v,h) is the rotated register window, NOT `v0 >> v_2` — the rotation is
+//! (v,h) is the rotated register window, NOT `v0 >> v_2` -- the rotation is
 //! cyclic over the whole carrier, so bits move around the window rather than
 //! literally shifting out. This test's semantic claim is about `T`, the number
 //! of loop iterations, which is the observable that makes this a variable-T
@@ -156,7 +156,7 @@ fn v2_of(n: u8) -> Option<u32> {
     }
 }
 
-/// Iteration count T for an entry value `(v0, h0)` — simulate the Trace loop
+/// Iteration count T for an entry value `(v0, h0)` -- simulate the Trace loop
 /// (enter `Right`, tag=1) by direct byte stepping until the tag flips back to 1.
 fn v2_iter_count(v0: u8, h0: u8) -> usize {
     let (mut tag, mut v, mut h) = (1u8, v0, h0);
@@ -339,7 +339,7 @@ fn vart_t3_real_cpu_sampled() {
 #[test]
 fn vart_k4_now_lowers_at_wbr16() {
     // W_BR-b: K=4,HB=1 (narrow iter_len = body+10 = 133 > 128) previously
-    // REJECTED. It now LOWERS via the two-byte (w_br=16) come-from — iter_len =
+    // REJECTED. It now LOWERS via the two-byte (w_br=16) come-from -- iter_len =
     // body + LOOP_OVERHEAD_WIDE (14) = 137 (MINOR-C: NOT 133). This flips the
     // former reject→run WITHOUT weakening any guard: the narrow w_br=8 cap
     // (iter_len ≤ 128) is untouched; the loop is lifted to w_br=16 whose cap is

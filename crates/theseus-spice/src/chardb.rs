@@ -94,7 +94,7 @@ pub fn rebuild(raw: &[(String, Vec<CharPoint>)]) -> CharDb {
 /// [`rebuild`], which sorts each cell's points and fits the ADR-0028 energy
 /// model (`energy::fit`) per cell.
 ///
-/// This is pure assembly over the existing sweep functions — no new physics —
+/// This is pure assembly over the existing sweep functions -- no new physics --
 /// so the DB byte-round-trips and rebuilds deterministically for a fixed
 /// `rung`/`periods` (the sweeps are deterministic).
 ///
@@ -133,7 +133,7 @@ pub fn build_char_db(rung: DeviceRung, periods: &[f64]) -> CharDb {
         ));
     }
 
-    // Admitted cell 6: the R1 rail-role swap (ADR-0040) — the same TG
+    // Admitted cell 6: the R1 rail-role swap (ADR-0040) -- the same TG
     // fabric as K1 with one routed conductor pair instead of two.
     let sweep = cell_energy_curve(CellTopo::R1, rung, periods)
         .unwrap_or_else(|e| panic!("cswap-r1 energy sweep failed: {e}"));
@@ -176,7 +176,7 @@ impl CharDb {
     /// Query the fitted energy for `key` at `t_ramp`.
     ///
     /// **Contract (ADR-0028 C3.1):** only values within the cell's swept
-    /// `[min, max]` range are accepted — no extrapolation.
+    /// `[min, max]` range are accepted -- no extrapolation.
     pub fn query(&self, key: &str, t_ramp: f64) -> Result<f64, QueryError> {
         let cell = self
             .cells

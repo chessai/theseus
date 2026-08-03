@@ -97,7 +97,7 @@ pub fn adjoint(iso: &Iso) -> Iso {
         // ── Fold/Unfold ──────────────────────────────────────────
         // (fold l f)† = unfold l (f†): the spine is preserved in the
         // data, so the inverse un-threads the accumulator tail-to-head
-        // with the inverted body. (unfold l f)† = fold l (f†) dually —
+        // with the inverted body. (unfold l f)† = fold l (f†) dually --
         // a mutually adjoint pair; adjoint∘adjoint is still identity.
         Iso::Fold(l, f) => Iso::unfold(l.clone(), adjoint(f)),
         Iso::Unfold(l, f) => Iso::fold(l.clone(), adjoint(f)),
@@ -200,7 +200,7 @@ mod tests {
         }
     }
 
-    /// `(sym f)† = f` — the involution cancellation rule.
+    /// `(sym f)† = f` -- the involution cancellation rule.
     #[test]
     fn sym_cancellation() {
         let f = Iso::SwapSum(one(), bool_ty());
@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(adjoint(&sym_f), f);
     }
 
-    /// `(f ; g)† = g† ; f†` — composition reversal.
+    /// `(f ; g)† = g† ; f†` -- composition reversal.
     #[test]
     fn seq_reversal() {
         let a = one();
@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(lhs, rhs);
     }
 
-    /// `(iter n f)† = iter n (f†)` — the counter type is preserved, the
+    /// `(iter n f)† = iter n (f†)` -- the counter type is preserved, the
     /// body is inverted.
     #[test]
     fn iter_adjoint() {
@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(lhs, rhs);
     }
 
-    /// `(fold l f)† = unfold l (f†)` and `(unfold l f)† = fold l (f†)` —
+    /// `(fold l f)† = unfold l (f†)` and `(unfold l f)† = fold l (f†)` --
     /// the mutually adjoint pair; the spine type is preserved, the body
     /// is inverted, and the direction flips.
     #[test]

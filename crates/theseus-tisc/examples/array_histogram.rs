@@ -7,7 +7,7 @@
 //! (`compile_with_metadata_resident`), runs it on the byte-simulated CPU
 //! (`run_on_cpu_fast_resident`) and checks it against the reference interpreter
 //! (`eval`), then sweeps the runtime count `k` and prints `T(k)` (productive steps)
-//! and the WCET park-tax `(B−T)/B` from `rom_trace` — the histogram. (For joules,
+//! and the WCET park-tax `(B−T)/B` from `rom_trace` -- the histogram. (For joules,
 //! see `cargo run --example rom_energy`, which prices the fib ROM in measured pJ.)
 
 use std::collections::BTreeMap;
@@ -49,7 +49,7 @@ fn numeral(k: usize) -> Value {
     v
 }
 
-// ── f2: array map — BODY = memexch; (g⊗id); memexch; (id⊗succ⊗id) ──
+// ── f2: array map -- BODY = memexch; (g⊗id); memexch; (id⊗succ⊗id) ──
 fn map_iso(d: usize) -> Iso {
     let body = Iso::seq(
         Iso::seq(
@@ -74,7 +74,7 @@ fn map_input(k: usize, data: u8, idx: u8, a0: u8, a1: u8) -> Value {
     )
 }
 
-// ── f3: XOR reduce — BODY = (id⊗memexch); assoc;(reduceStep⊗id);assoc; (id⊗memexch); succ ──
+// ── f3: XOR reduce -- BODY = (id⊗memexch); assoc;(reduceStep⊗id);assoc; (id⊗memexch); succ ──
 fn xor_prim() -> Iso {
     let ty = Type::prod(bit(), bit());
     let mut forward = BTreeMap::new();

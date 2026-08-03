@@ -10,7 +10,7 @@ repository.workspace = true
 z3-crosscheck = []
 # Gate memory-heavy / slow integration-test binaries out of the default (fast)
 # tier so the per-attempt maestro gate is fast; advisor runs `--features
-# heavy-tests` (single-threaded — concurrent heavy tests OOM) before merge.
+# heavy-tests` (single-threaded -- concurrent heavy tests OOM) before merge.
 heavy-tests = []
 
 [dependencies]

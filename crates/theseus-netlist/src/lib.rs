@@ -5,7 +5,7 @@
 //! Prim / Reg / ports. Sums stay *typed* in this IR; encoding is a
 //! backend lowering decision (ADR-0011).
 //!
-//! - Canonicalization fuses all structural plumbing into `Permute` —
+//! - Canonicalization fuses all structural plumbing into `Permute` --
 //!   canonical and unique by Mac Lane coherence, rig fragment only
 //!   (ADR-0014; theory ledger TH-3).
 //! - Canonicity invariant `valid ⇒ well-formed` is conditional and
@@ -43,14 +43,14 @@ pub mod schedule {}
 pub mod flatten {}
 pub mod sim_typed {
     //! Typed-token simulation: the tick-level phased-sim ([`crate::sim`])
-    //! runs at typed-token granularity — one boolean token per rail pair
-    //! per tick — asserting the dynamic INV-TOKEN protocol every tick
+    //! runs at typed-token granularity -- one boolean token per rail pair
+    //! per tick -- asserting the dynamic INV-TOKEN protocol every tick
     //! (spirit of ADR-0012's always-on validity assertion).
     pub use crate::sim::{simulate, SimError, SimResult};
 }
 pub mod sim_bits {
     //! TODO(bit-level sim): the electrical (rail, mirror) SR granularity
-    //! *below* the token line — per-phase trapezoid edges and C2.6
+    //! *below* the token line -- per-phase trapezoid edges and C2.6
     //! validity-window arithmetic, pinned empirically in B5 against the
     //! reference decks. Deferred; the typed-token sim ([`crate::sim`])
     //! is this slice's executor.

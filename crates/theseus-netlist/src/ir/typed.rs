@@ -1,6 +1,6 @@
 //! The typed reversible netlist IR (ADR-0013).
 //!
-//! Hierarchical, typed, direction-symmetric. Sums stay **typed** here —
+//! Hierarchical, typed, direction-symmetric. Sums stay **typed** here --
 //! how a sum is encoded in rails is a backend lowering decision
 //! (ADR-0011). Structural plumbing appears only as `Permute(monoid, σ)`
 //! (ADR-0014): the canonicalizer never emits a raw swap or assoc, and the
@@ -73,7 +73,7 @@ pub enum NodeKind {
     /// `f : a ↔ a` is applied `k` times where `k` is the unary numeral
     /// carried in the DATA (first component) and preserved on output.
     /// Node type: `counter × a ↔ counter × a`; `counter` is a numeral
-    /// type `1 + (1 + (… + 0))`, so `k ≤ |counter| − 1` bounds the
+    /// type `1 + (1 + (... + 0))`, so `k ≤ |counter| − 1` bounds the
     /// unroll (ADR-0039).
     IterLoop { counter: Type, body: Box<TypedNode> },
     /// Bounded structural recursion over a list spine (`fold`/`unfold
@@ -81,7 +81,7 @@ pub enum NodeKind {
     /// Cons node of the spine value, threading the accumulator
     /// head-to-tail (`Fold`) or tail-to-head (`Unfold`); the spine is
     /// preserved on output. Node type: `spine × c ↔ spine × c`;
-    /// `spine = 1 + (b × (1 + (b × (… + 0))))`, so its unroll depth − 1
+    /// `spine = 1 + (b × (1 + (b × (... + 0))))`, so its unroll depth − 1
     /// bounds the unroll (ADR-0039).
     FoldLoop { spine: Type, dir: FoldDir, body: Box<TypedNode> },
     /// Registry leaf: an admitted `(forward, backward)` mutual-inverse

@@ -1,7 +1,7 @@
-//! A-5b — deep loop-nesting via aux REUSE (Option B).
+//! A-5b -- deep loop-nesting via aux REUSE (Option B).
 //!
 //! Depth-2+ nested `Trace` now COMPILES + RUNS because a nested Trace REUSES the
-//! enclosing level's four aux `{rc,rb,temp,ctrl}` — provably DEAD across the
+//! enclosing level's four aux `{rc,rb,temp,ctrl}` -- provably DEAD across the
 //! inner-loop region (design §2.2: the outer aux are net-zero per-iteration
 //! ancillae, all 0 across the body; the come-from is carried by δu-immediates +
 //! PC/BR, not a live register). Aux cost is O(1) in depth; nesting is bounded by
@@ -68,7 +68,7 @@ fn assert_cpu_eq_eval(name: &str, iso: &Iso) -> usize {
 /// Whole-domain REAL-CPU authority: the compiled ROM on the real `step`-iso CPU
 /// (`run_on_cpu`, driven by `theseus_eval::eval`) == `eval` on every input. This
 /// is the INDEPENDENT runtime witness that does NOT share `exec_instr` with the
-/// k_max fast-oracle walk — mirrors `compile.rs::assert_oracle` (the `*_real_cpu`
+/// k_max fast-oracle walk -- mirrors `compile.rs::assert_oracle` (the `*_real_cpu`
 /// authority pattern). Slow (each step-iso evaluation ~seconds), hence `#[ignore]`.
 fn assert_real_cpu_eq_eval(name: &str, iso: &Iso) -> usize {
     let (in_ty, _) =
@@ -96,12 +96,12 @@ fn one() -> Type {
 /// A minimal, TAG-ONLY, non-degenerate loop that iterates EXACTLY 2×.
 ///
 /// `Trace(One, SwapSum(One, One))` : `One ↔ One`. The carrier is `Sum(One, One)`
-/// = a single tag leaf (One has 0 payload leaves), so the loop is TAG-ONLY — the
+/// = a single tag leaf (One has 0 payload leaves), so the loop is TAG-ONLY -- the
 /// minimal register footprint, which is exactly what lets a nested copy FIT after
 /// aux reuse. Semantics (Trace enters on the RIGHT / a-side):
 ///   Right(unit) --SwapSum--> Left(unit)   [continue, iter 1]
 ///   Left(unit)  --SwapSum--> Right(unit)   [EXIT,     iter 2]
-/// so every input iterates EXACTLY twice (a genuine ≥2 multi-iteration loop —
+/// so every input iterates EXACTLY twice (a genuine ≥2 multi-iteration loop --
 /// SwapSum on the tag flips continue↔exit each application).
 fn tag_only_loop() -> Iso {
     Iso::trace(one(), Iso::SwapSum(one(), one()))
@@ -130,14 +130,14 @@ fn tag_only_single_level_iterates() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// (2) DEPTH-2 nested Trace — the A-5b deliverable. NON-DEGENERATE: the OUTER
+// (2) DEPTH-2 nested Trace -- the A-5b deliverable. NON-DEGENERATE: the OUTER
 // loop iterates ≥2× AND the INNER loop iterates ≥2× (during an outer iteration).
 //
 // Shape (all tag-only carriers, so the nested copy FITS 8 regs via aux reuse):
 //   inner      = Trace(One, SwapSum)                         : One ↔ One (2 iters)
 //   outer_body = Seq( Plus(Id(One), inner), SwapSum(One,One) ) : Bit ↔ Bit
 //   outer      = Trace(One, outer_body)                       : One ↔ One
-// The outer body CONTAINS a Trace node (inside the Plus a-arm) — the exact case
+// The outer body CONTAINS a Trace node (inside the Plus a-arm) -- the exact case
 // that REJECTED before A-5b. Trace of `outer`: enter Right(unit):
 //   iter 1: Plus a-arm runs `inner` (which itself iterates 2×) → Right(unit);
 //           then SwapSum → Left(unit)  [outer continues]
@@ -193,7 +193,7 @@ fn depth2_nested_trace_compiles_and_runs() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// (3) SHARED-AUX TEAR-DOWN PROBE — the direct witness of design §2.2.
+// (3) SHARED-AUX TEAR-DOWN PROBE -- the direct witness of design §2.2.
 //
 // The inner Trace REUSES the outer's four aux {rc,rb,temp,ctrl}. Because the
 // reuse is a net-zero bracket, those four registers must be 0 at every outer-body
@@ -209,7 +209,7 @@ fn depth2_shared_aux_is_reused_not_disjoint() {
     // Outer carrier {0} (tag) + outer aux frame {1,2,3,4}; the outer marks the
     // frame occupied AND offers it as reusable. A directly-nested inner Trace with
     // a tag at {5} (a free reg) draws its 4-aux frame from the REUSABLE outer aux
-    // — i.e. the SAME {1,2,3,4}, not a new disjoint set.
+    // -- i.e. the SAME {1,2,3,4}, not a new disjoint set.
     let occupied = [0u8, 1, 2, 3, 4, 5]; // outer carrier+frame + inner tag
     let reusable = [1u8, 2, 3, 4]; // outer frame, dead across the body
     let (inner_frame, _) =
@@ -225,7 +225,7 @@ fn depth2_shared_aux_is_reused_not_disjoint() {
     eprintln!("A-5b shared-aux probe: inner frame {inner_frame:?} ⊆ outer aux {reusable:?} (reuse)");
 
     // Contrast: with NO reusable offered, the same occupancy REJECTS (only {6,7}
-    // free = 2 < 4) — proving the reuse (not extra free regs) is what makes it fit.
+    // free = 2 < 4) -- proving the reuse (not extra free regs) is what makes it fit.
     use theseus_tisc::compile::alloc_aux_frame_for_test;
     let res = alloc_aux_frame_for_test(&occupied, &[]);
     assert!(
@@ -235,14 +235,14 @@ fn depth2_shared_aux_is_reused_not_disjoint() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// (2R) DEPTH-2 nested Trace — REAL-CPU AUTHORITY (#[ignore], slow).
+// (2R) DEPTH-2 nested Trace -- REAL-CPU AUTHORITY (#[ignore], slow).
 //
 // The SAME non-degenerate depth-2 nested-Trace program as
 // `depth2_nested_trace_compiles_and_runs`, but checked against the INDEPENDENT
 // runtime witness the fast oracle can't provide: the compiled ROM executed on
 // the REAL `step`-iso CPU (`run_on_cpu`, driven by `theseus_eval::eval` for the
 // per-step core-iso evaluation) == `eval` on the WHOLE domain. This is the
-// authority that does NOT share `exec_instr` with the k_max fast-oracle walk —
+// authority that does NOT share `exec_instr` with the k_max fast-oracle walk --
 // it proves aux-REUSE (the shared 4-aux come-from frame) composes across depth
 // on the real machine, not just in the byte-level simulator. Mirrors the
 // `compile.rs` `*_real_cpu` / `mdd_*_trace_real_cpu` `assert_oracle` pattern.
@@ -252,7 +252,7 @@ fn depth2_shared_aux_is_reused_not_disjoint() {
 fn depth2_nested_trace_real_cpu() {
     let inner = tag_only_loop(); // Trace(One, SwapSum) : One ↔ One, iterates 2×
 
-    // outer body : Sum(One,One) ↔ Sum(One,One) = Bit ↔ Bit — IDENTICAL to
+    // outer body : Sum(One,One) ↔ Sum(One,One) = Bit ↔ Bit -- IDENTICAL to
     // `depth2_nested_trace_compiles_and_runs` (the outer body CONTAINS a Trace).
     let outer_body = Iso::seq(
         Iso::plus(Iso::Id(one()), inner),
@@ -302,11 +302,11 @@ fn wrap_one_level(inner: Iso) -> Iso {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// (4) DEPTH-3 nested Trace — the arbitrary-depth claim. Aux cost is O(1) in
+// (4) DEPTH-3 nested Trace -- the arbitrary-depth claim. Aux cost is O(1) in
 // depth (every level reuses the shared 4-aux frame), so depth is bounded by
 // CARRIER registers, NOT 4·depth aux. With tag-only carriers depth-3 must either
 // COMPILE (all three levels sharing the one aux frame) or REJECT GRACEFULLY by a
-// clean carrier/register budget message — never panic, never 4·depth blow-up.
+// clean carrier/register budget message -- never panic, never 4·depth blow-up.
 // ═════════════════════════════════════════════════════════════════════
 #[test]
 fn depth3_nested_trace_compiles_or_rejects_gracefully() {
@@ -335,7 +335,7 @@ fn depth3_nested_trace_compiles_or_rejects_gracefully() {
             // GRACEFUL reject = a clean `Err` (never a panic / wrong body). The
             // aux FRAME reuse is O(1) in depth, but each nesting level's `Plus`
             // skip-block still needs 2 NON-reusable aux (LIVE across its body),
-            // so depth-3 exhausts the register/leaf budget at the deepest Plus —
+            // so depth-3 exhausts the register/leaf budget at the deepest Plus --
             // the reject-don't-corrupt boundary (design §2.3: depth bounded by
             // carrier + per-level skip-block registers). Any of these budget
             // messages is a clean reject.

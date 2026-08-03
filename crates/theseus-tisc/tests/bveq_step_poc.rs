@@ -1,4 +1,4 @@
-//! BVEQ-STEP-POC — prove the REAL compiler-emitted PC-update netlist correct
+//! BVEQ-STEP-POC -- prove the REAL compiler-emitted PC-update netlist correct
 //! SYMBOLICALLY (whole-domain, canonical BDD), replacing a brute-force
 //! whole-domain SIMULATION sweep with a domain-size-independent BDD proof.
 //!
@@ -9,11 +9,11 @@
 //! `PC' = (PC + sext_{w_pc}(BR) + 1) mod 2^{w_pc}` by EVALUATING the compiled
 //! iso `pc_add_br_with(&layout) ; pc_inc_with(&layout)` on EVERY (PC, BR) pair:
 //!   - `adr0034_split_add_exhaustive_wpc8` (b22b_wpc8_run.rs) walks all 2^16
-//!     (PC, BR) pairs — ~387 s in the last heavy run.
+//!     (PC, BR) pairs -- ~387 s in the last heavy run.
 //!   - The w_pc=16 analogue is 2^24 (~256× the domain → hours).
 //!
 //! This file proves the SAME property, over the WHOLE domain, SYMBOLICALLY in
-//! ~seconds via the repo's existing BDD machinery (`bveq_netlist::eval_bdd` —
+//! ~seconds via the repo's existing BDD machinery (`bveq_netlist::eval_bdd` --
 //! the symbolic Iso interpreter that also underpins `wide_add.rs`). The BDD
 //! proof time is TINY and ~FLAT across w_pc=8 (2^16 domain) and w_pc=16 (2^24
 //! domain), because a canonical BDD comparison is independent of domain size.
@@ -21,13 +21,13 @@
 //! ─────────────────────────────────────────────────────────────────────────
 //! WHAT IS PROVEN (honest coverage)
 //!
-//! `eval_bdd` handles the COMBINATIONAL (loop-free) fragment — Seq/Times/Swap/
-//! Assoc/Unite/Prim gates — and REJECTS Trace/Iter/Fold (loops). The PC-update
+//! `eval_bdd` handles the COMBINATIONAL (loop-free) fragment -- Seq/Times/Swap/
+//! Assoc/Unite/Prim gates -- and REJECTS Trace/Iter/Fold (loops). The PC-update
 //! iso `pc_add_br_with ; pc_inc_with` is entirely combinational (a fixed cascade
 //! of CNOT/Toffoli gates), so it is fully within `eval_bdd`'s fragment. This
 //! proves the ONE-STEP PC-update netlist ≡ its spec over the WHOLE state domain.
 //! Multi-step program correctness (the b21c composite-ring sweeps, the real-CPU
-//! authority runs) then follows by induction over steps — proving each step's
+//! authority runs) then follows by induction over steps -- proving each step's
 //! netlist ≡ step spec ONCE symbolically eliminates per-input, per-step
 //! simulation. (Full multi-step step-phase coverage needs eval_bdd extended past
 //! the pc-update fragment; the pc-update iso here needs no such extension.)
@@ -46,13 +46,13 @@ use theseus_tisc::types::{state_ty_with, Layout, StateVals, MEM_WORDS, NUM_REGS,
 // ══════════════════════════════════════════════════════════════════════════
 // Symbolic CpuState construction
 //
-// The iso operates on the FULL CpuState carrier `state_ty_with(&layout)` — a
+// The iso operates on the FULL CpuState carrier `state_ty_with(&layout)` -- a
 // right-nested product of `num_cpu_fields()` Word8 fields (every field is 8-bit
 // at both w_pc=8 and w_pc=16, since w_ctl==w_data==8). We build an ALL-SYMBOLIC
 // state SV (every field gets fresh BDD variables), which proves MORE than the
 // b22b sweep: it holds regs/IR/scratch symbolic (arbitrary), not const-0.
 //
-// Variable ordering — BIT-INTERLEAVED (`var = bit*num_fields + field`), the same
+// Variable ordering -- BIT-INTERLEAVED (`var = bit*num_fields + field`), the same
 // interleaving `bveq::VarMap` uses and `wide_add.rs` relies on to keep
 // ripple-carry LINEAR in the BDD. Sequential ordering blows the adder BDD up
 // exponentially; interleaved keeps PC bit i and BR bit i adjacent so the carry
@@ -83,7 +83,7 @@ fn field_bits(vs: &BddVariableSet, nf: usize, f: usize) -> Vec<Bdd> {
 /// Build the CpuState input SV mirroring `state_ty_with(&layout)`.
 ///
 /// Every field is SYMBOLIC (fresh interleaved BDD vars) EXCEPT s0 and s1, which
-/// are pinned to CONSTANT 0 — the decoder scratch convention the PC adder
+/// are pinned to CONSTANT 0 -- the decoder scratch convention the PC adder
 /// REQUIRES and RESTORES (b22b pins s0=s1=0). The adder materializes its operand
 /// INTO s0/s1 via CNOT/NOT, so a nonzero (symbolic) s0/s1 on entry would xor
 /// into the operand and corrupt the sum. Pinning s0/s1=0 matches b22b exactly;
@@ -118,7 +118,7 @@ fn build_symbolic(
     // field counter. To keep it robust we flatten each Word8 explicitly.
     match ty {
         Type::One => SV::Unit,
-        // A single Bit leaf — should not occur at top level of a Word8 carrier,
+        // A single Bit leaf -- should not occur at top level of a Word8 carrier,
         // but handle for completeness (treats it as field `*field`, bit 0).
         Type::Sum(a, b) if matches!((a.as_ref(), b.as_ref()), (Type::One, Type::One)) => {
             let bit = field_bit_var(vs, nf, *field, 0);
@@ -207,7 +207,7 @@ fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Spec construction — ripple-carry sum BDDs (like wide_add's spec_sum_bdds)
+// Spec construction -- ripple-carry sum BDDs (like wide_add's spec_sum_bdds)
 // ══════════════════════════════════════════════════════════════════════════
 
 /// `sum_i = a_i ⊕ b_i ⊕ c_i`, `c_0 = 0`, `c_{i+1} = maj(a_i, b_i, c_i)`.
@@ -237,7 +237,7 @@ fn ripple_plus_one(x: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
 /// `pc`: w_pc PC input bit BDDs. `br`: 8 BR input bit BDDs. Returns w_pc bits.
 ///
 /// CRITICAL sext detail (w_pc=16): BR is 8-bit sign-extended into the w_pc-bit
-/// PC before adding — sext operand bit i = BR_bit i for i<8, BR_bit7 for i>=8.
+/// PC before adding -- sext operand bit i = BR_bit i for i<8, BR_bit7 for i>=8.
 fn spec_pc_out(pc: &[Bdd], br: &[Bdd], w_pc: usize, vs: &BddVariableSet) -> Vec<Bdd> {
     assert_eq!(pc.len(), w_pc);
     assert_eq!(br.len(), W);
@@ -329,7 +329,7 @@ fn prove_pc_update(layout: &Layout) -> f64 {
 
     // ── s0 and s1 restored to 0 on exit (decoder scratch convention) ──
     // s0/s1 start at CONSTANT 0 (the operand-scratch region the adder threads
-    // its operand through transiently). They must be RESTORED to 0 on exit —
+    // its operand through transiently). They must be RESTORED to 0 on exit --
     // the "quiescent scratch" half of ADR-0034 (b22b asserts s0==s1==0).
     let zero = vs.mk_false();
     let s0_out = out_field_bits(&out, layout, layout.scratch_field(0));
@@ -347,8 +347,8 @@ fn prove_pc_update(layout: &Layout) -> f64 {
         );
     }
 
-    // ── Every OTHER field is the identity (regs, IR, remaining scratch, and —
-    //    at w_pc=8 — no PC_hi field). This proves no PC bit misroutes into a
+    // ── Every OTHER field is the identity (regs, IR, remaining scratch, and --
+    //    at w_pc=8 -- no PC_hi field). This proves no PC bit misroutes into a
     //    neighboring field (the exact wire-aliasing bug b22b guards against). ──
     let pc_hi = if layout.pc_fields() >= 2 {
         layout.pc_hi_field()
@@ -381,7 +381,7 @@ fn prove_pc_update(layout: &Layout) -> f64 {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// pc_inc ALONE — the isolated `+1` half (subsumes step.rs::pc_inc_exhaustive).
+// pc_inc ALONE -- the isolated `+1` half (subsumes step.rs::pc_inc_exhaustive).
 //
 // `pc_inc_with(&layout)` ≡ `PC' = (PC + 1) mod 2^w_pc` over the WHOLE PC domain,
 // with the carry crossing the PC_lo→PC_hi field boundary (w_pc=16) and s1 scratch
@@ -432,7 +432,7 @@ fn prove_pc_inc(layout: &Layout) -> f64 {
     let differs = (0..layout.w_pc).any(|i| out_pc[i] != pc_in[i]);
     assert!(
         differs,
-        "w_pc={}: NEG pc_inc must DIFFER from an identity (drop-+1) spec — the oracle has TEETH",
+        "w_pc={}: NEG pc_inc must DIFFER from an identity (drop-+1) spec -- the oracle has TEETH",
         layout.w_pc
     );
 
@@ -473,7 +473,7 @@ fn bveq_pc_inc_wpc8() {
     let secs = prove_pc_inc(&layout);
     eprintln!(
         "BVEQ POC [w_pc=8]: pc_inc == (PC + 1) mod 2^8 over the FULL 2^8 PC domain \
-         [regs/IR/scratch SYMBOLIC] — proved SYMBOLICALLY in {secs:.4} s (+ TEETH: != drop-+1)."
+         [regs/IR/scratch SYMBOLIC] -- proved SYMBOLICALLY in {secs:.4} s (+ TEETH: != drop-+1)."
     );
 }
 
@@ -484,7 +484,7 @@ fn bveq_pc_inc_wpc16() {
     let secs = prove_pc_inc(&layout);
     eprintln!(
         "BVEQ POC [w_pc=16]: pc_inc == (PC + 1) mod 2^16 over the FULL 2^16 PC domain \
-         [PC_lo→PC_hi carry; s1 carry-scratch restored] — proved SYMBOLICALLY in {secs:.4} s \
+         [PC_lo→PC_hi carry; s1 carry-scratch restored] -- proved SYMBOLICALLY in {secs:.4} s \
          (brute-force baseline: step.rs::pc_inc_exhaustive_all_16bit over 2^16; + TEETH: != drop-+1)."
     );
 }
@@ -503,7 +503,7 @@ fn bveq_pc_update_wpc8() {
     let secs = prove_pc_update(&layout);
     eprintln!(
         "BVEQ POC [w_pc=8]: pc_add_br;pc_inc == (PC + sext(BR) + 1) mod 2^8 over the FULL \
-         2^16 (PC,BR) domain [regs/IR/s2..s7 also SYMBOLIC; s0/s1 pinned 0 per decoder convention] — proved SYMBOLICALLY in \
+         2^16 (PC,BR) domain [regs/IR/s2..s7 also SYMBOLIC; s0/s1 pinned 0 per decoder convention] -- proved SYMBOLICALLY in \
          {secs:.4} s (brute-force baseline: 387 s over 2^16). Speedup ~{:.0}×.",
         387.0 / secs.max(1e-6)
     );
@@ -517,21 +517,21 @@ fn bveq_pc_update_wpc16() {
     let secs = prove_pc_update(&layout);
     eprintln!(
         "BVEQ POC [w_pc=16]: pc_add_br;pc_inc == (PC + sext(BR) + 1) mod 2^16 over the FULL \
-         2^24 (PC,BR) domain [regs/IR/s2..s7 also SYMBOLIC; s0/s1 pinned 0 per decoder convention] — proved SYMBOLICALLY in \
+         2^24 (PC,BR) domain [regs/IR/s2..s7 also SYMBOLIC; s0/s1 pinned 0 per decoder convention] -- proved SYMBOLICALLY in \
          {secs:.4} s (brute-force baseline: ~HOURS over 2^24). BDD time is domain-size \
          INDEPENDENT (≈ flat vs w_pc=8)."
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// CONCRETE BOOTSTRAP — the REALITY ANCHOR.
+// CONCRETE BOOTSTRAP -- the REALITY ANCHOR.
 //
 // The BVEQ proof above is the whole-domain authority, but it trusts `eval_bdd`
 // and the ripple-carry BDD spec. This section runs a handful of representative
 // + boundary (PC, BR) pairs through the REAL `theseus_eval::eval` (the concrete
 // interpreter the shipped CPU runs) on the SAME `pc_add_br_with;pc_inc_with`
 // iso, and asserts the concrete result equals the `pc_update` spec byte-for-byte
-// — plus BR/s0/s1 preservation and the ADJOINT recovering the input. This ties
+// -- plus BR/s0/s1 preservation and the ADJOINT recovering the input. This ties
 // the symbolic model to reality: a bug in eval_bdd or the BDD spec that happened
 // to make the symbolic sides agree with each other would still be caught here,
 // because eval is an independent oracle. This is NOT the coverage (the BDD is);
@@ -598,7 +598,7 @@ fn concrete_bootstrap(layout: &Layout, pcs: &[u16], brs: &[u8]) {
             assert_eq!(&got.scratch[2..], &s.scratch[2..], "w_pc={}: scratch tail untouched", layout.w_pc);
 
             // ADJOINT: sym(pc_add_br;pc_inc) subtracts (PC - sext(BR) - 1) and
-            // recovers the exact input — the reversibility half of ADR-0034.
+            // recovers the exact input -- the reversibility half of ADR-0034.
             let rec = eval_boot(layout, &back, &got);
             assert_eq!(rec, s, "w_pc={}: adjoint must recover input (pc={pc:#06x} br={br:#04x})", layout.w_pc);
         }
@@ -615,7 +615,7 @@ fn bveq_pc_update_bootstrap_wpc8() {
     concrete_bootstrap(&layout, &pcs, &brs);
     eprintln!(
         "BVEQ bootstrap [w_pc=8]: real theseus_eval on pc_add_br;pc_inc == pc_update spec over \
-         {} boundary (PC,BR) pairs [BR/s0/s1 preserved, adjoint recovers input] — the reality anchor.",
+         {} boundary (PC,BR) pairs [BR/s0/s1 preserved, adjoint recovers input] -- the reality anchor.",
         pcs.len() * brs.len()
     );
 }
@@ -632,13 +632,13 @@ fn bveq_pc_update_bootstrap_wpc16() {
     eprintln!(
         "BVEQ bootstrap [w_pc=16]: real theseus_eval on pc_add_br;pc_inc == pc_update spec over \
          {} boundary (PC,BR) pairs [inter-byte carry + sext backward-jump; BR/s1 preserved, adjoint \
-         recovers input] — the reality anchor.",
+         recovers input] -- the reality anchor.",
         pcs.len() * brs.len()
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// NEGATIVE CONTROLS — the oracle must have TEETH.
+// NEGATIVE CONTROLS -- the oracle must have TEETH.
 //
 // Each proves the BDD comparison catches a real bug in the spec: if the walked
 // netlist accidentally matched a WRONG spec, the POC would be worthless.
@@ -672,7 +672,7 @@ fn negative_controls(layout: &Layout) {
         "w_pc={w_pc}: NEG-1 the netlist must DIFFER from a spec that drops +1"
     );
 
-    // WRONG-2: forget the sext — BR ZERO-extends instead of sign-extends.
+    // WRONG-2: forget the sext -- BR ZERO-extends instead of sign-extends.
     // (Only distinguishable when w_pc > 8; at w_pc=8 sext(BR)==BR==zext(BR).)
     if w_pc > W {
         let zext: Vec<Bdd> = (0..w_pc)
@@ -686,7 +686,7 @@ fn negative_controls(layout: &Layout) {
         );
     }
 
-    // WRONG-3: carry-less byte split — add PC and sext(BR)+1 per-byte with the
+    // WRONG-3: carry-less byte split -- add PC and sext(BR)+1 per-byte with the
     // carry RESET at each 8-bit boundary (defeats cross-byte ripple). At w_pc=8
     // this collapses to the correct spec, so only meaningful at w_pc>8.
     if w_pc > W {
@@ -717,7 +717,7 @@ fn bveq_pc_update_negative_control_wpc8() {
     };
     negative_controls(&layout);
     eprintln!(
-        "BVEQ POC negative control [w_pc=8]: netlist != (spec without +1) — the oracle has TEETH."
+        "BVEQ POC negative control [w_pc=8]: netlist != (spec without +1) -- the oracle has TEETH."
     );
 }
 
@@ -727,6 +727,6 @@ fn bveq_pc_update_negative_control_wpc16() {
     negative_controls(&layout);
     eprintln!(
         "BVEQ POC negative control [w_pc=16]: netlist != {{drop-+1, zero-extend-BR, \
-         carry-less-byte-split}} — the oracle has TEETH across all three wrong specs."
+         carry-less-byte-split}} -- the oracle has TEETH across all three wrong specs."
     );
 }

@@ -3,15 +3,15 @@
 //!
 //! Instructions (docs/src/design/tisc-1-spec.md section 2, W = 8, mod 256):
 //!
-//! * `CSWAP rd, rs, rt` — if `rd[0]` then swap the whole 8-bit `rs`/`rt`
+//! * `CSWAP rd, rs, rt` -- if `rd[0]` then swap the whole 8-bit `rs`/`rt`
 //!   registers, else identity; `rd` preserved; self-inverse.
-//! * `ROTL rd, rs` — `rd <- rd rotl (rs mod 8)`, `rs` preserved.
-//! * `ROTR rd, rs` — `rd <- rd rotr (rs mod 8)`, `rs` preserved;
+//! * `ROTL rd, rs` -- `rd <- rd rotl (rs mod 8)`, `rs` preserved.
+//! * `ROTR rd, rs` -- `rd <- rd rotr (rs mod 8)`, `rs` preserved;
 //!   ROTR is the adjoint of ROTL.
 //!
 //! Construction: everything is a CASCADE of Fredkin (K1) cells. A K1
-//! cell passes its control through unchanged — `(c, a, b) -> (c,
-//! c?swap)` — so one control bit drives many controlled swaps by being
+//! cell passes its control through unchanged -- `(c, a, b) -> (c,
+//! c?swap)` -- so one control bit drives many controlled swaps by being
 //! threaded through cell after cell, with no fanout/copy primitive:
 //!
 //! * CSWAP: 8 Fredkins, all controlled by `rd[0]`; Fredkin `i` swaps
@@ -28,8 +28,8 @@
 //!   `adjoint`).
 //!
 //! Routing (getting the control + the two data bits adjacent to apply
-//! the 3-wide Fredkin prim) is pure product-structure plumbing —
-//! swap/assoc isos, which lower to zero-cell rewiring — built as
+//! the 3-wide Fredkin prim) is pure product-structure plumbing --
+//! swap/assoc isos, which lower to zero-cell rewiring -- built as
 //! `route ; fredkin-at-head ; sym(route)`.
 
 use theseus_core::{adjoint, type_of, Iso, Type, Value};
@@ -320,7 +320,7 @@ struct Lowered {
 }
 
 /// Lower + validate + balance; assert every cell kind is in the
-/// admitted vocabulary (K0–K3 CSWAPs + the R1 rail-role swap,
+/// admitted vocabulary (K0-K3 CSWAPs + the R1 rail-role swap,
 /// ADR-0040) and print the cell counts.
 fn prepare(name: &str, iso: &Iso) -> Lowered {
     let (in_ty, out_ty) = type_of(iso).expect("iso types");

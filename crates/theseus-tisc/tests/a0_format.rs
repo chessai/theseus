@@ -96,7 +96,7 @@ fn roundtrip_scratch_operands() {
 
     // The legal operand range round-trips through the rs field: registers
     // r0..r7 (0..8) and scratch operands s2..s7 (10..16). s0/s1 (8/9) are
-    // decoder-reserved (MAJOR-4) and rejected — see `rejects_reserved_operands`.
+    // decoder-reserved (MAJOR-4) and rejected -- see `rejects_reserved_operands`.
     for i in (0..8u8).chain(10..16u8) {
         // Add rd=..,rs=i needs rd != rs and rd legal; pick a distinct
         // legal register for rd.
@@ -221,7 +221,7 @@ fn select_operand_routes_reg_and_scratch() {
         // predicate word); they are NOT legal operands (asm.rs check_operand
         // rejects them) and the crossbar deliberately does NOT route them
         // (level-3 swap range is 2..8, so positions 0/1 ↔ s0/s1 are untouched
-        // — the A-0 BLOCKER-1 fix). Legal operands: reg 0..7, scratch s2..s7
+        // -- the A-0 BLOCKER-1 fix). Legal operands: reg 0..7, scratch s2..s7
         // (idx 10..15). Skip the reserved pair.
         if idx == 8 || idx == 9 {
             continue;

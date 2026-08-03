@@ -230,9 +230,9 @@ fn tk_add_gates() -> Vec<Gate> {
     tk_add_gates_n(W)
 }
 
-/// Width-parametric Takahashi–Kunihiro zero-ancilla in-place ripple adder on
+/// Width-parametric Takahashi-Kunihiro zero-ancilla in-place ripple adder on
 /// `flat(2m)`: operand `a` = wires `m..2m` (PRESERVED), target `b` = wires
-/// `0..m` (MODIFIED: `b := b + a mod 2^m`). Zero ancilla — the carry is
+/// `0..m` (MODIFIED: `b := b + a mod 2^m`). Zero ancilla -- the carry is
 /// threaded transiently through `a`'s OWN wires (the middle two forward/reverse
 /// CNOT+Toffoli sweeps set `a[i+1] ^= carry_i` and then undo it), so `a` is
 /// bit-identical on exit.
@@ -241,7 +241,7 @@ fn tk_add_gates() -> Vec<Gate> {
 /// with every `W` replaced by the parameter `m`. Because the ripple is a
 /// *bit-level* chain (carry_i depends on `a[0..=i], b[0..=i]`), it crosses any
 /// notional byte boundary for FREE: at `m = k·W` the carry out of byte j feeds
-/// byte j+1 with no special cross-lane machinery — there are no byte boundaries
+/// byte j+1 with no special cross-lane machinery -- there are no byte boundaries
 /// at the wire level. Requires `m >= 2`.
 fn tk_add_gates_n(m: usize) -> Vec<Gate> {
     assert!(m >= 2, "TK ripple adder needs width >= 2");
@@ -355,7 +355,7 @@ pub fn wide_word_ty(k: usize) -> Type {
 /// `(a: kbytes, b: kbytes) ↦ (a + b mod 2^(8k), b)`.
 ///
 /// `a` is the target (the FIRST wide word, modified in place); `b` is the
-/// operand (the SECOND wide word, preserved) — matching `add_operand`'s
+/// operand (the SECOND wide word, preserved) -- matching `add_operand`'s
 /// "first-word is `rd`, second is `rs`" convention. Keeping `b` intact makes
 /// the map a bijection (`(a,b) ↦ (a+b, b)`, inverse `(a,b) ↦ (a−b, b)`).
 ///
@@ -363,11 +363,11 @@ pub fn wide_word_ty(k: usize) -> Type {
 ///
 /// The type `(wideWord, wideWord)` flattens (LSB byte first, LSB bit first
 /// within a byte) to `flat(2m)` with `m = k·W`: target bits at wires `0..m`,
-/// operand bits at wires `m..2m`. We then run the SAME Takahashi–Kunihiro
+/// operand bits at wires `m..2m`. We then run the SAME Takahashi-Kunihiro
 /// zero-ancilla in-place ripple adder used for the byte adder, but at width
 /// `m`. The carry is a single bit-level chain that ripples from wire 0 up to
 /// wire `m−1`; because the flattened target is a contiguous little-endian
-/// `m`-bit number, the carry crosses each byte boundary automatically — a
+/// `m`-bit number, the carry crosses each byte boundary automatically -- a
 /// `Times` of independent byte adds would DROP exactly this inter-byte carry.
 ///
 /// # Soundness (bijectivity + carry correctness + net-zero ancilla)
@@ -380,7 +380,7 @@ pub fn wide_word_ty(k: usize) -> Type {
 /// - **Zero-ancilla / net-zero:** no wire outside the `2m` operand/target wires
 ///   is touched. The carry is threaded transiently through the operand `a`'s own
 ///   wires (`a[i+1] ^= carry_i`) and the mirror-image reverse sweep restores
-///   every `a[i]`, so `a` is bit-identical on exit — there is NO garbage bit to
+///   every `a[i]`, so `a` is bit-identical on exit -- there is NO garbage bit to
 ///   clean up (the "net-zero" is exact, not a bracketed page-in/page-out).
 /// - **Carry correctness:** the forward sweep computes the majority carry
 ///   `c_{i+1} = maj(a[i], b[i], c_i)` into `a[i+1]` and adds it into `b[i+1]`;
@@ -401,7 +401,7 @@ pub fn wide_add(k: usize) -> Iso {
     )
 }
 
-/// WIDE SUB iso: adjoint of `wide_add(k)` — `(a,b) ↦ (a − b mod 2^(8k), b)`.
+/// WIDE SUB iso: adjoint of `wide_add(k)` -- `(a,b) ↦ (a − b mod 2^(8k), b)`.
 pub fn wide_sub(k: usize) -> Iso {
     Iso::sym(wide_add(k))
 }
@@ -484,7 +484,7 @@ pub fn swapbr(rd: usize) -> Iso {
     at_fields(swap_words_iso(), &[reg_field(rd), BR_FIELD])
 }
 
-/// W_BR-a: layout-parameterized [`swapbr`] — **ADDRESSING ONLY**. At the default
+/// W_BR-a: layout-parameterized [`swapbr`] -- **ADDRESSING ONLY**. At the default
 /// (`br_fields()==1`) this is exactly the single-word swap `swapbr()` builds
 /// (byte-identical). This slice's purpose is to prove the `br_fields()`-driven
 /// FIELD ADDRESSING type-checks at `w_br=16`; it does NOT define correct
@@ -492,16 +492,16 @@ pub fn swapbr(rd: usize) -> Iso {
 ///
 /// ⚠️ W_BR-b TRAP (Fable W_BR-a MINOR-1): at `br_fields()>1` the sequential
 /// `swap(reg,BR₀); swap(reg,BR₁)` below is a **3-cycle** (reg←BR₁, BR₀←reg_old,
-/// BR₁←BR₀), NOT an involution and NOT a correct full-offset swap — an 8-bit
+/// BR₁←BR₀), NOT an involution and NOT a correct full-offset swap -- an 8-bit
 /// register cannot hold a 16-bit offset, so "swap the reg with both BR words"
 /// is not even well-posed. Pendulum SWAPBR self-inverseness (which reverse
 /// execution relies on) is VIOLATED here for `br_fields()>1`. Zero production
 /// callers (test-only; the runtime path uses `swapbr_core`, kept low-word-only).
-/// **W_BR-b must redesign the reversible two-byte come-from move from scratch —
+/// **W_BR-b must redesign the reversible two-byte come-from move from scratch --
 /// do NOT reuse this chain on any run path.**
 pub fn swapbr_with(layout: &Layout, rd: usize) -> Iso {
     // MINOR-2: fail loudly on a non-`w_ctl`-multiple `w_br` (defense-in-depth,
-    // mirrors `pc_add_br_with`). ADDRESSING stub — see the ⚠️ above: at
+    // mirrors `pc_add_br_with`). ADDRESSING stub -- see the ⚠️ above: at
     // br_fields()>1 this is a 3-cycle, not a correct/self-inverse offset swap.
     // Byte-identical to `swapbr()` at the default (br_fields()==1 → one SwapProd).
     crate::step::assert_br_carrier(layout);
@@ -555,7 +555,7 @@ pub fn rotri(rd: usize, imm: u8) -> Iso {
 /// `MEXCH rd, addr` : swap register `rd` with memory word `mem[addr]`.
 /// Self-inverse (M-C2 Layer 1, ADR-0046 §3.1).
 ///
-/// Operates on `composite_state_ty() = (CpuState, MemState)` — the
+/// Operates on `composite_state_ty() = (CpuState, MemState)` -- the
 /// carrier split (Stage 1a-B) means reg and mem fields live in different
 /// factors. Uses `at_fields_n` (the same machinery as the decoder) to
 /// route, reshape, apply the swap, and restore field order over the

@@ -87,7 +87,7 @@ fn t2_fast_oracle_whole_domain() {
     }
 }
 
-// ── T3: real CPU oracle (system_step) — #[ignore], serialized ────────
+// ── T3: real CPU oracle (system_step) -- #[ignore], serialized ────────
 
 #[test]
 #[ignore]
@@ -116,7 +116,7 @@ fn t3_real_cpu_oracle() {
     }
 }
 
-// ── T4: compiled ROM MexchReg closes on SystemRing — #[ignore] ───────
+// ── T4: compiled ROM MexchReg closes on SystemRing -- #[ignore] ───────
 
 #[test]
 #[ignore]
@@ -130,7 +130,7 @@ fn t4_system_ring_closure() {
     let ring = system_ring(&rom);
 
     // I-2: use a sample with addr=1 (data != arr[1]) so the MexchReg
-    // actually exchanges — not just the all-zeros no-op.
+    // actually exchanges -- not just the all-zeros no-op.
     // Pick the LAST value in the domain (addr=1, data=1, arr=[1,1]... the
     // highest thermometer encoding). Fall back to last if domain is small.
     let domain = full_domain();
@@ -164,7 +164,7 @@ fn t5_f2a_misaligned_resident_rejected() {
     // Times(memexch, id_Bit): memexch's arr leaves are at positions 2,3
     // in the left sub-context, but the full context has 5 leaves total
     // (4 from memexch + 1 from id_Bit). With resident=2, the LAST 2 leaves
-    // (positions 3,4) go to Mem — but memexch expects its arr (positions 2,3
+    // (positions 3,4) go to Mem -- but memexch expects its arr (positions 2,3
     // within its sub-context) at Mem(0),Mem(1). This misaligns.
     let memexch = memexch_iso();
     let id_bit = Iso::Id(bit());
@@ -277,7 +277,7 @@ fn t6_marshal_unmarshal_roundtrip() {
     }
 }
 
-// ── T5-F6a: head>14 bounds reject (NOT an occ test — see I-1 below) ──
+// ── T5-F6a: head>14 bounds reject (NOT an occ test -- see I-1 below) ──
 
 #[test]
 fn t5_f6a_head_exceeds_14_rejected() {
@@ -391,7 +391,7 @@ fn t5_f7_paging_bracket() {
     assert!(has_mexchr, "padded ROM must contain MexchReg");
     assert!(has_xchg, "padded ROM must contain Xchg bracket for paging");
 
-    // I-2: Sampled oracle — include addr=1 (take first 2 + last 2).
+    // I-2: Sampled oracle -- include addr=1 (take first 2 + last 2).
     let full_ty = Type::prod(pad_ty, memexch_ty());
     let all_vals = enumerate_values(&full_ty);
     let sample: Vec<_> = all_vals
@@ -496,7 +496,7 @@ fn t7_energy_prices_mexchr_rom() {
     assert!(pe.park_tax.abs() < 1e-15, "memexch park_tax must be 0");
 }
 
-// ── I-1: occ obligation test — occ seed is load-bearing at head=14, resident=2 ─
+// ── I-1: occ obligation test -- occ seed is load-bearing at head=14, resident=2 ─
 //
 // With head=14 (all 8 regs + 6 scratch occupied) and resident=2, the branching
 // `Plus` forces `allocate_aux` to grab an aux zero-source. WITHOUT the occ seed,
@@ -504,7 +504,7 @@ fn t7_energy_prices_mexchr_rom() {
 //
 // ADVISOR TEETH-CHECK (verified, L20): neutering the occ seed
 // (`OccSet::from_locations(&homes[..0])` in `Ctx::new_resident`) makes THIS test
-// FAIL — but via *register aliasing* (`allocate_aux` reuses the occupied `r0` →
+// FAIL -- but via *register aliasing* (`allocate_aux` reuses the occupied `r0` →
 // `assemble` rejects `CSWAP r0,r1,r0: operands must be pairwise distinct`), which
 // fires BEFORE any memory displacement. So this test proves the occ seed is
 // *necessary*; F-6's specific "a mem spill never lands on a resident word"
@@ -531,7 +531,7 @@ fn i1_occ_obligation_displacement_disjoint() {
     // Build a non-identity arm for the Left branch: SwapProd swaps the
     // first two Bit fields (so is_structural_identity returns false).
     // The payload is Bit × (Bit × rest) so SwapProd(Bit, Bit × rest)
-    // would swap at the top level — but we need it to be on the payload only.
+    // would swap at the top level -- but we need it to be on the payload only.
     // Use a simple Seq(SwapProd(Bit, remaining), SwapProd(Bit, remaining)) which
     // composes to identity semantically but is NOT recognized as structural id.
     // Actually simpler: just use SwapProd on the first two factors.

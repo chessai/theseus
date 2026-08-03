@@ -26,7 +26,7 @@ fn db() -> &'static CharDb {
 }
 
 /// A single ADD, lowered once. Its ripple-carry adder emits Toffolis,
-/// which the ADR-0040 phase-C `emit_mcnot` lowers via R1 sandwiches — so
+/// which the ADR-0040 phase-C `emit_mcnot` lowers via R1 sandwiches -- so
 /// this net exercises the zero-garbage cell in the energy path.
 fn add_net() -> &'static PhasedCellNetlist {
     static N: OnceLock<PhasedCellNetlist> = OnceLock::new();

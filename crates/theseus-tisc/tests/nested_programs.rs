@@ -1,6 +1,6 @@
-//! A-4: nested programs COMPILE + RUN — the milestone slice for compositional
+//! A-4: nested programs COMPILE + RUN -- the milestone slice for compositional
 //! control. This suite is the end-to-end backing for deleting the six
-//! nesting-reject sites R1–R6 in `compile.rs`:
+//! nesting-reject sites R1-R6 in `compile.rs`:
 //!
 //!   R1 nested Trace          `contains_trace(body)`     (was ~3288)
 //!   R2 Trace-under-Times F-1 canonical/occ guard        (was ~3279)
@@ -12,15 +12,15 @@
 //! Each deleted reject is backed here by the smallest real nested program it
 //! unblocks. Programs that FIT the current machine (B ≤ 256 AND the aux frames
 //! fit the 8-register file) must COMPILE + `run_on_cpu_fast == eval` over the
-//! whole (small) domain — proving the A-3 tree-WCET fold gives `B_fold ≥ true_B`
+//! whole (small) domain -- proving the A-3 tree-WCET fold gives `B_fold ≥ true_B`
 //! (park doesn't wrap) and the A-5 disjoint frame stack preserves the outer
 //! come-from token δu across ≥2 inner iterations. Programs that exceed the
 //! register/PC budget must REJECT GRACEFULLY (a clean `Deferred` error naming
-//! the budget) — never panic, never wrong body, never silent corruption.
+//! the budget) -- never panic, never wrong body, never silent corruption.
 //!
 //! ADVISOR: the SLOW real `system_step` authority (`run_on_cpu`) should be run
 //! pre-merge for the running nested programs here (nested-Trace, loop-under-
-//! product, Iter-under-Trace) — the fast oracle shares `exec_instr` with the
+//! product, Iter-under-Trace) -- the fast oracle shares `exec_instr` with the
 //! compiler's k_max walk, so only `system_step` is a fully independent check of
 //! the come-from-join-composes-across-depth claim (design §5.1).
 
@@ -84,7 +84,7 @@ fn compile_ok(name: &str, iso: &Iso) -> theseus_tisc::compile::Lowered {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// R5 — branch-in-branch: Plus(Plus(f,g), Plus(h,k)) on a nested Sum type.
+// R5 -- branch-in-branch: Plus(Plus(f,g), Plus(h,k)) on a nested Sum type.
 // No loop, no back-edge: pure reservation-ordering test for nested skip-blocks.
 // FITS: shallow, register-resident → COMPILE + run.
 // ═════════════════════════════════════════════════════════════════════
@@ -97,7 +97,7 @@ fn r5_branch_in_branch_compiles_and_runs() {
     // Outer: Plus(inner_l, inner_r) : ((Bit+Bit)+(Bit+Bit)) ↔ same.
     let iso = Iso::plus(inner_l, inner_r);
 
-    // Sanity: this is a genuine branch-in-branch — the outer Plus's arms each
+    // Sanity: this is a genuine branch-in-branch -- the outer Plus's arms each
     // lower to a skip-block whose body itself contains skip-blocks.
     let _ = compile_ok("R5 branch-in-branch", &iso);
     let n = assert_cpu_eq_eval("R5 branch-in-branch", &iso);
@@ -105,7 +105,7 @@ fn r5_branch_in_branch_compiles_and_runs() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// R4 — skip-in-iter (Iter-in-Iter): Iter(m, Iter(n, bit_flip)).
+// R4 -- skip-in-iter (Iter-in-Iter): Iter(m, Iter(n, bit_flip)).
 // The inner Iter is a nested skip-block inside the outer Iter's body.
 // FITS (small counts): COMPILE + run.
 // ═════════════════════════════════════════════════════════════════════
@@ -123,10 +123,10 @@ fn r4_iter_in_iter_compiles_and_runs() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// R6 — nested-skip in the controlled-op idiom: a Plus whose arm is itself a
+// R6 -- nested-skip in the controlled-op idiom: a Plus whose arm is itself a
 // controlled/branching body (doubly-nested skip-block). We reuse the
 // branch-in-branch shape but assert it exercises the R6 path via a Times of a
-// controlled body — see below. Here we cover the doubly-nested skip via
+// controlled body -- see below. Here we cover the doubly-nested skip via
 // Plus(Plus(...)) already (R5); R6 is the SAME reservation-ordering fix on the
 // controlled-idiom code path. We build a Plus with a nested Plus arm on ONE side
 // and identity on the other to force the single-arm controlled path.
@@ -146,9 +146,9 @@ fn r6_nested_skip_controlled_compiles_and_runs() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// R3 — branch-under-Trace: Trace(Bit, Plus(bit_flip, bit_flip)).
+// R3 -- branch-under-Trace: Trace(Bit, Plus(bit_flip, bit_flip)).
 // The Trace body is a Plus → lowers to a forward skip-block (Swapbr) INSIDE
-// the loop body — R3's exact target ("any Swapbr-containing Trace body"). The
+// the loop body -- R3's exact target ("any Swapbr-containing Trace body"). The
 // A-3 Σ-fold folds the branch's forward-skip distance into the loop's s_max
 // (never max), the walk falls back to the cardinality bound for k_max
 // (body_has_inner_control), and the A-5 frame is disjoint from the branch's
@@ -156,18 +156,18 @@ fn r6_nested_skip_controlled_compiles_and_runs() {
 //
 // The tag drives exit: `Iso::trace` injects Right (tag=1 = a-arm); the body's
 // Right arm (bit_flip on the payload) does NOT touch the tag, so the loop exits
-// on the first iteration — a machinery-proof of "skip-block inside a loop body
+// on the first iteration -- a machinery-proof of "skip-block inside a loop body
 // compiles + runs correctly", exactly what R3 forbade.
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
 fn r3_branch_under_trace_compiles_and_runs() {
     // DE-DEGENERATED (compositional-control Finding 1): the original body was
-    // `Plus(bit_flip, bit_flip)` — SYMMETRIC arms, so running the wrong arm is
+    // `Plus(bit_flip, bit_flip)` -- SYMMETRIC arms, so running the wrong arm is
     // INVISIBLE (both do the same thing). Use ASYMMETRIC arms `Plus(Id, bit_flip)`
-    // so a wrong-arm dispatch corrupts the output visibly — the correct vector for
+    // so a wrong-arm dispatch corrupts the output visibly -- the correct vector for
     // an arm-dispatch aliasing bug.
-    // Body : Sum(Bit, Bit) ↔ Sum(Bit, Bit) — a Plus (branch) with a Swapbr.
+    // Body : Sum(Bit, Bit) ↔ Sum(Bit, Bit) -- a Plus (branch) with a Swapbr.
     let body = Iso::plus(Iso::Id(bit()), bit_flip());
     let iso = Iso::trace(bit(), body);
 
@@ -183,7 +183,7 @@ fn r3_branch_under_trace_compiles_and_runs() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// R3b — Iter-under-Trace (the design's canonical R3 example) is REGISTER-BOUND
+// R3b -- Iter-under-Trace (the design's canonical R3 example) is REGISTER-BOUND
 // on the current 8-register machine: the Trace's 4-register aux frame + the
 // carrier + the inner Iter's own numeral counter and skip-block aux exceed the
 // register file, and the inner ctx has no displaceable leaves. This MUST reject
@@ -201,7 +201,7 @@ fn r3b_iter_under_trace_rejects_gracefully() {
     match compile_with_metadata(&iso) {
         Ok(_) => {
             // If the register budget ever grows enough to host this, that is
-            // fine too — but then it MUST run correctly.
+            // fine too -- but then it MUST run correctly.
             let n = assert_cpu_eq_eval("R3b Iter-under-Trace", &iso);
             eprintln!("R3b Iter-under-Trace: now COMPILES+RUNS, {n}/{n} inputs");
         }
@@ -214,7 +214,7 @@ fn r3b_iter_under_trace_rejects_gracefully() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// R2 — Trace under Times sibling: Times(Trace(Bit, id_body), bit_flip).
+// R2 -- Trace under Times sibling: Times(Trace(Bit, id_body), bit_flip).
 // The A-5 occ-aware frame must skip the sibling bit_flip's live register.
 // The sibling factor must produce the CORRECT output (the exact thing F-1's
 // recorded failure got wrong). FITS: COMPILE + run.
@@ -223,13 +223,13 @@ fn r3b_iter_under_trace_rejects_gracefully() {
 #[test]
 fn r2_trace_under_times_compiles_and_runs() {
     // DE-DEGENERATED (compositional-control Finding 1): the original body was
-    // `Id(Sum(Bit,Bit))` — an empty-body identity loop whose ctrl corruption at
+    // `Id(Sum(Bit,Bit))` -- an empty-body identity loop whose ctrl corruption at
     // the top pair CANCELS against the bottom pair, so the aliased tag round-trips
     // and the wrong output was accidentally correct. That is exactly the wrong
     // vector for a tag-aliasing bug. Use a NON-self-cancelling asymmetric body:
     // `Plus(Id, bit_flip)` ≡ flip on the trace factor, so a wrong-arm run is
     // VISIBLE in the payload. The occ-aware tag (Finding 1 fix) keeps the sibling
-    // bit_flip's live register untouched — the sibling must still flip correctly.
+    // bit_flip's live register untouched -- the sibling must still flip correctly.
     let body = Iso::plus(Iso::Id(bit()), bit_flip()); // : Sum(Bit,Bit) ↔ Sum(Bit,Bit)
     let left = Iso::trace(bit(), body); // : Bit ↔ Bit, ≡ flip (non-degenerate)
     // Right sibling: bit_flip : Bit ↔ Bit.
@@ -241,23 +241,23 @@ fn r2_trace_under_times_compiles_and_runs() {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// R1 — nested Trace: Trace(Bit, Trace(Bit, ·)).
+// R1 -- nested Trace: Trace(Bit, Trace(Bit, ·)).
 // The inner Trace draws a DISJOINT aux frame; the outer δu (`temp`) survives
 // across the entire inner loop. FITS if both loops are register-resident and
-// B ≤ 256. Depth-2 loop nesting needs 2×4 aux registers — with an 8-register
+// B ≤ 256. Depth-2 loop nesting needs 2×4 aux registers -- with an 8-register
 // file plus carrier/tag this is the tight edge; if it exceeds budget it must
 // reject GRACEFULLY (register-bound). We report which.
 // ═════════════════════════════════════════════════════════════════════
 
 #[test]
 fn r1_nested_trace_compiles_or_rejects_gracefully() {
-    // Inner: Trace(Bit, Id(Sum(Bit, Sum(Bit,Bit)))) — carrier u=Bit, a=Sum(Bit,Bit).
-    // Outer: Trace(Bit, inner) — inner must be : Sum(Bit, X) ↔ Sum(Bit, X) where
+    // Inner: Trace(Bit, Id(Sum(Bit, Sum(Bit,Bit)))) -- carrier u=Bit, a=Sum(Bit,Bit).
+    // Outer: Trace(Bit, inner) -- inner must be : Sum(Bit, X) ↔ Sum(Bit, X) where
     // X is the outer a-type. Build the smallest well-typed nesting.
     //
     // Outer body must be : Sum(Bit, a_outer) ↔ Sum(Bit, a_outer). We make the
     // outer body itself a Trace: inner = Trace(Bit, id) : (a_outer) ↔ (a_outer)
-    // is NOT sum-typed as an outer body — the outer body must be a Sum-endo. So
+    // is NOT sum-typed as an outer body -- the outer body must be a Sum-endo. So
     // wrap the inner Trace in a Plus so the outer body is Sum-typed:
     //   outer_body = Plus(Id(Bit)[u-arm], inner_trace[a-arm])
     // where inner_trace : a_inner ↔ a_inner and a_inner is the outer a-type.

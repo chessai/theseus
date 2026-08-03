@@ -1,7 +1,7 @@
 //! Tests for the general-sum encoding, Branch lowering, and
 //! Distrib/Factor lowering (ADR-0031, M3b-A).
 //!
-//! Pure logic tests — no ngspice, no SPICE.  Every test builds an Iso,
+//! Pure logic tests -- no ngspice, no SPICE.  Every test builds an Iso,
 //! lowers it end-to-end, then verifies by the differential oracle:
 //! `theseus_eval::eval` is the semantic root, and the lowered+simulated
 //! netlist must agree with it over the WHOLE finite domain.
@@ -224,7 +224,7 @@ fn distrib_branch_factor_composed() {
 fn distrib_branch_fredkin_factor() {
     // A non-trivial case: use Fredkin inside the Branch.
     // Distrib(Bit, Bit, Bit) exposes Bit×(Bit+Bit) → (Bit×Bit)+(Bit×Bit).
-    // Then Branch(Fredkin_on_2bits?, ...) — but Fredkin needs 3 bits.
+    // Then Branch(Fredkin_on_2bits?, ...) -- but Fredkin needs 3 bits.
     //
     // Simpler: Distrib(3bits, One, One) ; Branch(Id, Id) ; Factor.
     // This tests the Distrib/Factor wiring on wider types.

@@ -1,4 +1,4 @@
-theseus M3a money plot — rung0 (generic level-1 models, ngspice)
+theseus M3a money plot -- rung0 (generic level-1 models, ngspice)
 Reference snapshot; regenerate: cargo run -p theseus-spice --example money_plot
 Headline: adiabatic energy recovery (slope ~-1) vs static CMOS (flat).
 

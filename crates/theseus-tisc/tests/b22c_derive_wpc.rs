@@ -1,4 +1,4 @@
-// B-2.2c — derive `w_pc` per program from the compiled `Lowered` (B + S_max +
+// B-2.2c -- derive `w_pc` per program from the compiled `Lowered` (B + S_max +
 // rom_len) and MEASURE the win of the w_pc=8 datapath vs the default w_pc=16.
 //
 // - `derive_w_pc(budget, s_max, rom_len)` picks the MINIMUM safe PC width that
@@ -12,7 +12,7 @@
 // The pure `derive_w_pc` boundary tests (no lowering) are ungated. The narrowing
 // run + the WIN measurement lower/run full step nets and are `heavy-tests`-gated;
 // the two GB-net lowerings are serialized behind a `Mutex` (concurrent lowerings
-// OOM — mirrors autoderive_wdata.rs's `LOWER_GATE`).
+// OOM -- mirrors autoderive_wdata.rs's `LOWER_GATE`).
 
 use theseus_tisc::compile::derive_w_pc;
 
@@ -62,7 +62,7 @@ fn derive_w_pc_never_violates_the_runtime_guards() {
     let w_ctl = 8usize;
     for reach in 0..=520usize {
         for &rom_len in &[0usize, 1, 63, 64, 127, 128, 129, 200, 255, 256, 300] {
-            // Split reach into a plausible (budget, s_max) — s_max <= budget.
+            // Split reach into a plausible (budget, s_max) -- s_max <= budget.
             let s_max = reach / 4;
             let budget = reach - s_max;
             let w = derive_w_pc(budget, s_max, rom_len);
@@ -184,7 +184,7 @@ mod heavy {
 
         // run_on_cpu (which now routes through derive_full_layout_from_lowered)
         // must agree with eval over the WHOLE Flat(8)×Flat(8) domain? that is
-        // 2^16 — too big. Sample the edge bytes + a stride, incl. 0/0xFF/high-bit.
+        // 2^16 -- too big. Sample the edge bytes + a stride, incl. 0/0xFF/high-bit.
         let ty = Type::prod(Type::Flat(8), Type::Flat(8));
         let key: Vec<u8> = vec![0, 1, 0x0F, 0x55, 0xAA, 0x80, 0xC3, 127, 128, 254, 255];
         let mut checked = 0usize;
@@ -223,7 +223,7 @@ mod heavy {
         assert_eq!(layout.pc_fields(), 2, "w_pc=16 → two PC fields (PC_hi present)");
 
         // Runs correct: k=130 even ⇒ net xor applied 130 times ⇒ identity on b.
-        // Flat(4) type (matches the chain): nibble keys. FEW pairs on purpose —
+        // Flat(4) type (matches the chain): nibble keys. FEW pairs on purpose --
         // run_on_cpu here eval's the step iso ~130 times PER pair (a 130-entry
         // ROM), so each pair is ~seconds; the run is confirmatory (derivation is
         // proven exhaustively by the pure sweep; broad run-correctness by B-2.2b
@@ -255,7 +255,7 @@ mod heavy {
     fn boundary_derived_wpc_runs_without_guard_error() {
         // EXACTLY ON the fetch edge (Fable B-2.2c MINOR-3): 128 xors → rom_len ==
         // 128 == 1<<(w_pc-1) at w_pc=8, the SHARPEST w_pc=8 case (rom_len 129
-        // would force 16). B=128 <= 256. Must derive 8 AND run clean — a real run
+        // would force 16). B=128 <= 256. Must derive 8 AND run clean -- a real run
         // at the exact fetch-injectivity boundary, not just under it.
         let iso = xor_chain_iso(128);
         let lowered = compile_with_metadata(&iso).expect("compile");
@@ -265,7 +265,7 @@ mod heavy {
         let layout = derive_full_layout_from_lowered(&iso, &lowered);
         assert_eq!(layout.w_pc, 8, "rom_len==128 (== 1<<7) must derive w_pc=8, the sharp edge");
         eprintln!("  → derive_w_pc={} (direct={})", layout.w_pc, derive_w_pc(b, s, rl));
-        // Whatever w_pc is derived, it MUST run — that is the crux: a mis-narrowed
+        // Whatever w_pc is derived, it MUST run -- that is the crux: a mis-narrowed
         // w_pc would Deferred-fail here or panic the fetch assert.
         // Flat(4) type (matches the chain): nibble operands.
         let ty = Type::prod(Type::Flat(4), Type::Flat(4));
@@ -293,7 +293,7 @@ mod heavy {
         let rom = assemble(&lowered.instrs).expect("assemble");
 
         // The auto layout (should be w_pc=8) and the SAME layout forced to w_pc=16
-        // — so w_pc is the ONLY difference (isolates the PC-width win).
+        // -- so w_pc is the ONLY difference (isolates the PC-width win).
         let auto = derive_full_layout_from_lowered(&iso, &lowered);
         assert_eq!(auto.w_pc, 8, "kernel must auto-derive w_pc=8");
         let wpc16 = Layout { w_pc: 16, ..auto };

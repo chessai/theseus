@@ -23,7 +23,7 @@ fn bit() -> Type {
     Type::sum(Type::One, Type::One)
 }
 
-/// `notb : Bit ↔ Bit` — the bijection g.
+/// `notb : Bit ↔ Bit` -- the bijection g.
 fn notb() -> Iso {
     Iso::SwapSum(Type::One, Type::One)
 }
@@ -304,7 +304,7 @@ fn t4_map_semantics_and_g_squared() {
     }
 }
 
-// ── T5: varying address — exact per-copy body slice shape ───────────
+// ── T5: varying address -- exact per-copy body slice shape ───────────
 
 #[test]
 fn t5_varying_address_exact_shape() {
@@ -365,18 +365,18 @@ fn t5_varying_address_exact_shape() {
             Instr::Xori { rd: rd1, imm: 1 },
             "copy {pair_idx}: g must be Xori{{rd={rd1}, imm=1}} between memexch pair"
         );
-        // After the second MexchReg is succ's Xori{ra,1} — the LAST body instruction.
+        // After the second MexchReg is succ's Xori{ra,1} -- the LAST body instruction.
         assert_eq!(
             instrs[pos2 + 1],
             Instr::Xori { rd: ra1, imm: 1 },
             "copy {pair_idx}: succ must be Xori{{rd={ra1}, imm=1}} after second memexch"
         );
-        // F2-I3: succ is the LAST body instruction — the copy closes with the
+        // F2-I3: succ is the LAST body instruction -- the copy closes with the
         // skip-block's trailing Swapbr right after it (pins body_len == 4; without
         // this a lowering that appended body instrs would pass and silently move T(k)).
         assert!(
             matches!(instrs[pos2 + 2], Instr::Swapbr { .. }),
-            "copy {pair_idx}: body must be exactly 4 instrs — succ followed by the closing Swapbr, got {:?}",
+            "copy {pair_idx}: body must be exactly 4 instrs -- succ followed by the closing Swapbr, got {:?}",
             instrs[pos2 + 2]
         );
         // data and address registers must differ (MexchReg aliasing is rejected).
@@ -387,11 +387,11 @@ fn t5_varying_address_exact_shape() {
     }
 }
 
-// ── T6a: park-tax histogram TRACE (default tier — the M-E measurable, F2-I1) ──
+// ── T6a: park-tax histogram TRACE (default tier -- the M-E measurable, F2-I1) ──
 //
 // The milestone's headline deliverable is the histogram T(k)/park_tax(k). Its
 // measurable half needs only compile→assemble→rom_trace (milliseconds, no netlist,
-// no CharDb), so it lives in the DEFAULT tier — pinning B=30 and T(k)=18+4k against
+// no CharDb), so it lives in the DEFAULT tier -- pinning B=30 and T(k)=18+4k against
 // any regression in the unroll spine / body_len / skip semantics. The joule PRICING
 // half is the #[ignore]'d t6b (it needs the ~min spice lowering).
 
@@ -453,7 +453,7 @@ fn t6a_trace_histogram() {
     }
 }
 
-// ── T6b: park-tax histogram PRICING (joules — #[ignore], needs spice) ────
+// ── T6b: park-tax histogram PRICING (joules -- #[ignore], needs spice) ────
 
 #[test]
 #[ignore]
@@ -484,7 +484,7 @@ fn t6b_park_tax_pricing() {
             pe.step_j > 0.0,
             "step_j must be > 0 (a memory-touching ROM is priced)"
         );
-        // total_j == B·step_j is the static-inventory MODEL IDENTITY (F2-I2 — not a
+        // total_j == B·step_j is the static-inventory MODEL IDENTITY (F2-I2 -- not a
         // falsifiable cross-check; the genuine two-path energy check is memexch T7).
         assert!(
             (pe.total_j - b as f64 * pe.step_j).abs() < 1e-30,
@@ -499,7 +499,7 @@ fn t6b_park_tax_pricing() {
     }
 }
 
-// ── T7: closure — MexchReg stays bus-quiescent (#[ignore]) ──────────
+// ── T7: closure -- MexchReg stays bus-quiescent (#[ignore]) ──────────
 
 #[test]
 #[ignore]

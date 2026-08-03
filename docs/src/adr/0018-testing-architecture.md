@@ -9,10 +9,10 @@ totality means no test needs a timeout.
 
 ## Decision
 **Four layers.** T1 universal properties (adjoint commutation, round-trip,
-serialization, determinism — stated once, instantiated per artifact).
+serialization, determinism -- stated once, instantiated per artifact).
 T2 oracle chain (per-boundary differentials; a pass without a link does
 not merge; exhaustive mode kicks in automatically by type size).
-T3 per-component obligations keyed to the risk register — notably:
+T3 per-component obligations keyed to the risk register -- notably:
 coverage checker differentially tested against the brute-force semantic
 definition plus an adversarial corpus; canonicalizer soundness,
 idempotence, and *completeness* (Mac Lane coherence, executable);
@@ -23,7 +23,7 @@ T4 adversarial/meta: fuzzing, a permanent regression corpus, and
 
 **Generators are the keystone:** typed values (random + exhaustive,
 type-aware shrinking); well-typed isos (bottom-up combinator
-composition); and the **bijection-table trick** — random type, random
+composition); and the **bijection-table trick** -- random type, random
 permutation of its values, emit the fully-literal clause set, run the
 whole pipeline to Verilator against the table as ground truth that owes
 nothing to any compiler stage. Generator distributions are themselves

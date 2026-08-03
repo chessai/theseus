@@ -29,13 +29,13 @@ Each `Decl` is a `Type`, `Iso`, or `Prim` declaration.
 The `depth_overrides` map carries any `Name@depth` annotations the
 programmer wrote (see §1c).
 
-### 1b. Check — coverage + linearity
+### 1b. Check -- coverage + linearity
 
 **Crate:** `theseus-check`
 **Entry:** `theseus_check::check(program: &Program) -> Vec<Diagnostic>`
 (`crates/theseus-check/src/lib.rs`)
 
-Runs four gated stages in order — Names, Typing, Linearity, Coverage.
+Runs four gated stages in order -- Names, Typing, Linearity, Coverage.
 A non-empty stage short-circuits the rest.  An empty `Vec` means the
 program is clean.
 
@@ -45,20 +45,20 @@ program is clean.
 (`crates/theseus-check/src/env.rs`)
 
 Builds the `Env` (types, constructors, iso signatures, prims) from all
-top-level declarations.  Infallible — name collisions are recorded as
+top-level declarations.  Infallible -- name collisions are recorded as
 `IsoCollision`s (first definition wins).
 
 Two knobs control μ-type bounded unrolling:
 
 | Knob | Meaning |
 |---|---|
-| `DEFAULT_UNROLL_DEPTH` (= **4**) | Global default; `Nat` at D=4 has exactly 4 inhabitants (`Zero`, `Succ Zero`, …, `Succ³ Zero`). |
+| `DEFAULT_UNROLL_DEPTH` (= **4**) | Global default; `Nat` at D=4 has exactly 4 inhabitants (`Zero`, `Succ Zero`, ..., `Succ³ Zero`). |
 | `Name@depth` override | Per-use-site annotation parsed into `Program::depth_overrides`; lets one iso expand a recursive type to a different depth than the default. |
 
 `Env::lower(&self, ty: &SurfType) -> CoreType` converts surface types
 to core types, unrolling μ-types to the configured depth.
 
-### 1d. Elaboration — surface → core
+### 1d. Elaboration -- surface → core
 
 **Entry:** `theseus_check::elaborate::elaborate_program(program: &Program, env: &Env) -> BTreeMap<String, ElabResult>`
 (`crates/theseus-check/src/elaborate.rs`)
@@ -66,20 +66,20 @@ to core types, unrolling μ-types to the configured depth.
 where `type ElabResult = Result<Iso, Vec<Diagnostic>>`.
 
 Each named iso in the program becomes either an `Ok(Iso)` (a
-`theseus_core::Iso` — the core combinator term) or an `Err`.
+`theseus_core::Iso` -- the core combinator term) or an `Err`.
 See §3 for the elaboration constraint that causes `Err`.
 
 Internally, `elaborate` builds a clause table (a `BTreeMap<Value, Value>`)
 from the surface patterns, then calls `synthesize` to decompose it
 into core combinators.  `synthesize` dispatches to:
 
-- `synthesize_sum` — left/left + right/right decomposition, or full swap.
-- `synthesize_prod` — independent-factor decomposition; falls back to
+- `synthesize_sum` -- left/left + right/right decomposition, or full swap.
+- `synthesize_prod` -- independent-factor decomposition; falls back to
   `synthesize_controlled` when the first component is a `Sum`.
-- `synthesize_controlled` — emits
+- `synthesize_controlled` -- emits
   `SwapProd ; Distrib ; Plus(f_left, f_right) ; Factor ; SwapProd`.
 
-### 1e. Lowering — core → cells
+### 1e. Lowering -- core → cells
 
 **Crate:** `theseus-netlist`
 **Entries:**
@@ -108,7 +108,7 @@ depth annotations.
 (`crates/theseus-netlist/src/balance.rs`).
 Inserts minimal K0 buffer stages so every cell's reconvergent inputs
 are tick-exact.  `balance_compact` stores delays as integers instead of
-materializing K0 cells — necessary for the TISC-1 step's ~1.6 M-buffer
+materializing K0 cells -- necessary for the TISC-1 step's ~1.6 M-buffer
 balanced netlist.
 
 **Energy:** the `theseus-spice` crate
@@ -158,7 +158,7 @@ pub fn to_core(sv: &SVal, ty: &Type, env: &Env) -> Value
 pub fn render(v: &Value, ty: &Type, env: &Env) -> String
 ```
 
-### Current gap — no `lower` verb
+### Current gap -- no `lower` verb
 
 The CLI pipeline stops at eval.  **There is no CLI verb that emits the
 lowered cell netlist.**  To go from surface source to cells you must
@@ -173,14 +173,14 @@ This is the non-obvious gotcha that costs people time.
 
 `synthesize` (and its helpers `synthesize_sum`, `synthesize_prod`,
 `synthesize_controlled`) only handles clause tables that decompose
-**structurally** — independent products, controlled operations, and
+**structurally** -- independent products, controlled operations, and
 sum-case dispatch.
 
 A dense permutation truth table (e.g. add-mod-4 over a 4-bit product)
 or a cyclic-successor iso **passes `check`** (coverage + linearity are
 fine) but **fails to elaborate**: its entry in the map is `Err`.
 `check` proves the iso is a valid bijection; `elaborate` asks a
-stronger question — can it be *decomposed* into the core combinator
+stronger question -- can it be *decomposed* into the core combinator
 vocabulary.
 
 **Consequence:** multi-bit reversible arithmetic must be **composed**
@@ -195,7 +195,7 @@ not.
 
 ---
 
-## 4. Verification — the differential oracle
+## 4. Verification -- the differential oracle
 
 The project's verification norm for compiled circuits is
 **whole-finite-domain agreement**: lower the iso to cells, simulate
@@ -257,7 +257,7 @@ iso fibStep : Bit * Bit <-> Bit * Bit = swap2 ; addInto
 iso fib : Nat * (Bit * Bit) <-> Nat * (Bit * Bit) = iter Nat fibStep
 ```
 
-`fibStep` is `(a, b) ↦ (b, a ⊕ b)` — swap then CNOT.
+`fibStep` is `(a, b) ↦ (b, a ⊕ b)` -- swap then CNOT.
 `fib` applies `fibStep` k times via `iter Nat`, computing
 `(f_k mod 2, f_{k+1} mod 2)` from the initial pair.
 
@@ -271,14 +271,14 @@ Input: `k = 1`, initial pair `(1, 1)`.  One application of `fibStep`
 gives `(1, 1 ⊕ 1) = (1, 0)`.  The Nat counter is threaded through
 unchanged.  Expected output shape: `(Succ Zero, (I, O))`.
 
-Other examples (D = 4, so `Nat` has inhabitants 0–3):
+Other examples (D = 4, so `Nat` has inhabitants 0-3):
 
 | Input | k | Initial pair | Output pair (f_k, f_{k+1}) mod 2 |
 |---|---|---|---|
-| `(Zero, (I, I))` | 0 | (1, 1) | (1, 1) — identity |
+| `(Zero, (I, I))` | 0 | (1, 1) | (1, 1) -- identity |
 | `(Succ Zero, (I, I))` | 1 | (1, 1) | (1, 0) |
 | `(Succ Succ Zero, (I, I))` | 2 | (1, 1) | (0, 1) |
-| `(Succ Succ Succ Zero, (I, I))` | 3 | (1, 1) | (1, 1) — period 3 mod 2 |
+| `(Succ Succ Succ Zero, (I, I))` | 3 | (1, 1) | (1, 1) -- period 3 mod 2 |
 
 ### The verifier
 
@@ -327,5 +327,5 @@ theseus lower <FILE> <iso>
 Print the `PhasedCellNetlist` (cell count, line count, ancilla count;
 optionally a machine-readable JSON/textual dump).
 
-Neither exists today — this section is a recommendation, not a
+Neither exists today -- this section is a recommendation, not a
 description of implemented functionality.

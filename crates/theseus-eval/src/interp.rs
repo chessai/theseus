@@ -182,7 +182,7 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
             }
         }
 
-        // iter n f : n × a ↔ n × a — ⟨k, x⟩ ↦ ⟨k, f^k(x)⟩ where k is
+        // iter n f : n × a ↔ n × a -- ⟨k, x⟩ ↦ ⟨k, f^k(x)⟩ where k is
         // the unary numeral inrᵏ(inl ()). The count is read off the
         // DATA, so the loop is a structural induction on the numeral:
         // it cannot diverge (ADR-0007). One fuel unit per body
@@ -204,8 +204,8 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
             other => Err(domain_err("Iter", &other)),
         },
 
-        // fold l f : l × c ↔ l × c — reversible mapAccumL, head-to-tail:
-        // ⟨[x₁…xₖ], c₀⟩ ↦ ⟨[y₁…yₖ], cₖ⟩ with ⟨yᵢ, cᵢ⟩ = f⟨xᵢ, cᵢ₋₁⟩.
+        // fold l f : l × c ↔ l × c -- reversible mapAccumL, head-to-tail:
+        // ⟨[x₁...xₖ], c₀⟩ ↦ ⟨[y₁...yₖ], cₖ⟩ with ⟨yᵢ, cᵢ⟩ = f⟨xᵢ, cᵢ₋₁⟩.
         // The spine is read off the DATA, so the loop is a structural
         // induction on the finite list value: it cannot diverge
         // (ADR-0007). One fuel unit per element, exactly like `iter`.
@@ -236,8 +236,8 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
             other => Err(domain_err("Fold", &other)),
         },
 
-        // unfold l f : l × c ↔ l × c — the tail-to-head dual:
-        // ⟨[x₁…xₖ], dₖ⟩ ↦ ⟨[y₁…yₖ], d₀⟩ with ⟨yᵢ, dᵢ₋₁⟩ = f⟨xᵢ, dᵢ⟩.
+        // unfold l f : l × c ↔ l × c -- the tail-to-head dual:
+        // ⟨[x₁...xₖ], dₖ⟩ ↦ ⟨[y₁...yₖ], d₀⟩ with ⟨yᵢ, dᵢ₋₁⟩ = f⟨xᵢ, dᵢ⟩.
         Iso::Unfold(_l, body) => match value {
             Value::Pair(xs, c) => {
                 let elems = spine_elems(&xs).ok_or_else(|| domain_err("Unfold/spine", &xs))?;
@@ -359,7 +359,7 @@ fn cardinality_u64(ty: &Type) -> u64 {
     }
 }
 
-/// Compute the static bound `B(iso)` — the maximum fuel an evaluation of
+/// Compute the static bound `B(iso)` -- the maximum fuel an evaluation of
 /// `iso` can consume. See `docs/src/spec/dynamic-semantics.md`.
 pub fn static_bound(iso: &Iso) -> u64 {
     match iso {
@@ -414,7 +414,7 @@ pub fn static_bound(iso: &Iso) -> u64 {
     }
 }
 
-/// Count the `1 + (b × …)` layers of a list-spine type. A spine with
+/// Count the `1 + (b × ...)` layers of a list-spine type. A spine with
 /// `d` layers holds lists of length `0 ..= d − 1`. Stops (conservatively)
 /// at the first non-spine node, so it is total on all types.
 fn spine_layer_count(ty: &Type) -> u64 {
@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn structural_iso_costs_zero_fuel() {
-        // Structural formers are free — fuel unchanged.
+        // Structural formers are free -- fuel unchanged.
         let mut fuel = 0;
         assert_eq!(
             eval(&Iso::Id(Type::One), Value::Unit, &mut fuel).unwrap(),
@@ -668,9 +668,9 @@ mod tests {
         use theseus_core::PrimDef;
 
         // Values in Bit + 1:
-        let r_unit = Value::right(Value::Unit);       // Right(Unit) — boundary
-        let l_left = Value::left(Value::left(Value::Unit));  // Left(Left(Unit)) — O
-        let l_right = Value::left(Value::right(Value::Unit)); // Left(Right(Unit)) — I
+        let r_unit = Value::right(Value::Unit);       // Right(Unit) -- boundary
+        let l_left = Value::left(Value::left(Value::Unit));  // Left(Left(Unit)) -- O
+        let l_right = Value::left(Value::right(Value::Unit)); // Left(Right(Unit)) -- I
 
         let mut fwd = BTreeMap::new();
         fwd.insert(r_unit.clone(), l_left.clone());   // Right(()) → Left(O)
@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn iter_applies_body_count_times() {
-        // iter not: ⟨k, b⟩ ↦ ⟨k, notᵏ(b)⟩ — parity of k decides.
+        // iter not: ⟨k, b⟩ ↦ ⟨k, notᵏ(b)⟩ -- parity of k decides.
         let iso = Iso::iter(Type::numeral_ty(4), not_body());
         let o = Value::left(Value::Unit);
         let i = Value::right(Value::Unit);
@@ -843,7 +843,7 @@ mod tests {
     #[test]
     fn iter_rejects_non_numeral_counter_value() {
         let iso = Iso::iter(Type::numeral_ty(2), not_body());
-        // Counter slot holds a Pair — not a numeral.
+        // Counter slot holds a Pair -- not a numeral.
         let v = Value::pair(
             Value::pair(Value::Unit, Value::Unit),
             Value::left(Value::Unit),
@@ -904,7 +904,7 @@ mod tests {
 
     /// `cx : Bit × Bit ↔ Bit × Bit` as a Prim (CNOT: ⟨x, a⟩ ↦ ⟨x, a⊕x⟩,
     /// self-inverse). Folding it computes the parity of the list into
-    /// the accumulator while preserving the list — a reversible "sum".
+    /// the accumulator while preserving the list -- a reversible "sum".
     fn cx_body() -> Iso {
         use std::collections::BTreeMap;
         use theseus_core::PrimDef;
@@ -995,7 +995,7 @@ mod tests {
     #[test]
     fn fold_rejects_non_spine_value() {
         let iso = Iso::fold(bit_list_ty(2), cx_body());
-        // Spine slot holds a bare pair — not nil/cons shaped.
+        // Spine slot holds a bare pair -- not nil/cons shaped.
         let v = Value::pair(Value::pair(Value::Unit, Value::Unit), bit_o());
         let mut fuel = 100;
         assert!(matches!(

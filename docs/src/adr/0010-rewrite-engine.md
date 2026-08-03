@@ -7,7 +7,7 @@
 scoping; the decision here was ratified during the pass-pipeline session,
 ADR-0016.) Core rewrites need a stopping rule: fixed pass order of
 individually-terminating rewrites, or a saturating e-graph engine. `egg`
-exists in Rust and Π's equational theory suits equality saturation — but
+exists in Rust and Π's equational theory suits equality saturation -- but
 it is a research-flavored dependency whose wins matter only at scale.
 
 ## Decision

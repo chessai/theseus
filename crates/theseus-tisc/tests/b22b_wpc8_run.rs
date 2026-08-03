@@ -1,33 +1,33 @@
 #![cfg(feature = "heavy-tests")]
 // HEAVY tier: gated out of the fast gate; advisor runs --features heavy-tests --test-threads=1 pre-merge
-//! B-2.2b — PROVE `w_pc = 8` is CORRECT, not just well-typed.
+//! B-2.2b -- PROVE `w_pc = 8` is CORRECT, not just well-typed.
 //!
 //! B-2.2a generalized the PC builders (`pc_add_br_with`/`pc_inc_with`,
 //! `fetch_fields`, `encode_with`/`decode_with`) to `layout.pc_fields()` so a
 //! hand-built `w_pc=8` layout (pc_fields()==1, no PC_hi) TYPE-CHECKS. But
 //! `type_of` cannot see intra-word wire aliasing (the Fable B-2.2a review
 //! MAJOR-1 demonstrated this: a `w_pc=12` layout type-checks yet silently
-//! routes PC bits onto BR wires). Only a REAL RUN — evaluating the isos over
-//! encoded state — proves the field addressing at `w_pc=8` is alias-free.
+//! routes PC bits onto BR wires). Only a REAL RUN -- evaluating the isos over
+//! encoded state -- proves the field addressing at `w_pc=8` is alias-free.
 //! That is this file's job.
 //!
-//! TEST 1 — the mechanized ADR-0034 adder identity at k=8. The WHOLE-DOMAIN
+//! TEST 1 -- the mechanized ADR-0034 adder identity at k=8. The WHOLE-DOMAIN
 //! authority is now the SYMBOLIC BDD proof `tests/bveq_step_poc.rs`
 //! (`bveq_pc_update_wpc8`, ~0.1 s vs the retired 2^16 brute-force ~387 s);
 //! what remains here is the concrete REALITY-ANCHOR bootstrap over a boundary
 //! (PC, BR) grid run through the REAL `theseus_eval::eval` on the w_pc=8 layout:
 //! `(pc_add_br_with ; pc_inc_with)(&w_pc8)` realizes `PC' = (PC + BR + 1) mod
 //! 256` (sext identity at w_pc=8), with BR/s0/s1 preserved and the ADJOINT
-//! subtracting — pinning the hand-built w_pc=8 layout's alias-freedom against
+//! subtracting -- pinning the hand-built w_pc=8 layout's alias-freedom against
 //! the interpreter.
 //!
-//! TEST 2 — real end-to-end CPU runs at `w_pc=8` via
+//! TEST 2 -- real end-to-end CPU runs at `w_pc=8` via
 //! `run_rom_on_cpu_with(&w_pc8, ...)` on small CPU-only programs that EXERCISE
 //! the PC adder: a taken `Swapbr` FORWARD branch, a taken BACKWARD branch that
-//! wraps through the 8-bit modulus (the two-register token-migration idiom —
+//! wraps through the 8-bit modulus (the two-register token-migration idiom --
 //! terminates without a loop counter, Fable MAJOR-1), high-PC `pc_inc` carries,
 //! and straight-line steps. The core assertion: narrowing `w_pc` to 8 changes
-//! NOTHING observable — the w_pc=8 final state equals the SAME program run at
+//! NOTHING observable -- the w_pc=8 final state equals the SAME program run at
 //! the default w_pc=16 layout, on every input. `run_rom_on_cpu_with` internally
 //! enforces terminal quiescence (BR/s0/s1==0) and the
 //! `budget + s_max <= pc_addr_space()` bound, so a returned `Ok` already
@@ -44,7 +44,7 @@ const EVAL_FUEL: u64 = 8_000_000_000;
 
 /// A `w_pc=8` layout: PC occupies a single 8-bit CONTROL field (no PC_hi).
 /// Everything else is the default so the change under test (PC width) is
-/// isolated. Constructed BY HAND — B-2.2b does not DERIVE w_pc (that is
+/// isolated. Constructed BY HAND -- B-2.2b does not DERIVE w_pc (that is
 /// B-2.2c).
 fn layout_w_pc8() -> Layout {
     let l = Layout {
@@ -53,18 +53,18 @@ fn layout_w_pc8() -> Layout {
     };
     // Pin the invariant the whole file rests on: PC occupies exactly ONE
     // control field at w_pc=8 (guards against a future w_ctl default change
-    // silently making this a 16-bit run — Fable B-2.2b nit).
+    // silently making this a 16-bit run -- Fable B-2.2b nit).
     assert_eq!(l.pc_fields(), 1, "w_pc=8 layout must have exactly 1 PC field");
     l
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TEST 1 — mechanized ADR-0034 adder identity at k=8 (EXHAUSTIVE, 2^16).
+// TEST 1 -- mechanized ADR-0034 adder identity at k=8 (EXHAUSTIVE, 2^16).
 // ══════════════════════════════════════════════════════════════════════
 //
 // The oracle: at w_pc=8, `PC' = (PC + sext(BR) + 1) mod 2^8`. Since BR is
 // already 8-bit, sext(BR) == BR, so the oracle collapses to
-// `(PC + BR + 1) mod 256` — arithmetic on u8 with wrapping. This is the
+// `(PC + BR + 1) mod 256` -- arithmetic on u8 with wrapping. This is the
 // pre-widen 8-bit-PC identity, the oldest proven ADR-0034 case, now realized
 // by the pc_fields()==1 (PC_hi-dropped, BR/op slid down one word) field
 // addressing. Any wire-aliasing bug that `type_of` missed shows up here as a
@@ -109,8 +109,8 @@ fn eval_wpc8(layout: &Layout, iso: &Iso, s: &StateVals) -> StateVals {
 // TIER-A speedup: the WHOLE-DOMAIN authority for `pc_add_br_with;pc_inc_with`
 // ≡ (PC + sext(BR) + 1) mod 2^w_pc is now the SYMBOLIC BDD proof in
 // `tests/bveq_step_poc.rs` (`bveq_pc_update_wpc8` + negative controls),
-// which proves the SAME identity over the full (PC,BR) domain — and MORE, with
-// regs/IR/scratch held SYMBOLIC — in ~0.1 s (was 387 s over 2^16 = ~4000×), in
+// which proves the SAME identity over the full (PC,BR) domain -- and MORE, with
+// regs/IR/scratch held SYMBOLIC -- in ~0.1 s (was 387 s over 2^16 = ~4000×), in
 // the FAST tier. That is now the single authority; there is no duplicate slow
 // sweep. What remains here is the concrete REALITY-ANCHOR bootstrap: a boundary
 // (PC,BR) grid through the REAL `theseus_eval::eval` on the w_pc=8 layout,
@@ -166,21 +166,21 @@ fn adr0034_split_add_bootstrap_wpc8() {
     }
 
     eprintln!(
-        "B-2.2b TEST 1 (bootstrap): ADR-0034 split-add reality-anchor at w_pc=8 — {checked} \
+        "B-2.2b TEST 1 (bootstrap): ADR-0034 split-add reality-anchor at w_pc=8 -- {checked} \
          boundary (PC,BR) pairs == (PC+BR+1) mod 256 (sext=identity), BR/s0/s1 preserved, \
          adjoint recovers input ✓ (whole-domain authority = bveq_step_poc::bveq_pc_update_wpc8)"
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// TEST 2 — a real end-to-end CPU run at w_pc=8 == the SAME run at w_pc=16.
+// TEST 2 -- a real end-to-end CPU run at w_pc=8 == the SAME run at w_pc=16.
 // ══════════════════════════════════════════════════════════════════════
 //
 // A small CPU-only program that EXERCISES the PC adder at w_pc=8:
 //   - a taken FORWARD branch (Swapbr with a positive offset ⇒ pc_add_br runs
 //     with a nonzero BR whose top bit is CLEAR),
 //   - a taken BACKWARD branch (Swapbr with a top-bit-SET offset ⇒ the sext
-//     path — identity at w_pc=8, but the come-from token is > 127),
+//     path -- identity at w_pc=8, but the come-from token is > 127),
 //   - straight-line pc_inc steps between/around them.
 //
 // The branch idiom mirrors the compiler's `emit_skip_block` (compile.rs):
@@ -214,7 +214,7 @@ fn forward_branch_program() -> Vec<Instr> {
     ]
 }
 
-/// A second CPU-only branch program — the canonical `emit_skip_block` bracket
+/// A second CPU-only branch program -- the canonical `emit_skip_block` bracket
 /// (compile.rs): a forward `Swapbr` jumps over a 2-instr body and LANDS ON the
 /// come-from `Swapbr`, which clears BR (so the program terminates quiescent).
 ///   0: Addi r1, +2         ; r1 = 2 = body length (the forward skip distance)
@@ -238,17 +238,17 @@ fn skip_block_program() -> Vec<Instr> {
 }
 
 /// A CPU-only program with a genuinely TAKEN BACKWARD branch that TERMINATES
-/// without a loop counter — the two-register token-migration idiom (Fable
+/// without a loop counter -- the two-register token-migration idiom (Fable
 /// B-2.2b MAJOR-1). The branch at addr 3 jumps BACK to addr 1 (PC wraps
 /// 3 + sext(0xFD) + 1 = 257 ≡ 1 mod 256 at w_pc=8; = 0x10001 ≡ 1 mod 2^16 at
-/// w_pc=16 — the layouts agree via sext). The token lives in r2 on pass 1 and
+/// w_pc=16 -- the layouts agree via sext). The token lives in r2 on pass 1 and
 /// migrates into r1 at the top come-from on pass 2, so the branch fires exactly
 /// once and the loop exits. This is the ONE run that drives a real backward
 /// jump wrapping through the 8-bit modulus (the intermediate arithmetic TEST 1
 /// covers exhaustively but no forward-only run reaches).
 ///   0: Addi  r2, 0xFD   ; r2 = -3 token (top bit set)
 ///   1: Swapbr r1        ; top come-from: pass1 no-op (r1=0); pass2 absorbs BR=0xFD→r1
-///   2: Addi  r3, 1      ; body — runs TWICE (r3: 0→1→2)
+///   2: Addi  r3, 1      ; body -- runs TWICE (r3: 0→1→2)
 ///   3: Swapbr r2        ; pass1: BR←0xFD,r2←0 ⇒ PC = (3-3+1) mod 256 = 1 (BACK);
 ///                       ;   pass2: r2=0 ⇒ no-op ⇒ PC = 4 (fall through)
 ///   4: Xori  r1, 0xFD   ; clear migrated token → r1 = 0 (terminal quiescent)
@@ -325,7 +325,7 @@ fn wpc8_run_equals_wpc16_forward_branch() {
     }
 
     // Verify the branch was actually TAKEN (r2 unchanged: the body at 2,3 was
-    // skipped) — otherwise the test would pass vacuously with an untaken branch.
+    // skipped) -- otherwise the test would pass vacuously with an untaken branch.
     let regs = [0x01, 0x00, 0xAA, 0x05, 0, 0, 0, 0];
     let got = run_rom_on_cpu_with(
         &layout_w_pc8(),
@@ -348,7 +348,7 @@ fn wpc8_run_equals_wpc16_backward_branch() {
     // Fable B-2.2b MAJOR-1: a REAL terminating backward branch (no counter),
     // via two-register token migration. This is the only run that drives a
     // backward jump WRAPPING through the modulus (3 + sext(0xFD) + 1 = 257 ≡ 1
-    // mod 256 at w_pc=8; ≡ 1 mod 2^16 at w_pc=16 — the layouts agree via sext).
+    // mod 256 at w_pc=8; ≡ 1 mod 2^16 at w_pc=16 -- the layouts agree via sext).
     // TEST 1 proves this arithmetic exhaustively; this proves it in a real run.
     let prog = backward_branch_program();
     let budget = 8; // PC trace 0→1→2→3→1→2→3→4→park = 8 productive steps.
@@ -396,9 +396,9 @@ fn wpc8_run_equals_wpc16_high_pc_and_branch() {
     // Two ways to walk the w_pc=8 PC adder near the top of the 8-bit range in a
     // REAL run, both asserting w_pc=8 == w_pc=16:
     //
-    //   Case A — the skip-block branch taken at PC=0 (pc_add_br with BR=2), then
+    //   Case A -- the skip-block branch taken at PC=0 (pc_add_br with BR=2), then
     //            park: exercises the branch adder end-to-end on a second program.
-    //   Case B — the machine STARTED high (PC in 240..252), running pure-park
+    //   Case B -- the machine STARTED high (PC in 240..252), running pure-park
     //            pc_inc steps whose carries ripple through the HIGH bits of the
     //            8-bit PC word (e.g. 0xEF → 0xF0, 0xFB → 0xFC). This is the
     //            w_pc=8 analogue of widen_pc_payoff's "PC crosses 256" carry
@@ -407,7 +407,7 @@ fn wpc8_run_equals_wpc16_high_pc_and_branch() {
     //            256 boundary, which TEST 1 covers via (PC+BR+1) mod 256).
     //
     // NOTE ON BACKWARD BRANCHES (BR top-bit set): a terminating hand-built
-    // backward branch IS constructible without a loop counter — via
+    // backward branch IS constructible without a loop counter -- via
     // two-register token migration (`wpc8_run_equals_wpc16_backward_branch`
     // above), which drives a real backward jump wrapping through the 8-bit
     // modulus. The backward (top-bit-set BR, negative-sext) arithmetic is
@@ -417,7 +417,7 @@ fn wpc8_run_equals_wpc16_high_pc_and_branch() {
     // test focuses on the forward branch + high-PC carries.
     let prog = skip_block_program();
 
-    // Case A: PC=0, branch taken — pc_add_br with BR=2 (forward), then park.
+    // Case A: PC=0, branch taken -- pc_add_br with BR=2 (forward), then park.
     let budget_a = prog.len();
     for regs in [
         [0x00, 0x00, 0x00, 0x00, 0, 0, 0, 0],

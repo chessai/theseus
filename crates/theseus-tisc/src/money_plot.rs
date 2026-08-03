@@ -1,5 +1,5 @@
 //! CPU "money plot" (ADR-0028/0030): energy per TISC-1 step vs the
-//! power-clock ramp time — the machine-level analogue of the M3a
+//! power-clock ramp time -- the machine-level analogue of the M3a
 //! cell-level money plot.
 //!
 //! # What it shows
@@ -10,7 +10,7 @@
 //! ~`1/T` (log-log slope ≈ −1) as the power-clock is slowed, until the
 //! tiny leakage/residual floor. An *irreversible* CMOS implementation of
 //! the same logic pays a flat `½CV²` per gate per cycle, **independent of
-//! T** — it cannot be driven below that floor. The plot is that contrast
+//! T** -- it cannot be driven below that floor. The plot is that contrast
 //! at the machine level: the reversible CPU's curve sliding below the
 //! flat CMOS line.
 //!
@@ -19,19 +19,19 @@
 //! The adiabatic curves come entirely from the committed rung-0
 //! characterization DB fits summed over the **zero-garbage** step's cell
 //! inventory (ADR-0040 phase C: the R1-based lowering, priced as
-//! `cswap-r1`) — no ngspice needed. The flat CMOS reference is a single
+//! `cswap-r1`) -- no ngspice needed. The flat CMOS reference is a single
 //! ngspice-derived constant ([`CMOS_STATIC_E_PER_GATE_J`]), committed so
 //! the whole artifact reproduces offline.
 //!
 //! Two adiabatic curves are reported (ADR-0028 attribution):
-//! * **full step** — active logic + the K0 tick-alignment balance
+//! * **full step** -- active logic + the K0 tick-alignment balance
 //!   buffers: the honest as-built machine energy;
-//! * **active logic** — K1/K2/R1 only, excluding the balance buffers
-//!   (which have no irreversible counterpart — CMOS needs no tick
+//! * **active logic** -- K1/K2/R1 only, excluding the balance buffers
+//!   (which have no irreversible counterpart -- CMOS needs no tick
 //!   alignment): the logic-proper energy.
 //!
 //! The CMOS reference counts one `½CV²` gate per *active* reversible cell
-//! (1:1, a deliberately conservative gate-count proxy — a Fredkin or an
+//! (1:1, a deliberately conservative gate-count proxy -- a Fredkin or an
 //! adder's Toffoli is worth more than one CMOS gate, so this understates
 //! the reversible win). The balance buffers are excluded from the CMOS
 //! gate count on purpose.
@@ -41,7 +41,7 @@ use theseus_spice::chardb::{CharDb, QueryError};
 
 use crate::energy::balanced_energy;
 
-/// Rung-0 CMOS static `½CV²` energy per gate, joules — the flat
+/// Rung-0 CMOS static `½CV²` energy per gate, joules -- the flat
 /// irreversible reference.
 ///
 /// Measured once via ngspice from the `cmos-static` deck (theseus-spice
@@ -76,7 +76,7 @@ pub struct CpuMoneyPlot {
     pub active_cells: usize,
     /// K0 balance-buffer count (no irreversible counterpart).
     pub buffer_cells: usize,
-    /// R1 cell count — the zero-garbage cells (ADR-0040 phase C).
+    /// R1 cell count -- the zero-garbage cells (ADR-0040 phase C).
     pub r1_cells: usize,
 }
 
@@ -111,7 +111,7 @@ pub fn cmos_crossing_t_ramp(curve: &[SweepPoint], cmos_ref_j: f64) -> Option<f64
 ///
 /// `step_net` should be a lowered TISC-1 step (via `lower_iso`);
 /// `t_ramps` must lie within the DB's characterized range (in-range
-/// interpolation only — [`CharDb::query`] errors otherwise, never
+/// interpolation only -- [`CharDb::query`] errors otherwise, never
 /// extrapolates).
 pub fn cpu_money_plot(
     step_net: &PhasedCellNetlist,
@@ -169,7 +169,7 @@ impl CpuMoneyPlot {
     }
 
     /// True iff the active-logic energy is below the CMOS floor at every
-    /// sampled ramp — the strong claim (reversible logic proper wins
+    /// sampled ramp -- the strong claim (reversible logic proper wins
     /// across the whole characterized clock range).
     pub fn active_logic_below_cmos_everywhere(&self) -> bool {
         self.active_logic
@@ -180,7 +180,7 @@ impl CpuMoneyPlot {
 
 impl std::fmt::Display for CpuMoneyPlot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "TISC-1 CPU money plot — energy/step vs power-clock ramp")?;
+        writeln!(f, "TISC-1 CPU money plot -- energy/step vs power-clock ramp")?;
         writeln!(f, "{:-<64}", "")?;
         writeln!(
             f,

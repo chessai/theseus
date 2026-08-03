@@ -7,7 +7,7 @@
 //! re-supplying fresh ancilla-init bits each revolution. The
 //! differential oracle is `eval(step)^R`.
 //!
-//! # Ancilla restoration — the zero-garbage ring
+//! # Ancilla restoration -- the zero-garbage ring
 //!
 //! True ring-machine recirculation (feeding ancilla outputs back as
 //! inputs) is valid when the step's lowering restores its ancillas
@@ -19,16 +19,16 @@
 //! old splitter/selector synthesis). [`StepRing::run`] is therefore the
 //! **default, zero-garbage runner**: it feeds ancilla outputs back as
 //! the next revolution's inputs (TRUE recirculation), so the ring
-//! physically closes with **zero per-revolution boundary** — nothing is
+//! physically closes with **zero per-revolution boundary** -- nothing is
 //! re-supplied, nothing exits. It equals `eval(step)^R`, and equals
 //! [`StepRing::run_open`] (the open-loop variant that re-supplies fresh
-//! inits) — that equivalence is what certifies the closure. This is the
+//! inits) -- that equivalence is what certifies the closure. This is the
 //! literal zero-garbage ring.
 //!
-//! # Closed ring (Bennett path — fallback)
+//! # Closed ring (Bennett path -- fallback)
 //!
 //! [`closed_step_ring`] lowers the step via
-//! [`lower_iso_bennett`] (compute–copy–uncompute, ADR-0033): the
+//! [`lower_iso_bennett`] (compute-copy-uncompute, ADR-0033): the
 //! wrap restores EVERY forward ancilla to its init, data-independently,
 //! and concentrates the irreducible parity residue into a fixed
 //! boundary of `2·w` slots (per data bit `j`: one slot carrying `y_j`
@@ -36,13 +36,13 @@
 //! `0`). [`ClosedStepRing::run`] therefore recirculates by feeding back
 //! the State **and all forward-ancilla outputs** as the next
 //! revolution's inputs, re-supplying only the fixed `(1, 0)` boundary
-//! pairs — a *physically closing* ring whose per-revolution external
+//! pairs -- a *physically closing* ring whose per-revolution external
 //! interface is a constant-size, data-independent set of ports
 //! ([`ClosedStepRing::boundary_size`], `2·w = 320` for the TISC-1
 //! State). With the plain path now ancilla-clean, the Bennett
 //! [`ClosedStepRing`] demotes to a **fallback** for circuits whose
 //! lowering is still K-only-dirty (e.g. trace tag duplication, iter/fold
-//! control chains — genuine fan-outs that still emit K-only garbage).
+//! control chains -- genuine fan-outs that still emit K-only garbage).
 
 use theseus_netlist::ir::cell::CellNetError;
 use theseus_netlist::lower::lower_iso_with_ancillas;
@@ -65,7 +65,7 @@ pub struct StepRing {
 
 /// Build a ring-ready compact-balanced step from a ROM image.
 ///
-/// Calls `step(rom)`, lowers with ancillas, and compact-balances —
+/// Calls `step(rom)`, lowers with ancillas, and compact-balances --
 /// O(active cells) memory, no K0 materialization.
 pub fn step_ring(rom: &[u32]) -> StepRing {
     let iso = step(rom);
@@ -86,12 +86,12 @@ pub fn step_ring(rom: &[u32]) -> StepRing {
 
 impl StepRing {
     /// Recirculate the step `revolutions` times starting from `start`,
-    /// with the ring CLOSED — the **default, zero-garbage** runner
+    /// with the ring CLOSED -- the **default, zero-garbage** runner
     /// (ADR-0040 phase C).
     ///
     /// Each revolution feeds the ancilla *outputs* back as the next
     /// revolution's ancilla *inputs* (TRUE recirculation): nothing is
-    /// re-supplied, nothing exits — the ring physically closes with
+    /// re-supplied, nothing exits -- the ring physically closes with
     /// **zero per-revolution boundary**. This is valid because the
     /// R1-based lowering is ancilla-clean ([`Self::ancillas_restored`]
     /// is true), so the fed-back ancillas equal their inits every
@@ -105,7 +105,7 @@ impl StepRing {
         debug_assert!(
             self.ancillas_restored(start),
             "StepRing::run assumes an ancilla-clean lowering (zero-garbage \
-             ring); this lowering leaves garbage — use run_open or \
+             ring); this lowering leaves garbage -- use run_open or \
              ClosedStepRing. mismatches: {:?}",
             self.ancilla_mismatches(start)
         );
@@ -168,7 +168,7 @@ impl StepRing {
     }
 
     /// True if ancillas are fully restored after one revolution from
-    /// `start` — the ring machine genuinely closes.
+    /// `start` -- the ring machine genuinely closes.
     pub fn ancillas_restored(&self, start: &StateVals) -> bool {
         self.ancilla_mismatches(start).is_empty()
     }
@@ -188,7 +188,7 @@ impl StepRing {
 
 /// A compact-balanced Bennett-wrapped TISC-1 step: forward ancillas
 /// are restored every revolution (fed back), and only the fixed
-/// `2·w`-slot boundary is re-supplied — the physically closing ring.
+/// `2·w`-slot boundary is re-supplied -- the physically closing ring.
 pub struct ClosedStepRing {
     compact: CompactBalanced,
     /// Full ancilla init vector: forward inits ++ `[1, 0]` per data bit.
@@ -242,7 +242,7 @@ impl ClosedStepRing {
     /// **and every forward-ancilla output** as the next revolution's
     /// inputs; only the fixed `2·w` boundary slots are re-supplied
     /// with their constant `(1, 0)` inits. Nothing data-dependent is
-    /// injected after the start state — the differential oracle
+    /// injected after the start state -- the differential oracle
     /// `run(s, R) == eval(step)^R` therefore certifies that the
     /// forward ancillas really do come back clean every revolution.
     pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
@@ -258,7 +258,7 @@ impl ClosedStepRing {
             input.extend_from_slice(boundary_init);
             let sim = self.compact.simulate(&input).expect("simulate");
             data_bits = sim.outputs[..self.n_data].to_vec();
-            // Feed the forward ancillas back — TRUE recirculation.
+            // Feed the forward ancillas back -- TRUE recirculation.
             forward_bits = sim.outputs[self.n_data..self.n_data + self.n_forward].to_vec();
             // Boundary outputs (the Bennett residue) exit the ring;
             // fresh (1, 0) pairs are re-supplied next revolution.
@@ -284,7 +284,7 @@ impl ClosedStepRing {
     }
 
     /// The boundary outputs after one revolution from `start`: `2·w`
-    /// bits, interleaved `(y_0, x_0, y_1, x_1, …)` — the output word
+    /// bits, interleaved `(y_0, x_0, y_1, x_1, ...)` -- the output word
     /// and the regenerated input word, the honest Bennett residue.
     pub fn boundary_residue(&self, start: &StateVals) -> Vec<bool> {
         let sim_out = self.revolve_once(start);
@@ -304,13 +304,13 @@ impl ClosedStepRing {
         self.n_data
     }
 
-    /// Forward ancilla lines — fed back, never re-supplied.
+    /// Forward ancilla lines -- fed back, never re-supplied.
     pub fn forward_ancilla_count(&self) -> usize {
         self.n_forward
     }
 
     /// Size of the fixed boundary re-supplied each revolution:
-    /// `2·w` slots with constant inits `(1, 0)` per data bit —
+    /// `2·w` slots with constant inits `(1, 0)` per data bit --
     /// data-independent ports, the ring's only external interface.
     pub fn boundary_size(&self) -> usize {
         2 * self.n_data
@@ -343,7 +343,7 @@ pub struct SystemRing {
 
 /// Build a ring-ready compact-balanced system_step from a ROM image.
 ///
-/// Calls `system_step(rom)`, lowers with ancillas, and compact-balances —
+/// Calls `system_step(rom)`, lowers with ancillas, and compact-balances --
 /// O(active cells) memory, no K0 materialization.
 pub fn system_ring(rom: &[u32]) -> SystemRing {
     let iso = system_step(rom);
@@ -371,7 +371,7 @@ impl SystemRing {
     /// valid because `system_step` lowers ancilla-clean by construction.
     ///
     /// Unlike [`StepRing::run`], this method does NOT contain a
-    /// `debug_assert!(ancillas_restored)` — the certificate test
+    /// `debug_assert!(ancillas_restored)` -- the certificate test
     /// asserts restoration explicitly, and the internal assert would
     /// panic before the certificate can observe `run==run_open` /
     /// `bus_quiescent`, and it doubles per-call cost.
@@ -434,13 +434,13 @@ impl SystemRing {
     }
 
     /// True if ancillas are fully restored after one revolution from
-    /// `start` — the ring machine genuinely closes.
+    /// `start` -- the ring machine genuinely closes.
     pub fn ancillas_restored(&self, start: &StateVals) -> bool {
         self.ancilla_mismatches(start).is_empty()
     }
 
     /// True if the BusMsg data lines are all zero after one revolution
-    /// from `start` — the bus-quiescence boundary condition.
+    /// from `start` -- the bus-quiescence boundary condition.
     ///
     /// Computes the bus range symbolically as
     /// `COMPOSITE_BITS..SYSTEM_BITS` and asserts `n_data == SYSTEM_BITS`
@@ -448,7 +448,7 @@ impl SystemRing {
     pub fn bus_quiescent(&self, start: &StateVals) -> bool {
         assert_eq!(
             self.n_data, SYSTEM_BITS,
-            "SystemRing::bus_quiescent: n_data ({}) != SYSTEM_BITS ({}) — \
+            "SystemRing::bus_quiescent: n_data ({}) != SYSTEM_BITS ({}) -- \
              lowering-order regression",
             self.n_data, SYSTEM_BITS,
         );
@@ -474,7 +474,7 @@ impl SystemRing {
 
 // ── Two-body ring (Stage 2a) ─────────────────────────────────────
 
-// F4: named constants for bus-slice offsets — a transposed splice is
+// F4: named constants for bus-slice offsets -- a transposed splice is
 // silent corruption otherwise.
 
 /// CPU body `(CpuState, BusMsg)` data width: 160 + 24 = 184 bits.
@@ -621,11 +621,11 @@ impl TwoBodyRing {
             cpu_bits = post_sim.outputs[..STATE_BITS].to_vec();
             post_anc = post_sim.outputs[self.post_n_data..].to_vec();
 
-            // (d) F3: assert bus quiescence — the §3 lemma made runtime
+            // (d) F3: assert bus quiescence -- the §3 lemma made runtime
             let bus_out = &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
             assert!(
                 bus_out.iter().all(|&b| !b),
-                "TwoBodyRing: bus NOT quiescent after cpu_post — \
+                "TwoBodyRing: bus NOT quiescent after cpu_post -- \
                  §3 quiescence lemma violated (nonzero bus bits: {:?})",
                 bus_out
                     .iter()
@@ -727,7 +727,7 @@ impl TwoBodyRing {
     /// OUTPUT bits to that body's ancilla inits and records any index
     /// that differs. Returns `(pre_mismatches, mem_mismatches,
     /// post_mismatches)`. All three empty ⇔ every body's ancillas
-    /// restore every revolution — the per-body zero-garbage certificate.
+    /// restore every revolution -- the per-body zero-garbage certificate.
     pub fn body_ancilla_mismatches(
         &self,
         start: &StateVals,
@@ -837,12 +837,12 @@ impl TwoBodyRing {
 ///
 /// Proves the two-body ring (cpu_pre / mem_body / cpu_post) can be
 /// clocked as two concurrent lockstep loops joined by a bus cross-edge.
-/// Pure integer arithmetic over lowered-body depths — no lowering
+/// Pure integer arithmetic over lowered-body depths -- no lowering
 /// mutation, no machine-semantics change, no padder materialization.
 ///
 /// δ₁/δ₂ are the minimal phase-aligning transits (a specific realizable
 /// placement); 2b-lite proves a consistent lockstep clocking EXISTS and
-/// pins it to measured depths — the physical padded netlist (2b-full)
+/// pins it to measured depths -- the physical padded netlist (2b-full)
 /// is deferred to the energy-ledger work.
 #[derive(Clone, Debug)]
 pub struct TwoBodyTiming {
@@ -987,7 +987,7 @@ impl TwoBodyTiming {
             return Err(format!("E: pad {re_pad} >= P={p}"));
         }
 
-        // F. line-audit (input_ty checks) — done in the test, not here,
+        // F. line-audit (input_ty checks) -- done in the test, not here,
         // because validate() operates on the timing struct only.
 
         // G. per-bus-line flush pads ≥ 0 (u32 so ≥0 by type, but assert
@@ -1130,7 +1130,7 @@ pub fn two_body_timing_certificate(rom: &[u32]) -> Result<TwoBodyTiming, CellNet
     // --- Per-bus-line flush pads (F-teeth-3) ---
     // Bus output lines: CPU bodies at [CPU_BUS_OFFSET..CPU_BUS_OFFSET+BUS_BITS),
     // mem body at [MEM_BUS_OFFSET..MEM_BUS_OFFSET+BUS_BITS).
-    // Fed from the SAME checked arrivals vec — bus range is a subset of data range.
+    // Fed from the SAME checked arrivals vec -- bus range is a subset of data range.
 
     let pre_bus_pads: Vec<u32> = (0..BUS_BITS)
         .map(|i| d_pre - checked_pre[CPU_BUS_OFFSET + i])

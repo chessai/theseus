@@ -5,12 +5,12 @@
 //! `ancilla_clean.rs::parity_obstruction_is_real`) rests on every cell
 //! being a *value-permutation* of its rail pairs, which forces
 //! `parity(data_out) ⊕ parity(anc_out)` to be constant up to a circuit
-//! constant — so a conditional-NOT (parity deviation = its AND) can
+//! constant -- so a conditional-NOT (parity deviation = its AND) can
 //! never be ancilla-clean. `Rk` conserves tokens (it is a controlled
-//! exchange of the two conductors of ONE pair — pure charge routing,
+//! exchange of the two conductors of ONE pair -- pure charge routing,
 //! 1-hot preserved) but does NOT permute pair-values; these tests check
-//! that the premise fails and that the forbidden conclusion —
-//! CNOT/Toffoli with constant ancilla outputs — is now constructively
+//! that the premise fails and that the forbidden conclusion --
+//! CNOT/Toffoli with constant ancilla outputs -- is now constructively
 //! achieved.
 
 use theseus_netlist::{CellKind, RoleSwapKind};
@@ -21,7 +21,7 @@ fn bits_of_index(x: u32, n: usize) -> Vec<bool> {
     (0..n).map(|i| (x >> i) & 1 == 1).collect()
 }
 
-/// R1 *is* CNOT: `(c, t) → (c, c ⊕ t)`, with ZERO ancilla ports — the
+/// R1 *is* CNOT: `(c, t) → (c, c ⊕ t)`, with ZERO ancilla ports -- the
 /// K-vocabulary needs 2 garbage pairs for the same function
 /// (`ancilla_clean.rs::bennett_cnot_forward_ancillas_clean`).
 #[test]
@@ -58,8 +58,8 @@ fn role_swap_is_self_inverse() {
 }
 
 /// The line-level definition (exchange the target pair's two token
-/// lines iff all controls are 1) preserves INV-TOKEN — each pair stays
-/// 1-hot, total asserted-line count is invariant — and decodes to
+/// lines iff all controls are 1) preserves INV-TOKEN -- each pair stays
+/// 1-hot, total asserted-line count is invariant -- and decodes to
 /// exactly the value-level `eval`. This is the admissibility half:
 /// the cell is charge routing, nothing more.
 #[test]
@@ -92,9 +92,9 @@ fn line_level_swap_conserves_tokens_and_matches_value_eval() {
     }
 }
 
-/// The parity law's premise (a) — "every cell permutes its values" —
+/// The parity law's premise (a) -- "every cell permutes its values" --
 /// FAILS for Rk: on all-1 controls with t = 1 the output multiset
-/// {1, …, 1, 0} differs from the input {1, …, 1}. This is the exact
+/// {1, ..., 1, 0} differs from the input {1, ..., 1}. This is the exact
 /// negation of `parity_obstruction_is_real`'s machine-checked premise,
 /// so the law's telescoping derivation does not extend to a vocabulary
 /// containing Rk.
@@ -109,7 +109,7 @@ fn role_swap_breaks_the_value_permutation_premise() {
         sorted_in.sort_unstable();
         assert_ne!(sorted_in, out, "{kind:?} unexpectedly permutes values");
         // And its parity change is data-dependent: 0 when a control is
-        // 0, 1 when all controls are 1 — the AND itself.
+        // 0, 1 when all controls are 1 -- the AND itself.
         for x in 0..1u32 << n {
             let bits = bits_of_index(x, n);
             let k = kind.controls();
@@ -124,7 +124,7 @@ fn role_swap_breaks_the_value_permutation_premise() {
 /// The forbidden conclusion, achieved: a Toffoli built as
 /// K1-compute → R1 → K1-uncompute has a CONSTANT ancilla output (its
 /// init, 0) on every input, while its data parity deviation
-/// (c₁ ∧ c₂) is non-constant — exactly the combination the parity law
+/// (c₁ ∧ c₂) is non-constant -- exactly the combination the parity law
 /// proves impossible in the K-only vocabulary. Garbage-free
 /// conditional-NOT is real with Rk in the vocabulary.
 #[test]
@@ -137,17 +137,17 @@ fn toffoli_via_k1_sandwich_is_ancilla_clean() {
 
         // compute: K1(c1, c2, anc) → third port carries c1 ∧ c2.
         let f = CellKind::K1.eval(&[c1, c2, anc]);
-        // use: R1(and, t) — reads its control, never modifies it.
+        // use: R1(and, t) -- reads its control, never modifies it.
         let r = RoleSwapKind::R1.eval(&[f[2], t]);
         let t_out = r[1];
         // uncompute: replay the self-inverse K1 on its own outputs
-        // (untouched by R1) — restores (c1, c2, anc).
+        // (untouched by R1) -- restores (c1, c2, anc).
         let u = CellKind::K1.eval(&[f[0], f[1], r[0]]);
 
         assert_eq!((u[0], u[1]), (c1, c2), "controls regenerated");
         assert_eq!(t_out, t ^ (c1 && c2), "Toffoli truth table");
         // THE WITNESS: the ancilla output equals its init on EVERY
-        // input — constant, data-independent, ancilla-clean.
+        // input -- constant, data-independent, ancilla-clean.
         assert_eq!(u[2], anc, "ancilla dirty on {bits:?}");
 
         let p_in = bits.iter().filter(|&&b| b).count() % 2;

@@ -6,7 +6,7 @@
 //! ── What this retires ──────────────────────────────────────────────
 //! `tests/decoder.rs`'s whole-domain equivalence sweeps proved the WIRED
 //! decoder (`decode_execute` / `shared_alu_block`) ≡ the per-op reference
-//! `instruction(op)` by SIMULATION — evaluating hundreds/thousands of
+//! `instruction(op)` by SIMULATION -- evaluating hundreds/thousands of
 //! (rd, 2nd-operand) points per opcode through `theseus_eval::eval`
 //! (~0.1-0.3 s/eval → ~53 min for the full decoder-class sweep):
 //!   * b12_whole_domain_equiv_arith / _logic_rot  (wd_equiv_op, ~576 pts/op)
@@ -18,12 +18,12 @@
 //! operand register/imm INDICES) but leave every operand VALUE SYMBOLIC, and
 //! walk the FULL WIRED `decode_execute` netlist ONCE with `eval_bdd`. Keeping
 //! the opcode/IR CONCRETE per walk means exactly one instruction decodes
-//! (small, flat BDD — the tractable regime); leaving operands symbolic covers
-//! the WHOLE 2^8-per-operand datapath domain in that single walk — a superset
+//! (small, flat BDD -- the tractable regime); leaving operands symbolic covers
+//! the WHOLE 2^8-per-operand datapath domain in that single walk -- a superset
 //! of any finite (rd, op2) sample grid.
 //!
 //! CRITICAL for soundness (the opcode-DISPATCH obligation): we compare the
-//! wired decoder's output against `bveq::instr_semantics` — an INDEPENDENT
+//! wired decoder's output against `bveq::instr_semantics` -- an INDEPENDENT
 //! per-op semantics source (symbolic_exec over the ISA, NOT `instruction(op)`
 //! and NOT a hand-written spec that assumes the right op). This is what makes
 //! retiring the sim sound: a MIS-DISPATCH (wrong opcode predicate firing, a
@@ -34,19 +34,19 @@
 //! an independent oracle.
 //!
 //! ── Authority tiers (the GO-rollout convention) ─────────────────────
-//! 1. BVEQ WHOLE-DOMAIN (primary): `decoder_bveq_whole_domain` — every op,
+//! 1. BVEQ WHOLE-DOMAIN (primary): `decoder_bveq_whole_domain` -- every op,
 //!    several selector configs, symbolic operands, compared to instr_semantics.
-//! 2. REALITY-ANCHOR BOOTSTRAP (sub-second): `decoder_bveq_bootstrap` —
+//! 2. REALITY-ANCHOR BOOTSTRAP (sub-second): `decoder_bveq_bootstrap` --
 //!    the SAME `decode_execute` iso run through concrete `theseus_eval::eval`
 //!    on a handful of points equals the ISA reference model.
-//! 3. NEGATIVE CONTROL (teeth): `decoder_bveq_negative_control` — a WRONG
+//! 3. NEGATIVE CONTROL (teeth): `decoder_bveq_negative_control` -- a WRONG
 //!    semantics (Add for an Xor word) MUST be detected as inequivalent, with a
 //!    non-vacuous (satisfiable) counterexample.
 //!
 //! ── Coverage boundary (honest) ──────────────────────────────────────
 //! `instr_semantics` covers the 13 REGISTER-PURE ops. Xchg / Swapbr touch
 //! scratch / BR beyond the register frame and have NO `instr_semantics`
-//! source, so they are NOT proved against an independent semantics here — the
+//! source, so they are NOT proved against an independent semantics here -- the
 //! wired decoder is still exercised on them by decoder.rs's kept
 //! `per_instruction_lowering_and_semantics` + `full_decoder_moves` (against the
 //! `reference` model) and the fib run_on_cpu==eval authority. Reserved opcodes
@@ -129,7 +129,7 @@ fn assert_word8_identity(sv: &theseus_tisc::bveq_netlist::SV, entry: &theseus_ti
 /// spurious scratch read/write). Appended AFTER the 14 standard extended
 /// operands (regs 0-7, s0 8, BR 9, mem 10-13). `RegTransfer`/`instr_semantics`
 /// only reference register operands (0-7), so these extra operands never appear
-/// in the expected BDDs — but they DO appear in the wired-decoder output if the
+/// in the expected BDDs -- but they DO appear in the wired-decoder output if the
 /// decode path spuriously reads/writes s2.., which the identity assertion catches.
 const OP_S2_BASE: usize = EXTENDED_NUM_OPERANDS; // 14
 /// Number of DATA scratch words s2..s7 made symbolic.
@@ -150,7 +150,7 @@ fn sv_right_nested(svs: &[theseus_tisc::bveq_netlist::SV]) -> theseus_tisc::bveq
 }
 
 /// Like `build_cpu_init`, but s2..s7 are SYMBOLIC (from operands OP_S2_BASE..)
-/// instead of pinned to 0 — so a spurious scratch read (output depends on s2..)
+/// instead of pinned to 0 -- so a spurious scratch read (output depends on s2..)
 /// or write (output != symbolic input) is caught by the identity assertion.
 /// s0/s1 stay CONTROL (pinned per `pin_s0`/convention).
 fn build_cpu_init_scratch_symbolic(map: &VarMap, word: u32, pin_s0: bool) -> theseus_tisc::bveq_netlist::SV {
@@ -166,7 +166,7 @@ fn build_cpu_init_scratch_symbolic(map: &VarMap, word: u32, pin_s0: bool) -> the
     for byte in 0..4 {
         fields.push(sv_word8_const((word >> (8 * byte)) as u8, vs)); // IR bytes
     }
-    // s0 (control) — pinned or symbolic
+    // s0 (control) -- pinned or symbolic
     if pin_s0 {
         fields.push(sv_word8_const(0, vs));
     } else {
@@ -186,7 +186,7 @@ fn build_cpu_init_scratch_symbolic(map: &VarMap, word: u32, pin_s0: bool) -> the
 /// IR word for `instr` (operand VALUES symbolic), and prove the register
 /// outputs equal the INDEPENDENT `instr_semantics(instr)` over the whole
 /// symbolic domain, plus the full frame (PC_lo / PC_hi / BR / IR / s0..s7) is
-/// preserved — s2..s7 SYMBOLIC and asserted IDENTITY.
+/// preserved -- s2..s7 SYMBOLIC and asserted IDENTITY.
 fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
     // Wider map: 14 standard operands + 6 for symbolic s2..s7. Both the walk
     // input AND `expr_to_bdd` use THIS map, so the comparison stays sound (the
@@ -205,7 +205,7 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
     let _ = needs_s0_pinned(&instr);
     let init_sv = build_cpu_init_scratch_symbolic(&map, word, pin_s0);
 
-    // THE WIRED DECODER — full shared-crossbar dispatch, not the per-op iso.
+    // THE WIRED DECODER -- full shared-crossbar dispatch, not the per-op iso.
     let iso = decoder::decode_execute();
 
     let t0 = Instant::now();
@@ -251,7 +251,7 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
     // s1 (control) = 0.
     assert_word8_zero(extract_field(&out_sv, 15, NUM_CPU_FIELDS), vs, &format!("{label}: s1"));
     // s2..s7: SYMBOLIC input must be restored to IDENTITY (a spurious scratch
-    // read/write — invisible when s2.. was pinned to 0 — is caught here).
+    // read/write -- invisible when s2.. was pinned to 0 -- is caught here).
     for j in 0..N_SYM_SCRATCH {
         let s_entry = sv_word8_symbolic(&map, OP_S2_BASE + j);
         assert_word8_identity(
@@ -268,7 +268,7 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 1. BVEQ WHOLE-DOMAIN authority — retires the decoder.rs sim sweeps.
+// 1. BVEQ WHOLE-DOMAIN authority -- retires the decoder.rs sim sweeps.
 // ══════════════════════════════════════════════════════════════════════
 
 /// Every register-pure op × several selector/imm configs, symbolic operands,
@@ -303,7 +303,7 @@ fn decoder_bveq_whole_domain() {
     // ── IMMEDIATE bit-lane coverage (MAJOR-2) ───────────────────────────
     // The retired sims swept the FULL immediate byte (256 values at w8). The
     // original BVEQ configs pinned 1-2 arbitrary imms (Addi{42,255}, Subi{100})
-    // that do NOT distinguish imm bit-lanes — a bit1↔bit3 imm-lane cross is
+    // that do NOT distinguish imm bit-lanes -- a bit1↔bit3 imm-lane cross is
     // invisible. Restore lane coverage: the one-hots {1,2,4,8,16,32,64,128}
     // exercise every imm bit-lane INDEPENDENTLY, plus two binary-signature
     // values (0xAA=10101010, 0xCC=11001100) cross lanes. The operand VALUES are
@@ -316,7 +316,7 @@ fn decoder_bveq_whole_domain() {
         configs.push((Instr::Xori { rd: 5, imm }, format!("Xori(5,{imm:#04x})")));
     }
     // Rotli/Rotri imm is a rotate AMOUNT masked to `& 7` (3 effective bits), so
-    // amounts {0..=7} are EXHAUSTIVE over the whole effective-amount domain —
+    // amounts {0..=7} are EXHAUSTIVE over the whole effective-amount domain --
     // every amount lane exercised, nothing hidden.
     for imm in 0u8..=7 {
         configs.push((Instr::Rotli { rd: 2, imm }, format!("Rotli(2,{imm})")));
@@ -333,7 +333,7 @@ fn decoder_bveq_whole_domain() {
             eprintln!("  {label}: walk {:.0} ms", w * 1e3);
         }
         eprintln!(
-            "DECODER-BVEQ whole-domain: {} configs, wired decode_execute ≡ instr_semantics — \
+            "DECODER-BVEQ whole-domain: {} configs, wired decode_execute ≡ instr_semantics -- \
              SUPERSET on the operand-value axis (WHOLE 2^8-per-operand domain vs the retired sim \
              grids) and LANE-COMPLETE on the immediate axis (one-hots {{1,2,4,8,16,32,64,128}} + \
              signatures {{0xAA,0xCC}}, rotate amounts 0..=7 exhaustive); total {:.2}s \
@@ -346,7 +346,7 @@ fn decoder_bveq_whole_domain() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 2. REALITY-ANCHOR BOOTSTRAP — same iso, concrete eval == ISA reference.
+// 2. REALITY-ANCHOR BOOTSTRAP -- same iso, concrete eval == ISA reference.
 // ══════════════════════════════════════════════════════════════════════
 
 const EVAL_FUEL: u64 = 4_000_000_000;
@@ -379,7 +379,7 @@ fn reference_regs(instr: Instr, regs: &[u8; 8], scratch2: u8) -> [u8; 8] {
 }
 
 /// The SAME `decode_execute` iso, run through concrete `theseus_eval::eval` on a
-/// few register points, equals the ISA reference — the reality anchor that a
+/// few register points, equals the ISA reference -- the reality anchor that a
 /// symmetric convention bug (shared by walk + instr_semantics) cannot hide.
 #[test]
 fn decoder_bveq_bootstrap() {
@@ -457,7 +457,7 @@ fn decoder_bveq_bootstrap() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// 3. NEGATIVE CONTROL — a wrong semantics must be caught (teeth).
+// 3. NEGATIVE CONTROL -- a wrong semantics must be caught (teeth).
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -475,7 +475,7 @@ fn decoder_bveq_negative_control() {
         let out_sv = eval_bdd(&iso, init_sv, vs, &mut ctx).unwrap();
         let out_r0 = extract_word8_bdds(extract_field(&out_sv, 0, NUM_CPU_FIELDS));
 
-        // WRONG-1: compare Xor's decode against ADD semantics — must DIFFER,
+        // WRONG-1: compare Xor's decode against ADD semantics -- must DIFFER,
         // with a satisfiable (non-vacuous) counterexample.
         let add_sem = instr_semantics(&Instr::Add { rd: 0, rs: 1 }).unwrap();
         let mut found = false;
@@ -491,7 +491,7 @@ fn decoder_bveq_negative_control() {
         assert!(found, "NEG: Xor decode vs Add semantics: no mismatch (vacuous!)");
 
         // WRONG-2: a DIFFERENT IR word (Add(0,1)) must produce a DIFFERENT
-        // wired-decode output on r0 — proves the walk tracks the opcode.
+        // wired-decode output on r0 -- proves the walk tracks the opcode.
         let add_word = asm::encode(Instr::Add { rd: 0, rs: 1 }).unwrap();
         let init2 = build_cpu_init(&map, add_word, false);
         let mut ctx2 = WalkCtx::new();
@@ -522,6 +522,6 @@ fn decoder_bveq_negative_control() {
         );
 
         eprintln!("DECODER-BVEQ negative control: wired decode ≠ {{Add-semantics, Add-word}}; \
-                   real PC_hi=0 ≠ a stray PC_hi=r0 write — teeth (incl. MAJOR-3 PC_hi).");
+                   real PC_hi=0 ≠ a stray PC_hi=r0 write -- teeth (incl. MAJOR-3 PC_hi).");
     });
 }

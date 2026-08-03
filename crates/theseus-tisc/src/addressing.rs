@@ -21,7 +21,7 @@
 //! `word8()`. The uniform `fields`/`swap_field_adj`/`split_fields`/
 //! `route_to_head_n`/`at_fields_n` entry points are thin wrappers that pass a
 //! `[8; n]` width vector, so at the default layout the produced iso is exactly
-//! the shipped `word8()`-typed one — **byte-identical**.
+//! the shipped `word8()`-typed one -- **byte-identical**.
 
 use crate::plumbing::seq_balanced;
 use crate::types::{flat, word8, NUM_FIELDS};

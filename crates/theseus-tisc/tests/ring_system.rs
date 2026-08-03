@@ -12,21 +12,21 @@
 //! # Compile-time N and closure scope
 //!
 //! `MEM_WORDS` is a compile-time `const usize` (defined in `types.rs`,
-//! currently 4 — the shipped configuration).  The entire carrier
+//! currently 4 -- the shipped configuration).  The entire carrier
 //! (`system_state_ty`, `mem_state_ty`, `system_step`) is built from it, so
 //! this certificate runs at N = 4.  Runtime N-parameterization would require
 //! a pervasive refactor that is not warranted.
 //!
-//! The composite-ring **closure** property proved here — `run == run_open ==
+//! The composite-ring **closure** property proved here -- `run == run_open ==
 //! eval(system_step)^R`, system_step ancilla-cleanliness, and
-//! bus-quiescence — is **N-independent**.  Ancilla-cleanliness is
+//! bus-quiescence -- is **N-independent**.  Ancilla-cleanliness is
 //! per-instance: the only ancilla source is the CCC-NOT chain inside `step`,
 //! whose structure does not depend on N.  Therefore N = 4 is representative
 //! for closure.
 //!
 //! The memory-select tree's ancilla-cleanliness **across** widths
 //! N ∈ {2, 4, 8} (where tree depth = ⌈log₂ N⌉ varies) is separately
-//! discharged in Stage 1b-A — see the tests in
+//! discharged in Stage 1b-A -- see the tests in
 //! `crates/theseus-tisc/tests/composite.rs`:
 //!   - `c1_real_select_mem_composite_ancilla_clean_n2`
 //!   - `c1_real_select_mem_composite_ancilla_clean_n4`
@@ -123,7 +123,7 @@ fn sample_state(pc_in: impl Into<u16>) -> StateVals {
 const SAMPLE_PCS: [u8; 4] = [0, 1, 2, 4];
 
 // ══════════════════════════════════════════════════════════════════════
-// 1. Ancilla restoration — system_step lowers ancilla-clean
+// 1. Ancilla restoration -- system_step lowers ancilla-clean
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -151,7 +151,7 @@ fn ancillas_restored_after_one_revolution() {
     }
 
     eprintln!(
-        "SystemRing ancillas restored: true — all {} ancilla lines \
+        "SystemRing ancillas restored: true -- all {} ancilla lines \
          return to init after one revolution on every sampled state.",
         c.ring.ancilla_count()
     );
@@ -234,7 +234,7 @@ fn true_recirculation_matches_eval_oracle() {
             let result = c.ring.run(&start, r);
             assert_eq!(
                 result, oracle,
-                "SystemRing: run(s, {r}) != eval^{r} at pc={pc} — \
+                "SystemRing: run(s, {r}) != eval^{r} at pc={pc} -- \
                  the closed (zero-garbage) runner must equal the eval oracle"
             );
             oracle = eval_system_state(&format!("true_recirc/pc={pc}/r={r}"), &c.iso, &oracle);

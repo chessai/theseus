@@ -143,7 +143,7 @@ fn assert_oracle_fast_bounded(name: &str, iso: &Iso, cap: usize) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// (a) COMPOSITE ORACLE — spill-to-memory programs via system_step
+// (a) COMPOSITE ORACLE -- spill-to-memory programs via system_step
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -216,7 +216,7 @@ fn composite_oracle_max_ceiling_whole_domain() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// (b) C1 REAL-TREE RE-VERIFY — ancilla-clean on the real select_mem_composite
+// (b) C1 REAL-TREE RE-VERIFY -- ancilla-clean on the real select_mem_composite
 // ══════════════════════════════════════════════════════════════════════
 //
 // Bounded domain: for each N ∈ {2,4,8}, enumerate all addr ∈ 0..N
@@ -416,7 +416,7 @@ fn c1_real_select_mem_composite_ancilla_clean_n8() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// (c) SHARED-ISA GUARD — decode_execute (ring) vs system_decode_execute
+// (c) SHARED-ISA GUARD -- decode_execute (ring) vs system_decode_execute
 // ══════════════════════════════════════════════════════════════════════
 //
 // Contract: on non-MEXCH opcodes, decode_execute'(v) ==
@@ -449,7 +449,7 @@ fn non_mexch_ir_samples() -> Vec<u32> {
         i_ins(2, 2, 0xAA),  // XORI
         i_ins(3, 3, 0x03),  // ROTLI
         i_ins(4, 4, 0x05),  // ROTRI
-        r_ins(11, 1, 2, 3), // CCNOT (opcode 0b1011; A-0/M-D.b live — NOT reserved)
+        r_ins(11, 1, 2, 3), // CCNOT (opcode 0b1011; A-0/M-D.b live -- NOT reserved)
         i_ins(5, 3, 0x7C),  // reserved I-format
         0,                  // IR=0 (degenerates to ADDI r0, #0)
     ]
@@ -518,7 +518,7 @@ fn shared_isa_guard_ring_vs_system() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// (d) CEILING — MAX_LEAVES = 14 + MEM_WORDS unchanged
+// (d) CEILING -- MAX_LEAVES = 14 + MEM_WORDS unchanged
 // ══════════════════════════════════════════════════════════════════════
 // These re-confirm the existing ceiling; the existing tests in
 // tests/compile.rs already cover this. We add an explicit guard.
@@ -649,7 +649,7 @@ fn assert_oracle_fast_with_bus_quiescence(name: &str, iso: &Iso) {
     assert!(n > 0, "{name}: domain is empty");
 
     // Bound the sample to at most 8 inputs (strided, deterministic).
-    // Bus quiescence is structural — a handful of samples covering
+    // Bus quiescence is structural -- a handful of samples covering
     // MEXCH and non-MEXCH bit-patterns is fully sufficient.
     const CAP: usize = 8;
     let count = CAP.min(n);
@@ -737,7 +737,7 @@ fn stage1b_oracle_spill_15_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// Stage 1b-A (c): LINE-AUDIT — mem-phase cells touch zero CpuState fields
+// Stage 1b-A (c): LINE-AUDIT -- mem-phase cells touch zero CpuState fields
 // ══════════════════════════════════════════════════════════════════════
 //
 // Netlist-incidence test: lower mem_phase, identify the CpuState field

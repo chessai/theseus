@@ -1,9 +1,9 @@
-//! BVEQ-MULTISTEP-POC — the SECOND pivotal go/no-go experiment.
+//! BVEQ-MULTISTEP-POC -- the SECOND pivotal go/no-go experiment.
 //!
 //! `bveq_full_step_poc.rs` proved ONE full combinational step
 //! `step_with(&layout, &rom)` ≡ its step-spec symbolically over the whole
 //! reachable state domain, and that SYMBOLIC PC (the fetch mux over all 256
-//! PC) stays tiny. This file COMPOSES that proven step over T steps —
+//! PC) stays tiny. This file COMPOSES that proven step over T steps --
 //! replacing the per-input Rust loop in `run_rom_on_cpu` / `run_on_cpu`
 //! (`cur = eval(step_iso, cur)` × budget) with a SYMBOLIC composition
 //! (`sv = eval_bdd(step_iso, sv)` × budget), feeding each output `SV` as the
@@ -15,7 +15,7 @@
 //! authority + W_BR-b's paused real-cpu proof). Blow-up = NO-GO (report where).
 //!
 //! Two regimes:
-//!   1. STRAIGHT-LINE ROM, PC CONCRETE (advances 0→1→…). The tractability
+//!   1. STRAIGHT-LINE ROM, PC CONCRETE (advances 0→1→...). The tractability
 //!      probe: symbolic register file, PC concrete each step so fetch is a
 //!      const-select. After T = rom-length steps the register BDDs must equal
 //!      the composed instruction semantics.
@@ -137,7 +137,7 @@ fn out_pc_bits(out: &SV, layout: &Layout) -> Vec<Bdd> {
 // ── BDD size metric: total unique nodes across the whole state SV ───────────
 //
 // We report BOTH the peak per-field BDD size (max over all output bit BDDs) and
-// the SUM over all bits (the honest "state BDD" footprint — sharing across bits
+// the SUM over all bits (the honest "state BDD" footprint -- sharing across bits
 // is NOT counted, so this is an upper bound on true memory but the faithful
 // growth signal).
 
@@ -193,7 +193,7 @@ fn ripple_sub(a: &[Bdd], b: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
 //
 // Compose `step_with(layout, rom)` `n_steps` times, feeding each output SV as
 // the next input SV, EXACTLY like `run_rom_on_cpu`'s `cur = eval(step, cur)`
-// loop — but symbolic. After every step, record (peak, sum, cumulative_secs).
+// loop -- but symbolic. After every step, record (peak, sum, cumulative_secs).
 // ══════════════════════════════════════════════════════════════════════════
 
 struct StepSample {
@@ -212,7 +212,7 @@ fn compose_steps(layout: &Layout, rom: &[u32], sv0: SV, n_steps: usize) -> (SV, 
     let t0 = Instant::now();
     // Safety abort: a data-dependent loop's naive step-composition blows the BDD
     // up (measured: vart_halve hit >8 GB RSS). Bail the instant the state BDD
-    // crosses a safe threshold, recording WHERE — documents the blow-up without
+    // crosses a safe threshold, recording WHERE -- documents the blow-up without
     // OOMing the box (maestro-gate-no-timeout lesson). Combinational/straight-line
     // runs stay far under this (peak < 500 nodes), so they are unaffected.
     const BLOWUP_ABORT_NODES: usize = 200_000;
@@ -229,7 +229,7 @@ fn compose_steps(layout: &Layout, rom: &[u32], sv0: SV, n_steps: usize) -> (SV, 
         if peak > BLOWUP_ABORT_NODES {
             eprintln!(
                 "BLOW-UP ABORT: state BDD hit {peak} nodes at composed step {step} \
-                 (threshold {BLOWUP_ABORT_NODES}) — naive full-composition of a \
+                 (threshold {BLOWUP_ABORT_NODES}) -- naive full-composition of a \
                  data-dependent loop is intractable; needs the inductive-invariant method."
             );
             break;
@@ -284,13 +284,13 @@ fn restrict_regs_br(
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// PART 1 — STRAIGHT-LINE, PC CONCRETE (advances). The tractability probe.
+// PART 1 -- STRAIGHT-LINE, PC CONCRETE (advances). The tractability probe.
 // ══════════════════════════════════════════════════════════════════════════
 //
-// A straight-line ROM never sets BR, so PC advances 0→1→…, and every fetch
+// A straight-line ROM never sets BR, so PC advances 0→1→..., and every fetch
 // reads a constant ROM word. We keep PC concrete each step: the input SV to
 // step k has PC = concrete k. Because PC stays concrete, the fetch PC-mux
-// collapses to a const-select — this isolates the DATAPATH (reg-file) BDD
+// collapses to a const-select -- this isolates the DATAPATH (reg-file) BDD
 // growth, the pure question "does composing arithmetic steps blow up the regs".
 
 /// Symbolic regs + BR=0 + concrete PC=pc; IR=0, s0/s1=0, s2.. symbolic.
@@ -446,12 +446,12 @@ fn multistep_straightline_long_wpc8() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// PART 1b — STRAIGHT-LINE, PC SYMBOLIC (fetch mux LIVE across steps).
+// PART 1b -- STRAIGHT-LINE, PC SYMBOLIC (fetch mux LIVE across steps).
 //
 // The harder tractability probe: DON'T re-pin PC. PC starts concrete 0 but the
 // step's own pc_add_br;pc_inc drives it, and we feed the FULL output (incl. the
 // symbolic-through-datapath PC) forward. BR=0 keeps PC deterministic, but the
-// fetch mux is now walked over a PC that is a function of the composition — this
+// fetch mux is now walked over a PC that is a function of the composition -- this
 // is the mux-blow-up regime the inductive proof actually needs.
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -488,14 +488,14 @@ fn multistep_straightline_pcfree_wpc8() {
     assert_eq!(pc_val, prog.len() as u32, "PC must advance to rom-length");
     eprintln!(
         "STRAIGHT-LINE PC-FREE [w_pc=8]: PC stayed CONCRETE (={pc_val}) through {} composed steps \
-         — the fetch mux collapses each step because BR=0 keeps PC deterministic. Peak {} nodes.",
+         -- the fetch mux collapses each step because BR=0 keeps PC deterministic. Peak {} nodes.",
         prog.len(),
         samples.last().unwrap().peak
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// PART 2 — BOUNDED LOOP, PC + INPUT SYMBOLIC. The prize.
+// PART 2 -- BOUNDED LOOP, PC + INPUT SYMBOLIC. The prize.
 //
 // A count-down loop: r0 counts down to 0 by a come-from backward jump. We build
 // the ROM by hand (the come-from arithmetic is what realizes the loop), keep the
@@ -508,7 +508,7 @@ fn multistep_straightline_pcfree_wpc8() {
 
 /// Fully-symbolic CpuState: regs + BR + s2.. symbolic; PC=0 concrete, IR=0,
 /// s0/s1=0. (The come-from loop makes PC data-dependent as the composition
-/// proceeds, so PC must be able to go symbolic — it starts concrete 0.)
+/// proceeds, so PC must be able to go symbolic -- it starts concrete 0.)
 fn loop_sv0(layout: &Layout, vs: &BddVariableSet) -> SV {
     let nf = n_fields(layout);
     build_state(layout, |f| {
@@ -529,7 +529,7 @@ fn loop_sv0(layout: &Layout, vs: &BddVariableSet) -> SV {
 
 /// Measure BDD growth composing a REAL compiled loop's ROM symbolically over
 /// its WCET budget, WITHOUT re-pinning PC. Reports the curve; does NOT assert
-/// correctness (that is the separate concrete-anchor test) — this is the
+/// correctness (that is the separate concrete-anchor test) -- this is the
 /// tractability measurement, the whole point of the experiment.
 fn measure_loop_growth(layout: &Layout, rom: &[u32], budget: usize, tag: &str) -> Vec<StepSample> {
     let vs = BddVariableSet::new_anonymous(n_vars(layout));
@@ -539,7 +539,7 @@ fn measure_loop_growth(layout: &Layout, rom: &[u32], budget: usize, tag: &str) -
     samples
 }
 
-/// Build a hand loop: `r0 -= 1 (Subi) ; if r0 != 0 jump back` — but the CPU has
+/// Build a hand loop: `r0 -= 1 (Subi) ; if r0 != 0 jump back` -- but the CPU has
 /// no data-dependent branch instruction; branching is via BR (come-from). The
 /// simplest data-dependent loop expressible as a straight ROM + BR is awkward to
 /// hand-mint correctly, so PART 2's REAL target is the compiled vart_halve ROM
@@ -547,12 +547,12 @@ fn measure_loop_growth(layout: &Layout, rom: &[u32], budget: usize, tag: &str) -
 ///
 /// This helper instead builds a trivial FIXED-count "loop" via an unconditional
 /// come-from that always jumps back a fixed span for a fixed number of physical
-/// steps — enough to observe whether PC going symbolic under a self-referential
+/// steps -- enough to observe whether PC going symbolic under a self-referential
 /// fetch mux blows up. (Correctness of this synthetic ROM is not claimed; only
 /// growth is measured, and eval_bdd staying in-fragment is itself a finding.)
 fn measure_symbolic_pc_iteration(layout: &Layout, n_steps: usize) -> Vec<StepSample> {
     // A 3-instruction straight ROM; we feed a SYMBOLIC BR so PC becomes a
-    // symbolic function of BR after step 1 — forcing the fetch mux to stay
+    // symbolic function of BR after step 1 -- forcing the fetch mux to stay
     // symbolic across every subsequent step. This is the exact PC-mux-under-
     // -composition stress the inductive loop proof faces.
     let prog = [
@@ -596,20 +596,20 @@ fn multistep_symbolic_pc_growth_wpc8() {
 /// the state BDD blows up across a real data-dependent loop's 646 steps.
 // FINDING (measured, 2026-08-02): naive symbolic composition of a DATA-DEPENDENT
 // LOOP is INTRACTABLE. Composing vart_halve K=3's ROM (rom_len=111, WCET budget
-// 646) with SYMBOLIC input+PC blows the state BDD past 8 GB RSS and OOMs — and the
+// 646) with SYMBOLIC input+PC blows the state BDD past 8 GB RSS and OOMs -- and the
 // explosion happens WITHIN a single step's `eval_bdd` walk, before any per-step
 // node-count guard can fire. Root cause: once PC is data-dependent (the loop's
 // come-from), the fetched IR is SYMBOLIC, so the fetch mux ranges over all 111 ROM
-// words and `decode_execute` must represent EVERY opcode's effect simultaneously —
+// words and `decode_execute` must represent EVERY opcode's effect simultaneously --
 // a symbolic "any instruction on any operands" relation, which is exponential.
 // (Contrast: straight-line composition stays < 500 nodes because PC is CONCRETE
-// each step, so exactly one instruction is decoded per step — see the
+// each step, so exactly one instruction is decoded per step -- see the
 // `multistep_straightline_*` tests, which are green and fast.)
 //
 // This is the GO/NO-GO for retiring the loop-based + real-CPU-authority sweeps by
 // naive step-composition: NO-GO. The path forward is the INDUCTIVE-INVARIANT
 // method (prove `step` preserves a loop invariant + a progress/rank measure, both
-// SINGLE-STEP properties with CONCRETE-per-arm PC — tractable), NOT full unrolling.
+// SINGLE-STEP properties with CONCRETE-per-arm PC -- tractable), NOT full unrolling.
 //
 // The test is deliberately NOT run (it is a memory bomb): it only compiles the ROM
 // and reports the shape, documenting the finding without OOMing the box
@@ -621,7 +621,7 @@ fn multistep_vart_halve_growth() {
     let (rom, budget) = build_vart_halve_rom();
     eprintln!(
         "vart_halve K=3: rom_len={}, budget(wcet)={budget}. Naive symbolic composition \
-         over this data-dependent loop OOMs (>8GB) — symbolic PC ⇒ symbolic opcode ⇒ \
+         over this data-dependent loop OOMs (>8GB) -- symbolic PC ⇒ symbolic opcode ⇒ \
          decoder represents all ops at once. NOT run; see the module FINDING comment. \
          Path forward = inductive-invariant method, not full unrolling.",
         rom.len()
@@ -692,7 +692,7 @@ fn build_vart_halve_rom() -> (Vec<u32>, usize) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// REALITY ANCHOR — symbolic composition co-factored to a concrete point equals
+// REALITY ANCHOR -- symbolic composition co-factored to a concrete point equals
 // the real per-step eval loop (run_rom_on_cpu).
 // ══════════════════════════════════════════════════════════════════════════
 
@@ -769,13 +769,13 @@ fn multistep_reality_anchor_wpc8() {
     }
     eprintln!(
         "MULTISTEP REALITY ANCHOR [w_pc=8]: symbolic composition co-factored at {} concrete points \
-         == real per-step theseus_eval loop (run_rom_on_cpu) — the reality anchor.",
+         == real per-step theseus_eval loop (run_rom_on_cpu) -- the reality anchor.",
         pts.len()
     );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// NEGATIVE CONTROL — a wrong composed spec must be caught.
+// NEGATIVE CONTROL -- a wrong composed spec must be caught.
 // ══════════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -810,7 +810,7 @@ fn multistep_negative_control_wpc8() {
     );
 
     // WRONG-2: a DIFFERENT ROM (Add instead of Xor at step 0) must produce a
-    // DIFFERENT composed output — proves the composition tracks the ROM.
+    // DIFFERENT composed output -- proves the composition tracks the ROM.
     let prog2 = [
         Instr::Add { rd: 1, rs: 0 },
         Instr::Add { rd: 2, rs: 1 },
@@ -825,6 +825,6 @@ fn multistep_negative_control_wpc8() {
     );
 
     eprintln!(
-        "MULTISTEP NEGATIVE CONTROL [w_pc=8]: composition != {{wrong op-order, wrong ROM}} — teeth."
+        "MULTISTEP NEGATIVE CONTROL [w_pc=8]: composition != {{wrong op-order, wrong ROM}} -- teeth."
     );
 }

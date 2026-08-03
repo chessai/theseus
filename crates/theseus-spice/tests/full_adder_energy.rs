@@ -139,7 +139,7 @@ fn differential_oracle_all_32_inputs() {
     }
 }
 
-// ── Test (c): determinism — compiled_energy stable across two runs ───
+// ── Test (c): determinism -- compiled_energy stable across two runs ───
 
 #[test]
 fn energy_is_deterministic() {

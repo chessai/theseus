@@ -59,12 +59,12 @@ impl RegTransfer {
     }
 }
 
-// ── VarMap (shared variable mapping — TCB, r2 MAJOR-3) ──────────────
+// ── VarMap (shared variable mapping -- TCB, r2 MAJOR-3) ──────────────
 
 /// Pinned variable mapping: `(operand, bit) → BddVariable`.
 ///
 /// Interleaved ordering: `var_index = bit * num_operands + operand`.
-/// This groups all operands' bit-0, then all bit-1, etc. — keeps
+/// This groups all operands' bit-0, then all bit-1, etc. -- keeps
 /// ripple-carry ADD/SUB linear and rotates trivial.
 ///
 /// **This mapping is TCB.** One instance must be shared by BOTH sides of
@@ -143,7 +143,7 @@ impl VarMap {
 /// Convert a `BvExpr` to a canonical BDD using the shared variable mapping.
 ///
 /// Returns `Err(VarOutOfRange)` if any `Var` node references an out-of-range
-/// `(operand, bit)` — no silent aliasing, no panic (MAJOR-3).
+/// `(operand, bit)` -- no silent aliasing, no panic (MAJOR-3).
 pub fn expr_to_bdd(expr: &BvExpr, map: &VarMap) -> Result<Bdd, BveqError> {
     match expr {
         BvExpr::Var { operand, bit } => {
@@ -336,7 +336,7 @@ fn imm_bits(imm: u8) -> Vec<BvExpr> {
 #[derive(Debug)]
 pub enum BveqError {
     /// Instruction is not register-pure (Swapbr, Xchg, Mexch, MexchReg).
-    /// These move state off the register file — reject, don't corrupt (r2 MAJOR-2).
+    /// These move state off the register file -- reject, don't corrupt (r2 MAJOR-2).
     NonRegisterPure(Instr),
     /// Register index out of range (rd/rs/rt ≥ NUM_REGS) in an instruction.
     /// MAJOR-3: apply_instr must reject, not panic.
@@ -345,14 +345,14 @@ pub enum BveqError {
         which: &'static str,
         val: u8,
     },
-    /// Two-operand instruction has rd == rs — the ISA rejects these
+    /// Two-operand instruction has rd == rs -- the ISA rejects these
     /// (non-injective datapath) and the hardware deviates. MAJOR-5.
     AliasedOperands { instr: Instr },
-    /// Three-operand instruction has non-distinct operands — the ISA rejects
+    /// Three-operand instruction has non-distinct operands -- the ISA rejects
     /// these (Cswap/Ccnot pairwise-distinct rule). MAJOR-5.
     NonDistinctOperands { instr: Instr },
     /// BvExpr Var node references an out-of-range (operand, bit).
-    /// MAJOR-3: silent aliasing fix — Var(20,0) no longer maps onto Var(4,2).
+    /// MAJOR-3: silent aliasing fix -- Var(20,0) no longer maps onto Var(4,2).
     VarOutOfRange {
         operand: usize,
         bit: usize,
@@ -533,7 +533,7 @@ fn check_three_op_distinct(instr: &Instr, rd: u8, rs: u8, rt: u8) -> Result<(), 
 /// Apply one instruction's register-transfer semantics to a `RegTransfer`.
 ///
 /// Returns `Err(NonRegisterPure)` for instructions that move state off the
-/// register file (Swapbr, Xchg, Mexch, MexchReg) — reject, don't corrupt.
+/// register file (Swapbr, Xchg, Mexch, MexchReg) -- reject, don't corrupt.
 ///
 /// Returns `Err(RegisterOutOfRange)` if any register index ≥ NUM_REGS (MAJOR-3).
 ///
@@ -685,7 +685,7 @@ pub fn instr_semantics(instr: &Instr) -> Result<RegTransfer, BveqError> {
 /// Returns the resulting `RegTransfer` (identity for untouched registers).
 /// Hard-rejects any instruction outside the register-pure subset
 /// {Add, Sub, Xor, Exch, Rotl, Rotr, Cswap, Ccnot, Addi, Subi, Xori,
-/// Rotli, Rotri} — reject, don't corrupt (r2 MAJOR-2).
+/// Rotli, Rotri} -- reject, don't corrupt (r2 MAJOR-2).
 ///
 /// Also rejects instructions with out-of-range register indices (MAJOR-3)
 /// and ISA-illegal aliased operands (MAJOR-5).
@@ -702,7 +702,7 @@ pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
 /// Check equivalence of two register transfers at Flat(`w`) bit-width.
 ///
 /// Compares per-output-bit BDDs over the FULL register-file frame (all
-/// registers, identity for untouched — r2 MAJOR-2). Uses ONE shared
+/// registers, identity for untouched -- r2 MAJOR-2). Uses ONE shared
 /// `VarMap` for both sides (r2 MAJOR-3: differing maps make unequal
 /// functions compare equal).
 ///
@@ -718,11 +718,11 @@ pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
 /// TYPE, never from the candidate instruction sequence. `equiv` trusts it and
 /// cannot validate it:
 /// - **Over-declaring** a register that is not actually Flat(`w`) forces its
-///   upper bits to zero and thereby HIDES any difference conditioned on them —
+///   upper bits to zero and thereby HIDES any difference conditioned on them --
 ///   returning `Ok` on a corrupting sequence (unsound *by declaration*). See
 ///   `bveq_major2_overdeclaration_hides_corruption`.
 /// - **Empty `operand_regs`** at `w < 8` makes the constraint vacuously true and
-///   degrades `equiv` to full unconstrained Flat(8) equality (ignoring `w`) —
+///   degrades `equiv` to full unconstrained Flat(8) equality (ignoring `w`) --
 ///   strictly stricter (fail-safe), but surprising.
 ///
 /// # I4 obligation (r2 MAJOR-1 + N1, MANDATORY)
@@ -732,7 +732,7 @@ pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
 /// - Low `w` output bits of `a` must equal `b` (the spec) for all registers.
 /// - Output bits `w..7` of BOTH `a` AND `b` must be false *under the input
 ///   constraint* for operand registers (MAJOR-1: BOTH sides; N1: UNDER the
-///   constraint, not unconditionally — an unconditional check rejects every
+///   constraint, not unconditionally -- an unconditional check rejects every
 ///   reversible model, since a bijection's output bit is never identically
 ///   false).
 ///
@@ -743,7 +743,7 @@ pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
 /// `Err(...)` for validation failures (out-of-range, etc.).
 ///
 /// **Never panics** across the recognizer boundary on any register/width/frame
-/// input (returns `Result` — r2 MAJOR-3). The ONE remaining abort is a stack
+/// input (returns `Result` -- r2 MAJOR-3). The ONE remaining abort is a stack
 /// overflow from a pathologically deep `BvExpr` (unbounded recursion in
 /// `expr_to_bdd`/`eval_expr`); this is unreachable from `symbolic_exec`, which
 /// only builds straight-line-bounded expressions.
@@ -828,12 +828,12 @@ pub fn equiv(
                 }
             } else {
                 // I4 (N1 fix): upper output bits w..7 of operand registers must
-                // be identically false UNDER the Flat(w) input constraint — i.e.
+                // be identically false UNDER the Flat(w) input constraint -- i.e.
                 // Flat(w) inputs produce Flat(w) outputs (invariant preservation,
                 // NOT circular). Pass-through upper bits (`Var(op, b≥w)`) are
                 // legitimately false once the constraint zeroes those inputs, so
                 // identity/reversible models are ACCEPTED; a real width-escape
-                // (e.g. byte-Add's carry into bit w — a function of the LOW,
+                // (e.g. byte-Add's carry into bit w -- a function of the LOW,
                 // unconstrained bits) stays satisfiable and is REJECTED.
                 // The prior UNCONDITIONAL check rejected every reversible model at
                 // w<8 (identity ≡ identity included), since an output bit of a
@@ -952,7 +952,7 @@ mod z3_tests {
     /// T9: Z3 differential cross-check over a small corpus.
     ///
     /// Asserts Z3's verdict matches `bveq::equiv` for each case.
-    /// Behind `z3-crosscheck` feature flag — NEVER in the default build.
+    /// Behind `z3-crosscheck` feature flag -- NEVER in the default build.
     #[test]
     fn t9_z3_differential_crosscheck() {
         use std::io::Write;
@@ -1000,7 +1000,7 @@ mod z3_tests {
                 vec![0, 1],
                 false,
             ),
-            // MINOR-4: w<8 / I4 case — byte-Add rejected against Flat(4) addInto spec
+            // MINOR-4: w<8 / I4 case -- byte-Add rejected against Flat(4) addInto spec
             // This exercises the Flat(w) constraint and upper-bit SMT path.
             (
                 "add_ne_flat4_add",
@@ -1010,10 +1010,10 @@ mod z3_tests {
                 4,
                 vec![0, 1],
                 // byte-Add at Flat(4) has carry in upper bits, so it's not self-equal
-                // under I4 — this is the exact T3 scenario.
+                // under I4 -- this is the exact T3 scenario.
                 false,
             ),
-            // N4: w<8 pass-through ACCEPT case — the case that distinguishes the
+            // N4: w<8 pass-through ACCEPT case -- the case that distinguishes the
             // correct UNDER-constraint I4 (accept) from the old unconditional bug
             // (which rejected every reversible model at w<8). Exch's Flat(4)
             // upper output bits are pass-throughs of constrained-zero inputs.
@@ -1047,7 +1047,7 @@ mod z3_tests {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
-                .expect("z3 binary not found — install z3 or disable z3-crosscheck feature");
+                .expect("z3 binary not found -- install z3 or disable z3-crosscheck feature");
 
             child
                 .stdin

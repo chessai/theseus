@@ -54,7 +54,7 @@ fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
 /// Differential oracle: for every input value, the lowered netlist's
 /// untimed evaluation must agree with `theseus_eval::eval`; the net
 /// must validate, balance, and stay within the admitted vocabulary
-/// (K0–K3 CSWAPs + the R1 rail-role swap, ADR-0040).
+/// (K0-K3 CSWAPs + the R1 rail-role swap, ADR-0040).
 fn assert_lowering_agrees(iso: &Iso) -> PhasedCellNetlist {
     let (in_ty, out_ty) = type_of(iso).expect("iso types");
     let (netlist, ancilla_values) = lower_iso_with_ancillas(iso).expect("lowering succeeds");
@@ -89,7 +89,7 @@ fn assert_lowering_agrees(iso: &Iso) -> PhasedCellNetlist {
 }
 
 /// Same oracle against the TIMED phased simulation of the balanced
-/// net — asserts dynamic INV-TOKEN on every tick.
+/// net -- asserts dynamic INV-TOKEN on every tick.
 fn assert_balanced_timed_sim_agrees(iso: &Iso) {
     let (in_ty, out_ty) = type_of(iso).expect("iso types");
     let (netlist, ancilla_values) = lower_iso_with_ancillas(iso).expect("lowering succeeds");
@@ -112,12 +112,12 @@ fn assert_balanced_timed_sim_agrees(iso: &Iso) {
 // ── Test bodies ─────────────────────────────────────────────────────
 
 /// `not : Bit ↔ Bit` as a structural iso (zero-cell rail swap when
-/// unconditional — forces the conditional-NOT synthesis under gating).
+/// unconditional -- forces the conditional-NOT synthesis under gating).
 fn not_iso() -> Iso {
     Iso::SwapSum(Type::One, Type::One)
 }
 
-/// `rot3 : Three ↔ Three`, successor mod 3 — NOT self-inverse, so
+/// `rot3 : Three ↔ Three`, successor mod 3 -- NOT self-inverse, so
 /// `iterᵏ` distinguishes every k mod 3. Lowered via B4.2 synthesis.
 fn rot3() -> Iso {
     let t0 = Value::left(Value::Unit);
@@ -154,7 +154,7 @@ fn cx() -> Iso {
 }
 
 /// A NON-self-inverse, order-sensitive body: `cx ; swapˣ`,
-/// ⟨x, a⟩ ↦ ⟨a⊕x, x⟩ — distinguishes head-to-tail (`fold`) from
+/// ⟨x, a⟩ ↦ ⟨a⊕x, x⟩ -- distinguishes head-to-tail (`fold`) from
 /// tail-to-head (`unfold`) threading.
 fn cx_swap() -> Iso {
     Iso::seq(cx(), Iso::SwapProd(bit(), bit()))
@@ -188,7 +188,7 @@ fn iter_singleton_counter_is_identity() {
 
 #[test]
 fn iter_body_with_branch() {
-    // Body = id + not : (1 + Bit) ↔ (1 + Bit) — a Branch inside the
+    // Body = id + not : (1 + Bit) ↔ (1 + Bit) -- a Branch inside the
     // gated body: nested control promotion (Branch K1s → K2 under the
     // iteration gate).
     let body = Iso::plus(Iso::Id(Type::One), not_iso());
@@ -197,7 +197,7 @@ fn iter_body_with_branch() {
 
 #[test]
 fn iter_inside_composition() {
-    // swapˣ ; iter ; swapˣ — the loop node composes with canonicalized
+    // swapˣ ; iter ; swapˣ -- the loop node composes with canonicalized
     // plumbing on both sides.
     let n = Type::numeral_ty(3);
     let iso = Iso::seq(
@@ -262,7 +262,7 @@ fn fold_depth_one_spine_is_identity() {
 
 #[test]
 fn sym_fold_lowers_as_unfold_of_adjoint() {
-    // (fold l f)† = unfold l (f†) — the mutually adjoint pairing, run
+    // (fold l f)† = unfold l (f†) -- the mutually adjoint pairing, run
     // through the lowering.
     assert_lowering_agrees(&Iso::sym(Iso::fold(Type::list_spine_ty(bit(), 3), cx_swap())));
 }

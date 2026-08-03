@@ -29,5 +29,5 @@ Boundary contracts:
 Post-pivot (ADR-0022), the backend fans out after `flatten`: the FPGA
 path lowers and emits Verilog; the adiabatic path cell-maps to the
 phased netlist and emits SPICE decks (see the adiabatic backend
-chapter). Every artifact is executable, serializable, and dumpable (`--emit=…`);
+chapter). Every artifact is executable, serializable, and dumpable (`--emit=...`);
 this is what powers the verification spine (ADR-0008, ADR-0018).

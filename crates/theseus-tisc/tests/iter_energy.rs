@@ -35,12 +35,12 @@ fn three_ty() -> Type {
     Type::sum(Type::One, bit())
 }
 
-/// `not : Bit ↔ Bit` — swap the two sum branches.
+/// `not : Bit ↔ Bit` -- swap the two sum branches.
 fn not_iso() -> Iso {
     Iso::SwapSum(Type::One, Type::One)
 }
 
-/// `rot3 : Three ↔ Three`, successor mod 3 — NOT self-inverse.
+/// `rot3 : Three ↔ Three`, successor mod 3 -- NOT self-inverse.
 fn rot3() -> Iso {
     let t0 = Value::left(Value::Unit);
     let t1 = Value::right(Value::left(Value::Unit));
@@ -74,7 +74,7 @@ fn cx() -> Iso {
     Iso::Prim(Box::new(def))
 }
 
-/// `cx ; swap` — non-self-inverse, order-sensitive body for fold.
+/// `cx ; swap` -- non-self-inverse, order-sensitive body for fold.
 fn cx_swap() -> Iso {
     Iso::seq(cx(), Iso::SwapProd(bit(), bit()))
 }
@@ -108,7 +108,7 @@ fn assert_sane_breakdown(bd: &EnergyBreakdown, label: &str) {
         "{label}: breakdown must have entries"
     );
 
-    // Must have at least one active cell kind (K1, K2, K3, or R1 — the
+    // Must have at least one active cell kind (K1, K2, K3, or R1 -- the
     // ADR-0040 rail-role-swap cell, e.g. a NOT lowers to R1).
     let has_active = bd
         .by_kind

@@ -16,18 +16,18 @@ use theseus_tisc::types::MEM_WORDS;
 // ── Two oracles: one authoritative, one fast ─────────────────────────
 //
 // AUTHORITATIVE (`assert_oracle`): runs the compiled ROM on the REAL
-// TISC-1 CPU — the `step` core-iso evaluator we energy-account — and
+// TISC-1 CPU -- the `step` core-iso evaluator we energy-account -- and
 // compares to `theseus_eval::eval` over the whole finite domain
 // (ADR-0043 §5, ADR-0008). This is the acceptance authority. It is slow:
 // each step-iso evaluation of the 160-bit machine costs ~seconds, so the
 // expensive M-B programs (fib, controlled op, swapMaybe) run it behind a
-// `*_real_cpu` `#[ignore]` test — `cargo test -p theseus-tisc --test
-// compile -- --ignored` — verified pre-merge. The cheap M-A programs run
+// `*_real_cpu` `#[ignore]` test -- `cargo test -p theseus-tisc --test
+// compile -- --ignored` -- verified pre-merge. The cheap M-A programs run
 // the authoritative oracle in-gate on every build.
 //
 // FAST (`assert_oracle_fast`): a direct byte-level simulator
 // (`run_on_cpu_fast`) that re-implements the ISA in Rust. NOT
-// authoritative on its own — it is *pinned* to the real CPU by the
+// authoritative on its own -- it is *pinned* to the real CPU by the
 // `*_real_cpu` tests (each asserts real == eval; the routine test asserts
 // fast == eval; together fast == real on those inputs). It exists only so
 // the expensive M-B programs get fast routine regression coverage.
@@ -142,7 +142,7 @@ fn assert_oracle_fast_bounded(name: &str, iso: &Iso, cap: usize) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-A tests (must remain green — no regression)
+// M-A tests (must remain green -- no regression)
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -224,7 +224,7 @@ fn bare_unfold_compiles() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-B (a): data-dependent fib — iter Nat fibStep (the M-A blocker)
+// M-B (a): data-dependent fib -- iter Nat fibStep (the M-A blocker)
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -245,10 +245,10 @@ fn fib_data_dependent_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// B1.3 — universal 3-operand shared bracket: run_on_cpu == eval on a REAL
+// B1.3 -- universal 3-operand shared bracket: run_on_cpu == eval on a REAL
 // program exercising Ccnot + Cswap (+ reg+imm) through the full system_step.
 // The ROM is straight-line (BR stays 0), so running exactly B = rom.len()
-// steps naturally parks (PC past end, BR=s0=s1=0) — `run_rom_on_cpu`'s
+// steps naturally parks (PC past end, BR=s0=s1=0) -- `run_rom_on_cpu`'s
 // terminal check (BR=0, s0=0, s1=0) is the CPU-level s0/s1-restoration
 // assertion. The real system_step result is compared to the byte-level
 // reference interpreter `run_rom_fast` (itself pinned to eval by the ISA
@@ -341,11 +341,11 @@ fn b13_shared_bracket_ccnot_cswap_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-B (b): general controlled op — multi-instruction arm
+// M-B (b): general controlled op -- multi-instruction arm
 // ══════════════════════════════════════════════════════════════════════
 
 // Build a controlled fibStep: the Distrib;Plus(Id, Times(fibStep,Id));Factor
-// idiom whose active arm is a multi-instruction sequence (EXCH;XOR) — the
+// idiom whose active arm is a multi-instruction sequence (EXCH;XOR) -- the
 // M-B "general controlled op" case (M-A only handled single-instruction arms).
 fn build_controlled_fibstep() -> Iso {
     let fib_step = elaborate(FIB_SRC, "fibStep");
@@ -390,7 +390,7 @@ fn general_controlled_op_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-B (c): bare-sum program — swapMaybe
+// M-B (c): bare-sum program -- swapMaybe
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -411,7 +411,7 @@ fn swapmay_bare_sum_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-C1 (a): pure spill — straight-line programs needing 9–14 leaves
+// M-C1 (a): pure spill -- straight-line programs needing 9-14 leaves
 // ══════════════════════════════════════════════════════════════════════
 
 /// Right-nested product of `n` Bits.
@@ -469,7 +469,7 @@ fn assert_oracle_sample(name: &str, iso: &Iso, count: usize) {
 
 #[test]
 fn spill_11_leaves_swap_oracle_agrees() {
-    // SwapProd on 11 leaves: exercises spill (leaves 8–10 in scratch).
+    // SwapProd on 11 leaves: exercises spill (leaves 8-10 in scratch).
     let iso = Iso::SwapProd(bit_prod(5), bit_prod(6));
     let instrs = compile(&iso).expect("11-leaf SwapProd should compile");
     eprintln!("11-leaf SwapProd: {} instructions", instrs.len());
@@ -513,7 +513,7 @@ fn spill_14_leaves_ceiling_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-C1 (b): spill + branch — controlled-op / iter on >8 leaves
+// M-C1 (b): spill + branch -- controlled-op / iter on >8 leaves
 // ══════════════════════════════════════════════════════════════════════
 
 /// Build a controlled NOT on Bit^10 (1 ctrl + 9 target). The g arm
@@ -586,7 +586,7 @@ fn spill_branch_iter_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-C1 (c): negative tests — ceiling enforcement
+// M-C1 (c): negative tests -- ceiling enforcement
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -637,7 +637,7 @@ fn spill_13_leaves_branching_now_compiles() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-C2 Layer 1 (a): spill-to-memory — programs needing >14 leaves
+// M-C2 Layer 1 (a): spill-to-memory -- programs needing >14 leaves
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -739,7 +739,7 @@ fn mem_store_reload_round_trip_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-C2 Layer 1 (c): negative tests — updated ceiling enforcement
+// M-C2 Layer 1 (c): negative tests -- updated ceiling enforcement
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -842,7 +842,7 @@ fn fold_sym_agrees_with_unfold_eval() {
 
 #[test]
 fn counterexample_times_unfold_rejected() {
-    // Times(Id(Bit), Unfold(list_spine_ty(Bit,4), swp)) — the unfold sits
+    // Times(Id(Bit), Unfold(list_spine_ty(Bit,4), swp)) -- the unfold sits
     // under a Times split so its ctx is displaced (non-canonical). Guard 1
     // must reject this rather than silently corrupting the ROM.
     let bit = Type::sum(Type::One, Type::One);
@@ -861,7 +861,7 @@ fn counterexample_times_unfold_rejected() {
 #[test]
 fn counterexample_nested_fold_unfold_rejected() {
     // Fold(list_spine_ty(Bit,2), Times(Id(Bit), Unfold(list_spine_ty(Bit,2), swp)))
-    // — the inner Unfold is nested inside a fold body's sub-context under Times.
+    // -- the inner Unfold is nested inside a fold body's sub-context under Times.
     // Guard 1 must reject this (the Unfold sees a non-canonical ctx).
     let bit = Type::sum(Type::One, Type::One);
     let swp = Iso::SwapProd(bit.clone(), bit.clone());
@@ -923,7 +923,7 @@ fn sym_shl_oracle() {
 #[test]
 fn deep_spine_fold_oracle() {
     // Fold over list_spine_ty(Bit, 6): 12 spine leaves + 1 acc = 13 total.
-    // Tags at leaves 0, 2, 4, 6, 8, 10 — leaves 8+ spill to scratch.
+    // Tags at leaves 0, 2, 4, 6, 8, 10 -- leaves 8+ spill to scratch.
     // Bounded fast oracle (2^13 = 8192 values → strided ≤256 sample).
     let bit = Type::sum(Type::One, Type::One);
     let swp = Iso::SwapProd(bit.clone(), bit.clone());
@@ -955,7 +955,7 @@ fn deep_spine_fold_real_cpu() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-D.alloc1: L20 regression — occupancy-aware allocation fixes
+// M-D.alloc1: L20 regression -- occupancy-aware allocation fixes
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
@@ -976,7 +976,7 @@ fn times_id_plus_id_swapsum_l20_regression() {
 
 #[test]
 fn times_id_iter_l20_regression() {
-    // L20 regression: Times(Id(Bit), Iter(Nat2, NOT)) — iter under Times
+    // L20 regression: Times(Id(Bit), Iter(Nat2, NOT)) -- iter under Times
     // with a sibling bit. Without occ-aware allocation, the sibling's
     // register was treated as free and used as aux, corrupting data.
     let bit = Type::sum(Type::One, Type::One);
@@ -987,16 +987,16 @@ fn times_id_iter_l20_regression() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// M-D.alloc2: doubly-nested skip-block control — rejected not corrupted
+// M-D.alloc2: doubly-nested skip-block control -- rejected not corrupted
 // ══════════════════════════════════════════════════════════════════════
 
 #[test]
 fn nested_plus_in_plus_compiles_and_runs() {
     // A-4: doubly-nested skip-block control is now ADMITTED (the reservation-
     // ordering hazard is closed by occ-marking each Plus arm's aux before
-    // lowering it — inner Plus draws a disjoint aux pair). Was
+    // lowering it -- inner Plus draws a disjoint aux pair). Was
     // `reject_nested_plus_in_plus`; now must compile + fast-oracle == eval on the
-    // whole domain. (Fast oracle keeps the heavy gate bounded — real-CPU terminal
+    // whole domain. (Fast oracle keeps the heavy gate bounded -- real-CPU terminal
     // -check authority for the newly-admitted nested programs is the advisor's
     // slow `run_on_cpu` job, review Finding 3.)
     let bit = Type::sum(Type::One, Type::One);
@@ -1031,7 +1031,7 @@ fn reject_nested_plus_with_trailing() {
 
 #[test]
 fn nested_plus_in_iter_compiles_and_runs() {
-    // A-4: a Plus (skip-block) inside an Iter body is now ADMITTED — the Iter's
+    // A-4: a Plus (skip-block) inside an Iter body is now ADMITTED -- the Iter's
     // guarded-unroll aux {rb,temp} are occ-marked before the body is lowered, so
     // the inner Plus draws a disjoint aux pair. Was `reject_nested_plus_in_iter`;
     // now must compile + fast-oracle == eval on the whole domain (real-CPU
@@ -1166,9 +1166,9 @@ fn mdw_t2b_park_liveness_skip_tightness() {
     // WIDEN-PC: the old "tightness" premise is DEAD. Under an 8-bit PC the
     // step at total = rom_len + dead_zone + 2 = 257 wrapped PC to 1 and
     // re-entered the ROM, corrupting r0. Under the 16-bit PC there is NO wrap
-    // at 256 — at that step the CPU is STILL PARKED (PC has advanced past the
+    // at 256 -- at that step the CPU is STILL PARKED (PC has advanced past the
     // ROM into the high, all-zero PARK region, executing no live ROM word), so
-    // r0 stays at the baseline. Park-liveness now extends well past 256 — a
+    // r0 stays at the baseline. Park-liveness now extends well past 256 -- a
     // POSITIVE widen-PC property (the park bound is the 16-bit PC space, not
     // 256). So the assertion INVERTS: r0 must equal the baseline.
     let over = run_rom_fast(&rom, init.clone(), rom_len + dead_zone + 2);
@@ -1178,7 +1178,7 @@ fn mdw_t2b_park_liveness_skip_tightness() {
     );
 }
 
-// ── T3: WCET ledger — pinned golden number ──────────────────────────
+// ── T3: WCET ledger -- pinned golden number ──────────────────────────
 
 #[test]
 fn mdw_t3_wcet_ledger() {
@@ -1192,7 +1192,7 @@ fn mdw_t3_wcet_ledger() {
     assert!(b >= instrs.len(), "WCET invariant B >= rom.len()");
 }
 
-// ── T4: two-direction bound — wcet(iso) == wcet(sym(iso)) ──────────
+// ── T4: two-direction bound -- wcet(iso) == wcet(sym(iso)) ──────────
 
 #[test]
 fn mdw_t4_two_direction_bound() {
@@ -1218,16 +1218,16 @@ fn mdw_t5_p2_park_safety_overflow() {
     // WIDEN-PC: the OLD premise (B + S_max = 265 > 256 ⇒ P2 rejects) is DEAD.
     // The widen lifted the P2 parked-PC cap from 256 to PC_ADDR_SPACE = 2^16
     // = 65536, so a 135-instr / S_max=130 ROM (B+S_max=265) no longer
-    // overflows — it parks fine within the 16-bit PC space. Triggering the
+    // overflows -- it parks fine within the 16-bit PC space. Triggering the
     // real cap with an actual ROM needs B + S_max > 65536, i.e. a >65k-instr
     // ROM, which is infeasible as a unit test (assemble + a 65k-step run).
     //
-    // The P2 guard logic itself is UNCHANGED — it is the inline check
+    // The P2 guard logic itself is UNCHANGED -- it is the inline check
     // `budget + s_max_val > PC_ADDR_SPACE` at the top of `run_rom_on_cpu`,
     // evaluated on the passed compositional budget / forward-skip distance
     // BEFORE the run loop. Because those are explicit parameters, we can pin
     // the 2^16 boundary DIRECTLY with a tiny valid ROM and synthetic
-    // budget/s_max arguments — no 65k-instr ROM, no 65k-step run (the guard
+    // budget/s_max arguments -- no 65k-instr ROM, no 65k-step run (the guard
     // returns Err before the loop). This exercises the real guard at the
     // widen-PC boundary.
     let nop = vec![Instr::Addi { rd: 0, imm: 0 }];
@@ -1240,7 +1240,7 @@ fn mdw_t5_p2_park_safety_overflow() {
         mem: [0; MEM_WORDS],
     };
 
-    // (a) B + S_max = 265 (the OLD trigger) is now WELL under 2^16 — accepted.
+    // (a) B + S_max = 265 (the OLD trigger) is now WELL under 2^16 -- accepted.
     //     Use budget=1 (run the 1-instr NOP) with s_max=264 so B+S_max=265 but
     //     the run loop only steps once.
     let ok = run_rom_on_cpu(&nop, init.clone(), 1, 264, theseus_eval::eval);
@@ -1333,9 +1333,9 @@ fn mdw_t5_p1_terminal_br_nonzero() {
 /// programs to the mem-free `step` ring, so the `system_step` emit/mem/absorb
 /// bracketing (net-identity for non-mem opcodes) otherwise loses coverage. A
 /// CPU-only ROM run with NONZERO `init.mem` defeats the guard → routes to
-/// `system_step`; assert (a) it leaves mem INERT (untouched — the program
+/// `system_step`; assert (a) it leaves mem INERT (untouched -- the program
 /// never emits a mem op) and (b) its CpuState EQUALS the mem-free `step` run
-/// of the same ROM (the two carriers agree — a pure machinery drop).
+/// of the same ROM (the two carriers agree -- a pure machinery drop).
 #[test]
 fn mdw_b2_cpu_only_nonzero_mem_routes_system_step_inert() {
     // CPU-only straight-line ROM (no Mexch/MexchReg): Addi r0,#1 ; Xori r1,#0xFF.
@@ -1388,8 +1388,8 @@ fn mdw_b2_cpu_only_nonzero_mem_routes_system_step_inert() {
 /// A-0 SCRATCH-OPERAND authority gap closure (A-5b scoping Piece 1; step-1
 /// review M7 + roadmap open-Q1): A-0 made scratch (s2..s7) operand-addressable
 /// via the reg∪scratch crossbar, but until now NO real-ring `run_on_cpu`
-/// (step / system_step) had EVER executed a scratch-operand instruction — only
-/// eval-level `decode_execute` (`blocker2_ccnot_uses_scratch_operand…`). This
+/// (step / system_step) had EVER executed a scratch-operand instruction -- only
+/// eval-level `decode_execute` (`blocker2_ccnot_uses_scratch_operand...`). This
 /// promotes that to the REAL ring authority: `Ccnot r0, r1, s2` (rt = operand
 /// idx 10 = s2) run through both real rings, `r0 ^= r1 & s2`, everything else
 /// preserved. Closes the "scratch operand never ran on authority" gap.
@@ -1421,13 +1421,13 @@ fn scratch_operand_ccnot_runs_on_real_ring() {
         assert_eq!(got.scratch[1], 0, "{ring}: s1 restored");
         assert_eq!(got.br, 0, "{ring}: BR restored (Ccnot rides rt through BR)");
     };
-    // Real ring #1 — CPU-only `step(rom)` (mem-quiescent).
+    // Real ring #1 -- CPU-only `step(rom)` (mem-quiescent).
     check(
         run_rom_on_cpu(&instrs, mk([0; MEM_WORDS]), 1, s_max, theseus_eval::eval)
             .expect("scratch-operand Ccnot on step ring"),
         "step",
     );
-    // Real ring #2 — `system_step` (forced by nonzero init.mem), which must
+    // Real ring #2 -- `system_step` (forced by nonzero init.mem), which must
     // leave mem inert AND give the identical CpuState result.
     let mut memnz = [0u8; MEM_WORDS];
     memnz[0] = 0x9A;
@@ -1437,19 +1437,19 @@ fn scratch_operand_ccnot_runs_on_real_ring() {
     assert_eq!(sys.mem, memnz, "system_step: mem inert for a CPU-only op");
 }
 
-/// A-5b Piece 1 — scratch-`rd` SWAPBR real-ring AUTHORITY. The encoder
+/// A-5b Piece 1 -- scratch-`rd` SWAPBR real-ring AUTHORITY. The encoder
 /// relaxation (asm.rs) lets `Swapbr` name a scratch operand (s2..s7); the
 /// datapath already routes rd over the reg∪scratch A-0 crossbar. This proves a
 /// scratch-`rd` SWAPBR executes a REAL branch + come-from on the real ring
 /// (`run_rom_on_cpu == eval`), where the come-from token lives in scratch s2 the
-/// whole time — the SWAPBR-specific analogue of `scratch_operand_ccnot_…`.
+/// whole time -- the SWAPBR-specific analogue of `scratch_operand_ccnot_...`.
 ///
 /// It mirrors `branching::taken_branch_with_come_from`, but the come-from token
 /// rests in s2 (operand idx 10) instead of r0:
 ///   init:  s2 = δ = 3, BR = 0, all regs 0.
-///   PC=0:  SWAPBR s2   — BR ← 3, s2 ← 0.  end-of-step PC = 0 + 3 + 1 = 4 (branch).
-///   PC=4:  SWAPBR s2   — come-from: BR ← 0, s2 ← 3 (token restored). PC = 4+0+1 = 5.
-///   PC=5:  ADDI r1,0x42 — arrival proof: r1 = 0x42.
+///   PC=0:  SWAPBR s2   -- BR ← 3, s2 ← 0.  end-of-step PC = 0 + 3 + 1 = 4 (branch).
+///   PC=4:  SWAPBR s2   -- come-from: BR ← 0, s2 ← 3 (token restored). PC = 4+0+1 = 5.
+///   PC=5:  ADDI r1,0x42 -- arrival proof: r1 = 0x42.
 /// Indices 1..4 are XORI r7,0 NOPs (identity) so PC=4 lands on the come-from.
 /// After PC=5 the CPU parks (BR=0, zero ROM words = ADDI r0,0 identity). Terminal
 /// BR/s0/s1 = 0 (checked by run_rom_on_cpu); s2 restored to its input δ.
@@ -1458,12 +1458,12 @@ fn scratch_operand_swapbr_runs_on_real_ring() {
     let delta: u8 = 3;
     let target = delta as usize + 1; // = 4 (PC after the branch SWAPBR)
     let mut instrs: Vec<Instr> = vec![
-        Instr::Swapbr { rd: 10, rs: 0 }, // 0: branch — BR ← s2(=δ), s2 ← 0
+        Instr::Swapbr { rd: 10, rs: 0 }, // 0: branch -- BR ← s2(=δ), s2 ← 0
     ];
     while instrs.len() < target {
         instrs.push(Instr::Xori { rd: 7, imm: 0 }); // NOP filler (identity)
     }
-    instrs.push(Instr::Swapbr { rd: 10, rs: 0 }); // 4: come-from — BR ← 0, s2 ← δ
+    instrs.push(Instr::Swapbr { rd: 10, rs: 0 }); // 4: come-from -- BR ← 0, s2 ← δ
     instrs.push(Instr::Addi { rd: 1, imm: 0x42 }); // 5: arrival proof
 
     // The encoder must now ACCEPT the scratch-rd SWAPBR (the relaxation).
@@ -1489,7 +1489,7 @@ fn scratch_operand_swapbr_runs_on_real_ring() {
     let check = |got: &StateVals, ring: &str| {
         assert_eq!(
             got.regs[1], 0x42,
-            "{ring}: arrival ADDI must have run (r1 = 0x42) — proves the branch \
+            "{ring}: arrival ADDI must have run (r1 = 0x42) -- proves the branch \
              SWAPBR jumped to the come-from at PC={target} then fell through to ADDI"
         );
         assert_eq!(
@@ -1518,12 +1518,12 @@ fn scratch_operand_swapbr_runs_on_real_ring() {
     );
     check(&fast, "run_rom_fast");
 
-    // Real ring #1 — CPU-only `step(rom)` (mem-quiescent).
+    // Real ring #1 -- CPU-only `step(rom)` (mem-quiescent).
     let step_run = run_rom_on_cpu(&instrs, mk([0; MEM_WORDS]), budget, s_max, theseus_eval::eval)
         .expect("scratch-rd SWAPBR on step ring");
     check(&step_run, "step");
 
-    // Real ring #2 — `system_step` (forced by nonzero init.mem), which must
+    // Real ring #2 -- `system_step` (forced by nonzero init.mem), which must
     // leave mem inert AND give the identical CpuState result.
     let mut memnz = [0u8; MEM_WORDS];
     memnz[0] = 0x9A;
@@ -1545,7 +1545,7 @@ fn scratch_operand_swapbr_runs_on_real_ring() {
 fn mdw_t6_real_cpu_park_liveness() {
     // For the SMALL straight-line program of T2a (fibStep), assert the REAL
     // run_on_cpu gives the same output when run for rom.len(), rom.len()+1,
-    // and rom.len()+(dead_zone-1) steps — proving the real iso idles to identity.
+    // and rom.len()+(dead_zone-1) steps -- proving the real iso idles to identity.
     let iso = elaborate(FIB_SRC, "fibStep");
     let instrs = compile(&iso).unwrap();
     let rom_len = instrs.len();
@@ -1573,13 +1573,13 @@ fn mdw_t6_real_cpu_park_liveness() {
         let base_out = theseus_tisc::compile::unmarshal(&base, &out_ty);
 
         // Idle is HOMOGENEOUS on the real iso: each idle step fetches a zero
-        // word (Addi r0,0) that adds s0 (=0) into r0 — identity — and never
+        // word (Addi r0,0) that adds s0 (=0) into r0 -- identity -- and never
         // touches s0, so if a few idle steps are identity, all of them are
         // (up to the dead-zone wrap boundary, a fast-sim concern covered
         // exhaustively by mdw_t2a). A few real idle steps therefore suffice to
         // prove the real system_step iso idles to identity (the s0=0 property
         // the fast sim cannot witness). A full 253-step real-CPU sweep is
-        // infeasible (~1.7s/step) and redundant — bound the domain (L19).
+        // infeasible (~1.7s/step) and redundant -- bound the domain (L19).
         let _ = dead_zone;
         for k in [1usize, 2, 3, 8] {
             let ext = run_real(rom_len + k);
@@ -1659,7 +1659,7 @@ fn build_3cycle_body() -> (Iso, Type) {
 
 /// Build an informative Trace body (F-4): the SAME recognized linear map
 /// `(a,b) ↦ (a⊕b⊕1, a)` as the 3-cycle, but on the carrier `Sum(Bit, Bit)`
-/// (a = b = Bit, so the trace OUTPUT carries a real Bit — unlike the
+/// (a = b = Bit, so the trace OUTPUT carries a real Bit -- unlike the
 /// One↔One 3-cycle whose unmarshal is always Unit and cannot witness a
 /// wrong payload). `Trace(Bit, body)` is the identity on Bit, but input 0
 /// takes t=3 (TWO backward re-entries) and MUST return exactly 0; a
@@ -1756,7 +1756,7 @@ fn mdd_bare_trace_compiles() {
 fn mdd_3cycle_trace_fast() {
     // u = Bit (|u|=2), body = the 3-cycle on Sum(Bit, One).
     // Evaluation trace for input Unit (a=One): R() → L(R()) → L(L()) → R().
-    // That's t=3 = |u|+1 iterations — exercises TWO backward re-entries.
+    // That's t=3 = |u|+1 iterations -- exercises TWO backward re-entries.
     let (body, u_ty) = build_3cycle_body();
     let iso = Iso::trace(u_ty, body);
     let instrs = compile(&iso).expect("3-cycle trace should compile");
@@ -1777,7 +1777,7 @@ fn mdd_3cycle_trace_real_cpu() {
     assert_oracle("mdd_3cycle_trace", &iso);
 }
 
-// ── A3: adjoint — (Trace f)† = Trace(f†) ───────────────────────────
+// ── A3: adjoint -- (Trace f)† = Trace(f†) ───────────────────────────
 
 #[test]
 fn mdd_adjoint_trace() {
@@ -1799,7 +1799,7 @@ fn mdd_adjoint_trace() {
     );
 }
 
-// ── A4: WCET golden — wcet > rom.len() ──────────────────────────────
+// ── A4: WCET golden -- wcet > rom.len() ──────────────────────────────
 
 #[test]
 fn mdd_wcet_golden() {
@@ -1824,7 +1824,7 @@ fn mdd_wcet_golden() {
     assert_eq!(b, expected_wcet, "WCET mismatch");
     assert!(
         b > rom_len,
-        "WCET ({b}) must exceed rom.len() ({rom_len}) — \
+        "WCET ({b}) must exceed rom.len() ({rom_len}) -- \
          the first program where B > rom.len(), proving the budget path is load-bearing"
     );
     assert!(b >= rom_len, "WCET invariant B >= rom.len()");
@@ -1969,17 +1969,17 @@ fn mdd_reject_wcet_overflow() {
     // SwapSum pairs). exact-k_max: body ≡ Id ⇒ T=1, k_exact=2, k_max=min(2,3)=2.
     //
     // History of this case's binding guard:
-    //   • pre-widen-PC: "WCET > 256" — DEAD (widen-PC lifted the per-Trace step
+    //   - pre-widen-PC: "WCET > 256" -- DEAD (widen-PC lifted the per-Trace step
     //     budget to PC_ADDR_SPACE = 2^16 in lower_trace).
-    //   • W_BR-a: the 8-bit BR back-jump reach guard (δu = 256 − iter_len minted
+    //   - W_BR-a: the 8-bit BR back-jump reach guard (δu = 256 − iter_len minted
     //     into an 8-bit BR reaches a genuine backward jump only for iter_len ≤ 128,
     //     so the narrow iter_len 136 > 128 was REJECTED).
-    //   • W_BR-b (this change): a Trace whose narrow iter_len exceeds 128 now
+    //   - W_BR-b (this change): a Trace whose narrow iter_len exceeds 128 now
     //     auto-LIFTS to the two-byte (w_br=16) come-from (δu = 65536 − iter_len,
-    //     cap 32768) instead of rejecting — exactly as `vart_k4_now_lowers_at_wbr16`.
+    //     cap 32768) instead of rejecting -- exactly as `vart_k4_now_lowers_at_wbr16`.
     //     The narrow w_br=8 cap is UNTOUCHED; the loop is simply lifted. So this
     //     case now LOWERS. Its wide iter_len = body(126) + LOOP_OVERHEAD_WIDE(14).
-    //     (>32768 cap coverage needs a huge body — deferred to W_BR-c per review.)
+    //     (>32768 cap coverage needs a huge body -- deferred to W_BR-c per review.)
     let bit = Type::sum(Type::One, Type::One);
     let carrier_b = Type::sum(bit.clone(), Type::One);
     // Build body = 63 × Seq(SwapSum(Bit, One), SwapSum(One, Bit)) = 126 NOPs.
@@ -2013,26 +2013,26 @@ fn mdd_trace_under_times_compiles_and_runs() {
     // clobber g's data because the TAG register was positional (`Reg(n_input)`),
     // landing exactly on g's first live leaf. The tag + extra-payload padding are
     // now drawn OCC-AWARELY (disjoint from carriers, siblings, and outer aux), so
-    // `Times(Trace, g)` no longer aliases — it compiles and runs correctly.
+    // `Times(Trace, g)` no longer aliases -- it compiles and runs correctly.
     // Real CPU (P2 + BR/s0/s1 terminal check) == eval on the WHOLE domain is the
     // value here: the aliased-tag orbit, if it existed, would park a nonzero
     // BR/scratch that only the terminal check can see. This program was the exact
     // observation-DEGENERATE case (trace factor : One↔One, sibling Id) that the
-    // fast oracle could not certify — so we assert the REAL CPU here.
+    // fast oracle could not certify -- so we assert the REAL CPU here.
     //
-    // DEGENERATE for Finding-1 coverage — DO NOT count this as the adversarial
+    // DEGENERATE for Finding-1 coverage -- DO NOT count this as the adversarial
     // reproducer. The body here is a self-cancelling One↔One trace with a
     // symmetric Id sibling: a wrong arm / aliased tag is INVISIBLE in the output
     // payload, so this program passes green even if the tag aliases g. It earns
     // its place only as a REAL-CPU witness (the terminal BR/s0/s1 check catches
     // parked residue that the fast oracle cannot). The genuine Finding-1
-    // reproducers — asymmetric arms where a wrong arm is VISIBLE in the payload —
+    // reproducers -- asymmetric arms where a wrong arm is VISIBLE in the payload --
     // are `times_trace_nondegenerate_body_runs` (probe1/probe2) and
     // `times_trace_wider_payload_runs` (probe6). If those are ever removed,
     // this test does NOT cover the Finding-1 regression on its own.
     let (body, u_ty) = build_3cycle_body(); // Trace(Bit, 3cycle) : One ↔ One
     let trace = Iso::trace(u_ty, body);
-    let g = Iso::Id(Type::sum(Type::One, Type::One)); // Id(Bit) — the sibling factor
+    let g = Iso::Id(Type::sum(Type::One, Type::One)); // Id(Bit) -- the sibling factor
     let iso = Iso::times(trace, g); // (One × Bit) ↔ (One × Bit)
     assert!(
         compile(&iso).is_ok(),
@@ -2052,17 +2052,17 @@ fn times_trace_nondegenerate_body_runs() {
     // input = Right, the aliasing-sensitive case).
     let bit = Type::sum(Type::One, Type::One);
     let flip = Iso::SwapSum(Type::One, Type::One); // Bit ↔ Bit flip (non-self-cancelling)
-    // probe1: Times(Trace(Bit, Plus(Id, flip)), flip) — trace factor ≡ flip.
+    // probe1: Times(Trace(Bit, Plus(Id, flip)), flip) -- trace factor ≡ flip.
     let left1 = Iso::trace(bit.clone(), Iso::plus(Iso::Id(bit.clone()), flip.clone()));
     let iso1 = Iso::times(left1, flip.clone());
     assert!(compile(&iso1).is_ok(), "probe1 must compile");
     // Fast oracle here (non-degenerate body ⇒ a wrong arm is VISIBLE in the
-    // payload, so fast==eval already reproduces the BLOCKER — exactly how the
+    // payload, so fast==eval already reproduces the BLOCKER -- exactly how the
     // review's probes caught it). Real-CPU terminal-check authority for this
     // family is the advisor's job (Finding 3); the degenerate probe9 program
     // (mdd_trace_under_times below) IS run on the real CPU here.
     assert_oracle_fast("times_trace_probe1", &iso1);
-    // probe2: arms swapped — Times(Trace(Bit, Plus(flip, Id)), flip).
+    // probe2: arms swapped -- Times(Trace(Bit, Plus(flip, Id)), flip).
     let left2 = Iso::trace(bit.clone(), Iso::plus(flip.clone(), Iso::Id(bit.clone())));
     let iso2 = Iso::times(left2, flip.clone());
     assert!(compile(&iso2).is_ok(), "probe2 must compile");
@@ -2073,11 +2073,11 @@ fn times_trace_nondegenerate_body_runs() {
 fn times_trace_wider_payload_runs() {
     // L20 regression for compositional-control Finding 1 (probe6): a WIDER trace
     // payload (a = Bit×Bit) under Times. The tag lands at Reg(n_input) which is
-    // still a sibling live leaf for any payload width — the positional bug's
+    // still a sibling live leaf for any payload width -- the positional bug's
     // second corruption vector. Must run_on_cpu == eval on the whole domain.
     let bit = Type::sum(Type::One, Type::One);
     let flip = Iso::SwapSum(Type::One, Type::One);
-    // body : Sum(Bit, Bit×Bit) ↔ Sum(Bit, Bit×Bit) = Plus(Id(Bit), flip⊗Id) — asymmetric.
+    // body : Sum(Bit, Bit×Bit) ↔ Sum(Bit, Bit×Bit) = Plus(Id(Bit), flip⊗Id) -- asymmetric.
     let flip_left = Iso::times(flip.clone(), Iso::Id(bit.clone())); // (Bit×Bit) ↔ (Bit×Bit)
     let body = Iso::plus(Iso::Id(bit.clone()), flip_left);
     let left = Iso::trace(bit.clone(), body); // (Bit×Bit) ↔ (Bit×Bit)
@@ -2089,8 +2089,8 @@ fn times_trace_wider_payload_runs() {
 #[test]
 fn mdd_nested_trace_compiles_via_aux_reuse() {
     // A-5b (was `mdd_reject_nested_trace`): a depth-2 nested Trace now COMPILES.
-    // The inner Trace REUSES the outer level's four aux {rc,rb,temp,ctrl} — dead
-    // across the inner region (design §2.2) — rather than needing a disjoint
+    // The inner Trace REUSES the outer level's four aux {rc,rb,temp,ctrl} -- dead
+    // across the inner region (design §2.2) -- rather than needing a disjoint
     // second 4-register frame. Aux cost is O(1) in depth; nesting is bounded by
     // CARRIER + per-level skip-block registers, not by 4·depth aux. This is the
     // L20 reproducing test: it REJECTED before A-5b and compiles now.
@@ -2119,7 +2119,7 @@ fn mdd_swapbr_body_compiles_and_runs() {
     // Trace(Bit, Plus(SwapSum(1,1), Id(One))) : body Sum(Bit,One)↔Sum(Bit,One)
     // (u=Bit, a=b=One). Must compile + fast-oracle == eval. The real-CPU
     // P2/terminal-check authority across the back-edge is the advisor's slow
-    // run_on_cpu job (Finding 3 — this Trace's loop is expensive on the step-iso
+    // run_on_cpu job (Finding 3 -- this Trace's loop is expensive on the step-iso
     // CPU); the fast oracle here is the bounded heavy-gate regression.
     let body = Iso::plus(Iso::SwapSum(Type::One, Type::One), Iso::Id(Type::One));
     let iso = Iso::trace(Type::sum(Type::One, Type::One), body);
@@ -2200,7 +2200,7 @@ fn f7_assoc_rsum_nested_rejected() {
 
 #[test]
 fn f7_assoc_lsum_nested_rejected() {
-    // AssocLSum(One,One,One): a+(b+c) → (a+b)+c — also non-identity.
+    // AssocLSum(One,One,One): a+(b+c) → (a+b)+c -- also non-identity.
     let one = Type::One;
     let iso = Iso::AssocLSum(one.clone(), one.clone(), one.clone());
     let result = compile(&iso);
@@ -2221,7 +2221,7 @@ fn f7_assoc_identity_still_compiles() {
     // which maps to Unit. Input encoding: Sum(Zero,One) has
     // num_leaves = 1 + max(0,0) = 1 → [tag=1]. Output encoding: One has
     // num_leaves = 0 → []. After zero-padding to len=1: [1] vs [0...; pad to 1]
-    // — actually this IS non-identity because the tag byte 1 doesn't match 0.
+    // -- actually this IS non-identity because the tag byte 1 doesn't match 0.
     //
     // UnitiSum(One): One → 0+One. Input: [] (One). Output: Right(Unit)
     // in Sum(Zero,One) → [1]. After padding to 1: [0] vs [1]. Non-identity.
@@ -2359,10 +2359,10 @@ fn f7_factor_trivial_identity() {
 // ══════════════════════════════════════════════════════════════════════
 
 // M-D.w design finding 1 (BLOCKER): the parked PC after `budget` steps is
-// B + S(input), NOT B — it depends on the forward-skip distance the input
+// B + S(input), NOT B -- it depends on the forward-skip distance the input
 // takes. (mdw_t2b only exercised the S=0 path.) Two inputs of one branching
 // program that skip different-length arms park at DIFFERENT PCs, both past
-// rom.len() — the exact `B+S` arithmetic the reviewer derived.
+// rom.len() -- the exact `B+S` arithmetic the reviewer derived.
 #[test]
 fn mdw_parked_pc_is_b_plus_s_not_b() {
     let one = Type::One;
@@ -2385,7 +2385,7 @@ fn mdw_parked_pc_is_b_plus_s_not_b() {
     let parked_right = run_rom_fast(&rom, marshal(&right_in, &in_ty), rom_len);
 
     // Both idled past rom.len() (a skip was taken), and the two differ because
-    // S differs by arm — i.e. parked PC = rom.len() + S(input) = B + S, not B.
+    // S differs by arm -- i.e. parked PC = rom.len() + S(input) = B + S, not B.
     assert!(
         parked_left.pc as usize > rom_len || parked_right.pc as usize > rom_len,
         "an input must idle past rom.len (parked PC = B + S, S>0): L={} R={} rom_len={}",
@@ -2400,7 +2400,7 @@ fn mdw_parked_pc_is_b_plus_s_not_b() {
 }
 
 // M-D.w design finding 3 (MAJOR): on the REAL system_step iso the idle cell
-// (IR=0 → ADDI r0,#0) adds s0 into r0, so with s0!=0 idling CORRUPTS r0 —
+// (IR=0 → ADDI r0,#0) adds s0 into r0, so with s0!=0 idling CORRUPTS r0 --
 // while the fast sim freezes. This is the exact fast-vs-real divergence that
 // precondition P3 (s0=0 at terminal) guards. Proves P3's teeth (L20 mutation).
 #[test]
@@ -2430,20 +2430,20 @@ fn mdw_real_idle_corrupts_r0_when_s0_nonzero() {
     let real_final = theseus_tisc::types::decode_system(&cur);
     assert_ne!(
         real_final.regs[0], 0,
-        "real idle with s0!=0 must corrupt r0 (adds s0 each step) — why P3 rejects s0!=0"
+        "real idle with s0!=0 must corrupt r0 (adds s0 each step) -- why P3 rejects s0!=0"
     );
     // Fast sim: idle freezes r0 (the differential blind spot P3 covers).
     let fast_final = run_rom_fast(&rom, init.clone(), 4);
     assert_eq!(
         fast_final.regs[0], 0,
-        "fast sim idle freezes r0 — the divergence the real oracle (and P3) exposes"
+        "fast sim idle freezes r0 -- the divergence the real oracle (and P3) exposes"
     );
 }
 
 // M-D.d design F4 (MAJOR): the loop's Ltop..Lend Swapbr pair must NOT be
 // counted as a forward skip. The compositional s_max (loop bracket => 0) is
 // correct; the old consecutive-Swapbr ROM scan (max_skip_distance) MISPAIRS
-// the two loop Swapbrs and counts the body as forward-skip distance — the
+// the two loop Swapbrs and counts the body as forward-skip distance -- the
 // exact bug the compositional path avoids (and why the run budget must use
 // the compositional wcet/s_max, not a ROM scan).
 #[test]
@@ -2460,7 +2460,7 @@ fn mdd_loop_bracket_not_counted_as_forward_skip() {
     assert!(
         scan > lowered.s_max(),
         "the consecutive-Swapbr ROM scan mispairs the loop bracket (scan={} > compositional={}) \
-         — F4: this is why the run budget must NOT derive S_max from a ROM scan",
+         -- F4: this is why the run budget must NOT derive S_max from a ROM scan",
         scan,
         lowered.s_max()
     );

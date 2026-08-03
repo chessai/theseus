@@ -8,16 +8,16 @@
 //! park-safety guard REJECTED any program with `B + S_max > 256`
 //! (`Deferred("... exceeds PC address space 256 ...")`), and past it the
 //! hardware/fast-sim PC would silently wrap mod 256. The 16-bit PC lifts
-//! the cap to 2^16 and the PC walks — and PARKS — correctly past 256.
+//! the cap to 2^16 and the PC walks -- and PARKS -- correctly past 256.
 //!
 //! Two capability proofs:
 //!  1. `park_walk_past_256`: (a) the fast-sim walks a whole B = 300-step
-//!     run (productive, then parked) without wrapping at 256 — an 8-bit PC
+//!     run (productive, then parked) without wrapping at 256 -- an 8-bit PC
 //!     would read PC 44 and re-execute the ROM, corrupting the answer;
 //!     (b) the REAL `system_step` CPU is started just below 256 and steps
 //!     across it (254 → 260), proving the `pc_inc` carry crosses the
 //!     PC_lo→PC_hi byte boundary on the datapath == the fast-sim, terminal
-//!     park-quiescent. (Only 6 real evals — each system_step eval is
+//!     park-quiescent. (Only 6 real evals -- each system_step eval is
 //!     expensive; the full 2^16 PC-increment coverage is the isolated
 //!     `pc_inc_exhaustive_all_16bit` in tests/step.rs.)
 //!  2. `p2_guard_lifted_to_16bit`: the P2 cap now admits B+S_max up to
@@ -29,7 +29,7 @@ use theseus_tisc::types::{StateVals, MEM_WORDS, PC_ADDR_SPACE};
 
 /// A small straight-line ROM: `r1 += 1` at each of `len` addresses. Every
 /// word is legal and non-idle, so the productive trace is exactly `len`
-/// steps; beyond `len` the PC parks (word 0 = idle) — and with B > 256 the
+/// steps; beyond `len` the PC parks (word 0 = idle) -- and with B > 256 the
 /// parked PC crosses 256, exercising the 16-bit address space.
 fn inc_rom(len: usize) -> Vec<Instr> {
     (0..len).map(|_| Instr::Addi { rd: 1, imm: 1 }).collect()
@@ -48,7 +48,7 @@ fn init() -> StateVals {
 
 #[test]
 fn park_walk_past_256() {
-    // Part 1 — FAST-SIM reference: the 16-bit PC walks a whole B = 300-step
+    // Part 1 -- FAST-SIM reference: the 16-bit PC walks a whole B = 300-step
     // run (productive 0..LEN, then parks LEN..300) WITHOUT wrapping at 256.
     const LEN: usize = 5;
     const B: usize = 300; // > 256
@@ -58,15 +58,15 @@ fn park_walk_past_256() {
     assert_eq!(want.regs[1], LEN as u8, "fast-sim: r1 = LEN increments");
     assert_eq!(
         want.pc, B as u16,
-        "fast-sim: PC advanced to {B} (no 8-bit wrap — an 8-bit PC would read 44)"
+        "fast-sim: PC advanced to {B} (no 8-bit wrap -- an 8-bit PC would read 44)"
     );
     assert!(want.pc > 256, "fast-sim PC crossed the old 256 boundary");
 
-    // Part 2 — REAL CPU crossing 256: start the real `system_step` machine
+    // Part 2 -- REAL CPU crossing 256: start the real `system_step` machine
     // just below 256 and run 6 steps so PC crosses the old 8-bit wrap point
     // (254 → 255 → 256 → 257 → 258 → 259 → 260) on the HARDWARE. This is the
-    // load-bearing new behavior — the pc_inc carry crossing the PC_lo→PC_hi
-    // byte boundary on the actual datapath — and it must equal the fast-sim.
+    // load-bearing new behavior -- the pc_inc carry crossing the PC_lo→PC_hi
+    // byte boundary on the actual datapath -- and it must equal the fast-sim.
     // (Only 6 real evals: each system_step eval is expensive; the multi-
     // hundred-step park is covered by Part 1 + the isolated pc_inc exhaustive
     // over all 2^16 PCs in tests/step.rs.)
@@ -106,7 +106,7 @@ fn p2_guard_lifted_to_16bit() {
     let prog = inc_rom(4);
     // Just under the widened cap: admitted.
     let big = PC_ADDR_SPACE - 1;
-    // (We don't RUN big steps — that's 2^16 evals — we assert the guard's
+    // (We don't RUN big steps -- that's 2^16 evals -- we assert the guard's
     // arithmetic admits/ rejects at the 2^16 boundary by feeding a budget
     // just past it, which must be rejected fast before any eval.)
     let over = PC_ADDR_SPACE + 1;
@@ -117,7 +117,7 @@ fn p2_guard_lifted_to_16bit() {
         msg.contains("exceeds PC address space") && msg.contains(&PC_ADDR_SPACE.to_string()),
         "P2 must reject against the 16-bit cap (2^16={PC_ADDR_SPACE}), got: {msg}"
     );
-    // Sanity: the old 256 boundary is NO LONGER the cap — a budget of 300
+    // Sanity: the old 256 boundary is NO LONGER the cap -- a budget of 300
     // (rejected under the 8-bit PC) is admitted (run separately above).
     assert!(big > 256, "widened cap {big} far exceeds the old 256");
     eprintln!("PAYOFF p2_guard: cap lifted 256 → {PC_ADDR_SPACE}; B>2^16 rejected ✓");

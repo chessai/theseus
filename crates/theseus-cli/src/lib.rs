@@ -1,4 +1,4 @@
-//! `theseus-cli` — end-to-end pipeline, value bridge, and conformance harness.
+//! `theseus-cli` -- end-to-end pipeline, value bridge, and conformance harness.
 
 pub mod lower;
 pub mod pipeline;

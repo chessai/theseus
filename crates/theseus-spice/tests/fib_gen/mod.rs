@@ -1,7 +1,7 @@
 //! Generator for reversible-Fibonacci Theseus programs (shared between the
 //! oracle test `fib_reversible.rs` and the `fib_energy` example).
 //!
-//! Construction (all COMPOSITIONAL — no monolithic multi-bit truth tables):
+//! Construction (all COMPOSITIONAL -- no monolithic multi-bit truth tables):
 //!
 //! * `ha4`  : 4-wire preserved-input half adder
 //!   (a,b,s,c) <-> (a,b, s^(a^b), c^(a&b))            [16 clauses]
