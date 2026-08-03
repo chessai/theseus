@@ -541,26 +541,6 @@ pub const PC_HI_FIELD: usize = Layout::default().pc_hi_field();
 /// (W_BR-a). Callers on the wide path must guard on `layout.br_fields()`.
 pub const BR_HI_FIELD: usize = Layout::default().br_hi_field();
 
-/// The Word8 field index of PC byte `k` under the **default** layout
-/// (`k=0` → low, `k=1` → high). B-2.2a: this is a default-layout convenience
-/// (it has no `Layout` param and no callers in the reduced-`w_pc` path -- see
-/// the grep in the B-2.2 design Q4.1); the bound is
-/// `Layout::default().pc_fields()` (= 2 at w_pc=16) rather than a hardcoded
-/// "2", so it does not silently bake the 2-field assumption. A reduced-layout
-/// caller should address PC via `layout.pc_field()` / `layout.pc_hi_field()`
-/// guarded on `layout.pc_fields()`.
-pub const fn pc_byte_field(k: usize) -> usize {
-    assert!(
-        k < Layout::default().pc_fields(),
-        "pc_byte_field: k out of range for the default layout's pc_fields()"
-    );
-    match k {
-        0 => PC_FIELD,
-        1 => PC_HI_FIELD,
-        _ => unreachable!(),
-    }
-}
-
 /// Field index of IR byte 0 (bits 0..8 of the 32-bit IR).
 pub const IR_B0_FIELD: usize = Layout::default().ir_byte_field(0);
 /// Field index of IR byte 1 (bits 8..16).
@@ -569,11 +549,6 @@ pub const IR_B1_FIELD: usize = Layout::default().ir_byte_field(1);
 pub const IR_B2_FIELD: usize = Layout::default().ir_byte_field(2);
 /// Field index of IR byte 3 (bits 24..32).
 pub const IR_B3_FIELD: usize = Layout::default().ir_byte_field(3);
-
-/// Legacy alias: IR byte 0 (was `IR_lo` of the 16-bit IR).
-pub const IR_LO_FIELD: usize = IR_B0_FIELD;
-/// Legacy alias: IR byte 1 (was `IR_hi` of the 16-bit IR).
-pub const IR_HI_FIELD: usize = IR_B1_FIELD;
 
 /// Field index of scratch word `i` (0..8).
 pub fn scratch_field(i: usize) -> usize {
