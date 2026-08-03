@@ -531,11 +531,19 @@ pub fn rom_program_energy_resident(
 }
 
 /// Error type for `rom_program_energy`.
-#[derive(Debug)]
+///
+/// The `Compile`/`CharDb` inner types carry a manual `Display` but do not
+/// implement `std::error::Error`, so their `From` conversions are hand-written
+/// (thiserror's `#[from]` would require the source to be an `Error`).
+#[derive(Debug, thiserror::Error)]
 pub enum RomProgramEnergyError {
+    #[error("compile: {0}")]
     Compile(crate::compile::CompileError),
+    #[error("assemble: {0}")]
     Asm(String),
+    #[error("type: {0}")]
     Type(String),
+    #[error("chardb: {0}")]
     CharDb(QueryError),
 }
 
@@ -550,16 +558,3 @@ impl From<QueryError> for RomProgramEnergyError {
         Self::CharDb(e)
     }
 }
-
-impl fmt::Display for RomProgramEnergyError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Compile(e) => write!(f, "compile: {e}"),
-            Self::Asm(e) => write!(f, "assemble: {e}"),
-            Self::Type(e) => write!(f, "type: {e}"),
-            Self::CharDb(e) => write!(f, "chardb: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for RomProgramEnergyError {}

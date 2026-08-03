@@ -18,6 +18,7 @@ theseus-core = { path = "../theseus-core" }
 theseus-netlist = { path = "../theseus-netlist" }
 theseus-spice = { path = "../theseus-spice" }
 biodivine-lib-bdd = "=0.6.3"
+thiserror = { workspace = true }
 
 [dev-dependencies]
 theseus-eval = { path = "../theseus-eval" }

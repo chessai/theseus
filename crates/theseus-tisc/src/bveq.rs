@@ -333,48 +333,59 @@ fn imm_bits(imm: u8) -> Vec<BvExpr> {
 // ── Error type ──────────────────────────────────────────────────────
 
 /// Error from symbolic execution or equivalence checking.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum BveqError {
     /// Instruction is not register-pure (Swapbr, Xchg, Mexch, MexchReg).
-    /// These move state off the register file -- reject, don't corrupt (r2 MAJOR-2).
+    /// These move state off the register file -- reject, don't corrupt.
+    #[error("non-register-pure instruction rejected: {0:?}")]
     NonRegisterPure(Instr),
-    /// Register index out of range (rd/rs/rt ≥ NUM_REGS) in an instruction.
-    /// MAJOR-3: apply_instr must reject, not panic.
+    /// Register index out of range (rd/rs/rt >= NUM_REGS) in an instruction.
+    /// apply_instr must reject, not panic.
+    #[error("register index out of range in {instr:?}: {which}={val} (max {})", NUM_REGS - 1)]
     RegisterOutOfRange {
         instr: Instr,
         which: &'static str,
         val: u8,
     },
     /// Two-operand instruction has rd == rs -- the ISA rejects these
-    /// (non-injective datapath) and the hardware deviates. MAJOR-5.
+    /// (non-injective datapath) and the hardware deviates.
+    #[error("aliased operands rejected (ISA-illegal): {instr:?}")]
     AliasedOperands { instr: Instr },
     /// Three-operand instruction has non-distinct operands -- the ISA rejects
-    /// these (Cswap/Ccnot pairwise-distinct rule). MAJOR-5.
+    /// these (Cswap/Ccnot pairwise-distinct rule).
+    #[error("non-distinct operands rejected (ISA-illegal): {instr:?}")]
     NonDistinctOperands { instr: Instr },
     /// BvExpr Var node references an out-of-range (operand, bit).
-    /// MAJOR-3: silent aliasing fix -- Var(20,0) no longer maps onto Var(4,2).
+    /// Guards against silent aliasing -- Var(20,0) no longer maps onto Var(4,2).
+    #[error("BvExpr Var out of range: operand={operand} (max {num_operands}), bit={bit} (max {})", BITS)]
     VarOutOfRange {
         operand: usize,
         bit: usize,
         num_operands: usize,
     },
     /// Width parameter out of range (w > BITS or w == 0).
+    #[error("width out of range: w={w} (must be 1..={BITS})")]
     WidthOutOfRange { w: usize },
     /// RegTransfer frame size mismatch (must be NUM_REGS).
+    #[error("RegTransfer frame size mismatch on {side}: len={len} (expected {NUM_REGS})")]
     FrameSizeMismatch { side: &'static str, len: usize },
-    /// A register bit-row has the wrong length (must be BITS). N3: a short row
+    /// A register bit-row has the wrong length (must be BITS). A short row
     /// must return Err, not panic on index.
+    #[error("RegTransfer bit-row size mismatch on {side} reg {reg}: len={len} (expected {BITS})")]
     RowSizeMismatch {
         side: &'static str,
         reg: usize,
         len: usize,
     },
-    /// An `operand_regs` entry is out of range (≥ NUM_REGS). N2: the new
-    /// MAJOR-2 parameter must be validated, not fed to VarMap::var (which panics).
+    /// An `operand_regs` entry is out of range (>= NUM_REGS). The
+    /// operand-register parameter must be validated, not fed to VarMap::var (which panics).
+    #[error("operand_regs entry out of range: {reg} (max {})", NUM_REGS - 1)]
     OperandRegOutOfRange { reg: usize },
     /// VarMap::new overflow: BITS * num_operands exceeds u16.
+    #[error("VarMap overflow: BITS({BITS}) * num_operands({num_operands}) exceeds u16")]
     VarMapOverflow { num_operands: usize },
     /// The two transfers are not equivalent; includes a concrete counterexample.
+    #[error("transfers not equivalent: {0}")]
     NotEquivalent(Counterexample),
 }
 
@@ -387,66 +398,6 @@ impl BveqError {
         }
     }
 }
-
-impl std::fmt::Display for BveqError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BveqError::NonRegisterPure(instr) => {
-                write!(f, "non-register-pure instruction rejected: {instr:?}")
-            }
-            BveqError::RegisterOutOfRange { instr, which, val } => {
-                write!(
-                    f,
-                    "register index out of range in {instr:?}: {which}={val} (max {})",
-                    NUM_REGS - 1
-                )
-            }
-            BveqError::AliasedOperands { instr } => {
-                write!(f, "aliased operands rejected (ISA-illegal): {instr:?}")
-            }
-            BveqError::NonDistinctOperands { instr } => {
-                write!(f, "non-distinct operands rejected (ISA-illegal): {instr:?}")
-            }
-            BveqError::VarOutOfRange {
-                operand,
-                bit,
-                num_operands,
-            } => {
-                write!(f, "BvExpr Var out of range: operand={operand} (max {num_operands}), bit={bit} (max {})", BITS)
-            }
-            BveqError::WidthOutOfRange { w } => {
-                write!(f, "width out of range: w={w} (must be 1..={BITS})")
-            }
-            BveqError::FrameSizeMismatch { side, len } => {
-                write!(
-                    f,
-                    "RegTransfer frame size mismatch on {side}: len={len} (expected {NUM_REGS})"
-                )
-            }
-            BveqError::RowSizeMismatch { side, reg, len } => {
-                write!(f, "RegTransfer bit-row size mismatch on {side} reg {reg}: len={len} (expected {BITS})")
-            }
-            BveqError::OperandRegOutOfRange { reg } => {
-                write!(
-                    f,
-                    "operand_regs entry out of range: {reg} (max {})",
-                    NUM_REGS - 1
-                )
-            }
-            BveqError::VarMapOverflow { num_operands } => {
-                write!(
-                    f,
-                    "VarMap overflow: BITS({BITS}) * num_operands({num_operands}) exceeds u16"
-                )
-            }
-            BveqError::NotEquivalent(cex) => {
-                write!(f, "transfers not equivalent: {cex}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for BveqError {}
 
 // ── Counterexample ──────────────────────────────────────────────────
 
