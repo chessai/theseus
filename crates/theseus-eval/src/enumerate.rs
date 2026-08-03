@@ -17,17 +17,13 @@ pub fn enumerate(ty: &Type) -> Vec<Value> {
 }
 
 /// The cardinality of a finite type (number of inhabitants).
+///
+/// Delegates to the canonical saturating recursion in
+/// [`theseus_core::enumerate::cardinality_u64`] (single source of truth),
+/// narrowing to `usize`. The core version saturates at `u64::MAX`, so this
+/// no longer overflows on enormous carriers -- it saturates instead.
 pub fn cardinality(ty: &Type) -> usize {
-    match ty {
-        Type::Zero => 0,
-        Type::One => 1,
-        Type::Sum(a, b) => cardinality(a) + cardinality(b),
-        Type::Prod(a, b) => cardinality(a) * cardinality(b),
-        Type::Flat(n) => {
-            debug_assert!(*n <= 8, "Flat({n}): width must be <= 8");
-            1usize << n
-        }
-    }
+    theseus_core::enumerate::cardinality_u64(ty) as usize
 }
 
 #[cfg(test)]
