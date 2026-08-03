@@ -102,7 +102,6 @@
 //! of one pair, which would make CNOT garbage-free and void the
 //! parity law).
 
-use core::fmt;
 use std::collections::HashMap;
 
 use crate::ir::cell::{
@@ -111,34 +110,23 @@ use crate::ir::cell::{
 use crate::lower::{rail_width, LowerError};
 
 /// Why a netlist cannot be Bennett-wrapped.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum BennettError {
     /// The body is structurally invalid.
-    Body(CellNetError),
+    #[error("bennett: invalid body: {0}")]
+    Body(#[from] CellNetError),
     /// A boundary type has no dual-rail encoding (cannot size the data
     /// sections).
-    Encoding(LowerError),
+    #[error("bennett: unencodable boundary: {0}")]
+    Encoding(#[from] LowerError),
     /// Data input/output widths differ: the wrap needs the regenerated
     /// input register and the spare output copies to fill the fan-out
     /// ancilla slots pairwise (`w_in = w_out`, the iso case).
+    #[error("bennett: data widths differ ({w_in} in vs {w_out} out)")]
     Shape { w_in: usize, w_out: usize },
     /// `ancilla_init` length disagrees with the netlist's input ports.
+    #[error("bennett: ancilla_init has {got} entries, netlist wants {want}")]
     AncillaCount { want: usize, got: usize },
-}
-
-impl fmt::Display for BennettError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BennettError::Body(e) => write!(f, "bennett: invalid body: {e}"),
-            BennettError::Encoding(e) => write!(f, "bennett: unencodable boundary: {e}"),
-            BennettError::Shape { w_in, w_out } => {
-                write!(f, "bennett: data widths differ ({w_in} in vs {w_out} out)")
-            }
-            BennettError::AncillaCount { want, got } => {
-                write!(f, "bennett: ancilla_init has {got} entries, netlist wants {want}")
-            }
-        }
-    }
 }
 
 /// Emission state for the wrap: continues the forward net's line
@@ -316,17 +304,10 @@ pub fn lower_iso_bennett(
 }
 
 /// Error from [`lower_iso_bennett`]: lowering or wrapping failed.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum BennettWrapError {
+    #[error(transparent)]
     Lower(LowerError),
+    #[error(transparent)]
     Wrap(BennettError),
-}
-
-impl fmt::Display for BennettWrapError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BennettWrapError::Lower(e) => write!(f, "{e}"),
-            BennettWrapError::Wrap(e) => write!(f, "{e}"),
-        }
-    }
 }

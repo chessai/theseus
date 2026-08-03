@@ -41,7 +41,6 @@
 //!   [`PhasedCellNetlist::tick_imbalances`] and `output_depths` skew are
 //!   the balancer's worklist.
 
-use core::fmt;
 use std::collections::{BTreeMap, HashMap};
 
 use theseus_core::{admit, enumerate_values, Iso, PrimDef, Type, TypeError, Value};
@@ -51,55 +50,29 @@ use crate::ir::cell::{Cell, CellKind, LineId, PhasedCellNetlist, RailPair, PHASE
 use crate::ir::typed::{flatten_layer, DistribDir, Monoid, NodeKind, TypedError, TypedNode};
 
 /// Error from the dual-rail lowering.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LowerError {
     /// The source iso is ill-typed.
-    Type(TypeError),
+    // `{0}` (Display) not `{0:?}` (Debug): render the readable message and
+    // chain the cause via `#[from]`/`source()` (fixes a real observability bug).
+    #[error("ill-typed iso: {0}")]
+    Type(#[from] TypeError),
     /// The typed net is malformed.
-    Typed(TypedError),
+    #[error("malformed typed net: {0}")]
+    Typed(#[from] TypedError),
     /// Node vocabulary deferred to a later slice (see module docs).
+    #[error("{node} lowering deferred to a later slice ({plan})")]
     Deferred { node: &'static str, plan: &'static str },
     /// No dual-rail encoding for this type (`0`-typed nets are
     /// statically dead -- `Absurd` pruning is a later pass).
+    #[error("no dual-rail encoding for {0}")]
     UnsupportedType(Type),
     /// The prim could not be synthesized: its flattened width exceeds
     /// the B4.2 synthesis cap ([`MAX_SYNTH_WIDTH`]) or its truth table
     /// is not total (an inadmissible def -- refused, never guessed at).
+    #[error("prim {name:?} not synthesizable: wider than the B4.2 \
+             synthesis cap ({MAX_SYNTH_WIDTH} rail pairs) or non-total")]
     UnsupportedPrim { name: String },
-}
-
-impl fmt::Display for LowerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LowerError::Type(e) => write!(f, "ill-typed iso: {e:?}"),
-            LowerError::Typed(e) => write!(f, "malformed typed net: {e}"),
-            LowerError::Deferred { node, plan } => {
-                write!(f, "{node} lowering deferred to a later slice ({plan})")
-            }
-            LowerError::UnsupportedType(ty) => {
-                write!(f, "no dual-rail encoding for {ty}")
-            }
-            LowerError::UnsupportedPrim { name } => {
-                write!(
-                    f,
-                    "prim {name:?} not synthesizable: wider than the B4.2 \
-                     synthesis cap ({MAX_SYNTH_WIDTH} rail pairs) or non-total"
-                )
-            }
-        }
-    }
-}
-
-impl From<TypeError> for LowerError {
-    fn from(e: TypeError) -> Self {
-        LowerError::Type(e)
-    }
-}
-
-impl From<TypedError> for LowerError {
-    fn from(e: TypedError) -> Self {
-        LowerError::Typed(e)
-    }
 }
 
 /// Number of rail pairs (logical bits) encoding a value of `ty`:

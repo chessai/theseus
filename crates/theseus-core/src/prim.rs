@@ -138,30 +138,40 @@ impl PrimDef {
 }
 
 /// Error from prim admission.
-#[derive(Clone, Debug, PartialEq, Eq)]
+// `Value` does not implement `Display`, so Value-carrying variants render it
+// with `{:?}` (Debug); the rest use plain text.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AdmitError {
     /// `forward` is not defined for a value in the input type's domain.
+    #[error("forward is not total: undefined on input {0:?}")]
     ForwardNotTotal(Value),
     /// `backward` is not defined for a value in the output type's domain.
+    #[error("backward is not total: undefined on output {0:?}")]
     BackwardNotTotal(Value),
     /// `backward(forward(v)) ≠ v`.
+    #[error("backward(forward(v)) != v for input {input:?}")]
     BackwardOfForward { input: Value },
     /// `forward(backward(w)) ≠ w`.
+    #[error("forward(backward(w)) != w for input {input:?}")]
     ForwardOfBackward { input: Value },
     /// The prim has a symbolic spec but no table -- core::admit cannot certify
     /// bijectivity (no BDD machinery here). The caller should use
     /// `bveq::admit_symbolic` in theseus-tisc instead.
+    #[error("prim has a symbolic spec but no table: core::admit cannot certify bijectivity")]
     SymbolicOnly,
     /// The prim has both a table and a spec, but eval-via-spec disagrees with
     /// the table on at least one input.
+    #[error("spec and table disagree on input {input:?}")]
     SpecTableMismatch {
         /// The input value where the spec and table disagree.
         input: Value,
     },
     /// The symbolic spec is invalid w.r.t. the prim's types (F3).
+    #[error("invalid symbolic spec: {0}")]
     InvalidSpec(String),
     /// The prim has a spec AND a partial table (not covering the full domain),
     /// which would bypass the hang guard (F2).
+    #[error("prim has a spec and a partial table (would bypass the hang guard)")]
     PartialTableWithSpec,
 }
 

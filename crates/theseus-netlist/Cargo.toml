@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 theseus-core = { path = "../theseus-core" }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 # Differential oracle: the untimed cell-netlist evaluation in tests is

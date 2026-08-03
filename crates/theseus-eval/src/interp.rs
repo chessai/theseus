@@ -10,13 +10,15 @@
 use theseus_core::{adjoint, Iso, Type, Value};
 
 /// Errors during evaluation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum EvalError {
     /// Fuel budget exhausted before evaluation completed.
     /// `steps_taken` equals the initial fuel granted (the budget hit zero only
     /// after that many body applications).
+    #[error("out of fuel after {steps_taken} steps")]
     OutOfFuel { steps_taken: u64 },
     /// The input value does not match the combinator's expected domain shape.
+    #[error("domain error: {0}")]
     DomainError(String),
 }
 
