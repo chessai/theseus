@@ -106,11 +106,10 @@ impl CompactBalanced {
     /// every cell's input arrivals to one tick (the invariant that
     /// [`balance`] establishes).
     pub fn is_tick_exact(&self) -> bool {
-        // Verify the invariant: for every cell, after applying delays,
-        // all input arrivals equal cell.depth.
-        //
-        // This is always true because balance_compact computes
-        // delay = latest − arrival for each input, but assert anyway.
+        // Always true by construction: balance_compact sets
+        // delay = latest - arrival for each input, so every cell's input
+        // arrivals equalize to cell.depth. This is a documented invariant,
+        // not a runtime check -- no assert is performed.
         true
     }
 

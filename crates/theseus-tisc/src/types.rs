@@ -2,9 +2,10 @@
 //!
 //! ## Carrier types (M-C2 Stage 1a-B)
 //!
-//! **CpuState** (= `state_ty()`, 22 Word8 fields -- A-0 widened IR 16→32,
-//! adding two IR byte-fields):
-//!   [r0..r7, PC, BR, IR_b0, IR_b1, IR_b2, IR_b3, s0..s7]
+//! **CpuState** (= `state_ty()`, `num_cpu_fields()` Word8 fields = 23 at the
+//! default layout -- 22 base fields below plus the appended PC_hi from
+//! `pc_fields()-1`; A-0 widened IR 16->32, adding two IR byte-fields):
+//!   [r0..r7, PC, BR, IR_b0, IR_b1, IR_b2, IR_b3, s0..s7, PC_hi]
 //!
 //! **MemState** (= `mem_state_ty()`, `MEM_WORDS` Word8 fields):
 //!   [m0..m_{MEM_WORDS-1}]
@@ -129,7 +130,8 @@ impl Layout {
         self.w_pc / self.w_ctl
     }
 
-    /// Number of Word-sized fields BR occupies (`⌈w_br / w_ctl⌉`).
+    /// Number of Word-sized fields BR occupies (`w_br / w_ctl`, floor;
+    /// w_br is always a whole multiple of w_ctl, so floor == exact).
     pub const fn br_fields(&self) -> usize {
         self.w_br / self.w_ctl
     }
@@ -262,7 +264,7 @@ impl Layout {
 
     /// The per-field width vector for the whole CpuState product
     /// (`num_cpu_fields()` entries), used to drive the width-aware field
-    /// routers. At the default layout this is `[8; 24]`.
+    /// routers. At the default layout this is `[8; 23]`.
     pub fn cpu_field_widths(&self) -> Vec<usize> {
         (0..self.num_cpu_fields()).map(|i| self.field_width(i)).collect()
     }
@@ -455,7 +457,7 @@ pub fn data_word(layout: &Layout) -> Type {
 
 /// CpuState type for a given `Layout` (core, layout-parameterized).
 ///
-/// Field order (index), at the default layout (24 fields):
+/// Field order (index), at the default layout (23 fields, indices 0..=22):
 ///   0..8   = r0..r7    (general registers)
 ///   8      = PC_lo     (bits 0..8 of the 16-bit PC)
 ///   9      = BR        (8-bit branch offset, sign-extended into PC)
@@ -605,7 +607,8 @@ fn read_ir_bits(bits: &[bool], offset: usize) -> u32 {
 
 impl StateVals {
     /// Encode this State's CPU fields as a `Value` inhabiting `state_ty()`
-    /// (CpuState, 22 fields -- A-0 32-bit IR). Memory fields are NOT
+    /// (CpuState, `num_cpu_fields()` fields = 23 at the default layout --
+    /// A-0 32-bit IR, plus the appended PC_hi). Memory fields are NOT
     /// included -- use [`encode_composite`] for the system_step carrier.
     pub fn encode(&self) -> Value {
         let ty = state_ty();

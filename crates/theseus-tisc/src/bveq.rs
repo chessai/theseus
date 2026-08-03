@@ -1098,8 +1098,8 @@ fn remap_expr_operands(expr: &BvExpr, operand_regs: &[usize]) -> BvExpr {
 /// This is the symbolic bijectivity certificate for prims that have no table.
 /// Core stays BDD-free; this function lives in tisc.
 ///
-/// `num_operands` is the number of leaf operands (e.g. 3 for a 3-op prim).
-/// `width` is the bit-width per leaf (from the spec).
+/// The leaf count (e.g. 3 for a 3-op prim) and the per-leaf bit-width are read
+/// from `spec.forward` (`leaves.len()` and `width`).
 pub fn admit_symbolic(spec: &theseus_core::prim::PrimSpec) -> Result<(), BveqError> {
     let width = spec.forward.width as usize;
     let num_operands = spec.forward.leaves.len();
