@@ -450,7 +450,17 @@ fn diag_reduce_layout() {
 }
 
 /// Build a reduce input Value: counter k (unary), acc, data, idx, arr0, arr1.
-fn make_reduce_input(k: usize, acc: u8, data: u8, idx: u8, arr0: u8, arr1: u8, _d: usize) -> Value {
+/// Width-parameterized: the Flat leaves are `Flat(w)`.
+fn make_reduce_input_w(
+    w: u8,
+    k: usize,
+    acc: u8,
+    data: u8,
+    idx: u8,
+    arr0: u8,
+    arr1: u8,
+    _d: usize,
+) -> Value {
     let mut counter = Value::Left(Box::new(Value::Unit));
     for _ in 0..k {
         counter = Value::Right(Box::new(counter));
@@ -463,7 +473,7 @@ fn make_reduce_input(k: usize, acc: u8, data: u8, idx: u8, arr0: u8, arr1: u8, _
         }
     };
     let flat_val = |x: u8| {
-        let (v, _) = value_from_leaf_bytes_pub(&[x], &Type::Flat(2));
+        let (v, _) = value_from_leaf_bytes_pub(&[x], &Type::Flat(w));
         v
     };
     Value::pair(
@@ -479,6 +489,11 @@ fn make_reduce_input(k: usize, acc: u8, data: u8, idx: u8, arr0: u8, arr1: u8, _
             ),
         ),
     )
+}
+
+/// w=2 back-compat shim for the existing w=2 tests.
+fn make_reduce_input(k: usize, acc: u8, data: u8, idx: u8, arr0: u8, arr1: u8, d: usize) -> Value {
+    make_reduce_input_w(2, k, acc, data, idx, arr0, arr1, d)
 }
 
 /// Compile reduce_flat(w,d) to a ROM (resident=2).
@@ -718,10 +733,10 @@ fn assert_body_semantics(out: &SV, w: u8, rr: &ReduceRegs, vs: &BddVariableSet) 
 }
 
 /// L1-analog — the reduce BODY LEMMA (memory ring, whole carrier domain).
-/// Compose body [3,9) of reduce_flat(2,2), prove carrier ≡ reduce-body function.
-#[test]
-fn invariant_body_lemma_reduce() {
-    let w = 2u8;
+/// Compose body [3,9) of reduce_flat(w,2), prove carrier ≡ reduce-body function.
+/// Width-parameterized: w=2 and w=4 share this whole body (the ROM is byte-
+/// identical across widths — only the symbolic carrier bit-widths differ).
+fn body_lemma_reduce_w(w: u8) {
     let d = 2usize;
     let (rom, _budget) = compile_reduce_rom(w, d);
     let rr = reduce_regs(d);
@@ -746,10 +761,21 @@ fn invariant_body_lemma_reduce() {
 
     assert!(peak < 500_000, "BODY LEMMA peak {peak} — memory ring blowup");
     eprintln!(
-        "L1 BODY LEMMA [reduce_flat(2,2)]: system-ring body [3,9) ≡ (acc^=arr[idx]; idx^=1; \
+        "L1 BODY LEMMA [reduce_flat({w},2)]: system-ring body [3,9) ≡ (acc^=arr[idx]; idx^=1; \
          data/arr preserved) over the WHOLE symbolic carrier domain; all aux/scratch/bus/IR/BR/mem \
-         restored. Peak {peak} BDD nodes, {secs:.3}s. NEG-body fires. → MEMORY RING TRACTABLE."
+         restored. Peak {peak} BDD nodes, {secs:.3}s. NEG-body fires. → MEMORY RING TRACTABLE (w={w})."
     );
+}
+
+#[test]
+fn invariant_body_lemma_reduce() {
+    body_lemma_reduce_w(2);
+}
+
+/// w=4 mechanical extension of the L1 body lemma (byte-identical ROM, wider carrier).
+#[test]
+fn invariant_body_lemma_reduce_w4() {
+    body_lemma_reduce_w(4);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -992,9 +1018,8 @@ fn assert_skip_exit(
 }
 
 /// L2-analog — the SKIP-BLOCK LEMMA. Both ctrl cases over the whole carrier.
-#[test]
-fn invariant_skip_block_lemma_reduce() {
-    let w = 2u8;
+/// Width-parameterized (w=2 and w=4 share it; ROM byte-identical across widths).
+fn skip_block_lemma_reduce_w(w: u8) {
     let d = 2usize;
     let iso = reduce_flat(w, d);
     let lowered = compile_with_metadata_resident(&iso, 2).expect("compile");
@@ -1050,11 +1075,22 @@ fn invariant_skip_block_lemma_reduce() {
     // instrs + landing on the come-from Swapbr that then clears BR.
     assert_eq!(sb.body_len_imm, 6, "body_len imm must be 6");
     eprintln!(
-        "L2 SKIP-BLOCK LEMMA [reduce_flat(2,2)]: RUN(ctrl=1)⇒carrier:=body(carrier), Swapbr[+2]→+3, \
+        "L2 SKIP-BLOCK LEMMA [reduce_flat({w},2)]: RUN(ctrl=1)⇒carrier:=body(carrier), Swapbr[+2]→+3, \
          peak {peak_run}, {secs_run:.3}s. SKIP(ctrl=0)⇒carrier identity, Swapbr[+2] FORWARD-JUMP →+9 \
          (come-from, body skipped), peak {peak_skip}, {secs_skip:.3}s. Both exit PC=+12; aux rb=temp=0; \
-         ctrl preserved; all fields welded. NEG-skip + NEG-run-vs-skip fire. → FORWARD-SKIP LOOP PROVEN."
+         ctrl preserved; all fields welded. NEG-skip + NEG-run-vs-skip fire. → FORWARD-SKIP LOOP PROVEN (w={w})."
     );
+}
+
+#[test]
+fn invariant_skip_block_lemma_reduce() {
+    skip_block_lemma_reduce_w(2);
+}
+
+/// w=4 mechanical extension of the L2 skip-block lemma.
+#[test]
+fn invariant_skip_block_lemma_reduce_w4() {
+    skip_block_lemma_reduce_w(4);
 }
 
 /// After a RUN copy, sanity that PC reached exit (the body actually executed).
@@ -1155,9 +1191,7 @@ fn compose_full_rom(
 /// COMPOSITION LEMMA (d=3): full 24-instr ROM ≡ body^k for k = leading 1-tags,
 /// over each reachable (tag0,tag1) prefix combo. Proves the static composition
 /// reproduces `iter` semantics WITHOUT induction.
-#[test]
-fn invariant_composition_lemma_reduce_d3() {
-    let w = 2u8;
+fn composition_lemma_reduce_d3_w(w: u8) {
     let d = 3usize;
     let iso = reduce_flat(w, d);
     let lowered = compile_with_metadata_resident(&iso, 2).expect("compile");
@@ -1253,10 +1287,21 @@ fn invariant_composition_lemma_reduce_d3() {
 
     assert!(max_peak < 500_000, "COMPOSITION peak blowup {max_peak}");
     eprintln!(
-        "COMPOSITION LEMMA [reduce_flat(2,3)]: static 2-copy composition reproduces `iter` \
+        "COMPOSITION LEMMA [reduce_flat({w},3)]: static 2-copy composition reproduces `iter` \
          (body^k, k = leading 1-tags) over k∈{{0,1,2}} whole carrier domain; loop_terms EMPTY, \
-         NO induction. MAX peak {max_peak} BDD nodes, total {total:.3}s."
+         NO induction. MAX peak {max_peak} BDD nodes, total {total:.3}s (w={w})."
     );
+}
+
+#[test]
+fn invariant_composition_lemma_reduce_d3() {
+    composition_lemma_reduce_d3_w(2);
+}
+
+/// w=4 mechanical extension of the composition lemma (full 24-instr ROM ≡ body^k).
+#[test]
+fn invariant_composition_lemma_reduce_d3_w4() {
+    composition_lemma_reduce_d3_w(4);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1274,17 +1319,19 @@ fn invariant_composition_lemma_reduce_d3() {
 // ══════════════════════════════════════════════════════════════════════════
 #[test]
 fn invariant_marshal_encodes_leading_ones() {
-    let w = 2u8;
+    // The tag encoding is width-independent, but we pin it at BOTH w=2 and w=4
+    // (the w=4 composition lemma's reachable-combos case-split rests on it too).
+    for w in [2u8, 4u8] {
     for d in [2usize, 3] {
         let ty = carrier_ty(w, d);
         for k in 0..d {
-            let input = make_reduce_input(k, 1, 2, (k % 2) as u8, 3, 1, d);
+            let input = make_reduce_input_w(w, k, 1, 2, (k % 2) as u8, 3, 1, d);
             let st = marshal_resident(&input, &ty, 2);
             for i in 0..d {
                 let want = if i < k { 1u8 } else { 0u8 };
                 assert_eq!(
                     st.regs[i], want,
-                    "MARSHAL-ENCODING d={d} k={k}: tag reg r{i} = {} (expected leading-ones \
+                    "MARSHAL-ENCODING w={w} d={d} k={k}: tag reg r{i} = {} (expected leading-ones \
                      prefix {want}); the COMPOSITION lemma's reachable-combos case-split is \
                      INVALID if this premise breaks",
                     st.regs[i]
@@ -1294,10 +1341,11 @@ fn invariant_marshal_encodes_leading_ones() {
         // TEETH: the k-leading-ones prefix is DISTINCT across k (so the assert is
         // load-bearing, not a constant). Distinct k ⇒ distinct tag prefix.
         let ty2 = carrier_ty(w, d);
-        let p0 = marshal_resident(&make_reduce_input(0, 1, 2, 0, 3, 1, d), &ty2, 2).regs[0..d].to_vec();
-        let p1 = marshal_resident(&make_reduce_input(1, 1, 2, 1, 3, 1, d), &ty2, 2).regs[0..d].to_vec();
-        assert_ne!(p0, p1, "MARSHAL-ENCODING d={d}: k=0 and k=1 tag prefixes collapse — teeth vacuous");
-        eprintln!("  marshal-encoding d={d}: regs[0..{d}] == k-leading-ones for k=0..{}", d - 1);
+        let p0 = marshal_resident(&make_reduce_input_w(w, 0, 1, 2, 0, 3, 1, d), &ty2, 2).regs[0..d].to_vec();
+        let p1 = marshal_resident(&make_reduce_input_w(w, 1, 1, 2, 1, 3, 1, d), &ty2, 2).regs[0..d].to_vec();
+        assert_ne!(p0, p1, "MARSHAL-ENCODING w={w} d={d}: k=0 and k=1 tag prefixes collapse — teeth vacuous");
+        eprintln!("  marshal-encoding w={w} d={d}: regs[0..{d}] == k-leading-ones for k=0..{}", d - 1);
+    }
     }
     eprintln!(
         "MARSHAL-ENCODING ANCHOR: Nat_d marshals as leading-ones in r0..r_{{d-1}} — the \
@@ -1312,7 +1360,7 @@ fn invariant_marshal_encodes_leading_ones() {
 // ══════════════════════════════════════════════════════════════════════════
 #[test]
 fn invariant_reality_anchor_reduce() {
-    let w = 2u8;
+    for w in [2u8, 4u8] {
     for d in [2usize, 3] {
         let iso = reduce_flat(w, d);
         let ty = carrier_ty(w, d);
@@ -1320,27 +1368,30 @@ fn invariant_reality_anchor_reduce() {
         let rom = assemble(&lowered.instrs).expect("assemble");
         let budget = lowered.wcet();
         for k in 0..d {
-            // Vary acc/idx/arr per k so each input is nontrivial.
-            let input = make_reduce_input(k, 1, 2, (k % 2) as u8, 3, 1, d);
+            // Vary acc/idx/arr per k so each input is nontrivial. At w=4 use wider
+            // byte values (still ≤ 2^w-1) so the extra carrier bits are exercised.
+            let (acc, data, arr0, arr1) = if w >= 4 { (5u8, 10, 12, 6) } else { (1u8, 2, 3, 1) };
+            let input = make_reduce_input_w(w, k, acc, data, (k % 2) as u8, arr0, arr1, d);
             let state = marshal_resident(&input, &ty, 2);
             let final_state = run_rom_fast(&rom, state, budget);
             let rom_out = unmarshal_resident(&final_state, &ty, 2);
             let mut fuel = 100_000_000u64;
             let eval_out = theseus_eval::eval(&iso, input.clone(), &mut fuel).expect("eval");
-            assert_eq!(rom_out, eval_out, "ANCHOR d={d} k={k}: run_rom_fast != eval");
+            assert_eq!(rom_out, eval_out, "ANCHOR w={w} d={d} k={k}: run_rom_fast != eval");
             // TEETH: a DIFFERENT input (k+1 body apps, or different arr) must give a
             // DIFFERENT eval output when k>0 (so the anchor equality is nonvacuous).
             if k > 0 {
-                let other = make_reduce_input(k, 0, 2, (k % 2) as u8, 3, 1, d); // acc=0
+                let other = make_reduce_input_w(w, k, 0, data, (k % 2) as u8, arr0, arr1, d); // acc=0
                 let mut f2 = 100_000_000u64;
                 let ev2 = theseus_eval::eval(&iso, other, &mut f2).expect("eval2");
-                assert_ne!(eval_out, ev2, "ANCHOR teeth d={d} k={k}: distinct inputs collapse");
+                assert_ne!(eval_out, ev2, "ANCHOR teeth w={w} d={d} k={k}: distinct inputs collapse");
             }
-            eprintln!("  anchor d={d} k={k}: run_rom_fast == eval");
+            eprintln!("  anchor w={w} d={d} k={k}: run_rom_fast == eval");
         }
     }
+    }
     eprintln!(
-        "L3 REALITY ANCHOR [reduce]: run_rom_fast == eval for d∈{{2,3}}, k=0..d-1. \
+        "L3 REALITY ANCHOR [reduce]: run_rom_fast == eval for w∈{{2,4}}, d∈{{2,3}}, k=0..d-1. \
          Ties the L1/L2/composition symbolic lemmas to the real machine."
     );
 }
@@ -1349,7 +1400,8 @@ fn invariant_reality_anchor_reduce() {
 // FINDINGS (GO/NO-GO) — the inductive-invariant method EXTENDS to the Iter
 // FORWARD-SKIP-BLOCK loop. HONEST research record.
 //
-// GO. The method extends. Measured (reduce_flat, w=2, w_pc=16 default layout):
+// GO. The method extends, at BOTH w=2 AND w=4 (see the "w=4 MECHANICAL EXTENSION"
+// block below). Measured (reduce_flat, w=2, w_pc=16 default layout; w=4 identical):
 //   * SPIKE / L1 BODY (memory ring): the 6-instr MexchReg body walked through the
 //     monolithic `system_step` (CPU+Mem+Bus, 30 fields, 240 vars) with symbolic
 //     carrier stays TINY — MAX peak 9 BDD nodes, ~1.6 s/step (~8-16 s total). The
@@ -1398,15 +1450,36 @@ fn invariant_reality_anchor_reduce() {
 //     stay concrete throughout — the skip-block never introduces a symbolic PC.
 //
 // DOES IT REPLACE THE WHOLE-DOMAIN SWEEP? For the loop-control + body semantics:
-//   YES for reduce_flat(2,d) — L1+L2+COMPOSITION cover the per-copy relation and
-//   its static composition over the whole Flat(2) carrier, and the forward-skip
-//   PC control is netlist-asserted. But HONESTLY: this file proves w=2 only; the
-//   existing valwidth_reduce T2 (Flat(2) d=3, 1536 inputs) and T3 (Flat(4),
-//   393k inputs) sweeps also exercise the MARSHAL/UNMARSHAL round-trip and larger
-//   w. The symbolic lemmas retire the LOOP-CONTROL + body-semantics portion of the
-//   authority for w=2; they do NOT (yet) retire the Flat(4) sweep nor the
-//   marshal/unmarshal legs. A w=4 body lemma is a mechanical extension (the spike
-//   shows the ring cost is gate-count, not blow-up) but is not done here.
+//   YES for reduce_flat(w,d) at BOTH w=2 AND w=4 — L1+L2+COMPOSITION cover the
+//   per-copy relation and its static composition over the whole Flat(w) carrier,
+//   and the forward-skip PC control is netlist-asserted. The symbolic lemmas retire
+//   the LOOP-CONTROL + body-semantics portion of the authority for w∈{2,4}; they do
+//   NOT retire the marshal/unmarshal legs (anchored by L3, not lemma-covered).
+//
+// w=4 MECHANICAL EXTENSION (this file, the follow-up the rollout left open) — DONE.
+//   The reduce ROM is BYTE-IDENTICAL across Flat(1)/Flat(2)/Flat(4) (width-
+//   independent codegen — valwidth_reduce.rs pins "reduce ROM must be identical for
+//   Flat(2) vs Flat(4)"). So the w=4 proof reuses the SAME ROM, SAME body span
+//   [3,9), SAME 12-instr skip-block, SAME 24-instr d=3 ROM; only the symbolic
+//   carrier bit-width changes (sym_low_word8 low-4 symbolic vs low-2). Every lemma
+//   is width-parameterized (`*_w(w)`), with w=2 and w=4 `#[test]` entry points.
+//   Measured w=4 (identical machinery):
+//     * L1 BODY (w=4): peak 9 BDD nodes, ~7.5 s. (w=2: peak 9, ~7.3 s.)
+//     * L2 SKIP-BLOCK (w=4): RUN peak 9 ~15.6 s, SKIP peak 3 ~7.0 s; forward-skip
+//       Swapbr[+2] lands +3 (RUN) / +9 come-from (SKIP), body skipped — identical
+//       control to w=2.
+//     * COMPOSITION d=3 (w=4): full 24-instr ROM ≡ body^k, k∈{0,1,2}, peak 9,
+//       ~88 s. loop_terms EMPTY.
+//     * L3 anchor + marshal-encoding anchor extended to w∈{2,4}.
+//   The prior agent's prediction HELD: the memory-ring cost is GATE-COUNT (the
+//   un-short-circuited fetch mux), NOT BDD width — peak nodes are IDENTICAL at w=4
+//   and w=2 (9 nodes). NO blow-up, NO field-assert failure, NO non-mechanical
+//   obstacle. Teeth confirmed at w=4 (a mutation dropping the idx selector in the
+//   body spec IS caught by the whole-domain assert). reduce_flat(4,d) loop-control +
+//   body semantics are now FULLY SYMBOLIC-PROVEN over the whole Flat(4) carrier.
+//   REMAINING (unchanged): the Flat(4) T3 sweep still adds marshal/unmarshal round-
+//   trip authority; w=8 is walled by the memexch table (33.5M entries), not by this
+//   proof method.
 //
 // NO BLOWUP, NO FIELD-ASSERT FAILURE occurred: every peak < 10 nodes, every
 // PC-landing (incl. the forward skip) matched the netlist, every field welded.
