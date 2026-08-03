@@ -3,13 +3,13 @@
 //!
 //! Implements the money-plot artifact contract from `test-spec-m3a.md`:
 //! each curve becomes a `MoneyPlotRecord` with mandatory stamps and rung
-//! (INV-STAMP enforced), serialized to a byte-deterministic RON-like text
-//! format for acceptance artifacts.
+//! (INV-STAMP enforced), serialized to byte-deterministic RON (via serde +
+//! `ron::ser::to_string_pretty`) for acceptance artifacts.
 
 use crate::adiabatic::MoneyPlotCurve;
 
 /// Idealization rung for the simulation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Rung {
     /// Ideal MOSFET models (level-1, no PDK).
     Rung0IdealModels,
@@ -29,7 +29,7 @@ impl Rung {
 }
 
 /// Provenance stamps for a money-plot record (INV-STAMP).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Stamps {
     pub pdk: String,
     pub simulator: String,
@@ -38,7 +38,7 @@ pub struct Stamps {
 }
 
 /// A stamped money-plot record: the artifact unit per the test-spec contract.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MoneyPlotRecord {
     pub dut: String,
     pub family: String,
@@ -133,56 +133,23 @@ pub fn stamped_money_plot(
 }
 
 // ---------------------------------------------------------------------------
-// Deterministic RON-like serialization
+// Deterministic RON serialization
 // ---------------------------------------------------------------------------
 
-/// Format an f64 in a canonical, deterministic way: scientific notation with
-/// exactly 15 significant digits. This avoids platform-dependent formatting.
-fn fmt_f64(v: f64) -> String {
-    format!("{:.15e}", v)
-}
-
-/// Serialize a single record to a deterministic RON-like text block.
-fn record_to_text(r: &MoneyPlotRecord) -> String {
-    let mut s = String::new();
-    s.push_str("MoneyPlotRecord(\n");
-    s.push_str(&format!("    dut: \"{}\",\n", r.dut));
-    s.push_str(&format!("    family: \"{}\",\n", r.family));
-    s.push_str(&format!("    axes: \"{}\",\n", r.axes));
-    s.push_str(&format!("    slope: {},\n", fmt_f64(r.slope)));
-    s.push_str(&format!("    rung: \"{}\",\n", r.rung.as_str()));
-    s.push_str("    stamps: (\n");
-    s.push_str(&format!("        pdk: \"{}\",\n", r.stamps.pdk));
-    s.push_str(&format!("        simulator: \"{}\",\n", r.stamps.simulator));
-    s.push_str(&format!("        harness: \"{}\",\n", r.stamps.harness));
-    s.push_str(&format!("        db: \"{}\",\n", r.stamps.db));
-    s.push_str("    ),\n");
-    s.push_str("    points: [\n");
-    for &(period, energy) in &r.points {
-        s.push_str(&format!(
-            "        ({}, {}),\n",
-            fmt_f64(period),
-            fmt_f64(energy)
-        ));
-    }
-    s.push_str("    ],\n");
-    s.push_str(")\n");
-    s
-}
-
-/// Serialize a slice of records to a deterministic text artifact.
+/// Serialize a slice of records to a deterministic RON text artifact.
+///
+/// Uses `ron::ser::to_string_pretty` with the same `PrettyConfig` pattern as
+/// `chardb.rs`, which is byte-deterministic for a fixed input (serde field
+/// order is the declaration order; f64 formatting is stable). A leading comment
+/// header records the artifact provenance and record count.
 pub fn to_stamped_text(records: &[MoneyPlotRecord]) -> String {
-    let mut s = String::new();
-    s.push_str("// theseus money-plot artifact (M3a)\n");
-    s.push_str(&format!("// records: {}\n", records.len()));
-    s.push('\n');
-    for (i, r) in records.iter().enumerate() {
-        if i > 0 {
-            s.push('\n');
-        }
-        s.push_str(&record_to_text(r));
-    }
-    s
+    let body = ron::ser::to_string_pretty(records, ron::ser::PrettyConfig::default())
+        .expect("MoneyPlotRecord serialization should not fail");
+    format!(
+        "// theseus money-plot artifact (M3a)\n// records: {}\n\n{}\n",
+        records.len(),
+        body
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -298,11 +265,10 @@ mod tests {
 
         // Verify round-trip: the serialized text is non-empty and contains
         // expected markers.
-        assert!(text1.contains("MoneyPlotRecord("));
-        assert!(text1.contains("adiabatic-tg"));
-        assert!(text1.contains("cmos-static"));
+        assert!(text1.contains("dut: \"adiabatic-tg\""));
+        assert!(text1.contains("dut: \"cmos-static\""));
         assert!(text1.contains("EnergyPerOpVsPeriod"));
-        assert!(text1.contains("rung0-ideal-models"));
+        assert!(text1.contains("Rung0IdealModels"));
         assert!(text1.contains("generic-level1"));
 
         // ASCII render.
@@ -356,7 +322,7 @@ mod tests {
 
         // (b) Rung + PDK version carried in the stamp/rung.
         let text = to_stamped_text(&records);
-        assert!(text.contains("rung1-sky130-tt"), "artifact missing rung1-sky130-tt");
+        assert!(text.contains("Rung1Sky130Tt"), "artifact missing Rung1Sky130Tt");
         assert!(
             text.contains(&pdk),
             "artifact pdk stamp must carry the sky130 version {pdk}"

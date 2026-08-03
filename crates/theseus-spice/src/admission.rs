@@ -105,6 +105,15 @@ pub const MIN_FIT_R2: f64 = 0.99;
 /// reject a flat curve).
 pub const MIN_ADIA_SHARE: f64 = 0.5;
 
+/// Output load capacitance for the static-CMOS baseline deck, in Farads.
+///
+/// This value is emitted into the SPICE deck as the `Cout` load (formatted in
+/// scientific notation, numerically identical to the old `1p` literal) and is
+/// re-used numerically in the stored-energy term 1/2 C (V1^2 - V0^2) that the
+/// conservation closure subtracts. Deriving both from this one constant keeps
+/// the deck cap and the bookkeeping cap in lockstep by construction.
+const CMOS_LOAD_F: f64 = 1e-12;
+
 // ---------------------------------------------------------------------------
 // Typed decode
 // ---------------------------------------------------------------------------
@@ -1040,7 +1049,9 @@ fn cmos_admission_deck(rung: DeviceRung, period: f64) -> String {
     ));
     l.push(rung.fet("1", FetKind::Nmos, "out", "in", "0", "0", 4.0, 0.15));
     l.push(rung.fet("2", FetKind::Pmos, "out", "in", "vdd", "vdd", 8.0, 0.15));
-    l.push("Cout out 0 1p".into());
+    // Shared CMOS load cap (see CMOS_LOAD_F): the deck literal and the
+    // stored-energy term below both derive from the same constant.
+    l.push(format!("Cout out 0 {CMOS_LOAD_F:.4e}"));
     l.push("Bvd pvd 0 V = -V(vdd)*I(Vdd)".into());
     l.push("Bin pin 0 V = -V(in)*I(Vin)".into());
     l.push("Btot ptot 0 V = V(pvd)+V(pin)".into());
@@ -1095,7 +1106,7 @@ fn admit_cmos(rung: DeviceRung) -> io::Result<AdmissionReport> {
     let (e2, e3) = (meas(&out, "ecyc2"), meas(&out, "ecyc3"));
     let parts = meas(&out, "cvd") + meas(&out, "cin");
     let (v0, v1) = (meas(&out, "sv0"), meas(&out, "ev0"));
-    let d_stored = 0.5 * 1e-12 * (v1 * v1 - v0 * v0);
+    let d_stored = 0.5 * CMOS_LOAD_F * (v1 * v1 - v0 * v0);
     let conservation = closure_result(
         &format!("CMOS inverter, T={period:.1e} s, settled cycle 2→3"),
         e2,
