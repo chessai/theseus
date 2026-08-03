@@ -16,7 +16,7 @@ a **concurrent feedback loop** with the [main roadmap](roadmap.md):
 **The loop:** a program that fails to compile files a finding naming the milestone it
 needs; when that milestone lands, the program graduates to a Tier-1 coverage + energy
 artifact and its golden energy/park-tax joins the regression suite. Every program ships
-with `run_on_cpu == eval` (L19 real-CPU oracle) and, once M-E lands, an energy + park-tax
+with `run_on_cpu == eval` (real-CPU oracle) and, once M-E lands, an energy + park-tax
 figure.
 
 > **Reversibility is the crux.** theseus is total and reversible, so every program must be
@@ -58,8 +58,7 @@ figure.
 Status legend: ✅ done · 🎯 next · ▫ planned (fits) · ⛔ breaks today (a milestone customer)
 · ❌ overturned (not a valid program).
 
-> **First feedback-loop finding (TP-1 design + review, `docs/scratch/tp1-gcd-design.md`,
-> `docs/reviews/tp1-gcd-review.md`).** Designing GCD surfaced a general **sizing law**
+> **First feedback-loop finding (TP-1 design + review).** Designing GCD surfaced a general **sizing law**
 > (ADR-0007 **TH-1b**, trajectory disjointness): a `Trace`'s carrier must satisfy
 > `|u| ≥ |input|` for any always-iterating loop, and `k_max = |u|+1` is read from *type
 > cardinality*. Consequences that reshape this roadmap:
@@ -75,9 +74,8 @@ Status legend: ✅ done · 🎯 next · ▫ planned (fits) · ⛔ breaks today (
 >    program-level park-tax *histogram* (GCD-style) is gated on the whole cluster. The
 >    honest M-E artifact today is fib and the `iter`/`fold` family (tight `k_max`).
 
-> **Second feedback-loop finding (the iter+MEXCHR array-map, `docs/scratch/mdb2-design.md` +
-> `docs/reviews/mdb2-*`).** Picked as a *fits-today* win; grounding it in the code first
-> (L20) overturned that -- **the compiler emitted zero `MexchReg`.** M-D.b had shipped the
+> **Second feedback-loop finding (the iter+MEXCHR array-map).** Picked as a *fits-today* win; grounding it in the code first
+> overturned that -- **the compiler emitted zero `MexchReg`.** M-D.b had shipped the
 > *machine* capability (the CPU executes register-addressed memory exchange + the `SystemRing`
 > closes zero-garbage) but never the *compiler front-half* that emits it. So any program that
 > needs data-dependent addressing from `.thse` -- the array-map, **TP-5 S-box**, TP-6/7 --

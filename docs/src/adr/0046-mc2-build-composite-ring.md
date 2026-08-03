@@ -31,8 +31,7 @@ energy-ledger, §9).
 > equations and period lock validated"). **Deferred to the memory energy-ledger (§9):**
 > **2b-full** -- the compact **output padder** in `theseus-netlist` and a *materialized*
 > padded two-body netlist (only needed when the memory block gets its own energy line;
-> 2b-lite proves the clocking EXISTS without touching the central balancer). Design of
-> record: [docs/scratch/stage2-design.md](../../scratch/stage2-design.md). Next: **M-D**
+> 2b-lite proves the clocking EXISTS without touching the central balancer). Next: **M-D**
 > (heap / recursion / calling convention = arbitrary `.thse`).
 
 > **Stage 1b-B -- DONE (merged `75c5a13`) -- Stage 1b COMPLETE.** `system_step` now
@@ -52,7 +51,6 @@ energy-ledger, §9).
 > in Stage 1a/1b-A -- so the N=4 ring certificate + the tree's N∈{2,4,8} C1 together
 > establish closure at all supported widths. **This realizes Theorem 3.5 (composite
 > closure ZG-2) in code -- the composite ring `CPU⊗bus⊗memory` closes zero-garbage.**
-> Design of record: [docs/scratch/stage1b-B-design.md](../../scratch/stage1b-B-design.md).
 > (Stage 2 -- physical two-body separation -- is now DONE; see the box above.)
 
 > **Stage 1b-A -- DONE (merged `1f59744`).** The memory exchange is now
@@ -71,13 +69,12 @@ energy-ledger, §9).
 > Verified: `run_on_cpu(system_step)==eval` (spill-15, store→reload), emit/mem/absorb
 > self-inverse + correct, value-level bus-quiescence (BusMsg=0 every step boundary,
 > the whole-program version `#[ignore]`d for speed -- `system_step` eval is ~1.7 s/step),
-> zero regression. Design of record: [docs/scratch/stage1b-design.md](../../scratch/stage1b-design.md).
+> zero regression.
 > **Still value-level (no ring); the closure certificate is Stage 1b-B.**
 
 > **Stage 1a -- DONE (merged `8f27ba0`, two increments).** `MemState` is externalized
 > from `State` into a separate iso factor; the carrier is `(CpuState, MemState)`
-> (`CpuState` = 20 fields, `State` narrowed 24→20). **Two step isos** (Decision 1 of
-> [docs/scratch/stage1a-design.md](../../scratch/stage1a-design.md)): the ring keeps
+> (`CpuState` = 20 fields, `State` narrowed 24→20). **Two step isos** (Decision 1): the ring keeps
 > `step:CpuState↔CpuState` (`Op::Mexch` removed → `decode_execute′`); the oracle uses
 > `system_step:(CpuState,MemState)↔(CpuState,MemState)`. FIX-3 was done as
 > **width-parameterized flat routing** (`route_to_head_n`/`at_fields_n`/`on_fields_n`
@@ -141,7 +138,7 @@ CPU. Per-ring closure is *not* attempted: it is provably impossible (Theorem 2.3
 > effective `LOAD`/`STORE` needs the CPU to *decode* it (a new `Op` + the 1-of-N
 > select tree in `decode_execute`, `decoder.rs`) and a physical *home* for the
 > words (`State` is fixed at 160 bits, `types.rs:27-30`, so it must grow a bank) --
-> else the real CPU no-ops the reserved opcode (`decoder.rs`) and the L19 real-CPU
+> else the real CPU no-ops the reserved opcode (`decoder.rs`) and the real-CPU
 > oracle cannot gate it. Compiler-scope with CPU-authority is unbuildable.
 
 - **Layer 1 -- addressed-exchange substrate + resident memory** (CPU **and**
@@ -186,7 +183,7 @@ settled). Stages 1-2 are gated on the prior stage's certificate.
   the C1 gate. Encodings in `instr.rs`/`asm.rs` (free opcodes, `addr` in
   `rt`/immediate, §7).
 - **Real-CPU authority.** `run_on_cpu` executes `LOAD`/`STORE` on the real `step`,
-  so the oracle is authoritative (L19) -- which is *only* possible because the CPU
+  so the oracle is authoritative -- which is *only* possible because the CPU
   decodes them; a compiler-only layer would leave the real CPU no-opping the
   opcode.
 
@@ -212,7 +209,7 @@ marshalling):
   corrected.
 - **Oracle:** `run_on_cpu` (real `step`) `== eval` of the *original surface iso*
   (memory is a **compilation artifact**, never surface-visible -- Proposition 5.1);
-  whole-domain fast-sim + real-CPU sample per L19; **plus the C1 whole-domain
+  whole-domain fast-sim + real-CPU sample per the real-CPU oracle; **plus the C1 whole-domain
   cleanliness demonstration at `N ∈ {2,4,8}`** -- Layer 1's defining gate.
 
 **Settle before delegating.** The `MemState` word layout, address encoding, and
@@ -358,7 +355,7 @@ three are corrected here.
 **The split.**
 
 - **Stage 1a -- value-level externalization (DONE, merged `8f27ba0`; see the boxed
-  summary at the top of this ADR and [docs/scratch/stage1a-design.md](../../scratch/stage1a-design.md)).**
+  summary at the top of this ADR).**
   Move `MemState` out
   of `State` into a separate factor; make the addressing layer composite-aware;
   re-target `MEXCH` to swap `reg[rd] ↔ MemState[addr]` (external), composed into
@@ -519,7 +516,7 @@ in the `rt`/immediate field per the `Xchg` template. The 8-bit immediate caps
 `N ≤ 256` -- adequate for compile-time-addressed spill; a wider address (multi-word
 or a base register) is deferred with data-dependent addressing to M-D.
 
-## 8. Acceptance, per stage (per L19)
+## 8. Acceptance, per stage
 - **Layer 1:** `run_on_cpu`(real `step`) `== eval`(surface iso) -- pure-spill-to-
   memory program (>14 leaves) and a store+reload round-trip; whole-domain fast-sim +
   real-CPU sample; negatives error cleanly; no M-A/M-B/M-C1 regression.
@@ -570,4 +567,4 @@ it wrong (Corollary 6.2).
 - [ADR-0029](0029-memory.md) / [ADR-0027](0027-cell-library.md) -- exchange
   discipline, Options A/B/C, the Fredkin cell.
 - [ADR-0044](0044-mc-compiler-memory.md) -- M-C1 spill, the Layer-1 base.
-- [ADR-0008](0008-differential-testing.md) -- the oracle norm (L19).
+- [ADR-0008](0008-differential-testing.md) -- the oracle norm.

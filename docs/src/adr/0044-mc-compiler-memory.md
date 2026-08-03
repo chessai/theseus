@@ -63,7 +63,7 @@ concrete ring interface, not blind (the exact reason ADR-0029 deferred B).
 > registers held across a whole block, which needs a defined **zero-source** and
 > drops the ceiling to **12 for any branching program**. **(iii)** the guarded
 > unroll compiles the body **once** and re-emits a frozen instruction vector `D`
-> times, so a "residence persists across ops" scheme corrupts copies 2..D (the L15
+> times, so a "residence persists across ops" scheme corrupts copies 2..D (the
 > "helpers work, the sequence doesn't" trap). The fix to all three is a **canonical
 > home layout** with page-in/page-out **around each op**.
 
@@ -125,7 +125,7 @@ at 12). Both bounds surface as a clean **compile error, never a silent miscompil
 values or fails uniformly. (The first draft's "16 / error only above 16" was wrong
 on both counts.)
 
-### 2.6 Guarded-unroll consistency (the L15 fix)
+### 2.6 Guarded-unroll consistency (the fast-sim-vs-real-machine fix)
 Because §2.1 holds canonical layout at every op **and** every skip-block boundary,
 the body of `lower_data_dependent_iter` is in canonical layout at both its start and
 end. The single compiled body instruction-vector is therefore valid for **every** of
@@ -165,10 +165,10 @@ fabric-resident storage, ADR-0029 C3.5), Option A dies and Option B wakes:
 
 M-C2 earns its own ADR after M-C1 lands and against the real ring interface.
 
-## 4. Acceptance: the run-on-CPU differential oracle (per L19)
+## 4. Acceptance: the run-on-CPU differential oracle
 
 Authority = `run_on_cpu` on the **real `step`-iso CPU** `== theseus_eval::eval`
-over the whole finite domain ([ADR-0008](0008-differential-testing.md); L19 in
+over the whole finite domain ([ADR-0008](0008-differential-testing.md); the real-CPU oracle in
 maestro `OPERATING_LESSONS.md` -- the real CPU is the authority, the byte-level
 `run_on_cpu_fast` is a pinned convenience only). Required M-C1 programs:
 
@@ -214,4 +214,4 @@ are exactly what the whole-domain oracle pins.
   -- the compiler + M-A/M-B fragment M-C extends (`Ctx`, `allocate_aux`,
   `num_leaves`, `marshal`).
 - [ADR-0008](0008-differential-testing.md) -- the differential-oracle norm (real-CPU
-  authority, L19).
+  authority).

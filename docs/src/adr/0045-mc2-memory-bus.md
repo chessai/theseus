@@ -95,7 +95,7 @@ surgery) -- plus a `CompositeRing` runner with the generalized certificate
 (`restored_ok ∧ run == run_open ∧ run == eval(system_step)^R` + the line audit), a
 1:1 period-locked sequencer, and an ancilla-clean 1-of-N Fredkin exchange tree
 (demonstrated whole-domain at N ∈ {2,4,8} first). Roll out in two stages
-(L15-safe): **Stage 1** = single-body composite ring reusing `StepRing` verbatim
+(fast-vs-real-safe): **Stage 1** = single-body composite ring reusing `StepRing` verbatim
 (bus + tree scratch land in the ancilla section) -- exercises the *real* closure
 question end-to-end before any new machinery; **Stage 2** = two-body `SystemRing`
 with staggered ports for physical separability.
@@ -235,16 +235,16 @@ O(N) extra State unrolled every tick). Acceptance: the coupled two-ring run
   memory-home leaf in via `LOAD`, out via `STORE`, canonical layout preserved. The
   ceiling rises from 14 to 14 + N (bank size).
 
-## 5. Acceptance: the run-on-CPU differential oracle (per L19)
+## 5. Acceptance: the run-on-CPU differential oracle
 
 Authority = the real system on the real `step`/`mem` isos `== theseus_eval::eval`
-over the finite domain ([ADR-0008](0008-differential-testing.md); L19). M-C2a:
+over the finite domain ([ADR-0008](0008-differential-testing.md)). M-C2a:
 `system_step^k == eval` for programs that spill to memory (whole domain where
 feasible, else the representative-sample discipline M-C1 established, since domains
 grow with leaf count). M-C2b: the coupled two-ring run `== system_step^R`. Required
 programs: a value exceeding the register+scratch file (>14 leaves) that must use
 memory; a memory round-trip that both stores and reloads; no M-A/M-B/M-C1
-regression. Keep the fast-sim a pinned convenience only (L19).
+regression. Keep the fast-sim a pinned convenience only.
 
 ## 6. Energy (why Option B at all)
 The memory iso lowers to a `PhasedCellNetlist` (Fredkin/K1 addressed-exchange tree +
@@ -283,4 +283,4 @@ the money plot can price a program's memory traffic against its compute.
   extends: `Location`, `with_registers`, marshalling).
 - [ADR-0028](0028-energy-annotation.md) -- the per-iso energy ledger the memory
   fabric enters.
-- [ADR-0008](0008-differential-testing.md) -- the differential-oracle norm (L19).
+- [ADR-0008](0008-differential-testing.md) -- the differential-oracle norm.

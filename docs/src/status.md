@@ -32,7 +32,7 @@
 > machinery (ready + now symbolically verifiable) but gcd2's degree-7 ANF blowing the general-synth
 > operand-word budget (B=75794 ≫ 256 = the widen-state / A-6.4 gap, DEFERRED, UPSTREAM of the BVEQ
 > method). A low-degree body (`vart_halve`) fits now; high-degree bodies (gcd2) need widen-state; then
-> useful variable-T programs. See `docs/scratch/mde-variable-t-scoping.md`. Known backlog: lean
+> useful variable-T programs. Known backlog: lean
 > `lower_iso` for wide-state isos (whole-domain SIM tests OOM -- many now superseded by BVEQ).
 
 
@@ -49,14 +49,14 @@ Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip `216d4cd` (docs/POC r
 last MERGED code milestone `e918e33` (below).
 
 > **IN FLIGHT -- T-loops Slice A: narrow the fetch address-compare** (not yet merged; see
-> `docs/scratch/fetch-narrow-compare-design.md` + memory `tloops-fetch-narrow-state`). fetch compares a
+> memory `tloops-fetch-narrow-state`). fetch compares a
 > full-W `PC==addr` per ROM entry, but the PC only ever ∈ [0,B) so its high bits are provably zero →
 > compare only the low `A=⌈log₂(B+S_max)⌉` bits. **Lowers step_j today** (fib B=24→A=5, fetch predicates
 > −43%) **and makes widen-PC nearly free** (per-entry cost ∝ log₂B, not W). The plan: Slice A → **widen-PC**
 > (now cheap, B>256) → the **8-bit subtractive GCD** (first genuine variable-T algorithm; the `gcd2_hist_step`
 > recognizer is already de-risked + pinned, blocked only on the ~60-instr emission not fitting the current
-> 256 WCET -- `docs/reviews/tloops-slice1b-recognizer-poc.md`). Slice A status: the A-bit fetch code is
-> built (POC, `docs/scratch/fetch-narrow-poc.diff.ref`); an apparent lfsr failure was diagnosed as a
+> 256 WCET). Slice A status: the A-bit fetch code is
+> built (POC); an apparent lfsr failure was diagnosed as a
 > *test-helper* input-encoding bug, NOT a fetch bug; the proper `run_on_cpu==eval` validation (real
 > system_step -- the fast oracle is BLIND to fetch) is running. On green → adversarial review + full
 > authority + energy/ring golden re-pin (step_j drops) → merge. HIGHEST BAR (fetch/decoder).
@@ -74,8 +74,7 @@ existing 8-bit PC with ZERO energy tax). SOUNDNESS-CRITICAL `lower_trace` change
 silent corruption) -- HIGHEST BAR: fresh-context adversarial implementation review **SHIP** (the prime
 register-layout attack is structurally closed by the pre-walk F-1 canonical-homes guard, verified with
 built composed/Times/permuted/spill/Zero Traces; the fast oracle proven to detect a `k_max−1` park-wrap),
-+ the real-`system_step` H1 authority (2/2, ~2h) + compile-heavy regression 65/0. Reviews
-`docs/reviews/tloops-slice1a-impl-review.md` + `tloops-slice1-design-review.md`. **NEXT: slice-1b** =
++ the real-`system_step` H1 authority (2/2, ~2h) + compile-heavy regression 65/0. **NEXT: slice-1b** =
 a pinned `gcd2_hist_step` recognizer + the 2-bit GCD (the first genuine variable-T ALGORITHM) on top of
 exact-k_max; then widen-PC (to scale past w=3). The prior tip
 `9e41e6e` (**TP-5 slice-2: the PRESENT 4-bit S-box -- theseus's first full byte-substitution crypto
@@ -85,15 +84,14 @@ linear = `Xor`, const = `Xori`, outputs parked via `Xchg` to scratch). 47-instr 
 `Ccnot` + 10 `Xor` + 2 `Xori` + 4 `Xchg`), Rust-composed so it NEVER lowers (zero recognizer/lower
 change). **STANDALONE garbage-free** -- strictly stronger than χ's under-adjoint-only: because the inputs
 r0-r3 are never mutated, every product temp is uncomputed in the forward pass (acc r4 = temp r5 = 0,
-inputs preserved, outputs in scratch s2-s5, asserted over the whole domain -- the L20 guard). **8×
+inputs preserved, outputs in scratch s2-s5, asserted over the whole domain -- the regression guard). **8×
 bit-slicing: 3.52e-8 J/S-box vs 2.82e-7 J un-sliced.** Verified vs the published 16-entry table (the
 independent oracle) over the whole domain + discriminating packing + golden vectors + bijectivity (fast
-tier) and the system-ring L19 authority + eval-adjoint reversibility + energy (heavy tier, advisor-run
+tier) and the system-ring authority + eval-adjoint reversibility + energy (heavy tier, advisor-run
 single-threaded 3/3 green @ 71 GB). Design-review-with-POC established this AND proved **AES-8 infeasible
 on the current 18-slot machine** (peak-live 30 signals; reconstructed 115-gate Boyar-Peralta circuit
 validated vs an independent GF-inversion table) -- AES-8 is a follow-up needing a recomputation-bounded
-schedule or a wider register file. Reviews `docs/reviews/sbox-aes-design-review.md`, POC
-`docs/scratch/sbox_present_poc.rs.ref`. The prior tip
+schedule or a wider register file. The prior tip
 `012aecb` (**TP-5 slice-1: Keccak-χ -- the FIRST NONLINEAR CRYPTO LAYER in theseus -- MERGED**).
 χ (`A_i = a_i ⊕ (¬a_{i+1} ∧ a_{i+2})`, the nonlinear step of SHA-3/Keccak-f) is bit-sliced over
 Flat(8): each of the 5 lanes is a Flat(8) register = the same lane across 8 independent Keccak rows,
@@ -101,13 +99,12 @@ so one **byte-parallel `Ccnot`** (the masked-AND the value-width ladder + BVEQ m
 the χ gate for all 8 rows at once. A hand-composed 17-instruction in-place ROM (Rust-composed, so it
 NEVER enters the lowering path -- zero recognizer/lower change). **Perf win: 8× bit-slicing -- 5.25e-9
 J/row-χ vs 4.20e-8 J un-sliced (identical ROM).** Ships **Rev-A** (garbage-free UNDER THE ADJOINT: the
-17 forward cycles leave ancillas r5/r6 = old a0/a1 in 24/32 cases -- an honest L20 regression assertion --
+17 forward cycles leave ancillas r5/r6 = old a0/a1 in 24/32 cases -- an honest regression assertion --
 and the reverse run zeroes them; χ is a bijection, NOT an involution). Verified: fast tier (whole per-row
 2^5 domain ×8-packed + discriminating packing + Keccak golden + injectivity, all vs INDEPENDENT scalar/
-byte refs) + heavy tier (`#[ignore]`: system-ring L19 real-run authority, eval adjoint-reversibility,
+byte refs) + heavy tier (`#[ignore]`: system-ring real-run authority, eval adjoint-reversibility,
 energy) -- advisor ran the heavy tier single-threaded (concurrent heavy tests OOM), 3/3 green @ 50.6 GB.
-Design + design review with POC + delegation reviews: `docs/reviews/sbox-chi-design-review.md`,
-`docs/scratch/sbox-chi-design.md`, POC `docs/scratch/chi_poc.rs.ref`. Follow-ups: Rev-B true-in-place
+Follow-ups: Rev-B true-in-place
 χ⁻¹ cleanup; AES S-box; multi-round Keccak-f. The prior tip `604936a`
 (**BVEQ LADDER COMPLETE -- slices 1 + 2b + 2 + 3a + 3b MERGED**). slice-3b
 (`recognize_prim` symbolic-prim RECOGNITION via **selection-by-equiv**: iterate the finite arm library,
@@ -117,7 +114,7 @@ GF(2)⁸ bilinear op) is **recognized to `[Ccnot{rd,rs,rt}]` at full `Flat(8)` w
 built** (<2 s; whole `symbolic_prim` suite 24 tests incl. two Flat(8)³ recognitions in 0.12 s). Fresh-context
 implementation review **SHIP-WITH-FIXES** (mechanism sound, 5 tests flip under a neutered equiv gate, TCB
 untouched, I1 preserved); A-1 (non-identity operand→register remap teeth test) + E-1 (admit-first contract
-doc) applied and teeth-re-verified; review `docs/reviews/bveq-slice3b-impl-review.md` (L21). This makes 3-op
+doc) applied and teeth-re-verified. This makes 3-op
 byte-width prims (the GF(2)⁸ bilinear class -- bit-sliced crypto / TP-5 S-box, GF(2) dot products, keyed
 LFSR) first-class -- proven machinery, not yet cashed into a useful program. **Also `76fd4ca` fix(flake):
 `MALLOC_ARENA_MAX=1` in `targetToolsEnv`** -- the energy tests fragmented glibc per-thread arenas to ~86 GB
@@ -137,8 +134,7 @@ full-domain; ≡ real netlist by stratified sampling + an `#[ignore]` wide sweep
 model-divergence risk. Highest-bar trust core: design-review + impl-review (5 MAJORs) + hardening +
 re-review (**DO-NOT-SHIP**, caught an unconditional-I4 bug that rejected every reversible model at `w<8`) +
 advisor-fix + r3 review (**SHIP**, a 13-probe false-accept campaign confirmed the under-constraint I4 is
-sound). Reviews `docs/reviews/bveq-{design-review,impl-review,impl-review-r2,impl-review-r3}.md`; design
-`docs/scratch/bveq-recognizer-design.md` (r2). **slice-2b -- the symbolic NETLIST walk -- MERGED**
+sound). **slice-2b -- the symbolic NETLIST walk -- MERGED**
 (`0d348e6`, the current tip): `bveq_netlist.rs` symbolically evaluates the decoder's per-instruction
 netlist over BDDs (gates synthesized from each prim's `PrimDef` truth table) to prove `netlist(instr) ≡
 instr_semantics(instr)` at full `Flat(8)`. **The netlist reconciliation is now a fast DEFAULT check**
@@ -146,7 +142,7 @@ instr_semantics(instr)` at full `Flat(8)`. **The netlist reconciliation is now a
 sweep is RETIRED. Authority tiers (advisor-ran, all pass): `_system` (full 8-phase `system_step`, all 13
 ops, clean frame -- a theorem about the real machine, discharging the decode-vs-step gap), `_full_sweep`
 (every selector/immediate config), `_bootstrap` (walk vs real `run_rom_on_cpu` -- the convention anchor).
-Reviews `docs/reviews/bveq-slice2b-{design-review,impl-review}.md`. (slice-2 rewired `recognize_prim`'s
+(slice-2 rewired `recognize_prim`'s
 emission-verifier to `bveq`; slice-3a made symbolic prim specs representable; slice-3b -- above -- closed the
 ladder with recognition. **Next: gate tiering, then the TP-5 S-box** to cash in the BVEQ unlock.) The prior tip `8f49741` (**M-D.e slice-1 -- loop-carrier scratch-spill -- MERGED** `7be4a82`, atop
 the completed byte-wide value-width ladder): a reversible `Trace` (while-loop) can now carry a 4th payload leaf by
@@ -155,9 +151,9 @@ the completed byte-wide value-width ladder): a reversible `Trace` (while-loop) c
 barrier against live-input silent corruption; only a zero-init **padding** leaf may spill), and a pinned
 `check_pattern_kleaf`/`mde_spill_walk` recognizer emitting the 13-instruction walk in ONE `with_registers`
 call → the paging is a **whole-body** page-in/page-out bracket (2 `Xchg`, not per-instruction). A
-`lower_trace` change = the highest bar: full L19/L20/L21 (design → design review that RE-BUILT the
-spike → delegate → **implementation review (SHIP, no BLOCKER/MAJOR)** → advisor-finish → real-CPU authority),
-reviews `docs/reviews/mde-spill-{design-review-r2,impl-review}.md`. **Authority PASS:** the real
+`lower_trace` change = the highest bar: adversarial review and a reproducing regression test (design → design review that RE-BUILT the
+spike → delegate → **implementation review (SHIP, no BLOCKER/MAJOR)** → advisor-finish → real-CPU authority).
+**Authority PASS:** the real
 `system_step` CPU carries the spilled leaf (s2=1 live) across **5 backward jumps** and agrees with eval
 exactly (input 0 = 6 iterations, 4858s), plus `validate()==Ok` + run==eval^R with the ring bus-quiescent.
 This is a **machinery-proof** slice (like M-D.d) -- a synthetic walk proving Trace spill *closes*, NOT yet
@@ -176,7 +172,7 @@ cell and is written back -- no `BR=0` assumption; `PC += BR + 1` stays exact). T
 `exec_instr` drops the `&1`. This completes the masked accumulate `acc ^= key & arr[i]` -- a GF(2)⁸
 bilinear op (8 parallel AND-XOR lanes): the core of GF(2) dot products, gated reductions, GF(2)
 matrix-vector / linear codes, bit-sliced boolean logic, and keyed LFSR/CRC. Verified: dense-byte AND
-on the **real balanced system ring** (`ancillas_restored` + `bus_quiescent`, L19); the Flat(4) masked
+on the **real balanced system ring** (`ancillas_restored` + `bus_quiescent`); the Flat(4) masked
 fold whole-domain (69,888) `run_on_cpu==eval` + independent reference + a bit-0-discriminating case
 (`elems=[2],key=2`); `validate()==Ok`; real `system_step`. The masked-accumulate *program* caps at
 Flat(4) (the 3-operand prim table walls at Flat(8), 256³) -- the instruction's full 8-bit behavior is
@@ -184,8 +180,8 @@ proven at the dense-byte system-ring tier. Redefining `0b1011` is safe (Bit prog
 -- `dot_reduce` + 26 targets untouched-and-green; only `t_dense` flips). Another mild ISA-growth energy
 tax: the `0b1011` body grew, so **fib rose `7.23e-8 → 7.3674162103e-8 J` (+1.91%)** (`step_j`
 3.0697567543e-9; much less than f3.5's +9.15% -- no new opcode). Both reviews **built and verified** by the reviewer
-(the impl review independently re-ran every authority tier: system-ring, real-CPU, both goldens). Reviews
-`docs/reviews/valwidth-ccnot-*`. **The value-width arc is closed: `Flat(n)` words + XOR/Add/masked-AND
+(the impl review independently re-ran every authority tier: system-ring, real-CPU, both goldens).
+**The value-width arc is closed: `Flat(n)` words + XOR/Add/masked-AND
 reductions over bytes.** The prior tip `0d3ca83`:
 **value-width slices 1-3 merged** -- `Type::Flat(n)` foundation `30c4415`, byte-wide XOR
 reduce `ae61941`, and the **Flat(8) `Add` reduce** `06ecf6b`, atop f3.5 + TP-3.
@@ -200,10 +196,10 @@ a+b)` recognizes to `Instr::Add`; the only prim table is 65536 (2-operand). Veri
 Add whole-domain (65536), the fold-over-`Flat` spine walk whole-domain (Flat(2), 340), `sumFold` at
 D=2 whole-domain (65792 -- every carry/wrap pair) + D=3/D=4 strided with mandatory carry edge cases
 (`200+100→44`, `255+1→0`, `255·4→252`) against an **independent modular-sum reference** + real
-`system_step` (L19). Both reviews **built and verified** by the reviewer (the design review compiled the D=3
+`system_step`. Both reviews **built and verified** by the reviewer (the design review compiled the D=3
 ROM and ran the carries; the impl review caught that D=4's 3-Add chain was compiled-but-never-executed
--- now a hoisted D=4 tier). Honest limitation: the *composed* reduce's L19 authority is whole-domain at
-D=2, strided at D≥3 (Flat(8) list domain intractable). Reviews `docs/reviews/valwidth-add-*`.
+-- now a hoisted D=4 tier). Honest limitation: the *composed* reduce's real-CPU authority is whole-domain at
+D=2, strided at D≥3 (Flat(8) list domain intractable).
 **The ladder's final rung:** byte-parallel `Ccnot` (the decoder second-buffer, F35-1b) for the full
 masked accumulate `acc ^= key & arr[i]`. The prior tip `1a81b40`:
 **value-width slices 1 + 2 merged** -- `Type::Flat(n)` foundation `30c4415` + the byte-wide
@@ -218,9 +214,9 @@ byte-parallel, **the compiled ROM is byte-identical to f3's across w∈{1,2,4}**
 cross-width `assert_eq!` on the full instruction sequence + `wcet==24`), so `B=24, T(k)=12+6k,
 {50,25,0}%` carry over verbatim. Verified `run_on_cpu==eval` full-word at Flat(2) whole-domain
 (1536) and Flat(4) whole-domain (393k, hoist-compiled so it runs in seconds not hours), + real
-`system_step` (L19) + per-step canonicalization (`mem[0..2]` resident words stay `<2^w`). Caps at
-Flat(4) (the Flat(8) memexch table = 33.5M entries). Design + impl reviews (both recomputed
-the ROM==f3 by hand) `docs/reviews/valwidth-reduce-*`. **Ladder from here:** Flat(8) `Add` reduce
+`system_step` + per-step canonicalization (`mem[0..2]` resident words stay `<2^w`). Caps at
+Flat(4) (the Flat(8) memexch table = 33.5M entries). Design + impl reviews both recomputed
+the ROM==f3 by hand. **Ladder from here:** Flat(8) `Add` reduce
 (real numeric sum, native mod-256) → byte-parallel `Ccnot` decoder second-buffer (F35-1b) for the
 full masked accumulate `acc ^= key & arr[i]`. The prior tip `00d2468`:
 **Value-width slice-1** introduces a new core `Type::Flat(n)`: a width-parameterized SINGLE-leaf
@@ -229,7 +225,7 @@ that capped a program value leaf at 1 bit). `Value` is UNCHANGED -- a `Flat(n)` 
 existing thermometer `Right^k(Left(Unit))`. Exactly 10 match-arms across 5 crates (core/eval/
 netlist/tisc; theseus-check untouched); a bare byte-`Xor` prim over `Flat(w)` recognizes to the
 already-byte-parallel `Instr::Xor` and `run_on_cpu == eval` (Flat(4) whole-domain + Flat(8)
-strided + real `system_step`, L19). Chosen `Flat(n)`-over-`Word8` because the whole-domain oracle
+strided + real `system_step`). Chosen `Flat(n)`-over-`Word8` because the whole-domain oracle
 + the recognizer both enumerate `(2^w)^{#operands}` -- a 3-operand op at `Word8` is 16.7M
 (infeasible), so **verify-at-Flat(2/4), ship-Flat(8)** by strided sampling + a ROM-shape parametric
 pin. Standing rule (from the review): table-based `PrimDef` caps `Flat(8)` at **2 operands
@@ -237,7 +233,7 @@ forever** -- the reason width-parameterization is load-bearing. This is the foun
 sequel (byte-wide computation); NEXT slices: byte-XOR reduce (Flat(4) max -- the memexch table
 walls at Flat(8)), then `Flat(8)` `Add` reduce (real numeric sum), then byte-parallel `Ccnot`
 (decoder second-buffer, F35-1b) for the full masked accumulate. Both design + impl reviews were
-built and verified by the reviewer (`docs/reviews/valwidth-flat-*`). NOTE: value-width is ORTHOGONAL to
+built and verified by the reviewer. NOTE: value-width is ORTHOGONAL to
 M-D.c (which is MEM_WORDS/heap width, not value width -- the roadmap previously mislabeled it).
 The prior tip `2faed16`: **f3.5 `Ccnot` instruction + TP-3 LFSR merged**, atop the M-D.b2 map+reduce pair.
 **f3.5** (`8a8d8ef`) adds the compiler's **first user-facing ISA instruction** -- a bit-0
@@ -251,15 +247,14 @@ program -- the **ISA-growth energy tax**: fib's finale moved `6.62e-8 → 7.23e-
 codegen unchanged). **TP-3** (`3b4f123`) is a width-4 Galois LFSR (x⁴+x+1) run k_max=5 via
 `iter Nat@6` (`conformance/0026-lfsr.thse`) -- the longest-yet iter + lowest-branching body,
 whole-domain oracle + a third (low-branching) park-tax curve (`B=104, T(k)=14+10k`, 0 at k=5).
-Both via full L19/L20/L21 (design → design review → delegate → implementation review →
-advisor-finish → full-suite; reviews `docs/reviews/{f35,tp3-lfsr}-*`) -- the impl-reviews caught
+Both via adversarial review and a reproducing regression test (design → design review → delegate → implementation review →
+advisor-finish → full-suite) -- the impl-reviews caught
 real evidence-layer defects the maestro verifier passed (f3.5's un-re-pinned ring **and** fib
 energy goldens + a vacuous decoder oracle; TP-3's dropped T(k) pin). Concurrency note (RESOLVED):
 **M-D.e loop-carrier spill** was deferred behind f3.5 because its minimal test needed a
 `recognize_prim` extension that collided with f3.5's; once f3.5 merged the collision was gone and
 **slice-1 is now MERGED** (`7be4a82`+`8f49741`) -- the spill mechanism is no longer just "verified
-sound on paper" but proven on the real CPU across the back-edge (see the header + `docs/reviews/
-mde-spill-*`).
+sound on paper" but proven on the real CPU across the back-edge (see the header).
 The prior M-D.b2 map+reduce pair: the compiler emits `MexchReg` from compiled
 programs and composes it under `iter` for in-memory array processing, all reusing f1's
 `memexch` (no new emission machinery; each preceded by a compile-first probe):
@@ -270,9 +265,9 @@ iteration** (first data-dependent addressing *under load*), priced into a WCET p
 histogram `B=30, T(k)=18+4k, {40...0}%`; **f3** (`87c3f7e`) = a reversible **XOR/parity REDUCE**
 `acc ⊕= arr[i]` via the borrow-swap idiom (a non-destructive indexed read -- overturning
 "memexch can't reduce"; `AssocProd` regroup is free), histogram `B=24, T(k)=12+6k, {50,25,0}%`.
-All `run_on_cpu == eval` (real `system_step`, L19) + `SystemRing` closure + `rom_program_energy_
-resident` pricing; all via full L19/L20/L21 discipline (probe → design → design review →
-delegate → implementation review → advisor-finish → full-suite; reviews `docs/reviews/mdb2-*`).
+All `run_on_cpu == eval` (real `system_step`) + `SystemRing` closure + `rom_program_energy_
+resident` pricing; all via full discipline of adversarial review and a reproducing regression test (probe → design → design review →
+delegate → implementation review → advisor-finish → full-suite).
 M-E's `8c82630` is the prior finale.). Everything below is merged there. Since M4-v1 this branch landed the
 **M4-v2 ring-machine core** (a recirculating CPU), the **v0.2 software dialect**
 (μ-types + iter/fold/unfold, source-to-cells), and -- the **current headline
@@ -322,7 +317,7 @@ widen-PC ADR. Remaining for M-D: a reversible calling convention (M-D.d2, shares
 come-from machinery) and heap value rep (M-D.c, needs MEM_WORDS widening); plus a tracked
 pre-existing latent bug -- nested-sum `AssocSum` lowers as a no-op and miscompiles (F7,
 unreachable today, avoided by M-D.d's prim witness). See the sections below and
-ADRs 0033-0046, `docs/scratch/md*.md`, and
+ADRs 0033-0046 and
 [theory/reversible-memory-closure.md](theory/reversible-memory-closure.md).
 
 ## Status at a glance
@@ -336,7 +331,7 @@ ADRs 0033-0046, `docs/scratch/md*.md`, and
 | **M4-v1** TISC-1 CPU | ✅ **done** | the CPU runs **Fibonacci and Feistel, forward and backward, with per-clause energy** -- ADR-0030's milestone, met |
 | **M4-v2** ring machine | ✅ **done + zero-garbage** | recirculating CPU realized: `step` recirculates R times == `eval(step)^R`, runs **Fibonacci on the ring** at **20× area saving**; reversible branching works (ADR-0034). **Physical closure achieved**: the R1 rail-role-swap cell (ADR-0040, real ngspice, adiabatic slope −1) makes lowering garbage-free -- the step is ancilla-clean (`ancillas_restored: true`, 945 dirty → 0), so the default runner `run == eval^R` closes with **zero** re-supplied boundary. The machine-level **money plot** confirms it: energy/step falls at adiabatic slope **−0.997**, crossing below the flat CMOS ½CV² floor at t_ramp ≈ 2.1e-8 s (active logic below CMOS across the whole clock range). |
 | **v0.2 dialect** software | ✅ **done** | μ-types + `iter`/`fold`/`unfold`: core + eval + surface syntax + **netlist lowering** + diagnostics; writable `.thse` programs run source→cells (ADRs 0035-0039) |
-| **Surface → TISC-1 compiler** (the #1 goal) | ✅ **M-A→M-E path complete: `.thse` → ROM → CPU (`run_on_cpu==eval`) → measured joules** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive), **M-B** (reversible branching + **data-dependent iter** + general controlled ops + bare sums, ADR-0043), **M-C1** (register↔scratch **spill**, ADR-0044), and **M-C2 Layer 1** (resident **memory** + a reversible `MEXCH` exchange instruction + 1-of-N Fredkin tree, ADR-0046) all compile → ROM → run on the CPU → `run_on_cpu == eval` (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. Leaf ceiling now **14 + N** (straight-line) / **12 + N** (branching), N=4 resident memory words. **Conjecture C1 discharged** (the addressed-exchange tree is whole-domain ancilla-clean). Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience. Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042). **M-C2 Stage 1a** (externalize `MemState` into the `(CpuState,MemState)` composite carrier + `system_step` + composite oracle) is **done** (merged `8f27ba0`) -- **C1 now discharged on the *real* re-targeted `select_mem` tree at N∈{2,4,8}**, State narrowed 24→20 fields, width-parameterized routing + one `cross_ctrl_fredkin` primitive. **M-C2 Stage 1b-A** (merged `1f59744`) makes the memory exchange **non-degenerate**: a `BusMsg` factor + the **emit/mem/absorb** 3-cycle (mem tree re-keyed on `BusMsg.addr` → touches **zero CpuState fields**, **§6 line-audit passes**), value-level `system_step == eval`, C1 re-verified on `select_mem_on_bus` at N∈{2,4,8}. **M-C2 Stage 1b-B** (merged `75c5a13`) closes it: `system_step` runs through a recirculating **`SystemRing`** and the **composite closure certificate holds** -- `system_step` lowers **ancilla-clean**, `run == run_open == eval(system_step)^R`, bus-quiescent -- **realizing Theorem 3.5 (the composite ring `CPU⊗bus⊗memory` closes zero-garbage)**. **Stage 1b COMPLETE.** **M-C2 Stage 2** (physical two-body separation) is **done**: **2a** (merged `2810bab` + cert-hardening `24ae386`) splits `system_step` into `cpu_pre`/`mem_body`/`cpu_post` on **reduced carriers** (MemState physically absent from the CPU bodies -- the line-audit is now a *structural* fact, not a scan), a `TwoBodyRing` recirculates the three bodies and proves `two_body == SystemRing == eval^R` (authoritative wide-strided tier + direct per-body ancilla certificate); **2b-lite** (merged `2741a39`) adds a static realizability certificate -- `TwoBodyTiming` validates the absolute-tick arrival equations + equal period (`D_cpu=D_mem=3028≡0 mod 4`) + phase closure, proving the two loops clock in lockstep (F1 same-revolution servicing, no pipeline skew). **Stage 2 COMPLETE** (2b-full compact-output-padder / materialized netlist deferred to the memory energy-ledger, ADR-0046 §9). **M-D (arbitrary `.thse`) IN PROGRESS** -- recursion + allocation + addressing thirds done: **M-D.a** (`cf0639a`) compiles list `Fold`/`Unfold` via guarded static unroll (per-copy displaced `Ctx`, real-CPU oracle green); **M-D.alloc1** (`13ca492`) makes the register allocator **occupancy-aware** (`OccSet` bitmask -- fixed a *reproduced pre-existing M-B silent-corruption bug* where a sub-context's "free" register held live data); **M-D.alloc2** (`a8b8fcc`) safely *rejects* doubly-nested skip-block control (reject-don't-corrupt; correct nested compilation deferred); **M-D.b** (`c229920`) adds **data-dependent memory addressing** -- a `MEXCHR rd,ra` instruction (`reg[rd] ↔ mem[reg[ra] % N]`) whose address is a register value, preserving the Stage-1b bus-quiescence closure via `absorb=sym(emit)` cancellation (enforced by `ra≠rd`), verified by the real lowered `SystemRing == eval^R`. **M-D control track + M-E COMPLETE:** **M-D.w** (`a2479b9`) static-WCET harness + reversible park-at-end (ADR-0007 TH-1); **M-D.d** (`6d180bf`) **`Trace` as a reversible while-loop** -- a runtime backward jump, real-CPU `== eval` + `SystemRing` closure; **M-E** (`8c82630`) prices a compiled ROM in **measured joules** (fib `6.62e-8 J`, WCET park tax 16.67%, honest crossing 4.62e-8 s). **Post-finale frontier** (a *cluster*, per ADR-0007 **TH-1b** + the [test-program roadmap](test-program-roadmap.md)): real variable-`T` loops (GCD/Collatz) need **M-D.e loop-carrier spill + widen-PC + typed iteration bounds** together; plus reversible **calling convention** (M-D.d2) and **heap** (M-D.c). Design docs: `docs/scratch/md*.md`, `mdw/mdd/mdc/me-design.md`; reviews `docs/reviews/` (L21) |
+| **Surface → TISC-1 compiler** (the #1 goal) | ✅ **M-A→M-E path complete: `.thse` → ROM → CPU (`run_on_cpu==eval`) → measured joules** | compile `.thse` → a ROM the CPU fetches/executes. **M-A** (non-recursive), **M-B** (reversible branching + **data-dependent iter** + general controlled ops + bare sums, ADR-0043), **M-C1** (register↔scratch **spill**, ADR-0044), and **M-C2 Layer 1** (resident **memory** + a reversible `MEXCH` exchange instruction + 1-of-N Fredkin tree, ADR-0046) all compile → ROM → run on the CPU → `run_on_cpu == eval` (`theseus-tisc::compile`). The **real `iter Nat fibStep`** (`0022-fib.thse`) → a 24-instr ROM computing Fibonacci on the CPU. Leaf ceiling now **14 + N** (straight-line) / **12 + N** (branching), N=4 resident memory words. **Conjecture C1 discharged** (the addressed-exchange tree is whole-domain ancilla-clean). Authority is the real `step`-iso CPU; the fast byte-sim is a pinned convenience. Milestone path **M-A→M-B→M-C→M-D→M-E** (ADR-0042). **M-C2 Stage 1a** (externalize `MemState` into the `(CpuState,MemState)` composite carrier + `system_step` + composite oracle) is **done** (merged `8f27ba0`) -- **C1 now discharged on the *real* re-targeted `select_mem` tree at N∈{2,4,8}**, State narrowed 24→20 fields, width-parameterized routing + one `cross_ctrl_fredkin` primitive. **M-C2 Stage 1b-A** (merged `1f59744`) makes the memory exchange **non-degenerate**: a `BusMsg` factor + the **emit/mem/absorb** 3-cycle (mem tree re-keyed on `BusMsg.addr` → touches **zero CpuState fields**, **§6 line-audit passes**), value-level `system_step == eval`, C1 re-verified on `select_mem_on_bus` at N∈{2,4,8}. **M-C2 Stage 1b-B** (merged `75c5a13`) closes it: `system_step` runs through a recirculating **`SystemRing`** and the **composite closure certificate holds** -- `system_step` lowers **ancilla-clean**, `run == run_open == eval(system_step)^R`, bus-quiescent -- **realizing Theorem 3.5 (the composite ring `CPU⊗bus⊗memory` closes zero-garbage)**. **Stage 1b COMPLETE.** **M-C2 Stage 2** (physical two-body separation) is **done**: **2a** (merged `2810bab` + cert-hardening `24ae386`) splits `system_step` into `cpu_pre`/`mem_body`/`cpu_post` on **reduced carriers** (MemState physically absent from the CPU bodies -- the line-audit is now a *structural* fact, not a scan), a `TwoBodyRing` recirculates the three bodies and proves `two_body == SystemRing == eval^R` (authoritative wide-strided tier + direct per-body ancilla certificate); **2b-lite** (merged `2741a39`) adds a static realizability certificate -- `TwoBodyTiming` validates the absolute-tick arrival equations + equal period (`D_cpu=D_mem=3028≡0 mod 4`) + phase closure, proving the two loops clock in lockstep (F1 same-revolution servicing, no pipeline skew). **Stage 2 COMPLETE** (2b-full compact-output-padder / materialized netlist deferred to the memory energy-ledger, ADR-0046 §9). **M-D (arbitrary `.thse`) IN PROGRESS** -- recursion + allocation + addressing thirds done: **M-D.a** (`cf0639a`) compiles list `Fold`/`Unfold` via guarded static unroll (per-copy displaced `Ctx`, real-CPU oracle green); **M-D.alloc1** (`13ca492`) makes the register allocator **occupancy-aware** (`OccSet` bitmask -- fixed a *reproduced pre-existing M-B silent-corruption bug* where a sub-context's "free" register held live data); **M-D.alloc2** (`a8b8fcc`) safely *rejects* doubly-nested skip-block control (reject-don't-corrupt; correct nested compilation deferred); **M-D.b** (`c229920`) adds **data-dependent memory addressing** -- a `MEXCHR rd,ra` instruction (`reg[rd] ↔ mem[reg[ra] % N]`) whose address is a register value, preserving the Stage-1b bus-quiescence closure via `absorb=sym(emit)` cancellation (enforced by `ra≠rd`), verified by the real lowered `SystemRing == eval^R`. **M-D control track + M-E COMPLETE:** **M-D.w** (`a2479b9`) static-WCET harness + reversible park-at-end (ADR-0007 TH-1); **M-D.d** (`6d180bf`) **`Trace` as a reversible while-loop** -- a runtime backward jump, real-CPU `== eval` + `SystemRing` closure; **M-E** (`8c82630`) prices a compiled ROM in **measured joules** (fib `6.62e-8 J`, WCET park tax 16.67%, honest crossing 4.62e-8 s). **Post-finale frontier** (a *cluster*, per ADR-0007 **TH-1b** + the [test-program roadmap](test-program-roadmap.md)): real variable-`T` loops (GCD/Collatz) need **M-D.e loop-carrier spill + widen-PC + typed iteration bounds** together; plus reversible **calling convention** (M-D.d2) and **heap** (M-D.c). |
 | **stdlib** | ✅ increment 1-2 | implicit prelude (`Bit`, `Nat`, `notb`, `swapBit`, `cnot`, `toffoli`) via structural-dedup merge -- no imports needed; a compositional reversible adder demonstrates arithmetic composes (ADR-0038 constraint respected) |
 | **M2** FPGA / Verilator | ⏸ parked | still stubs; a demo, not a phase |
 
@@ -381,7 +376,7 @@ All under `nix develop` (e.g. `nix develop --command bash -c '<cmd>'`):
 - **The programs themselves** are built as Core-Π `Iso`s (no surface syntax for resident
   arrays yet); the builders live in `examples/array_histogram.rs` and the `tests/`
   (`array_map.rs`, `xor_reduce.rs`). Whole-domain `run_on_cpu == eval` oracles + the
-  real-`system_step` (L19) tiers run via `cargo test -p theseus-tisc [--test <file>]
+  real-`system_step` tiers run via `cargo test -p theseus-tisc [--test <file>]
   [-- --ignored]`.
 
 ## TISC-1 (the M4-v1 CPU) -- `crates/theseus-tisc`
@@ -514,7 +509,7 @@ ISA. The design is ADR-0042, decomposed into milestones:
     routine tests assert `fast == eval` (~40 s), while authoritative `#[ignore]`d
     `*_real_cpu` tests assert `real == eval` (run pre-merge via `--ignored`,
     ~30 min). A green fast-sim alone is *not* acceptance -- it would only prove the
-    compiler agrees with a second interpreter by the same author (cf. L15).
+    compiler agrees with a second interpreter by the same author (a fast-sim-vs-real-machine hazard).
 - **M-C1 -- done (ADR-0044).** Reversible register↔scratch **spill**: leaves beyond
   the 8-register file page into scratch `s2..s7` via the existing `Xchg` swap,
   lifting the ceiling to **14** (straight-line) / **12** (branching). Pure
@@ -617,8 +612,7 @@ depth-tracking bug) that unit tests missed.
   the [test-program roadmap](test-program-roadmap.md) + ADR-0007 **TH-1b** sizing law):
   real variable-`T` loop programs (GCD/Collatz) need **M-D.e (loop-carrier spill) +
   widen-PC + typed iteration bounds** together; plus a reversible **calling convention**
-  (M-D.d2) and **heap** (M-D.c1 widening / c2). Design docs `docs/scratch/md*.md`,
-  `mdw/mdd/mdc/me-design.md`, `tp1-gcd-design.md`; reviews `docs/reviews/`. A pre-existing
+  (M-D.d2) and **heap** (M-D.c1 widening / c2). A pre-existing
   latent `AssocSum` nested-sum no-op miscompile is now loudly rejected (F7).
 - **Energy-price a compiled loop** -- now that `iter`/`fold`/`unfold` (and
   compiled ROMs) lower to cells, run one through `theseus-spice::annotate` for a

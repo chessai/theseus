@@ -86,9 +86,9 @@
 > a 4th payload leaf by paging a zero-init padding leaf to `Scratch(2)` across the backward jump --
 > `MAX_LEAVES_LOOP` 3→4, `n_input+1 ≤ budget` guard (live-input spill still rejected), pinned
 > `check_pattern_kleaf`/`mde_spill_walk` recognizer, whole-body paging bracket (2 `Xchg`). Highest-bar
-> `lower_trace` change: full L19/L20/L21, implementation review SHIP, **real `system_step`==eval across 5
+> `lower_trace` change: adversarial review and a reproducing regression test, implementation review SHIP, **real `system_step`==eval across 5
 > back-edges with the spilled leaf live** + `validate()==Ok`/eval^R. Machinery-proof (like M-D.d), not
-> yet a useful program. Reviews `docs/reviews/mde-spill-{design-review-r2,impl-review}.md`.
+> yet a useful program.
 > **BVEQ arc -- symbolic-BDD recognizer trust core (2026-07-21/22, tip ~`75ff066`+):** a `bveq` module
 > proves two fixed-width bit-vector functions equal via canonical BDD (`biodivine-lib-bdd`, pure Rust),
 > breaking the recognizer's "2-operand enumeration wall". **slice-1** (`5eeca29`): `equiv` + `symbolic_exec`
@@ -104,8 +104,8 @@
 > candidate, `equiv` vs the spec-derived `RegTransfer`, first pass wins -- sound by construction) -- the
 > `Flat(8)³` wall-break payoff: a masked-accum prim is recognized to `[Ccnot]` at full `Flat(8)` with the
 > 2²⁴ table never built. implementation review SHIP-WITH-FIXES (A-1 remap teeth test + E-1 admit-first doc
-> applied, teeth-verified; `docs/reviews/bveq-slice3b-impl-review.md`). Every slice: full L19/L20/L21;
-> reviews `docs/reviews/bveq-*`; design `docs/scratch/bveq-*`. Two lessons: a worker who can't run cargo
+> applied, teeth-verified). Every slice: adversarial review and a reproducing regression test.
+> Two lessons: a worker who can't run cargo
 > can't catch a semantic bug (advisor finishes those); "tests pass" ≠ "tests have teeth" (flip-verify every
 > reproducer). **Gate infra (`76fd4ca` + tiering next):** the energy tests fragmented glibc arenas to ~86 GB
 > and SIGKILL'd the gate -- fixed via `MALLOC_ARENA_MAX=1` in flake.nix (→48 GB). The full tisc suite also
@@ -115,10 +115,10 @@
 > (`A_i = a_i ⊕ (¬a_{i+1} ∧ a_{i+2})`, SHA-3's nonlinear step) bit-sliced over Flat(8) -- 5 lanes × Flat(8),
 > one byte-parallel `Ccnot` (the BVEQ-delivered masked-AND) does the χ gate for 8 Keccak rows at once.
 > Hand-composed 17-instr in-place ROM (NEVER lowers -- no recognizer/lower change). **8× bit-slicing:
-> 5.25e-9 J/row-χ.** Rev-A (garbage-free UNDER-ADJOINT -- honest; forward-only leaves ancillas dirty, an L20
+> 5.25e-9 J/row-χ.** Rev-A (garbage-free UNDER-ADJOINT -- honest; forward-only leaves ancillas dirty, a regression
 > assertion; χ is a bijection not an involution). design review BUILT a POC + caught the garbage-free
-> error; delegated productionization verified (fast tier + heavy system-ring L19 authority, advisor-run
-> single-threaded 3/3 green). Reviews `docs/reviews/sbox-chi-design-review.md`, `docs/scratch/sbox-chi-*`.
+> error; delegated productionization verified (fast tier + heavy system-ring authority, advisor-run
+> single-threaded 3/3 green).
 > **Gate tiering DONE** (`7c78692`): 23 heavy `theseus-tisc` binaries feature-gated (`heavy-tests`) by
 > MEASURED runtime so the delegation gate is seconds not ~50 min; advisor runs `--features heavy-tests --
 > test-threads=1` pre-merge (CONTRIBUTING + maestro-advisor SKILL updated).
@@ -126,10 +126,9 @@
 > **TP-5 slice-2 (`9e41e6e`, MERGED -- first full byte-substitution S-box):** the **PRESENT 4-bit S-box**,
 > bit-sliced over Flat(8) -- a 47-instr ANF circuit (31 `Ccnot` + 10 `Xor` + 2 `Xori` + 4 `Xchg`), Rust-
 > composed (never lowers). **STANDALONE garbage-free** (inputs preserved ⇒ temps uncomputed; stronger than
-> χ's under-adjoint). 8× bit-slicing (3.52e-8 J/S-box). Verified vs the published table + system-ring L19
+> χ's under-adjoint). 8× bit-slicing (3.52e-8 J/S-box). Verified vs the published table + system-ring
 > authority. Design-review also proved **AES-8 INFEASIBLE** on the current 18-slot machine (peak-live 30 >
-> 18; 115-gate Boyar-Peralta circuit validated vs an independent GF-inversion table). Reviews
-> `docs/reviews/sbox-aes-design-review.md`.
+> 18; 115-gate Boyar-Peralta circuit validated vs an independent GF-inversion table).
 > **T-LOOPS ARC (variable-T loops).** slice-1a **EXACT-K_MAX (`e918e33`, MERGED):** the Trace WCET bound
 > `k_max=|u|+1` (full carrier cardinality -- the BINDING wall, NOT the PC) is now trajectory-derived
 > (`k_exact = max applications-to-exit + 1` via an `exec_instr` walk from every real input, `|u|+1`
@@ -137,20 +136,19 @@
 > SOUNDNESS-CRITICAL `lower_trace` change -- HIGHEST BAR; adversarial review SHIP (register-layout
 > attack closed by the pre-walk F-1 guard; fast oracle proven to detect park-wrap) + real-`system_step`
 > H1 authority (2/2, ~2h). The design-review had REFUTED the naive "small GCD fits today" hypothesis
-> (4 walls; widen-PC is NOT the first wall -- alone it just fits a 99.97%-park program). Reviews
-> `docs/reviews/tloops-slice1{,a}-*`. **slice-1b (gcd2 recognizer) POC** de-risked the recognizer
+> (4 walls; widen-PC is NOT the first wall -- alone it just fits a 99.97%-park program).
+> **slice-1b (gcd2 recognizer) POC** de-risked the recognizer
 > machinery (pinned `gcd2_hist_bytes`) but found the 2-bit GCD is **BLOCKED-AT-EMISSION**: the minimal
-> reversible walk is ~60 instrs vs the ≤40 the WCET-256 budget allows (`docs/reviews/tloops-slice1b-recognizer-poc.md`).
+> reversible walk is ~60 instrs vs the ≤40 the WCET-256 budget allows.
 > Unblockers: widen-PC, a `Csub` ISA op, a spare reg, or a smaller-T_max algorithm. **CHOSEN ROUTE (IN
 > FLIGHT):** **Slice A -- narrow the fetch address-compare** to `A=⌈log₂(B+S_max)⌉` bits (the PC's high bits
-> are provably zero) -- lowers step_j today AND makes widen-PC nearly free (`docs/scratch/fetch-narrow-compare-design.md`;
-> memory `tloops-fetch-narrow-state`). **THEN Slice B widen-PC** (now cheap, B>256) **→ Slice C the 8-bit
+> are provably zero) -- lowers step_j today AND makes widen-PC nearly free (memory
+> `tloops-fetch-narrow-state`). **THEN Slice B widen-PC** (now cheap, B>256) **→ Slice C the 8-bit
 > GCD** (recognizer already pinned) = the first genuine variable-T algorithm. Fetch/decoder = HIGHEST BAR;
 > the fast oracle is BLIND to fetch so validation is real-`system_step` only.
 > **Other follow-ups (each its own slice + review):** AES-8 S-box (recomputation-bounded schedule / wider
 > register file); factored fewer-`Ccnot` PRESENT; Rev-B true-in-place χ⁻¹ cleanup; multi-round Keccak-f
-> (θ/ρ/π/ι). Design docs `docs/scratch/{md*,valwidth-flat,bveq-*,sbox-*,tloops-*}.md`; reviews
-> `docs/reviews/` (L21).
+> (θ/ρ/π/ι).
 > See [Project status](status.md). The post-v1
 > DAG below is largely realized -- the physically-closing (zero-garbage) ring and
 > the CPU money plot are now **done** (ADR-0040 R1 cell; `theseus-tisc::money_plot`

@@ -17,7 +17,7 @@ program (`swapMaybe`) -- all `== theseus_eval::eval`.
 `compile::run_on_cpu`, which runs the ROM on the **real `step` core-iso CPU**
 we energy-account. A first cut wired the oracle to a faster hand-written
 byte-level simulator (`run_on_cpu_fast`); that only proves the compiler agrees
-with a second interpreter by the same author (cf. L15), not the real machine.
+with a second interpreter by the same author (a fast-sim-vs-real-machine hazard), not the real machine.
 The fast simulator is retained as a *pinned convenience* -- routine tests assert
 `fast == eval`; authoritative `#[ignore]`d `*_real_cpu` tests assert
 `real == eval` (run pre-merge via `--ignored`, ~30 min because each step-iso

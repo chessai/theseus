@@ -647,7 +647,7 @@ marshalling and are thereafter conserved, budgeted resources** -- at the iso
 level (no uniti-manufactured bus word, Proposition 4.1), at the ISA level
 (aux zero-source, Lemma 7.1), and at the ring level (the bus's rest-zero is
 re-established each revolution by conjugation, never re-created, Lemma 3.3).
-The frozen-unroll consistency requirement (`0044:128-135`, the L15 class) is
+The frozen-unroll consistency requirement (`0044:128-135`, the fast-sim-vs-real-machine class) is
 why these disciplines must hold at every canonical boundary, not merely at
 program start.
 
@@ -706,7 +706,7 @@ conjecture outranks a hand-waved theorem):
   discharge is the Stage-1 composite certificate itself:
   `restored_ok ∧ run == run_open ∧ run == eval(system_step)^R` plus the §5
   line audit, run end-to-end on the single-body composite ring before any
-  two-body `SystemRing` (`0045-mc2-memory-bus.md:96-101`) -- the L15-safe
+  two-body `SystemRing` (`0045-mc2-memory-bus.md:96-101`) -- the fast-vs-real-safe
   ordering.
 - **Domain coverage of the pointwise certificate.** `ancillas_restored` is
   checked at sampled starts plus the hard assertion on every actual run start

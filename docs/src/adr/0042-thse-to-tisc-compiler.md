@@ -62,8 +62,7 @@ on a finite domain, so the target is finite.
   `Fold`/`Unfold`/`Trace`, reversible calling convention. Depends on M-B
   (sum dispatch) and M-C (heap storage).
 
-  **Status -- IN PROGRESS (theseus-v2 `c229920`).** Key reframe (design
-  `docs/scratch/md-design.md`, adversarially reviewed): theseus finitizes
+  **Status -- IN PROGRESS (theseus-v2 `c229920`).** Key reframe (adversarially reviewed): theseus finitizes
   recursive types by bounded unrolling (ADR-0035, depth 4), so `Fold`/`Unfold`
   are *bounded* and compile via M-B's guarded static unroll -- the genuinely new
   work is heap + data-dependent addressing; `Trace` is *not* unrollable

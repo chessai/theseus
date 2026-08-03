@@ -23,15 +23,13 @@ applies throughout: forward totality does **not** imply backward totality
   machinery* (a static budget the compiler emits, plus a reversible
   park-at-end making over-running to the budget answer-preserving) is
   **implemented for the straight-line fragment** by M-D.w (theseus-v2
-  `a2479b9`; `wcet()`/`run_rom_on_cpu`, `docs/scratch/mdw-design.md`;
+  `a2479b9`; `wcet()`/`run_rom_on_cpu`;
   monotone `B = rom.len()`, two-direction equal by construction). The
   **loop term** `B = spine + (|u|+1)·|body|` and its two-direction bound
-  land with M-D.d (`Trace` as a reversible while-loop,
-  `docs/scratch/mdd-design.md`).
+  land with M-D.d (`Trace` as a reversible while-loop).
 - **Trajectory-disjointness / carrier sizing law (TH-1b).** A stronger,
   *formulation-independent* consequence of body injectivity, and the design
-  law for every `Trace` program (surfaced by the TP-1 GCD review,
-  `docs/reviews/tp1-gcd-review.md`): a bijective body is
+  law for every `Trace` program (surfaced by the TP-1 GCD review): a bijective body is
   backward-deterministic, so **trajectories from distinct inputs are
   vertex-disjoint in `Left(u)`** (a shared carrier state would have two
   predecessors walking back to two different `Right` entries). Hence:
