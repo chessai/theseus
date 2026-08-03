@@ -825,10 +825,10 @@ impl StateVals {
         }
         let pc = read_pc_bits(&all_bits);
         let br = u16::from(read_u8_bits(&all_bits, BR_FIELD * W));
-        let ir = read_ir_bits(&all_bits, 10 * W);
+        let ir = read_ir_bits(&all_bits, IR_B0_FIELD * W);
         let mut scratch = [0u8; NUM_SCRATCH];
         for (i, s) in scratch.iter_mut().enumerate() {
-            *s = read_u8_bits(&all_bits, (14 + i) * W);
+            *s = read_u8_bits(&all_bits, scratch_field(i) * W);
         }
 
         StateVals {
@@ -929,10 +929,10 @@ pub fn decode_composite(val: &Value) -> StateVals {
     }
     let pc = read_pc_bits(&cpu_bits);
     let br = u16::from(read_u8_bits(&cpu_bits, BR_FIELD * W));
-    let ir = read_ir_bits(&cpu_bits, 10 * W);
+    let ir = read_ir_bits(&cpu_bits, IR_B0_FIELD * W);
     let mut scratch = [0u8; NUM_SCRATCH];
     for (i, s) in scratch.iter_mut().enumerate() {
-        *s = read_u8_bits(&cpu_bits, (14 + i) * W);
+        *s = read_u8_bits(&cpu_bits, scratch_field(i) * W);
     }
 
     let mem_bits = bits_of(mem_val, &mem_ty).expect("decode_composite: mem bits");

@@ -408,8 +408,9 @@ impl OccSet {
     }
 }
 
-/// Maximum leaves for straight-line programs (8 regs + s2..s7 + MEM_WORDS mem = 14+N).
-const MAX_LEAVES: usize = 14 + MEM_WORDS;
+/// Maximum leaves for straight-line programs (8 regs + s2..s7 + MEM_WORDS mem
+/// = REG_PLUS_SCRATCH + N).
+const MAX_LEAVES: usize = REG_PLUS_SCRATCH + MEM_WORDS;
 
 /// Maximum leaves for branching programs (need 2 free-zero cells for aux
 /// zero-source, ADR-0044 §2.4 / ADR-0046 §3.1). The skip-block aux-draw reject
@@ -447,6 +448,23 @@ const W_BR16: usize = 16;
 /// First spillable scratch index (s0/s1 are decoder-reserved).
 const SCRATCH_SPILL_BASE: u8 = 2;
 
+/// Number of leaf-home slots that live in the register file plus usable
+/// scratch (s2..s7): `NUM_REGS` registers + `NUM_SCRATCH - SCRATCH_SPILL_BASE`
+/// spillable scratch words = 8 + 6 = 14. Leaves at or above this index home to
+/// memory. Names the bare `14` that recurred at every placement/assert site.
+const REG_PLUS_SCRATCH: usize = NUM_REGS + (NUM_SCRATCH - SCRATCH_SPILL_BASE as usize);
+
+/// Offset that maps a head leaf index in `[NUM_REGS, REG_PLUS_SCRATCH)` to its
+/// scratch word: `Scratch(leaf - SCRATCH_OFFSET)` = Scratch(2..8) for leaf
+/// 8..14. Equals `NUM_REGS - SCRATCH_SPILL_BASE` = 6.
+const SCRATCH_OFFSET: usize = NUM_REGS - SCRATCH_SPILL_BASE as usize;
+
+/// Register used as the transient carrier for Scratch<->Scratch,
+/// Scratch<->Mem, and Mem<->Mem home swaps in `swap_homes` (which have no
+/// direct exchange instruction). r0 is safe here: swaps run only in canonical
+/// layout, where the three-step self-inverse bracket restores it.
+const SWAP_TEMP_REG: u8 = 0;
+
 // ── Placement (sole layout function -- F-5) ──────────────────────────
 
 /// The SOLE placement function for leaf→location mapping.
@@ -460,17 +478,17 @@ fn home_of(leaf: usize, n_leaves: usize, resident: usize) -> Location {
         Location::Mem((leaf - head) as u8)
     } else if leaf < NUM_REGS {
         Location::Reg(leaf as u8)
-    } else if leaf < 14 {
+    } else if leaf < REG_PLUS_SCRATCH {
         // NOTE (M-D.e 3b): canonical leaf 8 maps here to Scratch(2) =
         // SCRATCH_SPILL_BASE -- the same slot `lower_trace` pages a spilled
         // loop-carrier leaf to. Unreachable under Trace at MAX_LEAVES_LOOP=4
-        // (would need n_input ≥ 9), but the collision is pinned here at the
+        // (would need n_input >= 9), but the collision is pinned here at the
         // producer as well as at the spill site in `lower_trace`.
-        Location::Scratch((leaf - 6) as u8)
+        Location::Scratch((leaf - SCRATCH_OFFSET) as u8)
     } else {
         // This case should not be reachable if bounds are checked,
         // but for safety map to Mem (will be caught by bounds check).
-        Location::Mem((leaf - 14) as u8)
+        Location::Mem((leaf - REG_PLUS_SCRATCH) as u8)
     }
 }
 
@@ -675,7 +693,7 @@ fn swap_homes(ctx: &Ctx, leaf_a: usize, leaf_b: usize) -> Vec<Instr> {
             if sa == sb {
                 return vec![];
             }
-            let tmp = 0u8;
+            let tmp = SWAP_TEMP_REG;
             vec![
                 Instr::Xchg { rd: tmp, sx: sa },
                 Instr::Xchg { rd: tmp, sx: sb },
@@ -685,7 +703,7 @@ fn swap_homes(ctx: &Ctx, leaf_a: usize, leaf_b: usize) -> Vec<Instr> {
         (Location::Scratch(sx), Location::Mem(addr))
         | (Location::Mem(addr), Location::Scratch(sx)) => {
             // Scratch↔Mem via temp register: Xchg into reg, Mexch, Xchg back.
-            let tmp = 0u8;
+            let tmp = SWAP_TEMP_REG;
             vec![
                 Instr::Xchg { rd: tmp, sx },
                 Instr::Mexch { rd: tmp, addr },
@@ -697,7 +715,7 @@ fn swap_homes(ctx: &Ctx, leaf_a: usize, leaf_b: usize) -> Vec<Instr> {
                 return vec![];
             }
             // Mem↔Mem via temp register.
-            let tmp = 0u8;
+            let tmp = SWAP_TEMP_REG;
             vec![
                 Instr::Mexch { rd: tmp, addr: a },
                 Instr::Mexch { rd: tmp, addr: b },
@@ -3070,12 +3088,12 @@ pub fn compile_with_metadata_resident(iso: &Iso, resident: usize) -> Result<Lowe
             max: MEM_WORDS,
         });
     }
-    // Reject: head leaves > 14
+    // Reject: head leaves > REG_PLUS_SCRATCH (8 regs + 6 scratch)
     let head = n - resident;
-    if head > 14 {
+    if head > REG_PLUS_SCRATCH {
         return Err(CompileError::TooManyLeaves {
             needed: head,
-            max: 14,
+            max: REG_PLUS_SCRATCH,
         });
     }
     let ctx = Ctx::new_resident(n, resident);
