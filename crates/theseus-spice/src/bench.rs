@@ -95,26 +95,6 @@ pub fn run_energy(netlist: &str, meas_name: &str) -> f64 {
     })
 }
 
-/// Sweep clock period over a parameterized netlist.
-///
-/// `netlist_template` must contain the literal placeholder `{PERIOD}` which
-/// will be replaced with each period value (in seconds, scientific notation).
-/// Returns `Vec<(period_s, energy_J)>`.
-pub fn sweep_period(
-    netlist_template: &str,
-    meas_name: &str,
-    periods: &[f64],
-) -> Vec<(f64, f64)> {
-    periods
-        .iter()
-        .map(|&t| {
-            let netlist = netlist_template.replace("{PERIOD}", &format!("{:.6e}", t));
-            let e = run_energy(&netlist, meas_name);
-            (t, e)
-        })
-        .collect()
-}
-
 /// DC probe: charge a capacitor through a resistor from a DC source and
 /// measure the steady-state cap voltage (should equal `v_volt`).
 ///
