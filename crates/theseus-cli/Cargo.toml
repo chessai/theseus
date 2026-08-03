@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+clap = { workspace = true }
 theseus-syntax = { path = "../theseus-syntax" }
 theseus-check = { path = "../theseus-check" }
 theseus-eval = { path = "../theseus-eval" }

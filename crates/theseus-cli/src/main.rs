@@ -3,37 +3,66 @@
 use std::fs;
 use std::process;
 
+use clap::{Parser, Subcommand};
+
 use theseus_cli::lower;
 use theseus_cli::pipeline;
 use theseus_cli::repl::Repl;
 use theseus_cli::value;
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() < 2 {
-        eprintln!("usage: theseus <check|run|repl|lower> ...");
-        process::exit(1);
-    }
+/// theseus -- minimal CLI driver.
+#[derive(Parser)]
+#[command(name = "theseus", version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
 
-    match args[1].as_str() {
-        "check" => cmd_check(&args[2..]),
-        "run" => cmd_run(&args[2..]),
-        "repl" => cmd_repl(&args[2..]),
-        "lower" => cmd_lower(&args[2..]),
-        other => {
-            eprintln!("unknown subcommand: {other}");
-            process::exit(1);
-        }
+#[derive(Subcommand)]
+enum Command {
+    /// Type-check a program and report diagnostics.
+    Check {
+        /// Path to the source file.
+        file: String,
+    },
+    /// Run an iso on a value.
+    Run {
+        /// Path to the source file.
+        file: String,
+        /// Name of the iso to run.
+        iso: String,
+        /// Value to feed the iso; remaining args are joined by spaces.
+        #[arg(required = true, num_args = 1..)]
+        value: Vec<String>,
+    },
+    /// Load a program and start the bidirectional-stepping REPL.
+    Repl {
+        /// Path to the source file.
+        file: String,
+    },
+    /// Lower an iso to cells and run the differential oracle.
+    Lower {
+        /// Path to the source file.
+        file: String,
+        /// Name of the iso to lower.
+        iso: String,
+    },
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Command::Check { file } => cmd_check(&file),
+        Command::Run { file, iso, value } => cmd_run(&file, &iso, &value),
+        Command::Repl { file } => cmd_repl(&file),
+        Command::Lower { file, iso } => cmd_lower(&file, &iso),
     }
 }
 
-fn cmd_check(args: &[String]) {
-    if args.is_empty() {
-        eprintln!("usage: theseus check <FILE>");
-        process::exit(1);
-    }
-    let src = fs::read_to_string(&args[0]).unwrap_or_else(|e| {
-        eprintln!("error reading {}: {e}", args[0]);
+fn cmd_check(file: &str) {
+    let src = fs::read_to_string(file).unwrap_or_else(|e| {
+        eprintln!("error reading {file}: {e}");
         process::exit(1);
     });
     match pipeline::diagnostics(&src) {
@@ -51,17 +80,12 @@ fn cmd_check(args: &[String]) {
     }
 }
 
-fn cmd_run(args: &[String]) {
-    if args.len() < 3 {
-        eprintln!("usage: theseus run <FILE> <iso> <value>");
-        process::exit(1);
-    }
-    let src = fs::read_to_string(&args[0]).unwrap_or_else(|e| {
-        eprintln!("error reading {}: {e}", args[0]);
+fn cmd_run(file: &str, iso_name: &str, value: &[String]) {
+    let src = fs::read_to_string(file).unwrap_or_else(|e| {
+        eprintln!("error reading {file}: {e}");
         process::exit(1);
     });
-    let iso_name = &args[1];
-    let val_str = args[2..].join(" ");
+    let val_str = value.join(" ");
 
     let ep = match pipeline::elaborate(&src) {
         Ok(ep) => ep,
@@ -106,13 +130,9 @@ fn cmd_run(args: &[String]) {
     println!("{}", value::render(&result, &sig.rhs, &ep.env));
 }
 
-fn cmd_repl(args: &[String]) {
-    if args.is_empty() {
-        eprintln!("usage: theseus repl <FILE>");
-        process::exit(1);
-    }
-    let src = fs::read_to_string(&args[0]).unwrap_or_else(|e| {
-        eprintln!("error reading {}: {e}", args[0]);
+fn cmd_repl(file: &str) {
+    let src = fs::read_to_string(file).unwrap_or_else(|e| {
+        eprintln!("error reading {file}: {e}");
         process::exit(1);
     });
 
@@ -137,16 +157,11 @@ fn cmd_repl(args: &[String]) {
     repl.run(&mut input, &mut output);
 }
 
-fn cmd_lower(args: &[String]) {
-    if args.len() < 2 {
-        eprintln!("usage: theseus lower <FILE> <iso>");
-        process::exit(1);
-    }
-    let src = fs::read_to_string(&args[0]).unwrap_or_else(|e| {
-        eprintln!("error reading {}: {e}", args[0]);
+fn cmd_lower(file: &str, iso_name: &str) {
+    let src = fs::read_to_string(file).unwrap_or_else(|e| {
+        eprintln!("error reading {file}: {e}");
         process::exit(1);
     });
-    let iso_name = &args[1];
 
     let lowered = match lower::surface_to_cells(&src, iso_name) {
         Ok(l) => l,

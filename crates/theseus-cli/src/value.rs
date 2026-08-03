@@ -280,7 +280,7 @@ fn render_named(v: &Value, type_name: &str, env: &Env) -> String {
         if let Some(payload) = try_extract_injection(v, &ci.path) {
             if let Some(payload_ty) = &ci.payload {
                 let inner = render(payload, payload_ty, env);
-                // If inner contains spaces or commas, it's already parenthesised.
+                // Render as `Ctor payload`; the payload prints itself.
                 return format!("{ctor_name} {inner}");
             } else {
                 return ctor_name.clone();
