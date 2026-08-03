@@ -35,7 +35,6 @@
 //!   below the token line lives inside the characterized cell
 //!   (`theseus-spice`); simulating it here is `sim_bits`, deferred.
 
-use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ir::cell::{CellKind, CellNetError, PhasedCellNetlist, RailPair};
@@ -58,46 +57,34 @@ pub struct SimResult {
 }
 
 /// Why a timed run refused to start or aborted.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SimError {
     /// The netlist is structurally invalid.
-    Net(CellNetError),
+    #[error("invalid netlist: {0}")]
+    Net(#[from] CellNetError),
     /// Wrong number of input tokens for the netlist's input ports.
+    #[error("netlist has {want} input ports, got {got} tokens")]
     InputWidth { want: usize, got: usize },
     /// A cell's inputs arrive on different ticks -- a wrong circuit under
     /// ADR-0026 C2.2 (the tick-exact balancer, a later slice, owes K0
     /// insertions). The timed sim refuses rather than letting the early
     /// token silently wait.
+    #[error("cell {cell} inputs arrive on ticks {arrivals:?} (C2.2: wrong circuit until balanced)")]
     Unbalanced { cell: usize, arrivals: Vec<u32> },
     /// Dynamic INV-TOKEN violation: at `tick`, this rail pair did not
     /// have exactly one line high. `None` means the line was never
     /// driven by that tick.
+    #[error(
+        "INV-TOKEN violated at tick {tick}: pair (l{}, l{}) has \
+         line0={line0_high:?}, line1={line1_high:?} (want exactly one high)",
+        .pair.line0.0, .pair.line1.0
+    )]
     InvToken {
         tick: u32,
         pair: RailPair,
         line0_high: Option<bool>,
         line1_high: Option<bool>,
     },
-}
-
-impl fmt::Display for SimError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SimError::Net(e) => write!(f, "invalid netlist: {e}"),
-            SimError::InputWidth { want, got } => {
-                write!(f, "netlist has {want} input ports, got {got} tokens")
-            }
-            SimError::Unbalanced { cell, arrivals } => write!(
-                f,
-                "cell {cell} inputs arrive on ticks {arrivals:?} (C2.2: wrong circuit until balanced)"
-            ),
-            SimError::InvToken { tick, pair, line0_high, line1_high } => write!(
-                f,
-                "INV-TOKEN violated at tick {tick}: pair (l{}, l{}) has line0={line0_high:?}, line1={line1_high:?} (want exactly one high)",
-                pair.line0.0, pair.line1.0
-            ),
-        }
-    }
 }
 
 /// The per-tick INV-TOKEN assertion for one rail pair: both lines driven

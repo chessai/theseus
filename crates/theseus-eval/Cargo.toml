@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 theseus-core = { path = "../theseus-core" }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

@@ -9,7 +9,6 @@
 //! input lines. Minimal-buffer = minimal-energy (ADR-0028): exactly the
 //! deficit, never more.
 
-use core::fmt;
 use std::collections::BTreeMap;
 
 use crate::ir::cell::{
@@ -18,36 +17,20 @@ use crate::ir::cell::{
 use crate::sim::SimResult;
 
 /// Error from the tick-exact balancer.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum BalanceError {
     /// The input netlist is structurally invalid (could not compute
     /// line arrivals).
-    CellNet(CellNetError),
-}
-
-impl fmt::Display for BalanceError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BalanceError::CellNet(e) => write!(f, "balance: invalid netlist: {e}"),
-        }
-    }
+    #[error("balance: invalid netlist: {0}")]
+    CellNet(#[from] CellNetError),
 }
 
 /// Error from the compact balanced simulator.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum CompactSimError {
     /// Wrong number of input tokens for the netlist's input ports.
+    #[error("compact sim: netlist has {want} input ports, got {got} tokens")]
     InputWidth { want: usize, got: usize },
-}
-
-impl fmt::Display for CompactSimError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CompactSimError::InputWidth { want, got } => {
-                write!(f, "compact sim: netlist has {want} input ports, got {got} tokens")
-            }
-        }
-    }
 }
 
 /// Compact balanced representation of a [`PhasedCellNetlist`].
@@ -73,9 +56,6 @@ pub struct CompactBalanced {
     /// `cell_input_delays[i][j]` = number of K0 buffer stages that
     /// [`balance`] would insert on cell `i`'s input port `j`.
     cell_input_delays: Vec<Vec<u32>>,
-    /// Per primary-output port: the K0 delay that [`balance`] would
-    /// insert. Currently always 0 (`balance()` preserves output skew).
-    output_delays: Vec<u32>,
     /// Cached Σ of all delays = number of K0 cells [`balance`] would
     /// materialize.
     total_k0_inserted: usize,
@@ -122,12 +102,6 @@ impl CompactBalanced {
     /// Per-input delay for cell `cell_idx`, port `port_idx`.
     pub fn delay(&self, cell_idx: usize, port_idx: usize) -> u32 {
         self.cell_input_delays[cell_idx][port_idx]
-    }
-
-    /// Per primary-output port delay (currently always 0 since
-    /// [`balance`] preserves output skew).
-    pub fn output_delay(&self, port_idx: usize) -> u32 {
-        self.output_delays[port_idx]
     }
 
     /// Per-(kind, phase) occupancy including virtual K0 buffers.
@@ -399,12 +373,9 @@ pub fn balance_compact(
         cell_input_delays.push(delays);
     }
 
-    let output_delays = vec![0u32; net.outputs.len()];
-
     Ok(CompactBalanced {
         net: net.clone(),
         cell_input_delays,
-        output_delays,
         total_k0_inserted: total_k0,
     })
 }

@@ -107,7 +107,8 @@ pub struct Spanned {
 }
 
 /// A lexical error: the byte span that could not be tokenized.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("unrecognized token at {span:?}")]
 pub struct LexError {
     pub span: Span,
 }

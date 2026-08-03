@@ -14,11 +14,18 @@ use crate::lexer::{lex, LexError, Spanned, Tok};
 
 /// A parse error with error code `T0001` (structured rendering is
 /// theseus-check's job; here we just carry the code, a message, and a span).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("[{code}] {message} at {span:?}")]
 pub struct ParseError {
     pub code: &'static str,
     pub message: String,
     pub span: Span,
+    /// The underlying lexical error, when this parse error was produced by
+    /// lexing (populated by `From<LexError>`). Carried as `#[source]` so the
+    /// error chain reaches the original token span; `None` for parse-stage
+    /// errors. Skipped by Display -- the message/span above are the surface.
+    #[source]
+    source: Option<LexError>,
 }
 
 impl ParseError {
@@ -27,23 +34,21 @@ impl ParseError {
             code: "T0001",
             message: message.into(),
             span,
+            source: None,
         }
     }
 }
 
 impl From<LexError> for ParseError {
     fn from(e: LexError) -> Self {
-        ParseError::new("unrecognized token", e.span)
+        ParseError {
+            code: "T0001",
+            message: "unrecognized token".into(),
+            span: e.span,
+            source: Some(e),
+        }
     }
 }
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {} at {:?}", self.code, self.message, self.span)
-    }
-}
-
-impl std::error::Error for ParseError {}
 
 /// Parse a whole program from source text.
 pub fn parse(src: &str) -> Result<Program, ParseError> {

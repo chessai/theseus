@@ -516,8 +516,9 @@ fn infer_labels_recursive(id: &ast::IsoDecl, env: &mut Env) {
     }
 }
 
-/// Extract the prim key as text. `PrimDecl::key` may itself be a string-ish
-/// field; adapt via `Display`-free stringification to avoid formatting policy.
+/// Extract the prim key as text. `PrimDecl::key` is a `String`, so this
+/// just clones it; the wrapper keeps a single call site if the field type
+/// ever changes.
 fn prim_key_text(pd: &ast::PrimDecl) -> String {
     pd.key.to_string()
 }

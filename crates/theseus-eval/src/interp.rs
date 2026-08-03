@@ -7,16 +7,19 @@
 //! fuel (one unit per body evaluation).
 //! See `docs/src/spec/dynamic-semantics.md`.
 
+use theseus_core::enumerate::cardinality_u64;
 use theseus_core::{adjoint, Iso, Type, Value};
 
 /// Errors during evaluation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum EvalError {
     /// Fuel budget exhausted before evaluation completed.
     /// `steps_taken` equals the initial fuel granted (the budget hit zero only
     /// after that many body applications).
+    #[error("out of fuel after {steps_taken} steps")]
     OutOfFuel { steps_taken: u64 },
     /// The input value does not match the combinator's expected domain shape.
+    #[error("domain error: {0}")]
     DomainError(String),
 }
 
@@ -341,22 +344,6 @@ fn rebuild_spine(elems: Vec<Value>) -> Value {
         v = Value::right(Value::pair(h, v));
     }
     v
-}
-
-/// Compute `|ty|` (number of inhabitants) structurally, saturating at
-/// `u64::MAX` so that enormous carriers never overflow or panic.
-/// O(term size), not O(|ty|).
-fn cardinality_u64(ty: &Type) -> u64 {
-    match ty {
-        Type::Zero => 0,
-        Type::One => 1,
-        Type::Sum(a, b) => cardinality_u64(a).saturating_add(cardinality_u64(b)),
-        Type::Prod(a, b) => cardinality_u64(a).saturating_mul(cardinality_u64(b)),
-        Type::Flat(n) => {
-            debug_assert!(*n <= 8, "Flat({n}): width must be <= 8");
-            1u64 << n
-        }
-    }
 }
 
 /// Compute the static bound `B(iso)` -- the maximum fuel an evaluation of

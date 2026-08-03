@@ -7,34 +7,45 @@ use crate::iso::Iso;
 use crate::ty::Type;
 
 /// Error from the type checker.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TypeError {
     /// In `f ; g`, the output type of `f` doesn't match the input type of `g`.
+    #[error("seq: output {left_output} of the left iso does not match input {right_input} of the right")]
     SeqMismatch { left_output: Type, right_input: Type },
     /// In `trace(u, f)`, `f`'s domain is not a sum type.
+    #[error("trace: body domain {0} is not a sum type")]
     TraceInputNotSum(Type),
     /// In `trace(u, f)`, `f`'s codomain is not a sum type.
+    #[error("trace: body codomain {0} is not a sum type")]
     TraceOutputNotSum(Type),
     /// In `trace(u, f)`, the carrier in `f`'s domain ≠ declared `u`.
+    #[error("trace: body domain carrier {got} does not match declared carrier {expected}")]
     TraceInputCarrier { expected: Type, got: Type },
     /// In `trace(u, f)`, the carrier in `f`'s codomain ≠ declared `u`.
+    #[error("trace: body codomain carrier {got} does not match declared carrier {expected}")]
     TraceOutputCarrier { expected: Type, got: Type },
     /// In `iter(n, f)`, the counter type `n` is not a unary numeral
     /// type `1 + (1 + (... + 0))`.
+    #[error("iter: counter type {0} is not a unary numeral type")]
     IterCounterNotNumeral(Type),
     /// In `iter(n, f)`, the body is not an endo-iso (`f : a ↔ a`).
+    #[error("iter: body is not an endo-iso (input {input}, output {output})")]
     IterBodyNotEndo { input: Type, output: Type },
     /// In `fold(l, f)` / `unfold(l, f)`, the spine type `l` is not a
     /// list-spine type `1 + (b × (1 + (b × (... + 0))))`.
+    #[error("fold: spine type {0} is not a list-spine type")]
     FoldSpineNotList(Type),
     /// In `fold(l, f)` / `unfold(l, f)`, the body is not an endo-iso
     /// (`f : b × c ↔ b × c`).
+    #[error("fold: body is not an endo-iso (input {input}, output {output})")]
     FoldBodyNotEndo { input: Type, output: Type },
     /// In `fold(l, f)` / `unfold(l, f)`, the body's (endo) type is not
     /// a product `b × c`.
+    #[error("fold: body type {0} is not a product")]
     FoldBodyNotElemProd(Type),
     /// In `fold(l, f)` / `unfold(l, f)`, the body's element component
     /// doesn't match the spine's element type.
+    #[error("fold: body element type {got} does not match the spine element type {expected}")]
     FoldBodyElemMismatch { expected: Type, got: Type },
 }
 

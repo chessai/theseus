@@ -39,8 +39,6 @@ pub mod lower_iter;
 pub mod ring;
 pub mod sim;
 
-pub mod schedule {}
-pub mod flatten {}
 pub mod sim_typed {
     //! Typed-token simulation: the tick-level phased-sim ([`crate::sim`])
     //! runs at typed-token granularity -- one boolean token per rail pair

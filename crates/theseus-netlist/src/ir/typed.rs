@@ -6,7 +6,6 @@
 //! (ADR-0014): the canonicalizer never emits a raw swap or assoc, and the
 //! two monoids never mix in one node.
 
-use core::fmt;
 
 use theseus_core::{PrimDef, Type};
 
@@ -47,8 +46,9 @@ pub struct TypedNode {
     pub kind: NodeKind,
 }
 
-/// The ADR-0013 node vocabulary (v0.1 subset; `Iter` reserved for v0.2,
-/// `HandshakeLoop` for v0.2+, `Absurd` pruning is a later pass).
+/// The ADR-0013 node vocabulary. Bounded iteration is implemented
+/// (`IterLoop`/`FoldLoop`, ADR-0036/0037/0039); `HandshakeLoop` is
+/// reserved for v0.2+ and `Absurd` pruning is a later pass.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NodeKind {
     /// Sequential region, diagram order. An empty sequence is identity.
@@ -115,9 +115,10 @@ pub fn identity_sigma(n: usize) -> Vec<usize> {
 }
 
 /// Well-formedness error for a [`TypedNode`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TypedError {
     /// Two types that must agree don't.
+    #[error("{context}: expected type {expected}, got {got}")]
     TypeMismatch {
         context: &'static str,
         expected: Type,
@@ -125,25 +126,11 @@ pub enum TypedError {
     },
     /// σ is not a permutation of the flattened layer (wrong length,
     /// out-of-range index, or repeated index).
+    #[error("{context}: sigma is not a layer permutation")]
     BadSigma { context: &'static str },
     /// A node's boundary type doesn't have the shape the node requires.
+    #[error("{context}: type {ty} has the wrong shape")]
     BadShape { context: &'static str, ty: Type },
-}
-
-impl fmt::Display for TypedError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TypedError::TypeMismatch { context, expected, got } => {
-                write!(f, "{context}: expected type {expected}, got {got}")
-            }
-            TypedError::BadSigma { context } => {
-                write!(f, "{context}: sigma is not a layer permutation")
-            }
-            TypedError::BadShape { context, ty } => {
-                write!(f, "{context}: type {ty} has the wrong shape")
-            }
-        }
-    }
 }
 
 fn expect(context: &'static str, expected: &Type, got: &Type) -> Result<(), TypedError> {

@@ -30,7 +30,6 @@
 //!   [`PhasedCellNetlist::tick_imbalances`] plus the skew visible in
 //!   `output_depths`.
 
-use core::fmt;
 use std::collections::BTreeMap;
 
 use theseus_core::Type;
@@ -241,77 +240,48 @@ pub struct PhasedCellNetlist {
 }
 
 /// Structural violation found by [`PhasedCellNetlist::validate`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CellNetError {
     /// A cell's port counts don't match its kind (INV-TOKEN structural:
     /// rail-pair count must be conserved through every cell).
+    #[error("cell {cell}: {kind:?} wants {} ports, has {inputs} in / {outputs} out", .kind.arity())]
     Arity { cell: usize, kind: CellKind, inputs: usize, outputs: usize },
     /// `phase ≠ depth mod P`.
+    #[error("cell {cell}: phase {phase} ≠ depth {depth} mod {PHASE_COUNT}")]
     Phase { cell: usize, depth: u32, phase: u8 },
     /// A rail pair reuses one line for both roles (1-of-2 needs two
     /// distinct lines).
+    #[error("rail pair uses line {} for both roles", .line.0)]
     DegeneratePair { line: LineId },
     /// A line id is out of `0..num_lines`.
+    #[error("line {} out of range", .line.0)]
     LineRange { line: LineId },
     /// A line is not driven exactly once (by a primary input or one cell
     /// output).
+    #[error("line {} has {drivers} drivers (want 1)", .line.0)]
     LineDrivers { line: LineId, drivers: usize },
     /// A line is not consumed exactly once (by one cell input or a
     /// primary output). Fanout needs buffer trees (C2.8), a later slice;
     /// v0 netlists are linear.
+    #[error("line {} has {consumers} consumers (want 1)", .line.0)]
     LineConsumers { line: LineId, consumers: usize },
     /// `outputs` and `output_depths` disagree in length.
+    #[error("{outputs} output ports but {output_depths} output depths")]
     PortWidths { outputs: usize, output_depths: usize },
     /// A cell's arrival depths never resolve (cycle or dangling input).
+    #[error("cell {cell}: arrival depths never resolve")]
     Unresolved { cell: usize },
     /// A cell's recorded `depth` isn't the arrival tick of its latest
     /// input.
+    #[error("cell {cell}: depth {got}, latest input arrives at {expected}")]
     CellDepth { cell: usize, expected: u32, got: u32 },
     /// A recorded output depth isn't the arrival tick of that port's
     /// lines.
+    #[error("output {port}: recorded depth {got}, lines arrive at {expected}")]
     OutputDepth { port: usize, expected: u32, got: u32 },
     /// The two lines of a consumed pair arrive on different ticks.
+    #[error("pair lines arrive at ticks {line0_depth} vs {line1_depth}")]
     PairSkew { line0_depth: u32, line1_depth: u32 },
-}
-
-impl fmt::Display for CellNetError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            CellNetError::Arity { cell, kind, inputs, outputs } => write!(
-                f,
-                "cell {cell}: {kind:?} wants {} ports, has {inputs} in / {outputs} out",
-                kind.arity()
-            ),
-            CellNetError::Phase { cell, depth, phase } => {
-                write!(f, "cell {cell}: phase {phase} ≠ depth {depth} mod {PHASE_COUNT}")
-            }
-            CellNetError::DegeneratePair { line } => {
-                write!(f, "rail pair uses line {} for both roles", line.0)
-            }
-            CellNetError::LineRange { line } => write!(f, "line {} out of range", line.0),
-            CellNetError::LineDrivers { line, drivers } => {
-                write!(f, "line {} has {drivers} drivers (want 1)", line.0)
-            }
-            CellNetError::LineConsumers { line, consumers } => {
-                write!(f, "line {} has {consumers} consumers (want 1)", line.0)
-            }
-            CellNetError::PortWidths { outputs, output_depths } => {
-                write!(f, "{outputs} output ports but {output_depths} output depths")
-            }
-            CellNetError::Unresolved { cell } => {
-                write!(f, "cell {cell}: arrival depths never resolve")
-            }
-            CellNetError::CellDepth { cell, expected, got } => {
-                write!(f, "cell {cell}: depth {got}, latest input arrives at {expected}")
-            }
-            CellNetError::OutputDepth { port, expected, got } => {
-                write!(f, "output {port}: recorded depth {got}, lines arrive at {expected}")
-            }
-            CellNetError::PairSkew { line0_depth, line1_depth } => {
-                write!(f, "pair lines arrive at ticks {line0_depth} vs {line1_depth}")
-            }
-        }
-    }
 }
 
 /// A cell whose inputs arrive on different ticks -- a *wrong circuit*

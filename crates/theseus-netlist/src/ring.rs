@@ -26,7 +26,6 @@
 //! and the differential oracle is iterating the body's function R
 //! times.
 
-use core::fmt;
 
 use crate::ir::cell::{
     Cell, CellKind, CellNetError, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT,
@@ -34,36 +33,23 @@ use crate::ir::cell::{
 use crate::sim::{simulate, SimError};
 
 /// Why a body cannot close into a ring.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RingError {
     /// The body is structurally invalid.
-    Body(CellNetError),
+    #[error("ring: invalid body: {0}")]
+    Body(#[from] CellNetError),
     /// The wrap is not a width-aligned identity: output port count must
     /// equal input port count (ADR-0033 D2 condition 4).
+    #[error("ring: wrap is not identity-shaped: {outputs} outputs vs {inputs} inputs")]
     PortMismatch { inputs: usize, outputs: usize },
     /// Output ports arrive on different ticks -- the boundary would not
     /// cross the wrap together (condition 2). Run [`pad_ring`] first.
+    #[error("ring: output ports arrive on different ticks {depths:?}")]
     OutputSkew { depths: Vec<u32> },
     /// Uniform output depth D is not a multiple of P: tick D would not
     /// drive the same clock trapezoids as tick 0 (condition 3).
+    #[error("ring: body depth {depth} is not a multiple of P = {phase_count}")]
     PhaseClosure { depth: u32, phase_count: u8 },
-}
-
-impl fmt::Display for RingError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RingError::Body(e) => write!(f, "ring: invalid body: {e}"),
-            RingError::PortMismatch { inputs, outputs } => {
-                write!(f, "ring: wrap is not identity-shaped: {outputs} outputs vs {inputs} inputs")
-            }
-            RingError::OutputSkew { depths } => {
-                write!(f, "ring: output ports arrive on different ticks {depths:?}")
-            }
-            RingError::PhaseClosure { depth, phase_count } => {
-                write!(f, "ring: body depth {depth} is not a multiple of P = {phase_count}")
-            }
-        }
-    }
 }
 
 /// Append K0 chains so (a) every output port arrives at one uniform
