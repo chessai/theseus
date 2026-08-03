@@ -1,32 +1,39 @@
-# Project status — where theseus is (2026-08-01)
+# Project status — where theseus is (2026-08-02)
 
-> **⇒ CURRENT DIRECTION (2026-08-01): TISC-2 — efficiency line done, variable-T frontier open.**
+> **⇒ CURRENT DIRECTION (2026-08-02): TISC-2 — BVEQ symbolic-verification program COMPLETE; efficiency line + variable-T + wide come-from all merged.**
 > The canonical, LIVE record is the **[TISC-2 roadmap](tisc2-roadmap.md)** — read it first; this
-> block is a pointer (it supersedes the old "A-0 merge-ready / Next: A-1 GCD" text). TISC-1's
-> paradigm (fixed-WCET + reversible park + PC-offset branching) is kept and proven; TISC-2 is a
-> provisioning + compiler + datapath redesign, all merged to `chessai/theseus-v2` (tip `d364ae2`).
+> block is a pointer. TISC-1's paradigm (fixed-WCET + reversible park + PC-offset branching) is kept
+> and proven; TISC-2 is a provisioning + compiler + datapath redesign, all merged to
+> `chessai/theseus-v2` (**tip `5964b7b`**).
 >
-> **Done (merged):** A-0 (shared scratch-addressable operand crossbar, −11.9%) → the full **B-1/B-2
-> efficiency line** — shared configurable ALU (B-1, step_j −39.4%) + **per-program widths** (B-2.1
-> reduced num_regs/w_data, B-2.2 per-program PC width w_pc), all auto-derived from the source iso +
-> `Lowered`. Then the **variable-T frontier**: `vart_halve` (`fd4cfd7`) — the first NON-synthetic
-> reversible `Trace` (while-loop) program on the real CPU (2-adic valuation `v_2`; real `system_step`
-> `run_on_cpu==eval`). Then **W_BR-a** (`61f1c0a`) — BR-addressing generalized to `br_fields()`
-> (byte-identical at w_br=8), the enabling refactor for a two-byte come-from offset.
+> **BIGGEST RECENT SHIFT — BVEQ symbolic-verification loop-program COMPLETE (fast-tests tenet):**
+> the heavy tier's hours-long brute-force SIMULATION sweeps are replaced by whole-domain SYMBOLIC BDD
+> equivalence (`bveq_netlist::eval_bdd`; canonical ROBDD equality = domain-size-independent, ~seconds,
+> coverage ≥ exhaustive). MERGED, each adversarially reviewed: **phase-1** GO-rollout (decoder ~53min→38s
+> vs an INDEPENDENT `instr_semantics`, b21c ~2.27h→36s, PC-add — ~3.1h of sims → ~3min); **phase-2**
+> the inductive-invariant loop proof (`bveq_invariant_poc.rs`, vart_halve — induction closes on
+> field-complete lemmas, no unrolling); the **per-loop rollout** across EVERY loop shape that lowers —
+> `mde_spill` (spill-in-carrier), valwidth `Iter` skip-blocks (static composition), `mexch_reg`
+> (memory/system-ring, symbolic mem addr = a byte permutation, no blow-up), plus valwidth w=4; and a
+> **hierarchical-method POC** proving nested loops are solvable (inner-loop triple substituted opaquely
+> into the outer body). Each retired real-CPU authority is kept as an `#[ignore]` advisor-run RE-ANCHOR
+> for step/decoder/lower_trace netlist changes. See [[maestro-fast-tests-tenet]].
 >
-> **In progress (NOT merged) — W_BR-b** on branch `wbr-b-comefrom`: the two-byte come-from δu
-> (RUN-correct w_br=16) that lifts the `iter_len ≤ 128` loop-span cap. The come-from ARITHMETIC is
-> proven (Fable design-review + impl-review, both cleared); but the full authority caught a real
-> wide-step-NETLIST type bug (the wide `swapbr_instr` decode has a field-arity mismatch; the fast
-> oracle/interpreter passed, only the netlist is malformed — fast≠real). Resume: the roadmap's
-> W_BR-b entry + `docs/reviews/wbr-b-review.md` (on the branch).
+> **Feature work (merged):** A-0 (shared scratch-addressable operand crossbar, −11.9%) → the full
+> **B-1/B-2 efficiency line** — shared configurable ALU (B-1, step_j −39.4%) + **per-program widths**
+> (B-2.1 reduced num_regs/w_data, B-2.2 per-program PC width w_pc), all auto-derived. Then the
+> **variable-T frontier**: `vart_halve` (`fd4cfd7`) — the first NON-synthetic reversible `Trace`
+> (while-loop) program on the real CPU. Then **W_BR-a** (`61f1c0a`, BR-addressing → `br_fields()`) and
+> **W_BR-b MERGED (`c8e587c`)** — the two-byte come-from δu (RUN-correct w_br=16) lifting the
+> `iter_len ≤ 128` loop-span cap; netlist bug (a non-layout-aware `fetch_operand` lift, NOT the
+> come-from) fixed, full heavy authority + real-CPU 4/4 green.
 >
-> **Terrain note (supersedes "A-1 GCD next"):** GCD as a `Trace` does NOT lower today — not the loop
-> machinery (which is ready) but gcd2's degree-7 ANF blowing the general-synth operand-word budget
-> (44 words vs ~10 free = the widen-state / A-6.4 gap, DEFERRED). A low-degree body (`vart_halve`)
-> fits now; wide programs need W_BR (in progress); high-degree bodies (gcd2) need widen-state (later).
-> See `docs/scratch/mde-variable-t-scoping.md`. Known backlog: lean `lower_iso` for wide-state isos
-> (whole-domain tests OOM, `#[ignore]`'d).
+> **Terrain note — the open frontier:** GCD as a `Trace` does NOT lower today — not the loop
+> machinery (ready + now symbolically verifiable) but gcd2's degree-7 ANF blowing the general-synth
+> operand-word budget (B=75794 ≫ 256 = the widen-state / A-6.4 gap, DEFERRED, UPSTREAM of the BVEQ
+> method). A low-degree body (`vart_halve`) fits now; high-degree bodies (gcd2) need widen-state; then
+> useful variable-T programs. See `docs/scratch/mde-variable-t-scoping.md`. Known backlog: lean
+> `lower_iso` for wide-state isos (whole-domain SIM tests OOM — many now superseded by BVEQ).
 
 
 One-paragraph orientation for anyone (human or agent) picking this up. theseus
