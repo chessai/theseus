@@ -51,6 +51,9 @@ use theseus_tisc::energy::{balanced_energy, instruction_energy};
 use theseus_tisc::step::step;
 use theseus_tisc::types::{StateVals, MEM_WORDS};
 
+mod common;
+use common::eval_state;
+
 /// Generous per-eval fuel (same order as fib_cpu.rs).
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -68,19 +71,12 @@ const T_RAMP: f64 = 1e-7;
 
 // ── Run harness (mirrors tests/fib_cpu.rs) ─────────────────────────
 
-fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
-    let mut fuel = EVAL_FUEL;
-    let ev = theseus_eval::eval(iso, s.encode(), &mut fuel)
-        .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
-    StateVals::decode(&ev)
-}
-
 /// Apply `step(rom)` `t` times: run the machine `t` cycles forward.
 fn run(rom: &[u32], start: &StateVals, t: usize) -> StateVals {
     let iso = step(rom);
     let mut cur = start.clone();
     for k in 0..t {
-        cur = eval_state(&format!("run/fwd[{k}]"), &iso, &cur);
+        cur = eval_state(&format!("run/fwd[{k}]"), &iso, &cur, EVAL_FUEL);
     }
     cur
 }
@@ -93,11 +89,11 @@ fn run_and_reverse(rom: &[u32], start: &StateVals, t: usize) -> (StateVals, Stat
     let back = Iso::sym(iso.clone());
     let mut cur = start.clone();
     for k in 0..t {
-        cur = eval_state(&format!("rr/fwd[{k}]"), &iso, &cur);
+        cur = eval_state(&format!("rr/fwd[{k}]"), &iso, &cur, EVAL_FUEL);
     }
     let fwd = cur.clone();
     for k in (0..t).rev() {
-        cur = eval_state(&format!("rr/back[{k}]"), &back, &cur);
+        cur = eval_state(&format!("rr/back[{k}]"), &back, &cur, EVAL_FUEL);
     }
     (fwd, cur)
 }
@@ -193,7 +189,12 @@ fn feistel_forward() {
         eprintln!("CPU Feistel run: (L, R, key) = ({l0:#04X}, {r0:#04X}, {key:#04X})");
         for round in 0..ROUNDS {
             for c in 0..ROUND_LEN {
-                cur = eval_state(&format!("feistel/round{round}/cycle{c}"), &iso, &cur);
+                cur = eval_state(
+                    &format!("feistel/round{round}/cycle{c}"),
+                    &iso,
+                    &cur,
+                    EVAL_FUEL,
+                );
             }
             (lr, rr) = round_ref(lr, rr, key);
             eprintln!(

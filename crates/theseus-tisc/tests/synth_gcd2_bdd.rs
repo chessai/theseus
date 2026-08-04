@@ -15,7 +15,7 @@
 use theseus_tisc::bveq::{expr_to_bdd, BvExpr, RegTransfer, VarMap};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{table_to_regtransfer, transcribe_bdd_bennett, BddHelpers};
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::{StateVals, NUM_REGS};
 
 // ── The pinned GCD rule (copied verbatim from `synth_gcd2.rs`, which copied it
 //    verbatim from compile.rs `gcd2_hist_bytes`). Test DATA, not a re-derivation.
@@ -105,17 +105,6 @@ fn build_inverse() -> impl Fn(&[u8]) -> Vec<u8> {
             .copied()
             .expect("inverse queried outside the canonical image")
             .to_vec()
-    }
-}
-
-fn zero_state() -> StateVals {
-    StateVals {
-        regs: [0u8; NUM_REGS],
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0u8; NUM_SCRATCH],
-        mem: [0u8; MEM_WORDS],
     }
 }
 
@@ -420,7 +409,7 @@ fn gcd2_bdd_per_bit_exec_verify_fittable() {
                     for (i, &leaf_reg) in SPEC_LEAVES.iter().enumerate() {
                         regvals[leaf_reg as usize] = s[i];
                     }
-                    let mut st = zero_state();
+                    let mut st = StateVals::zero_state();
                     for (rr, &val) in regvals.iter().enumerate().take(4) {
                         st.operand_set(rr as u8, val);
                     }

@@ -43,6 +43,12 @@ use theseus_tisc::compile::pc_update;
 use theseus_tisc::step::{pc_add_br_with, pc_inc_with};
 use theseus_tisc::types::{state_ty_with, Layout, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH, W};
 
+mod common;
+use common::bdd_helpers::{ripple_plus_one, ripple_sum};
+use common::bveq_support::{
+    build_state_fields, field_bit_var, field_bits, n_fields, n_vars, out_field_bits,
+};
+
 // ══════════════════════════════════════════════════════════════════════════
 // Symbolic CpuState construction
 //
@@ -58,27 +64,6 @@ use theseus_tisc::types::{state_ty_with, Layout, StateVals, MEM_WORDS, NUM_REGS,
 // exponentially; interleaved keeps PC bit i and BR bit i adjacent so the carry
 // chain stays a linear cascade.
 // ══════════════════════════════════════════════════════════════════════════
-
-/// Number of CPU fields for a layout (all 8-bit wide here).
-fn n_fields(layout: &Layout) -> usize {
-    layout.num_cpu_fields()
-}
-
-/// Total BDD variables for the symbolic state = num_fields * 8.
-fn n_vars(layout: &Layout) -> u16 {
-    (n_fields(layout) * W) as u16
-}
-
-/// The bit-interleaved BDD variable for CpuState field `f`, bit `b`.
-/// Ordering: `var_index = b * num_fields + f` (VarMap convention).
-fn field_bit_var(vs: &BddVariableSet, nf: usize, f: usize, b: usize) -> Bdd {
-    vs.mk_var(vs.variables()[b * nf + f])
-}
-
-/// The 8 input-bit BDDs of field `f` (LSB first).
-fn field_bits(vs: &BddVariableSet, nf: usize, f: usize) -> Vec<Bdd> {
-    (0..W).map(|b| field_bit_var(vs, nf, f, b)).collect()
-}
 
 /// Build the CpuState input SV mirroring `state_ty_with(&layout)`.
 ///
@@ -126,36 +111,13 @@ fn build_symbolic(
             SV::Bit(bit)
         }
         Type::Prod(_, _) => {
-            // Peel leading Word8 fields off the right-nested product.
-            build_state_fields(ty, vs, nf, layout, field)
+            // Peel leading Word8 fields off the right-nested product via the
+            // shared type-walk skeleton; the pinned-zero dispatch is our own.
+            build_state_fields(ty, vs, nf, field, &|vs, nf, f| {
+                field_word8(vs, nf, layout, f)
+            })
         }
         other => panic!("unexpected CpuState type node: {other:?}"),
-    }
-}
-
-/// Walk the right-nested CpuState product, emitting one symbolic Word8 SV per
-/// 8-bit field. The carrier is `field0 x (field1 x (... x fieldN))`.
-fn build_state_fields(
-    ty: &Type,
-    vs: &BddVariableSet,
-    nf: usize,
-    layout: &Layout,
-    field: &mut usize,
-) -> SV {
-    match ty {
-        // Last field: a bare Word8 (`flat(8)`), no trailing product.
-        _ if is_word8(ty) => {
-            let sv = field_word8(vs, nf, layout, *field);
-            *field += 1;
-            sv
-        }
-        Type::Prod(a, rest) if is_word8(a) => {
-            let head = field_word8(vs, nf, layout, *field);
-            *field += 1;
-            let tail = build_state_fields(rest, vs, nf, layout, field);
-            SV::pair(head, tail)
-        }
-        other => panic!("CpuState field not a Word8-headed product: {other:?}"),
     }
 }
 
@@ -177,24 +139,6 @@ fn const_zero_word8(vs: &BddVariableSet) -> SV {
     sv
 }
 
-/// Is `ty` exactly `flat(8)` (a right-nested product of 8 Bits)?
-fn is_word8(ty: &Type) -> bool {
-    fn count_bits(ty: &Type) -> Option<usize> {
-        match ty {
-            Type::Sum(a, b) if matches!((a.as_ref(), b.as_ref()), (Type::One, Type::One)) => {
-                Some(1)
-            }
-            Type::Prod(a, b) => {
-                let la = count_bits(a)?;
-                let lb = count_bits(b)?;
-                Some(la + lb)
-            }
-            _ => None,
-        }
-    }
-    count_bits(ty) == Some(W)
-}
-
 /// A symbolic Word8 SV for field `f` (right-nested 8 Bits, LSB-first).
 fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
     let bits: Vec<SV> = (0..W)
@@ -211,29 +155,6 @@ fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
 // ══════════════════════════════════════════════════════════════════════════
 // Spec construction -- ripple-carry sum BDDs (like wide_add's spec_sum_bdds)
 // ══════════════════════════════════════════════════════════════════════════
-
-/// `sum_i = a_i ⊕ b_i ⊕ c_i`, `c_0 = 0`, `c_{i+1} = maj(a_i, b_i, c_i)`.
-/// Produces `a.len()` sum-bit BDDs of `(a + b) mod 2^len`. Requires len == b.len().
-fn ripple_sum(a: &[Bdd], b: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
-    assert_eq!(a.len(), b.len());
-    let mut sums = Vec::with_capacity(a.len());
-    let mut carry = vs.mk_false();
-    for i in 0..a.len() {
-        let axb = a[i].xor(&b[i]);
-        let sum = axb.xor(&carry);
-        let new_carry = a[i].and(&b[i]).or(&carry.and(&axb));
-        sums.push(sum);
-        carry = new_carry;
-    }
-    sums
-}
-
-/// Add a constant `1` to the `w`-bit BDD vector `x`: ripple with b = [1,0,0,..].
-fn ripple_plus_one(x: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
-    let mut one = vec![vs.mk_false(); x.len()];
-    one[0] = vs.mk_true();
-    ripple_sum(x, &one, vs)
-}
 
 /// The spec PC-output bit BDDs: `PC' = (PC + sext_{w_pc}(BR) + 1) mod 2^{w_pc}`.
 /// `pc`: w_pc PC input bit BDDs. `br`: 8 BR input bit BDDs. Returns w_pc bits.
@@ -273,12 +194,6 @@ fn out_pc_bits(out: &SV, layout: &Layout) -> Vec<Bdd> {
     }
     assert_eq!(bits.len(), layout.w_pc);
     bits
-}
-
-/// Extract the 8 output bit BDDs of field `f`.
-fn out_field_bits(out: &SV, layout: &Layout, f: usize) -> Vec<Bdd> {
-    let nf = n_fields(layout);
-    extract_word8_bdds(extract_field(out, f, nf)).to_vec()
 }
 
 // ══════════════════════════════════════════════════════════════════════════

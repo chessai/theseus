@@ -18,30 +18,14 @@ use theseus_tisc::ring_run::{closed_step_ring, step_ring, ClosedStepRing, StepRi
 use theseus_tisc::step::step;
 use theseus_tisc::types::{state_ty, StateVals, MEM_WORDS};
 
+mod common;
+use common::{eval_state, i_ins, r_ins};
+
 const EVAL_FUEL: u64 = 8_000_000_000;
 
 // ── Instruction encoders (spec §3) ─────────────────────────────────
 
-// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
-fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
-    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
-    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
-}
-
-// I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
-fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
-    assert!(opc < 64 && rd < 16);
-    (opc << 25) | (rd << 20) | u32::from(imm)
-}
-
 // ── Eval helper ────────────────────────────────────────────────────
-
-fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
-    let mut fuel = EVAL_FUEL;
-    let ev = theseus_eval::eval(iso, s.encode(), &mut fuel)
-        .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
-    StateVals::decode(&ev)
-}
 
 // ── Small straight-line ROM (no BR mutation → fall-through) ────────
 
@@ -116,7 +100,12 @@ fn ring_matches_eval_oracle_fast() {
                 open_result, ring_result,
                 "run_open(s, {r}) != run(s, {r}) at pc={pc}"
             );
-            oracle = eval_state(&format!("fast_oracle/pc={pc}/r={r}"), &c.iso, &oracle);
+            oracle = eval_state(
+                &format!("fast_oracle/pc={pc}/r={r}"),
+                &c.iso,
+                &oracle,
+                EVAL_FUEL,
+            );
         }
     }
 }
@@ -138,7 +127,7 @@ fn ring_matches_eval_oracle() {
                 ring_result, oracle,
                 "ring.run(s, {r}) != eval^{r} at pc={pc}"
             );
-            oracle = eval_state(&format!("oracle/pc={pc}/r={r}"), &c.iso, &oracle);
+            oracle = eval_state(&format!("oracle/pc={pc}/r={r}"), &c.iso, &oracle, EVAL_FUEL);
         }
     }
 }
@@ -230,7 +219,12 @@ fn true_recirculation_matches_eval_oracle() {
                  the default closed (zero-garbage) runner feeds ancilla \
                  outputs back and must equal the eval oracle"
             );
-            oracle = eval_state(&format!("true_recirc/pc={pc}/r={r}"), &c.iso, &oracle);
+            oracle = eval_state(
+                &format!("true_recirc/pc={pc}/r={r}"),
+                &c.iso,
+                &oracle,
+                EVAL_FUEL,
+            );
         }
     }
 
@@ -361,7 +355,12 @@ fn closed_ring_matches_eval_oracle() {
                 ring_result, oracle,
                 "closed_ring.run(s, {r}) != eval^{r} at pc={pc}"
             );
-            oracle = eval_state(&format!("closed_oracle/pc={pc}/r={r}"), iso, &oracle);
+            oracle = eval_state(
+                &format!("closed_oracle/pc={pc}/r={r}"),
+                iso,
+                &oracle,
+                EVAL_FUEL,
+            );
         }
     }
 }
@@ -427,7 +426,7 @@ fn closed_ring_forward_ancillas_clean_and_boundary_fixed() {
         assert_eq!(residue.len(), 2 * w);
         let ty = state_ty();
         let x_bits = theseus_netlist::bits_of(&start.encode(), &ty).expect("bits_of");
-        let next = eval_state(&format!("residue/pc={pc}"), iso, &start);
+        let next = eval_state(&format!("residue/pc={pc}"), iso, &start, EVAL_FUEL);
         let y_bits = theseus_netlist::bits_of(&next.encode(), &ty).expect("bits_of");
         for j in 0..w {
             assert_eq!(

@@ -25,6 +25,9 @@ use theseus_tisc::ring_run::{step_ring, StepRing};
 use theseus_tisc::step::step;
 use theseus_tisc::types::{StateVals, MEM_WORDS};
 
+mod common;
+use common::eval_state;
+
 /// Generous per-eval fuel.
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -69,17 +72,10 @@ fn fib_pairs() -> Vec<(u8, u8)> {
 
 // ── Eval-iterate oracle ───────────────────────────────────────────
 
-fn eval_state(name: &str, iso: &theseus_core::Iso, s: &StateVals) -> StateVals {
-    let mut fuel = EVAL_FUEL;
-    let ev = theseus_eval::eval(iso, s.encode(), &mut fuel)
-        .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
-    StateVals::decode(&ev)
-}
-
 fn eval_iterate(iso: &theseus_core::Iso, start: &StateVals, t: usize) -> StateVals {
     let mut cur = start.clone();
     for k in 0..t {
-        cur = eval_state(&format!("eval_iterate[{k}]"), iso, &cur);
+        cur = eval_state(&format!("eval_iterate[{k}]"), iso, &cur, EVAL_FUEL);
     }
     cur
 }

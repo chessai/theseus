@@ -54,22 +54,24 @@
 
 #![cfg(feature = "heavy-tests")]
 
-use std::collections::BTreeMap;
 use std::time::Instant;
 
 use biodivine_lib_bdd::{Bdd, BddVariableSet};
 
-use theseus_core::prim::{enumerate_values, PrimDef};
 use theseus_core::{Iso, Type, Value};
 
 use theseus_tisc::asm::{assemble, Instr};
 use theseus_tisc::bveq_netlist::{eval_bdd, extract_field, extract_word8_bdds, WalkCtx, SV};
 use theseus_tisc::compile::{
     compile_with_metadata_resident, marshal_resident, memexch_prim_idx, run_rom_fast,
-    unmarshal_resident, value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
+    unmarshal_resident, value_from_leaf_bytes_pub,
 };
 use theseus_tisc::step::system_step;
 use theseus_tisc::types::{MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_REGS, NUM_SCRATCH, W};
+
+mod common;
+use common::bveq_support::{const_word8, sv_bdd_sizes};
+use common::prim_builders::xor_prim_iso;
 
 // ══════════════════════════════════════════════════════════════════════════
 // Target program: valwidth_reduce reduce_flat(w, d) = iter(Nat_d, xor_body).
@@ -107,34 +109,6 @@ fn memexch_iso(w: u8) -> Iso {
     let b = bit();
     let def = memexch_prim_idx(&flat, &b, 2).expect("memexch_prim_idx(Flat(w), Bit, 2)");
     Iso::Prim(Box::new(def))
-}
-fn xor_prim_def(w: u8) -> PrimDef {
-    let flat = Type::Flat(w);
-    let ty = Type::prod(flat.clone(), flat.clone());
-    let vals = enumerate_values(&ty);
-    let mut forward = BTreeMap::new();
-    let mut backward = BTreeMap::new();
-    for v in &vals {
-        let bytes = value_to_leaf_bytes_pub(v, &ty);
-        let a = bytes[0];
-        let b = bytes[1];
-        let out_b = a ^ b;
-        let (out_val, _) = value_from_leaf_bytes_pub(&vec![a, out_b], &ty);
-        forward.insert(v.clone(), out_val.clone());
-        backward.insert(v.clone(), out_val);
-    }
-    PrimDef {
-        forward_name: "xorInto".into(),
-        backward_name: "xorInto".into(),
-        input_ty: ty.clone(),
-        output_ty: ty,
-        forward,
-        backward,
-        symbolic: None,
-    }
-}
-fn xor_prim_iso(w: u8) -> Iso {
-    Iso::Prim(Box::new(xor_prim_def(w)))
 }
 fn reduce_step(w: u8) -> Iso {
     let flat = Type::Flat(w);
@@ -248,22 +222,6 @@ fn n_vars_sys() -> u16 {
 fn field_bit_var(vs: &BddVariableSet, f: usize, b: usize) -> Bdd {
     vs.mk_var(vs.variables()[b * NSYS + f])
 }
-fn const_word8(val: u8, vs: &BddVariableSet) -> SV {
-    let mut sv = SV::Bit(if (val >> (W - 1)) & 1 == 1 {
-        vs.mk_true()
-    } else {
-        vs.mk_false()
-    });
-    for b in (0..W - 1).rev() {
-        let bit = if (val >> b) & 1 == 1 {
-            vs.mk_true()
-        } else {
-            vs.mk_false()
-        };
-        sv = SV::pair(SV::Bit(bit), sv);
-    }
-    sv
-}
 /// A field whose low `wbits` bits are symbolic (its varmap vars), high bits 0.
 fn sym_low_word8(vs: &BddVariableSet, f: usize, wbits: usize) -> SV {
     let mut sv = SV::Bit(vs.mk_false());
@@ -345,29 +303,6 @@ fn read_concrete_pc(out: &SV) -> Option<usize> {
     let lo = read_concrete_sys_field(out, PC_LO)? as usize;
     let hi = read_concrete_sys_field(out, PC_HI)? as usize;
     Some((hi << 8) | lo)
-}
-
-/// Peak per-bit + sum node counts over the whole system SV.
-fn sv_bdd_sizes(sv: &SV) -> (usize, usize) {
-    fn walk(sv: &SV, peak: &mut usize, sum: &mut usize) {
-        match sv {
-            SV::Unit => {}
-            SV::Bit(b) => {
-                let s = b.size();
-                if s > *peak {
-                    *peak = s;
-                }
-                *sum += s;
-            }
-            SV::Pair(a, b) => {
-                walk(a, peak, sum);
-                walk(b, peak, sum);
-            }
-        }
-    }
-    let (mut peak, mut sum) = (0usize, 0usize);
-    walk(sv, &mut peak, &mut sum);
-    (peak, sum)
 }
 
 /// A word8 SV rebuilt from a Vec<Bdd> (LSB-first, right-nested).

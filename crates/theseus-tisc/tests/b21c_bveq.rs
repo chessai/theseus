@@ -54,6 +54,9 @@ use theseus_tisc::bveq_netlist::{eval_bdd, extract_field, WalkCtx, SV};
 use theseus_tisc::step::step_with;
 use theseus_tisc::types::{state_ty_with, Layout, StateVals, MEM_WORDS, NUM_SCRATCH};
 
+mod common;
+use common::bdd_helpers::ripple_sum;
+
 /// The POC layout under test: 4-bit data words, 8-bit control, 4 registers.
 fn poc_layout() -> Layout {
     Layout {
@@ -189,19 +192,6 @@ fn out_field_bits(out: &SV, layout: &Layout, f: usize) -> Vec<Bdd> {
 
 // ── Mixed-width ripple/rotate specs at w = field_width ────────────────
 
-fn ripple_sum(a: &[Bdd], b: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
-    assert_eq!(a.len(), b.len());
-    let mut sums = Vec::with_capacity(a.len());
-    let mut carry = vs.mk_false();
-    for i in 0..a.len() {
-        let axb = a[i].xor(&b[i]);
-        let sum = axb.xor(&carry);
-        let new_carry = a[i].and(&b[i]).or(&carry.and(&axb));
-        sums.push(sum);
-        carry = new_carry;
-    }
-    sums
-}
 fn ripple_plus_const(x: &[Bdd], k: u32, vs: &BddVariableSet) -> Vec<Bdd> {
     let kb: Vec<Bdd> = (0..x.len())
         .map(|i| {

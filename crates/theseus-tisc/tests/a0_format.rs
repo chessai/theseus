@@ -16,6 +16,9 @@ use theseus_core::{Iso, Value};
 use theseus_netlist::value_from_bits;
 use theseus_tisc::asm::{self, assemble, decode, encode, Instr};
 use theseus_tisc::decoder::{self, operand_field, select_operand, R_RD};
+
+mod common;
+use common::eval_state;
 use theseus_tisc::types::{
     state_ty, StateVals, MEM_WORDS, NUM_CPU_FIELDS, NUM_REGS, NUM_SCRATCH, W,
 };
@@ -204,13 +207,6 @@ fn distinct_state(operand_index: u32) -> StateVals {
     }
 }
 
-fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
-    let mut fuel = FUEL;
-    let ev = theseus_eval::eval(iso, s.encode(), &mut fuel)
-        .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
-    StateVals::decode(&ev)
-}
-
 #[test]
 fn select_operand_routes_reg_and_scratch() {
     // The 1-of-16 operand crossbar keyed on the rd field (IR bits 20..24).
@@ -227,7 +223,7 @@ fn select_operand_routes_reg_and_scratch() {
             continue;
         }
         let s = distinct_state(idx);
-        let got = eval_state("select_operand", &iso, &s);
+        let got = eval_state("select_operand", &iso, &s, FUEL);
 
         // The selected location's value must land at the fixed slot r0.
         let expected_val = if idx < 8 {
@@ -261,7 +257,7 @@ fn select_operand_roundtrip_identity() {
     for idx in 0..16u32 {
         let s = distinct_state(idx);
         assert_eq!(
-            eval_state("select_operand roundtrip", &rt, &s),
+            eval_state("select_operand roundtrip", &rt, &s, FUEL),
             s,
             "select ; unselect must be identity at operand index {idx}"
         );
@@ -276,8 +272,8 @@ fn select_operand_low8_matches_select_reg() {
     let reg_iso = decoder::select_reg(R_RD);
     for idx in 0..8u32 {
         let s = distinct_state(idx);
-        let via_operand = eval_state("select_operand", &op_iso, &s);
-        let via_reg = eval_state("select_reg", &reg_iso, &s);
+        let via_operand = eval_state("select_operand", &op_iso, &s, FUEL);
+        let via_reg = eval_state("select_reg", &reg_iso, &s, FUEL);
         assert_eq!(
             via_operand.regs, via_reg.regs,
             "register operand {idx}: select_operand must match select_reg"
@@ -336,7 +332,7 @@ fn scratch_operand_program_and_fetch() {
     // Put the operand index (10 = s2) in the rd field so R_RD selects it.
     let iso = select_operand(R_RD, operand_field);
     let s = distinct_state(10);
-    let got = eval_state("fetch-s2", &iso, &s);
+    let got = eval_state("fetch-s2", &iso, &s, FUEL);
     assert_eq!(
         got.regs[0],
         0x22, // s[2] = 0x20 + 2
@@ -344,7 +340,7 @@ fn scratch_operand_program_and_fetch() {
     );
     // And the routing is invertible (frame preserved on round-trip).
     let rt = Iso::seq(iso.clone(), Iso::sym(iso));
-    assert_eq!(eval_state("fetch-s2 rt", &rt, &s), s);
+    assert_eq!(eval_state("fetch-s2 rt", &rt, &s, FUEL), s);
 }
 
 // ══════════════════════════════════════════════════════════════════════

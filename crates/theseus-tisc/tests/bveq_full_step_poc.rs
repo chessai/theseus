@@ -38,30 +38,22 @@ use std::time::Instant;
 
 use biodivine_lib_bdd::{Bdd, BddVariableSet};
 
-use theseus_core::{Iso, Type};
+use theseus_core::Iso;
 
 use theseus_tisc::asm::{assemble, Instr};
-use theseus_tisc::bveq_netlist::{eval_bdd, extract_field, extract_word8_bdds, WalkCtx, SV};
+use theseus_tisc::bveq_netlist::{eval_bdd, WalkCtx, SV};
 use theseus_tisc::step::step_with;
 use theseus_tisc::types::{state_ty_with, Layout, StateVals, MEM_WORDS, NUM_SCRATCH, W};
+
+mod common;
+use common::bdd_helpers::{ripple_plus_one, ripple_sub, ripple_sum};
+use common::bveq_support::{
+    build_state_fields, field_bits, n_fields, n_vars, out_field_bits, symbolic_word8,
+};
 
 // ══════════════════════════════════════════════════════════════════════════
 // Symbolic CpuState construction (bit-interleaved varmap, same as bveq_step_poc)
 // ══════════════════════════════════════════════════════════════════════════
-
-fn n_fields(layout: &Layout) -> usize {
-    layout.num_cpu_fields()
-}
-fn n_vars(layout: &Layout) -> u16 {
-    (n_fields(layout) * W) as u16
-}
-/// Bit-interleaved var for field `f`, bit `b`: `var = b*nf + f`.
-fn field_bit_var(vs: &BddVariableSet, nf: usize, f: usize, b: usize) -> Bdd {
-    vs.mk_var(vs.variables()[b * nf + f])
-}
-fn field_bits(vs: &BddVariableSet, nf: usize, f: usize) -> Vec<Bdd> {
-    (0..W).map(|b| field_bit_var(vs, nf, f, b)).collect()
-}
 
 /// Fields that must enter CONCRETE for this instance:
 ///   PC_lo, PC_hi, IR bytes, s0, s1 → constant 0.
@@ -91,28 +83,6 @@ fn const_zero_word8(vs: &BddVariableSet) -> SV {
     }
     sv
 }
-fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
-    let bits: Vec<SV> = (0..W)
-        .map(|b| SV::Bit(field_bit_var(vs, nf, f, b)))
-        .collect();
-    let mut sv = bits[W - 1].clone();
-    for b in (0..W - 1).rev() {
-        sv = SV::pair(bits[b].clone(), sv);
-    }
-    sv
-}
-fn is_word8(ty: &Type) -> bool {
-    fn count_bits(ty: &Type) -> Option<usize> {
-        match ty {
-            Type::Sum(a, b) if matches!((a.as_ref(), b.as_ref()), (Type::One, Type::One)) => {
-                Some(1)
-            }
-            Type::Prod(a, b) => Some(count_bits(a)? + count_bits(b)?),
-            _ => None,
-        }
-    }
-    count_bits(ty) == Some(W)
-}
 fn field_word8(vs: &BddVariableSet, nf: usize, layout: &Layout, f: usize) -> SV {
     if is_concrete_zero(layout, f) {
         const_zero_word8(vs)
@@ -120,34 +90,14 @@ fn field_word8(vs: &BddVariableSet, nf: usize, layout: &Layout, f: usize) -> SV 
         symbolic_word8(vs, nf, f)
     }
 }
-fn build_state_fields(
-    ty: &Type,
-    vs: &BddVariableSet,
-    nf: usize,
-    layout: &Layout,
-    field: &mut usize,
-) -> SV {
-    match ty {
-        _ if is_word8(ty) => {
-            let sv = field_word8(vs, nf, layout, *field);
-            *field += 1;
-            sv
-        }
-        Type::Prod(a, rest) if is_word8(a) => {
-            let head = field_word8(vs, nf, layout, *field);
-            *field += 1;
-            let tail = build_state_fields(rest, vs, nf, layout, field);
-            SV::pair(head, tail)
-        }
-        other => panic!("CpuState field not a Word8-headed product: {other:?}"),
-    }
-}
 /// Build the symbolic CpuState SV mirroring `state_ty_with(&layout)`.
 fn symbolic_state_sv(layout: &Layout, vs: &BddVariableSet) -> SV {
     let nf = n_fields(layout);
     let ty = state_ty_with(layout);
     let mut field = 0usize;
-    build_state_fields(&ty, vs, nf, layout, &mut field)
+    build_state_fields(&ty, vs, nf, &mut field, &|vs, nf, f| {
+        field_word8(vs, nf, layout, f)
+    })
 }
 
 // ── Symbolic-PC variant: PC_lo SYMBOLIC (the PC-mux blow-up risk) ─────────
@@ -168,62 +118,18 @@ fn field_word8_pcsym(vs: &BddVariableSet, nf: usize, layout: &Layout, f: usize) 
         symbolic_word8(vs, nf, f)
     }
 }
-fn build_state_fields_pcsym(
-    ty: &Type,
-    vs: &BddVariableSet,
-    nf: usize,
-    layout: &Layout,
-    field: &mut usize,
-) -> SV {
-    match ty {
-        _ if is_word8(ty) => {
-            let sv = field_word8_pcsym(vs, nf, layout, *field);
-            *field += 1;
-            sv
-        }
-        Type::Prod(a, rest) if is_word8(a) => {
-            let head = field_word8_pcsym(vs, nf, layout, *field);
-            *field += 1;
-            let tail = build_state_fields_pcsym(rest, vs, nf, layout, field);
-            SV::pair(head, tail)
-        }
-        other => panic!("CpuState field not Word8-headed: {other:?}"),
-    }
-}
 fn symbolic_state_sv_pcsym(layout: &Layout, vs: &BddVariableSet) -> SV {
     let nf = n_fields(layout);
     let ty = state_ty_with(layout);
     let mut field = 0usize;
-    build_state_fields_pcsym(&ty, vs, nf, layout, &mut field)
+    build_state_fields(&ty, vs, nf, &mut field, &|vs, nf, f| {
+        field_word8_pcsym(vs, nf, layout, f)
+    })
 }
 
 // ══════════════════════════════════════════════════════════════════════════
 // Ripple-carry BDD specs (like bveq_step_poc / wide_add's spec_sum_bdds)
 // ══════════════════════════════════════════════════════════════════════════
-
-fn ripple_sum(a: &[Bdd], b: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
-    assert_eq!(a.len(), b.len());
-    let mut sums = Vec::with_capacity(a.len());
-    let mut carry = vs.mk_false();
-    for i in 0..a.len() {
-        let axb = a[i].xor(&b[i]);
-        let sum = axb.xor(&carry);
-        let new_carry = a[i].and(&b[i]).or(&carry.and(&axb));
-        sums.push(sum);
-        carry = new_carry;
-    }
-    sums
-}
-fn ripple_plus_one(x: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
-    let mut one = vec![vs.mk_false(); x.len()];
-    one[0] = vs.mk_true();
-    ripple_sum(x, &one, vs)
-}
-/// `(a - b) mod 2^len` = `a + (~b) + 1`.
-fn ripple_sub(a: &[Bdd], b: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
-    let notb: Vec<Bdd> = b.iter().map(|x| x.not()).collect();
-    ripple_plus_one(&ripple_sum(a, &notb, vs), vs)
-}
 
 /// PC' spec = (PC + sext(BR) + 1) mod 2^w_pc. `pc`: w_pc bits, `br`: 8 bits.
 fn spec_pc_out(pc: &[Bdd], br: &[Bdd], w_pc: usize, vs: &BddVariableSet) -> Vec<Bdd> {
@@ -245,10 +151,6 @@ fn spec_pc_out(pc: &[Bdd], br: &[Bdd], w_pc: usize, vs: &BddVariableSet) -> Vec<
 // Output field extraction
 // ══════════════════════════════════════════════════════════════════════════
 
-fn out_field_bits(out: &SV, layout: &Layout, f: usize) -> Vec<Bdd> {
-    let nf = n_fields(layout);
-    extract_word8_bdds(extract_field(out, f, nf)).to_vec()
-}
 fn out_pc_bits(out: &SV, layout: &Layout) -> Vec<Bdd> {
     let mut bits = out_field_bits(out, layout, layout.pc_field());
     if layout.pc_fields() >= 2 {

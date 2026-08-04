@@ -56,49 +56,16 @@ use theseus_tisc::compile::{
 use theseus_tisc::step::step_with;
 use theseus_tisc::types::{state_ty_with, Layout, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH, W};
 
+mod common;
+use common::bveq_support::{
+    const_word8, field_bits, n_fields, n_vars, out_field_bits, read_concrete_pc, sv_bdd_sizes,
+    sv_field_count, symbolic_word8,
+};
+
 // ══════════════════════════════════════════════════════════════════════════
 // Symbolic / concrete state SV construction (bit-interleaved varmap) -- VERBATIM
 // from bveq_invariant_poc.rs.  var(field f, bit b) = b*nf + f.
 // ══════════════════════════════════════════════════════════════════════════
-
-fn n_fields(layout: &Layout) -> usize {
-    layout.num_cpu_fields()
-}
-fn n_vars(layout: &Layout) -> u16 {
-    (n_fields(layout) * W) as u16
-}
-fn field_bit_var(vs: &BddVariableSet, nf: usize, f: usize, b: usize) -> Bdd {
-    vs.mk_var(vs.variables()[b * nf + f])
-}
-fn field_bits(vs: &BddVariableSet, nf: usize, f: usize) -> Vec<Bdd> {
-    (0..W).map(|b| field_bit_var(vs, nf, f, b)).collect()
-}
-fn const_word8(val: u8, vs: &BddVariableSet) -> SV {
-    let mut sv = SV::Bit(if (val >> (W - 1)) & 1 == 1 {
-        vs.mk_true()
-    } else {
-        vs.mk_false()
-    });
-    for b in (0..W - 1).rev() {
-        let bit = if (val >> b) & 1 == 1 {
-            vs.mk_true()
-        } else {
-            vs.mk_false()
-        };
-        sv = SV::pair(SV::Bit(bit), sv);
-    }
-    sv
-}
-fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
-    let bits: Vec<SV> = (0..W)
-        .map(|b| SV::Bit(field_bit_var(vs, nf, f, b)))
-        .collect();
-    let mut sv = bits[W - 1].clone();
-    for b in (0..W - 1).rev() {
-        sv = SV::pair(bits[b].clone(), sv);
-    }
-    sv
-}
 
 /// Build a CpuState SV field-by-field from a per-field closure.
 fn build_state<F: Fn(usize) -> SV>(layout: &Layout, mk: F) -> SV {
@@ -110,65 +77,6 @@ fn build_state<F: Fn(usize) -> SV>(layout: &Layout, mk: F) -> SV {
     debug_assert_eq!(sv_field_count(&sv), nf * W);
     let _ = state_ty_with(layout);
     sv
-}
-
-fn read_concrete_field(out: &SV, layout: &Layout, f: usize) -> Option<u32> {
-    let bits = out_field_bits(out, layout, f);
-    let mut v = 0u32;
-    for (b, bit) in bits.iter().enumerate() {
-        if bit.is_true() {
-            v |= 1 << b;
-        } else if bit.is_false() {
-        } else {
-            return None;
-        }
-    }
-    Some(v)
-}
-
-fn read_concrete_pc(out: &SV, layout: &Layout) -> Option<usize> {
-    let lo = read_concrete_field(out, layout, layout.pc_field())? as usize;
-    if layout.pc_fields() >= 2 {
-        let hi = read_concrete_field(out, layout, layout.pc_hi_field())? as usize;
-        Some((hi << 8) | lo)
-    } else {
-        Some(lo)
-    }
-}
-
-fn sv_field_count(sv: &SV) -> usize {
-    match sv {
-        SV::Unit => 0,
-        SV::Bit(_) => 1,
-        SV::Pair(a, b) => sv_field_count(a) + sv_field_count(b),
-    }
-}
-
-fn out_field_bits(out: &SV, layout: &Layout, f: usize) -> Vec<Bdd> {
-    let nf = n_fields(layout);
-    extract_word8_bdds(extract_field(out, f, nf)).to_vec()
-}
-
-fn sv_bdd_sizes(sv: &SV) -> (usize, usize) {
-    fn walk(sv: &SV, peak: &mut usize, sum: &mut usize) {
-        match sv {
-            SV::Unit => {}
-            SV::Bit(b) => {
-                let s = b.size();
-                if s > *peak {
-                    *peak = s;
-                }
-                *sum += s;
-            }
-            SV::Pair(a, b) => {
-                walk(a, peak, sum);
-                walk(b, peak, sum);
-            }
-        }
-    }
-    let (mut peak, mut sum) = (0usize, 0usize);
-    walk(sv, &mut peak, &mut sum);
-    (peak, sum)
 }
 
 struct BodyStep {
@@ -372,19 +280,6 @@ fn nat_chain(n: usize) -> Type {
     t
 }
 
-fn state_with_regs(bytes: &[u8]) -> StateVals {
-    let mut r = [0u8; NUM_REGS];
-    r[..bytes.len()].copy_from_slice(bytes);
-    StateVals {
-        regs: r,
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; NUM_SCRATCH],
-        mem: [0; MEM_WORDS],
-    }
-}
-
 /// The mde_spill carrier and its body prim (Sum(N5, Bit), 5 leaves).
 fn build_walk_body() -> (Iso, Type, Type) {
     let n5 = nat_chain(5);
@@ -398,7 +293,7 @@ fn build_walk_body() -> (Iso, Type, Type) {
         let sv = marshal(v, &carrier);
         let mut bytes: Vec<u8> = sv.regs[..5].to_vec();
         mde_walk_bytes(&mut bytes);
-        let out_val = unmarshal(&state_with_regs(&bytes), &carrier);
+        let out_val = unmarshal(&StateVals::state_with_regs(&bytes), &carrier);
         let out_re = marshal(&out_val, &carrier);
         assert_eq!(
             &out_re.regs[..5],

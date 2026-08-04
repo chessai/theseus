@@ -13,10 +13,10 @@
 //! is exactly where net-zero must be proven anyway.
 
 use theseus_tisc::asm::{encode, Instr};
-use theseus_tisc::bveq::{equiv, symbolic_exec, BvExpr, RegTransfer, BITS};
+use theseus_tisc::bveq::{equiv, symbolic_exec, transfer_zero_out, BvExpr, RegTransfer, BITS};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{transcribe_bennett, transcribe_into};
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::{StateVals, NUM_REGS};
 
 // ── MAJOR-3 reusable verification helpers ────────────────────────────
 //
@@ -83,18 +83,6 @@ fn bennett_register_symbolic_dryrun(fwd: &RegTransfer, bwd: &RegTransfer, n: usi
         .expect("register-symbolic dry-run: carriers = fwd, ancilla ≡ 0 (complete bwd=fwd⁻¹)");
 }
 
-/// A fully zero-init machine state (all regs, scratch, mem = 0).
-fn zero_state() -> StateVals {
-    StateVals {
-        regs: [0u8; NUM_REGS],
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0u8; NUM_SCRATCH],
-        mem: [0u8; MEM_WORDS],
-    }
-}
-
 /// Build a full-frame spec `RegTransfer` from a per-(reg,bit) closure.
 fn spec(f: impl Fn(usize, usize) -> BvExpr) -> RegTransfer {
     let mut t = RegTransfer::identity();
@@ -108,36 +96,6 @@ fn spec(f: impl Fn(usize, usize) -> BvExpr) -> RegTransfer {
 
 fn v(r: usize, b: usize) -> BvExpr {
     BvExpr::var(r, b)
-}
-
-/// Substitute every `Var { operand, .. }` with `operand ∈ zero_regs` by
-/// `Const(false)` -- models "the ancilla started at 0". Used by the symbolic
-/// Bennett check (the composed body only realizes the permutation when the
-/// ancilla input is zero; symbolic_exec starts every register as a free var).
-fn zero_out(e: &BvExpr, zero_regs: &[usize]) -> BvExpr {
-    match e {
-        BvExpr::Var { operand, .. } if zero_regs.contains(operand) => BvExpr::Const(false),
-        BvExpr::Var { .. } | BvExpr::Const(_) => e.clone(),
-        BvExpr::Not(a) => zero_out(a, zero_regs).not(),
-        BvExpr::Xor(a, b) => zero_out(a, zero_regs).xor(zero_out(b, zero_regs)),
-        BvExpr::And(a, b) => zero_out(a, zero_regs).and(zero_out(b, zero_regs)),
-        BvExpr::Or(a, b) => zero_out(a, zero_regs).or(zero_out(b, zero_regs)),
-        BvExpr::Mux { sel, then_, else_ } => BvExpr::mux(
-            zero_out(sel, zero_regs),
-            zero_out(then_, zero_regs),
-            zero_out(else_, zero_regs),
-        ),
-    }
-}
-
-fn transfer_zero_out(t: &RegTransfer, zero_regs: &[usize]) -> RegTransfer {
-    RegTransfer {
-        regs: t
-            .regs
-            .iter()
-            .map(|row| row.iter().map(|e| zero_out(e, zero_regs)).collect())
-            .collect(),
-    }
 }
 
 // ── Part 1: transcribe_into (fresh disjoint targets) ─────────────────
@@ -274,7 +232,7 @@ fn bennett_exec_netzero(
 
     for sample in samples {
         assert_eq!(sample.len(), n, "sample must set every carrier");
-        let mut st = zero_state();
+        let mut st = StateVals::zero_state();
         // Load carriers; ancilla left at the default 0.
         for (i, &op) in carrier_ops.iter().enumerate() {
             st.operand_set(op, sample[i]);
@@ -421,7 +379,7 @@ fn bennett_wrong_backward_breaks_netzero() {
 
     // A sample where the Toffoli actually flips a bit (b=c=0xFF, a=0x00) so
     // carriers change ⇒ O = x ⊕ y is nonzero.
-    let mut st = zero_state();
+    let mut st = StateVals::zero_state();
     st.operand_set(0, 0x00);
     st.operand_set(1, 0xFF);
     st.operand_set(2, 0xFF);

@@ -16,7 +16,7 @@ use theseus_tisc::compile::{
     bveq_verify_emission, marshal, mde_walk_bytes, recognize_prim, unmarshal,
     value_to_leaf_bytes_pub, CompileError, Ctx, Location, OccSet,
 };
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::StateVals;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -39,19 +39,6 @@ fn nat_chain(n: usize) -> Type {
         t = Type::sum(Type::One, t);
     }
     t
-}
-
-fn state_with_regs(bytes: &[u8]) -> StateVals {
-    let mut r = [0u8; NUM_REGS];
-    r[..bytes.len()].copy_from_slice(bytes);
-    StateVals {
-        regs: r,
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; NUM_SCRATCH],
-        mem: [0; MEM_WORDS],
-    }
 }
 
 /// Build a 2-reg PrimDef from a byte-level function on Flat(w)×Flat(w).
@@ -187,7 +174,7 @@ fn build_walk_prim() -> PrimDef {
         let sv = marshal(v, &carrier);
         let mut bytes: Vec<u8> = sv.regs[..5].to_vec();
         mde_walk_bytes(&mut bytes);
-        let out_val = unmarshal(&state_with_regs(&bytes), &carrier);
+        let out_val = unmarshal(&StateVals::state_with_regs(&bytes), &carrier);
         forward.insert(v.clone(), out_val.clone());
         backward.insert(out_val, v.clone());
     }
@@ -335,7 +322,7 @@ fn t_suite_agree_3cycle_fwd() {
         let (oa, ob) = (a ^ b ^ 1, a);
         let out_bytes = vec![oa, ob];
         // Reconstruct via marshal round-trip to stay canonical.
-        let out_sv = state_with_regs(&out_bytes);
+        let out_sv = StateVals::state_with_regs(&out_bytes);
         let out_val = unmarshal(&out_sv, &carrier);
         forward.insert(v.clone(), out_val.clone());
         backward.insert(out_val, v.clone());

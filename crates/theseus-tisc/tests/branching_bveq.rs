@@ -78,33 +78,25 @@ use std::time::Instant;
 
 use biodivine_lib_bdd::{Bdd, BddVariableSet};
 
-use theseus_core::{Iso, Type};
+use theseus_core::Iso;
 
 use theseus_tisc::asm::{assemble, encode, Instr};
-use theseus_tisc::bveq_netlist::{eval_bdd, extract_field, extract_word8_bdds, WalkCtx, SV};
-use theseus_tisc::compile::pc_update;
+use theseus_tisc::bveq_netlist::{eval_bdd, WalkCtx, SV};
 use theseus_tisc::step::{step, step_with};
 use theseus_tisc::types::{state_ty_with, Layout, StateVals, MEM_WORDS, NUM_SCRATCH, W};
+
+mod common;
+use common::bdd_helpers::{ripple_plus_one, ripple_sum};
+use common::bveq_support::{
+    build_state_fields, field_bits, n_fields, n_vars, out_field_bits, symbolic_word8,
+};
+use common::{eval_state, ref_step};
 
 // ══════════════════════════════════════════════════════════════════════════
 // Symbolic CpuState construction (bit-interleaved varmap, per bveq_step_poc /
 // bveq_full_step_poc). PC is CONCRETE (a chosen branch-taken address), IR=0,
 // s0=s1=0; register file + BR + s2.. SYMBOLIC.
 // ══════════════════════════════════════════════════════════════════════════
-
-fn n_fields(layout: &Layout) -> usize {
-    layout.num_cpu_fields()
-}
-fn n_vars(layout: &Layout) -> u16 {
-    (n_fields(layout) * W) as u16
-}
-/// Bit-interleaved var for field `f`, bit `b`: `var = b*nf + f`.
-fn field_bit_var(vs: &BddVariableSet, nf: usize, f: usize, b: usize) -> Bdd {
-    vs.mk_var(vs.variables()[b * nf + f])
-}
-fn field_bits(vs: &BddVariableSet, nf: usize, f: usize) -> Vec<Bdd> {
-    (0..W).map(|b| field_bit_var(vs, nf, f, b)).collect()
-}
 
 /// Fields pinned CONCRETE for this instance. PC (lo+hi) is set to a chosen
 /// concrete address (so `fetch` reads a CONSTANT rom word -- no PC-mux blow-up);
@@ -140,28 +132,6 @@ fn const_word8(vs: &BddVariableSet, val: u8) -> SV {
     }
     sv
 }
-fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
-    let bits: Vec<SV> = (0..W)
-        .map(|b| SV::Bit(field_bit_var(vs, nf, f, b)))
-        .collect();
-    let mut sv = bits[W - 1].clone();
-    for b in (0..W - 1).rev() {
-        sv = SV::pair(bits[b].clone(), sv);
-    }
-    sv
-}
-fn is_word8(ty: &Type) -> bool {
-    fn count_bits(ty: &Type) -> Option<usize> {
-        match ty {
-            Type::Sum(a, b) if matches!((a.as_ref(), b.as_ref()), (Type::One, Type::One)) => {
-                Some(1)
-            }
-            Type::Prod(a, b) => Some(count_bits(a)? + count_bits(b)?),
-            _ => None,
-        }
-    }
-    count_bits(ty) == Some(W)
-}
 
 /// The concrete byte a PC field must carry so PC == `pc_val` (lo byte at
 /// `pc_field()`, hi byte at `pc_hi_field()`).
@@ -184,61 +154,22 @@ fn field_word8(vs: &BddVariableSet, nf: usize, layout: &Layout, f: usize, pc_val
     }
 }
 
-fn build_state_fields(
-    ty: &Type,
-    vs: &BddVariableSet,
-    nf: usize,
-    layout: &Layout,
-    pc_val: u16,
-    field: &mut usize,
-) -> SV {
-    match ty {
-        _ if is_word8(ty) => {
-            let sv = field_word8(vs, nf, layout, *field, pc_val);
-            *field += 1;
-            sv
-        }
-        Type::Prod(a, rest) if is_word8(a) => {
-            let head = field_word8(vs, nf, layout, *field, pc_val);
-            *field += 1;
-            let tail = build_state_fields(rest, vs, nf, layout, pc_val, field);
-            SV::pair(head, tail)
-        }
-        other => panic!("CpuState field not a Word8-headed product: {other:?}"),
-    }
-}
-
 /// Build the symbolic CpuState SV mirroring `state_ty_with(&layout)`, with PC
 /// pinned to the concrete `pc_val`.
 fn symbolic_state_sv(layout: &Layout, vs: &BddVariableSet, pc_val: u16) -> SV {
     let nf = n_fields(layout);
     let ty = state_ty_with(layout);
     let mut field = 0usize;
-    build_state_fields(&ty, vs, nf, layout, pc_val, &mut field)
+    // Shared type-walk skeleton; the pc-field dispatch (capturing `pc_val`) is
+    // our own.
+    build_state_fields(&ty, vs, nf, &mut field, &|vs, nf, f| {
+        field_word8(vs, nf, layout, f, pc_val)
+    })
 }
 
 // ══════════════════════════════════════════════════════════════════════════
 // Ripple-carry BDD specs (like bveq_step_poc's spec_sum_bdds)
 // ══════════════════════════════════════════════════════════════════════════
-
-fn ripple_sum(a: &[Bdd], b: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
-    assert_eq!(a.len(), b.len());
-    let mut sums = Vec::with_capacity(a.len());
-    let mut carry = vs.mk_false();
-    for i in 0..a.len() {
-        let axb = a[i].xor(&b[i]);
-        let sum = axb.xor(&carry);
-        let new_carry = a[i].and(&b[i]).or(&carry.and(&axb));
-        sums.push(sum);
-        carry = new_carry;
-    }
-    sums
-}
-fn ripple_plus_one(x: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
-    let mut one = vec![vs.mk_false(); x.len()];
-    one[0] = vs.mk_true();
-    ripple_sum(x, &one, vs)
-}
 
 /// Const `w_pc`-bit BDD vector for the concrete value `v` (LSB first).
 fn const_bits(v: u16, w_pc: usize, vs: &BddVariableSet) -> Vec<Bdd> {
@@ -275,10 +206,6 @@ fn spec_pc_out(pc: &[Bdd], off: &[Bdd], w_pc: usize, vs: &BddVariableSet) -> Vec
 // Output field extraction
 // ══════════════════════════════════════════════════════════════════════════
 
-fn out_field_bits(out: &SV, layout: &Layout, f: usize) -> Vec<Bdd> {
-    let nf = n_fields(layout);
-    extract_word8_bdds(extract_field(out, f, nf)).to_vec()
-}
 fn out_pc_bits(out: &SV, layout: &Layout) -> Vec<Bdd> {
     let mut bits = out_field_bits(out, layout, layout.pc_field());
     if layout.pc_fields() >= 2 {
@@ -518,77 +445,6 @@ fn branch_come_from_whole_domain() {
 
 const EVAL_FUEL: u64 = 8_000_000_000;
 
-/// Reference emulator (v2 semantics: PC += sext(BR) + 1), ported verbatim from
-/// branching.rs. `word & (1<<31)` selects R-format.
-#[allow(clippy::collapsible_match)] // the Cswap arm reads clearest as a nested if (as in branching.rs)
-fn ref_instr(word: u32, s: &mut StateVals) {
-    if word & (1 << 31) != 0 {
-        let opcode = (word >> 25) & 0x3F;
-        let rd = ((word >> 20) & 0x1F) as usize;
-        let rs = ((word >> 15) & 0x1F) as usize;
-        let rt = ((word >> 10) & 0x1F) as usize;
-        match opcode {
-            0b0000 => s.regs[rd] = s.regs[rd].wrapping_add(s.regs[rs]),
-            0b0001 => s.regs[rd] = s.regs[rd].wrapping_sub(s.regs[rs]),
-            0b0010 => s.regs[rd] ^= s.regs[rs],
-            0b0011 => s.regs.swap(rd, rs),
-            0b0100 => s.regs[rd] = s.regs[rd].rotate_left(u32::from(s.regs[rs] & 7)),
-            0b0101 => s.regs[rd] = s.regs[rd].rotate_right(u32::from(s.regs[rs] & 7)),
-            0b0110 => {
-                if s.regs[rd] & 1 == 1 {
-                    s.regs.swap(rs, rt);
-                }
-            }
-            0b0111 => std::mem::swap(&mut s.regs[rd], &mut s.scratch[rt]),
-            0b1000 => {
-                let t = s.regs[rd];
-                s.regs[rd] = s.br as u8;
-                s.br = u16::from(t);
-            }
-            0b1001 if rt < MEM_WORDS => std::mem::swap(&mut s.regs[rd], &mut s.mem[rt]),
-            _ => {}
-        }
-    } else {
-        let opc = (word >> 25) & 0x3F;
-        let rd = ((word >> 20) & 0x1F) as usize;
-        let imm = (word & 0xFF) as u8;
-        match opc {
-            0b000 => s.regs[rd] = s.regs[rd].wrapping_add(imm),
-            0b001 => s.regs[rd] = s.regs[rd].wrapping_sub(imm),
-            0b010 => s.regs[rd] ^= imm,
-            0b011 => s.regs[rd] = s.regs[rd].rotate_left(u32::from(imm & 7)),
-            0b100 => s.regs[rd] = s.regs[rd].rotate_right(u32::from(imm & 7)),
-            _ => {}
-        }
-    }
-}
-
-fn ref_step(rom: &[u32], s: &StateVals) -> StateVals {
-    let mut out = s.clone();
-    let word = rom.get(s.pc as usize).copied().unwrap_or(0);
-    ref_instr(word, &mut out);
-    out.pc = pc_update(s.pc, out.br as u8);
-    out
-}
-
-fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
-    let mut fuel = EVAL_FUEL;
-    let ev = theseus_eval::eval(iso, s.encode(), &mut fuel)
-        .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
-    StateVals::decode(&ev)
-}
-
-fn zero_state() -> StateVals {
-    StateVals {
-        regs: [0; 8],
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; 8],
-        mem: [0; MEM_WORDS],
-    }
-}
-
 /// The δ=3 branch-taken program from branching.rs, run through the SAME `step`
 /// iso the whole-domain proof walks, checked step-by-step against the reference.
 fn branch_taken_program() -> (Vec<u32>, Iso) {
@@ -617,9 +473,9 @@ fn branch_reality_anchor() {
     let (rom, iso) = branch_taken_program();
     let delta: u8 = 3;
     let target = delta as usize + 2;
-    let mut cur = zero_state();
+    let mut cur = StateVals::zero_state();
     for t in 0..5 {
-        let next = eval_state(&format!("branch/fwd[{t}]"), &iso, &cur);
+        let next = eval_state(&format!("branch/fwd[{t}]"), &iso, &cur, EVAL_FUEL);
         let expected = ref_step(&rom, &cur);
         assert_eq!(next, expected, "branch step {t}: eval != reference");
         assert_eq!(next.ir, 0, "P4: IR=0 after step {t}");
@@ -629,7 +485,7 @@ fn branch_reality_anchor() {
     }
     // Branch actually taken: after SWAPBR (step 1) PC jumped to target.
     // Re-derive the intermediate to assert the landmark.
-    let mut s = zero_state();
+    let mut s = StateVals::zero_state();
     s = ref_step(&rom, &s); // step 0: XORI r0,δ
     assert_eq!(s.regs[0], delta);
     assert_eq!(s.pc, 1);
@@ -654,7 +510,7 @@ fn branch_reality_anchor() {
             scratch: [0; 8],
             mem: [0; MEM_WORDS],
         };
-        let got = eval_state(&format!("fallthrough/pc={pc}"), &fall_iso, &st);
+        let got = eval_state(&format!("fallthrough/pc={pc}"), &fall_iso, &st, EVAL_FUEL);
         assert_eq!(got.pc, pc.wrapping_add(1), "BR=0: PC += 1");
         assert_eq!(got.br, 0, "BR stays 0 (no SWAPBR)");
         assert_eq!(
@@ -685,7 +541,7 @@ fn branch_reality_anchor() {
             scratch: [0; 8],
             mem: [0; MEM_WORDS],
         };
-        let got = eval_state(&format!("p4/pc={pc},br={br}"), &p4_iso, &st);
+        let got = eval_state(&format!("p4/pc={pc},br={br}"), &p4_iso, &st, EVAL_FUEL);
         assert_eq!(
             got,
             ref_step(&p4_rom, &st),
@@ -712,16 +568,16 @@ fn branch_reality_anchor() {
 #[test]
 fn branch_reversibility() {
     let (_rom, iso) = branch_taken_program();
-    let start = zero_state();
+    let start = StateVals::zero_state();
     let mut cur = start.clone();
     let t_total = 5;
     for t in 0..t_total {
-        cur = eval_state(&format!("rev/fwd[{t}]"), &iso, &cur);
+        cur = eval_state(&format!("rev/fwd[{t}]"), &iso, &cur, EVAL_FUEL);
     }
     let back = Iso::sym(iso.clone());
     let mut rev = cur;
     for k in (0..t_total).rev() {
-        rev = eval_state(&format!("rev/back[{k}]"), &back, &rev);
+        rev = eval_state(&format!("rev/back[{k}]"), &back, &rev, EVAL_FUEL);
     }
     assert_eq!(
         rev, start,

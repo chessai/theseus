@@ -17,12 +17,12 @@
 //! gates the permissive `exec_instr` would run silently).
 
 use theseus_tisc::asm::{encode, Instr};
-use theseus_tisc::bveq::{equiv, symbolic_exec, BvExpr, RegTransfer, BITS};
+use theseus_tisc::bveq::{equiv, symbolic_exec, transfer_zero_out, BvExpr, RegTransfer, BITS};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{
     emit_weqzero, emit_wgt, emit_wlt, emit_wselect, transcribe_word, WOp, WLT_NTEMP,
 };
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::{StateVals, NUM_REGS};
 
 // ── shared helpers ───────────────────────────────────────────────────
 
@@ -31,17 +31,6 @@ fn assert_all_encode(body: &[Instr]) {
         encode(ins).unwrap_or_else(|e| {
             panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} -- not assemblable")
         });
-    }
-}
-
-fn zero_state() -> StateVals {
-    StateVals {
-        regs: [0u8; NUM_REGS],
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0u8; NUM_SCRATCH],
-        mem: [0u8; MEM_WORDS],
     }
 }
 
@@ -58,34 +47,6 @@ fn spec(f: impl Fn(usize, usize) -> BvExpr) -> RegTransfer {
         }
     }
     t
-}
-
-/// Substitute every `Var{operand,..}` with `operand ∈ zero_regs` by
-/// `Const(false)` (models "the temp started at 0"), for the dst-function check.
-fn zero_out(e: &BvExpr, zero_regs: &[usize]) -> BvExpr {
-    match e {
-        BvExpr::Var { operand, .. } if zero_regs.contains(operand) => BvExpr::Const(false),
-        BvExpr::Var { .. } | BvExpr::Const(_) => e.clone(),
-        BvExpr::Not(a) => zero_out(a, zero_regs).not(),
-        BvExpr::Xor(a, b) => zero_out(a, zero_regs).xor(zero_out(b, zero_regs)),
-        BvExpr::And(a, b) => zero_out(a, zero_regs).and(zero_out(b, zero_regs)),
-        BvExpr::Or(a, b) => zero_out(a, zero_regs).or(zero_out(b, zero_regs)),
-        BvExpr::Mux { sel, then_, else_ } => BvExpr::mux(
-            zero_out(sel, zero_regs),
-            zero_out(then_, zero_regs),
-            zero_out(else_, zero_regs),
-        ),
-    }
-}
-
-fn transfer_zero_out(t: &RegTransfer, zero_regs: &[usize]) -> RegTransfer {
-    RegTransfer {
-        regs: t
-            .regs
-            .iter()
-            .map(|row| row.iter().map(|e| zero_out(e, zero_regs)).collect())
-            .collect(),
-    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -339,7 +300,7 @@ fn weqzero_whole_domain_exec_and_netzero() {
 
     for x in 0u16..=255 {
         let x = x as u8;
-        let mut st = zero_state();
+        let mut st = StateVals::zero_state();
         st.operand_set(src, x);
         // sanity: all temps and dst start 0.
         assert_eq!(st.operand_get(dst_bit), 0);
@@ -409,7 +370,7 @@ fn weqzero_teeth_wrong_body_disagrees() {
     assert!(dropped, "test setup: expected an Xori dst,1 to drop");
 
     // src=0 should give is-zero=1; the corrupted body gives 0 → disagreement.
-    let mut st = zero_state();
+    let mut st = StateVals::zero_state();
     st.operand_set(src, 0);
     for &instr in &corrupted {
         exec_instr(instr, &mut st);
@@ -456,7 +417,7 @@ fn wlt_whole_domain_exec_and_netzero() {
     for av in 0u16..=255 {
         for bv in 0u16..=255 {
             let (av, bv) = (av as u8, bv as u8);
-            let mut st = zero_state();
+            let mut st = StateVals::zero_state();
             st.operand_set(a, av);
             st.operand_set(b, bv);
             for &instr in &body {
@@ -499,7 +460,7 @@ fn wgt_whole_domain_exec_and_netzero() {
     for av in 0u16..=255 {
         for bv in 0u16..=255 {
             let (av, bv) = (av as u8, bv as u8);
-            let mut st = zero_state();
+            let mut st = StateVals::zero_state();
             st.operand_set(a, av);
             st.operand_set(b, bv);
             for &instr in &body {
@@ -547,7 +508,7 @@ fn wlt_teeth_wrong_body_disagrees() {
         "test setup: expected Ccnots into dst_bit"
     );
     // a=0,b=1 → true a<b = 1; the corrupted body yields 0 → disagreement.
-    let mut st = zero_state();
+    let mut st = StateVals::zero_state();
     st.operand_set(a, 0);
     st.operand_set(b, 1);
     for &instr in &corrupted {

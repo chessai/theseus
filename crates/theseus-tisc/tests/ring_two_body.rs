@@ -26,6 +26,9 @@ use theseus_tisc::ring_run::{
     system_ring, two_body_ring, SystemRing, TwoBodyRing, CPU_BODY_N_DATA, MEM_BODY_N_DATA,
 };
 use theseus_tisc::step::system_step;
+
+mod common;
+use common::{i_ins, r_ins};
 use theseus_tisc::types::{
     bus_state_ty, decode_system, encode_system, mem_state_ty, state_ty, StateVals, MEM_WORDS,
 };
@@ -33,18 +36,6 @@ use theseus_tisc::types::{
 const EVAL_FUEL: u64 = 8_000_000_000;
 
 // ── Instruction encoders (spec §3) ────────────────────────────────
-
-// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
-fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
-    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
-    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
-}
-
-// I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
-fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
-    assert!(opc < 64 && rd < 16);
-    (opc << 25) | (rd << 20) | u32::from(imm)
-}
 
 // ── Eval helper ───────────────────────────────────────────────────
 

@@ -44,19 +44,6 @@ fn few_reg_program() -> Vec<Instr> {
     ]
 }
 
-fn state_with_regs(bytes: &[u8]) -> StateVals {
-    let mut r = [0u8; NUM_REGS];
-    r[..bytes.len()].copy_from_slice(bytes);
-    StateVals {
-        regs: r,
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; NUM_SCRATCH],
-        mem: [0; MEM_WORDS],
-    }
-}
-
 // ══════════════════════════════════════════════════════════════════════
 // 1. derive_layout picks num_regs=4 for the few-register program
 // ══════════════════════════════════════════════════════════════════════
@@ -187,7 +174,7 @@ fn reduced_run_matches_exec_and_default() {
 
     let budget = prog.len(); // straight-line: B = ROM length
     for bytes in inputs {
-        let init = state_with_regs(bytes);
+        let init = StateVals::state_with_regs(bytes);
 
         let want = exec_reference(&prog, &init);
 

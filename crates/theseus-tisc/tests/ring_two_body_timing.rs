@@ -27,11 +27,8 @@ use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_tisc::ring_run::{two_body_timing_certificate, CPU_BODY_N_DATA, MEM_BODY_N_DATA};
 use theseus_tisc::types::{bus_state_ty, mem_state_ty, state_ty};
 
-// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
-fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
-    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
-    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
-}
+mod common;
+use common::r_ins;
 
 // ── F-teeth-1: golden-tuple pin for the MEXCH ROM ──────────────────
 

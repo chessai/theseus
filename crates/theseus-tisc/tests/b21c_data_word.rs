@@ -14,7 +14,7 @@
 
 use theseus_tisc::asm::Instr;
 use theseus_tisc::compile::run_rom_on_cpu_with;
-use theseus_tisc::types::{Layout, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::{Layout, StateVals};
 
 /// The POC layout: 4-bit data words, 8-bit control region, 4 registers.
 fn poc_layout() -> Layout {
@@ -22,19 +22,6 @@ fn poc_layout() -> Layout {
         w_data: 4,
         num_regs: 4,
         ..Layout::default()
-    }
-}
-
-fn state_with_regs(bytes: &[u8]) -> StateVals {
-    let mut r = [0u8; NUM_REGS];
-    r[..bytes.len()].copy_from_slice(bytes);
-    StateVals {
-        regs: r,
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; NUM_SCRATCH],
-        mem: [0; MEM_WORDS],
     }
 }
 
@@ -151,7 +138,7 @@ fn add_xor_kernel_run_on_cpu_eq_eval_at_w_data_4() {
 
     for init4 in inputs {
         let want = exec_ref_4bit(&prog, &init4);
-        let init = state_with_regs(&init4);
+        let init = StateVals::state_with_regs(&init4);
         let got = run_rom_on_cpu_with(&layout, &prog, init, budget, 0, theseus_eval::eval)
             .unwrap_or_else(|e| panic!("kernel run failed for {init4:?}: {e}"));
         assert_eq!(
@@ -287,7 +274,7 @@ fn scratch_operand_ccnot_at_w_data_4() {
         (0xF, 0x8, 0x8),
     ];
     for &(r0, r1, s2) in cases {
-        let mut init = state_with_regs(&[r0, r1]);
+        let mut init = StateVals::state_with_regs(&[r0, r1]);
         init.scratch[2] = s2;
         let got = run_rom_on_cpu_with(&layout, &prog, init, prog.len(), 0, theseus_eval::eval)
             .unwrap_or_else(|e| panic!("scratch-op Ccnot w4 failed r0={r0} r1={r1} s2={s2}: {e}"));

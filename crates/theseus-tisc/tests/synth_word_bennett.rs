@@ -16,12 +16,12 @@
 //!     the byte domain; used when work needs scratch (the WLt-guarded compare).
 
 use theseus_tisc::asm::{encode, Instr};
-use theseus_tisc::bveq::{equiv, symbolic_exec, BvExpr, RegTransfer, BITS};
+use theseus_tisc::bveq::{equiv, symbolic_exec, transfer_zero_out, BvExpr, RegTransfer, BITS};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{
     transcribe_word_bennett, transcribe_word_bennett_peak, WForward, WValue,
 };
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::{StateVals, NUM_REGS};
 
 // ── shared helpers ───────────────────────────────────────────────────
 
@@ -33,45 +33,8 @@ fn assert_all_encode(body: &[Instr]) {
     }
 }
 
-fn zero_state() -> StateVals {
-    StateVals {
-        regs: [0u8; NUM_REGS],
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0u8; NUM_SCRATCH],
-        mem: [0u8; MEM_WORDS],
-    }
-}
-
 fn v(r: usize, b: usize) -> BvExpr {
     BvExpr::var(r, b)
-}
-
-fn zero_out(e: &BvExpr, zero_regs: &[usize]) -> BvExpr {
-    match e {
-        BvExpr::Var { operand, .. } if zero_regs.contains(operand) => BvExpr::Const(false),
-        BvExpr::Var { .. } | BvExpr::Const(_) => e.clone(),
-        BvExpr::Not(a) => zero_out(a, zero_regs).not(),
-        BvExpr::Xor(a, b) => zero_out(a, zero_regs).xor(zero_out(b, zero_regs)),
-        BvExpr::And(a, b) => zero_out(a, zero_regs).and(zero_out(b, zero_regs)),
-        BvExpr::Or(a, b) => zero_out(a, zero_regs).or(zero_out(b, zero_regs)),
-        BvExpr::Mux { sel, then_, else_ } => BvExpr::mux(
-            zero_out(sel, zero_regs),
-            zero_out(then_, zero_regs),
-            zero_out(else_, zero_regs),
-        ),
-    }
-}
-
-fn transfer_zero_out(t: &RegTransfer, zero_regs: &[usize]) -> RegTransfer {
-    RegTransfer {
-        regs: t
-            .regs
-            .iter()
-            .map(|row| row.iter().map(|e| zero_out(e, zero_regs)).collect())
-            .collect(),
-    }
 }
 
 /// Register-symbolic COMPLETE dry-run of a word-Bennett body. Carriers = regs
@@ -308,7 +271,7 @@ fn word_bennett_ltxor_whole_domain_exec() {
         for bv in 0u16..=255 {
             for &cv in &[0u8, 1, 0x2A, 0xFF] {
                 let (av, bv) = (av as u8, bv as u8);
-                let mut st = zero_state();
+                let mut st = StateVals::zero_state();
                 st.operand_set(0, av);
                 st.operand_set(1, bv);
                 st.operand_set(2, cv);
@@ -375,7 +338,7 @@ fn word_bennett_ltxor_teeth_wrong_bwd() {
     'outer: for av in 0u16..=255 {
         for bv in 0u16..=255 {
             let (av, bv) = (av as u8, bv as u8);
-            let mut st = zero_state();
+            let mut st = StateVals::zero_state();
             st.operand_set(0, av);
             st.operand_set(1, bv);
             st.operand_set(2, 0);

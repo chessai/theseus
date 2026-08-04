@@ -301,19 +301,6 @@ fn pc_update_w_br_boundaries() {
 const K: u8 = 4;
 const HB: u8 = 1;
 
-fn state_with_regs(bytes: &[u8]) -> StateVals {
-    let mut r = [0u8; NUM_REGS];
-    r[..bytes.len()].copy_from_slice(bytes);
-    StateVals {
-        regs: r,
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; NUM_SCRATCH],
-        mem: [0; MEM_WORDS],
-    }
-}
-
 /// One reversible step: right-rotate the (1+HB+K)-bit `(tag ‖ h ‖ v)` register
 /// by 1 (the mde_walk idiom; identical to vart_halve.rs::rot_step).
 fn rot_step(tag: u8, v: u8, h: u8, k: u8, hb: u8) -> (u8, u8, u8) {
@@ -339,7 +326,7 @@ fn build_v2_body_sized(k: u8, hb: u8) -> (Iso, Type, Type) {
         let sv = marshal(val, &carrier);
         let (nt, nv, nh) = rot_step(sv.regs[0], sv.regs[1], sv.regs[2], k, hb);
         let bytes = [nt, nv, nh];
-        let out_val = unmarshal(&state_with_regs(&bytes), &carrier);
+        let out_val = unmarshal(&StateVals::state_with_regs(&bytes), &carrier);
         forward.insert(val.clone(), out_val.clone());
         if backward.insert(out_val, val.clone()).is_some() {
             panic!("v2 body NOT injective at k={k},hb={hb} on {val:?}");

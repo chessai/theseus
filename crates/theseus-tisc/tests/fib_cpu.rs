@@ -31,6 +31,9 @@ use theseus_tisc::asm::{assemble, decode, encode, AsmError, Instr};
 use theseus_tisc::step::step;
 use theseus_tisc::types::{StateVals, MEM_WORDS};
 
+mod common;
+use common::eval_state;
+
 /// Generous per-eval fuel (same order as the step tests).
 const EVAL_FUEL: u64 = 8_000_000_000;
 
@@ -39,19 +42,12 @@ const N: usize = 10;
 
 // ── Run harness ────────────────────────────────────────────────────
 
-fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
-    let mut fuel = EVAL_FUEL;
-    let ev = theseus_eval::eval(iso, s.encode(), &mut fuel)
-        .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
-    StateVals::decode(&ev)
-}
-
 /// Apply `step(rom)` `t` times: run the machine `t` cycles forward.
 fn run(rom: &[u32], start: &StateVals, t: usize) -> StateVals {
     let iso = step(rom);
     let mut cur = start.clone();
     for k in 0..t {
-        cur = eval_state(&format!("run/fwd[{k}]"), &iso, &cur);
+        cur = eval_state(&format!("run/fwd[{k}]"), &iso, &cur, EVAL_FUEL);
     }
     cur
 }
@@ -64,11 +60,11 @@ fn run_and_reverse(rom: &[u32], start: &StateVals, t: usize) -> (StateVals, Stat
     let back = Iso::sym(iso.clone());
     let mut cur = start.clone();
     for k in 0..t {
-        cur = eval_state(&format!("rr/fwd[{k}]"), &iso, &cur);
+        cur = eval_state(&format!("rr/fwd[{k}]"), &iso, &cur, EVAL_FUEL);
     }
     let fwd = cur.clone();
     for k in (0..t).rev() {
-        cur = eval_state(&format!("rr/back[{k}]"), &back, &cur);
+        cur = eval_state(&format!("rr/back[{k}]"), &back, &cur, EVAL_FUEL);
     }
     (fwd, cur)
 }
@@ -229,8 +225,8 @@ fn fib_forward() {
     eprintln!("CPU fib run: (r1, r2) = ({}, {})", cur.regs[1], cur.regs[2]);
     for k in 0..N {
         // One fib pair = 2 machine cycles (ADD, then EXCH).
-        cur = eval_state(&format!("fib/pair{k}/add"), &iso, &cur);
-        cur = eval_state(&format!("fib/pair{k}/exch"), &iso, &cur);
+        cur = eval_state(&format!("fib/pair{k}/add"), &iso, &cur, EVAL_FUEL);
+        cur = eval_state(&format!("fib/pair{k}/exch"), &iso, &cur, EVAL_FUEL);
         eprintln!(
             "  after pair {:2}: (r1, r2) = ({:3}, {:3})",
             k + 1,
@@ -269,9 +265,9 @@ fn fib_step_adjoint_identity() {
     let iso = step(&rom);
     let back = Iso::sym(iso.clone());
     let s = seed();
-    let fwd = eval_state("adj/fwd", &iso, &s);
+    let fwd = eval_state("adj/fwd", &iso, &s, EVAL_FUEL);
     assert_ne!(fwd, s, "one step must change the state");
-    let rec = eval_state("adj/back", &back, &fwd);
+    let rec = eval_state("adj/back", &back, &fwd, EVAL_FUEL);
     assert_eq!(
         rec, s,
         "one forward step then one adjoint step must be the identity"

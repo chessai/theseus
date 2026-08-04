@@ -63,7 +63,7 @@ use theseus_tisc::compile::{
     compile_with_metadata, marshal, run_on_cpu_fast, run_rom_on_cpu, unmarshal,
     value_to_leaf_bytes_pub,
 };
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::{StateVals, NUM_SCRATCH};
 
 // ── Carrier size ────────────────────────────────────────────────────
 // K=3 (v ∈ 0..8) gives a RICH variable-T domain T ∈ {1,2,3} while lowering with
@@ -71,19 +71,6 @@ use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 // HB=1 keeps the carrier at exactly the fit boundary (1+HB+K = 5-bit window).
 const V2_K: u8 = 3;
 const V2_HB: u8 = 1;
-
-fn state_with_regs(bytes: &[u8]) -> StateVals {
-    let mut r = [0u8; NUM_REGS];
-    r[..bytes.len()].copy_from_slice(bytes);
-    StateVals {
-        regs: r,
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; NUM_SCRATCH],
-        mem: [0; MEM_WORDS],
-    }
-}
 
 /// One reversible step: right-rotate the (1+HB+K)-bit `(tag ‖ h ‖ v)` register
 /// by 1. A cyclic bit-permutation, hence a bijection over the whole carrier by
@@ -118,7 +105,7 @@ fn build_v2_body_sized(k: u8, hb: u8) -> (Iso, Type, Type) {
         let sv = marshal(val, &carrier);
         let (nt, nv, nh) = rot_step(sv.regs[0], sv.regs[1], sv.regs[2], k, hb);
         let bytes = [nt, nv, nh];
-        let out_val = unmarshal(&state_with_regs(&bytes), &carrier);
+        let out_val = unmarshal(&StateVals::state_with_regs(&bytes), &carrier);
         // Closure: the byte output must re-marshal to the same bytes.
         let re = marshal(&out_val, &carrier);
         if re.regs[..3] != bytes[..] {

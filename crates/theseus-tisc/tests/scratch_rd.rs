@@ -20,20 +20,15 @@
 //!   3. agree shared ≡ replicated (proves the fix is at the crossbar,
 //!      not merely in the sharing restructure).
 
-use theseus_core::Iso;
 use theseus_tisc::asm::{encode, Instr};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::decoder::{self, Op};
 use theseus_tisc::types::{StateVals, MEM_WORDS};
 
-const EVAL_FUEL: u64 = 4_000_000_000;
+mod common;
+use common::eval_state;
 
-fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
-    let mut fuel = EVAL_FUEL;
-    let ev = theseus_eval::eval(iso, s.encode(), &mut fuel)
-        .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
-    StateVals::decode(&ev)
-}
+const EVAL_FUEL: u64 = 4_000_000_000;
 
 /// Build a probe input. s0=s1=0 (the decoder invariant); s2..s7 seeded
 /// with live data so a scratch-`rd` write is observable and any stray
@@ -123,8 +118,8 @@ fn scratch_rd_shared_and_replicated_match_isa() {
 
     for (name, instr, s) in scratch_rd_samples() {
         let expected = reference(instr, &s);
-        let got_shared = eval_state(name, &shared, &s);
-        let got_repl = eval_state(name, &replicated, &s);
+        let got_shared = eval_state(name, &shared, &s, EVAL_FUEL);
+        let got_repl = eval_state(name, &replicated, &s, EVAL_FUEL);
 
         eprintln!("op={name} instr={instr:?}");
         eprintln!(
@@ -171,7 +166,7 @@ fn reg_rd_shared_control() {
     let ir = encode(Instr::Add { rd: 2, rs: 3 }).expect("encode");
     let s = st([0x10, 0xFF, 0x20, 0x55, 0x30, 0x40, 0x50, 0x60], ir);
     let expected = reference(Instr::Add { rd: 2, rs: 3 }, &s);
-    let got = eval_state("shared-reg", &shared, &s);
+    let got = eval_state("shared-reg", &shared, &s, EVAL_FUEL);
     assert_eq!(got, expected, "SHARED wrong for ADD r2,r3 (register-only)");
     assert_eq!(got.scratch[0], 0);
     assert_eq!(got.scratch[1], 0);

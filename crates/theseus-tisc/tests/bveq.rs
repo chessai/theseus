@@ -13,20 +13,7 @@
 use theseus_tisc::asm::Instr;
 use theseus_tisc::bveq::{self, biodivine_lib_bdd, BvExpr, BveqError, RegTransfer, BITS};
 use theseus_tisc::compile::{exec_instr, run_rom_on_cpu};
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
-
-fn state_with_regs(bytes: &[u8]) -> StateVals {
-    let mut r = [0u8; NUM_REGS];
-    r[..bytes.len()].copy_from_slice(bytes);
-    StateVals {
-        regs: r,
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; NUM_SCRATCH],
-        mem: [0; MEM_WORDS],
-    }
-}
+use theseus_tisc::types::StateVals;
 
 // ── T1: equiv correctness ───────────────────────────────────────────
 
@@ -657,7 +644,7 @@ fn bveq_reconciliation_la_full_domain() {
                 let regs = [a, b, 0, 0, 0, 0, 0, 0];
                 let sym_out = bveq::eval_transfer(&transfer, &regs);
 
-                let mut state = state_with_regs(&[a, b]);
+                let mut state = StateVals::state_with_regs(&[a, b]);
                 exec_instr(*instr, &mut state);
 
                 assert_eq!(
@@ -690,7 +677,7 @@ fn bveq_reconciliation_la_full_domain() {
                     let regs = [a, b, c, 0, 0, 0, 0, 0];
                     let sym_out = bveq::eval_transfer(&transfer, &regs);
 
-                    let mut state = state_with_regs(&[a, b, c]);
+                    let mut state = StateVals::state_with_regs(&[a, b, c]);
                     exec_instr(*instr, &mut state);
 
                     assert_eq!(
@@ -717,7 +704,7 @@ fn bveq_reconciliation_la_full_domain() {
                 let regs = [a, 0, 0, 0, 0, 0, 0, 0];
                 let sym_out = bveq::eval_transfer(&transfer, &regs);
 
-                let mut state = state_with_regs(&[a]);
+                let mut state = StateVals::state_with_regs(&[a]);
                 exec_instr(*instr, &mut state);
 
                 assert_eq!(
@@ -740,41 +727,41 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     cases.push((
         "Add(0,1) vals=42,170",
         Instr::Add { rd: 0, rs: 1 },
-        state_with_regs(&[42, 170]),
+        StateVals::state_with_regs(&[42, 170]),
     ));
 
     // Sub with (3,5): non-default register path.
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[3] = 200;
     s.regs[5] = 100;
     cases.push(("Sub(3,5) vals=200,100", Instr::Sub { rd: 3, rs: 5 }, s));
 
     // Xor with (2,6).
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[2] = 0xAA;
     s.regs[6] = 0x55;
     cases.push(("Xor(2,6) vals=AA,55", Instr::Xor { rd: 2, rs: 6 }, s));
 
     // Exch with (1,4).
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[1] = 0xFF;
     s.regs[4] = 0x01;
     cases.push(("Exch(1,4) vals=FF,01", Instr::Exch { rd: 1, rs: 4 }, s));
 
     // Rotl with (5,3): amount register path.
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[5] = 0xC3;
     s.regs[3] = 3;
     cases.push(("Rotl(5,3) vals=C3,3", Instr::Rotl { rd: 5, rs: 3 }, s));
 
     // Rotr with (0,7).
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[0] = 0xE7;
     s.regs[7] = 5;
     cases.push(("Rotr(0,7) vals=E7,5", Instr::Rotr { rd: 0, rs: 7 }, s));
 
     // Cswap with (4,2,6): 3-op register paths.
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[4] = 1; // control bit set → swap
     s.regs[2] = 0xAB;
     s.regs[6] = 0xCD;
@@ -789,7 +776,7 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     ));
 
     // Ccnot with (3,5,7): different 3-op path.
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[3] = 0x0F;
     s.regs[5] = 0xFF;
     s.regs[7] = 0xAA;
@@ -804,38 +791,38 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     ));
 
     // Addi with (6, imm=42).
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[6] = 200;
     cases.push(("Addi(6,42) val=200", Instr::Addi { rd: 6, imm: 42 }, s));
 
     // Subi with (1, imm=100).
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[1] = 50;
     cases.push(("Subi(1,100) val=50", Instr::Subi { rd: 1, imm: 100 }, s));
 
     // Xori with (7, imm=0xFF).
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[7] = 0xAA;
     cases.push(("Xori(7,0xFF) val=AA", Instr::Xori { rd: 7, imm: 0xFF }, s));
 
     // Rotli with (0, imm=3).
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[0] = 0b1100_0011;
     cases.push(("Rotli(0,3) val=C3", Instr::Rotli { rd: 0, imm: 3 }, s));
 
     // Rotri with (4, imm=5).
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[4] = 0b1110_0111;
     cases.push(("Rotri(4,5) val=E7", Instr::Rotri { rd: 4, imm: 5 }, s));
 
     // MINOR-1: rs=0 case -- exercises the rs-port index-0 decoder mux.
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[1] = 42;
     s.regs[0] = 170;
     cases.push(("Add(1,0) rs=0", Instr::Add { rd: 1, rs: 0 }, s));
 
     // MINOR-1: additional rt indices -- rt=3 for Ccnot.
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[0] = 0xFF;
     s.regs[1] = 0xAA;
     s.regs[3] = 0x55;
@@ -850,7 +837,7 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     ));
 
     // MINOR-1: Cswap with ctrl=0 (swap-not-taken).
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[4] = 0; // control bit clear → no swap
     s.regs[2] = 0xAB;
     s.regs[6] = 0xCD;
@@ -865,7 +852,7 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     ));
 
     // MINOR-1: rt=4 for Ccnot.
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[0] = 0x33;
     s.regs[1] = 0xCC;
     s.regs[4] = 0xFF;
@@ -880,7 +867,7 @@ fn netlist_test_cases() -> Vec<(&'static str, Instr, StateVals)> {
     ));
 
     // MINOR-1: rt=5 for Cswap.
-    let mut s = state_with_regs(&[]);
+    let mut s = StateVals::state_with_regs(&[]);
     s.regs[0] = 1;
     s.regs[1] = 0xDE;
     s.regs[5] = 0xAD;
@@ -994,7 +981,7 @@ fn bveq_perf_poc() {
     let t = std::time::Instant::now();
     for a in 0..=255u8 {
         for b in 0..=255u8 {
-            let mut state = state_with_regs(&[a, b]);
+            let mut state = StateVals::state_with_regs(&[a, b]);
             exec_instr(Instr::Add { rd: 0, rs: 1 }, &mut state);
             std::hint::black_box(state.regs[0]);
         }

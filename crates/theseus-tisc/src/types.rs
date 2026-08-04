@@ -883,6 +883,36 @@ impl StateVals {
         self.operand_set(a, vb);
         self.operand_set(b, va);
     }
+
+    /// The all-zero machine State (every register / scratch / memory word,
+    /// PC, BR, and IR set to 0). The common blank-slate carrier for tests
+    /// and reference oracles.
+    pub fn zero_state() -> Self {
+        StateVals {
+            regs: [0u8; NUM_REGS],
+            pc: 0,
+            br: 0,
+            ir: 0,
+            scratch: [0u8; NUM_SCRATCH],
+            mem: [0u8; MEM_WORDS],
+        }
+    }
+
+    /// A zero State with the first `bytes.len()` general registers set from
+    /// `bytes` (the rest, plus PC / BR / IR / scratch / memory, are zero).
+    /// Panics if `bytes.len() > NUM_REGS`.
+    pub fn state_with_regs(bytes: &[u8]) -> Self {
+        let mut r = [0u8; NUM_REGS];
+        r[..bytes.len()].copy_from_slice(bytes);
+        StateVals {
+            regs: r,
+            pc: 0,
+            br: 0,
+            ir: 0,
+            scratch: [0u8; NUM_SCRATCH],
+            mem: [0u8; MEM_WORDS],
+        }
+    }
 }
 
 // ── Composite encode / decode (system_step carrier) ────────────────

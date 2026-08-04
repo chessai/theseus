@@ -21,6 +21,9 @@ use theseus_core::prim::{admit, enumerate_values, AdmitError, PrimDef};
 use theseus_core::{Iso, Type, Value};
 
 use theseus_tisc::asm::{assemble, Instr};
+
+mod common;
+use common::prim_builders::xor_prim_def;
 use theseus_tisc::compile::{
     compile_with_metadata, marshal, run_on_cpu_resident, run_rom_fast, unmarshal,
     value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
@@ -67,37 +70,6 @@ fn add_prim_def() -> PrimDef {
     PrimDef {
         forward_name: "addInto".into(),
         backward_name: "subFrom".into(),
-        input_ty: ty.clone(),
-        output_ty: ty,
-        forward,
-        backward,
-        symbolic: None,
-    }
-}
-
-/// Build the xorInto PrimDef over Flat(w)×Flat(w) (self-inverse).
-fn xor_prim_def(w: u8) -> PrimDef {
-    let flat = Type::Flat(w);
-    let ty = Type::prod(flat.clone(), flat.clone());
-    let vals = enumerate_values(&ty);
-
-    let mut forward = BTreeMap::new();
-    let mut backward = BTreeMap::new();
-
-    for v in &vals {
-        let bytes = value_to_leaf_bytes_pub(v, &ty);
-        let a = bytes[0];
-        let b = bytes[1];
-        let out_b = a ^ b;
-        let out_bytes = vec![a, out_b];
-        let (out_val, _) = value_from_leaf_bytes_pub(&out_bytes, &ty);
-        forward.insert(v.clone(), out_val.clone());
-        backward.insert(v.clone(), out_val);
-    }
-
-    PrimDef {
-        forward_name: "xorInto".into(),
-        backward_name: "xorInto".into(),
         input_ty: ty.clone(),
         output_ty: ty,
         forward,

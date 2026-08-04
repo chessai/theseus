@@ -18,7 +18,7 @@ use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{
     table_to_regtransfer, transcribe_bennett_general, transcribe_inplace, HelperBank,
 };
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::{StateVals, NUM_REGS};
 
 // ── The pinned GCD rule (copied verbatim from compile.rs `gcd2_hist_bytes`
 //    on branch a1-gcd; test DATA, not a re-derivation). Carrier byte order is
@@ -118,17 +118,6 @@ fn build_inverse() -> impl Fn(&[u8]) -> Vec<u8> {
             .copied()
             .expect("inverse queried outside the canonical image")
             .to_vec()
-    }
-}
-
-fn zero_state() -> StateVals {
-    StateVals {
-        regs: [0u8; NUM_REGS],
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0u8; NUM_SCRATCH],
-        mem: [0u8; MEM_WORDS],
     }
 }
 
@@ -307,7 +296,7 @@ fn general_emitter_small_map_netzero() {
         (0xAA, 0xFF, 0xFF),
         (0x12, 0x34, 0x56),
     ] {
-        let mut st = zero_state();
+        let mut st = StateVals::zero_state();
         st.operand_set(0, r0);
         st.operand_set(1, r1);
         st.operand_set(2, r2);
@@ -431,7 +420,7 @@ fn gcd2_bennett_exec_verify_256_and_report() {
 
     let mut pass = 0usize;
     for s in canonical_states() {
-        let mut st = zero_state();
+        let mut st = StateVals::zero_state();
         // Load carriers into their PHYSICAL registers; ancilla left at default 0.
         for (i, &r) in PHYS.iter().enumerate() {
             st.operand_set(r, s[i]);

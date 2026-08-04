@@ -62,35 +62,18 @@ use theseus_core::Iso;
 use theseus_tisc::asm::{assemble, Instr};
 use theseus_tisc::bveq_netlist::{eval_bdd, extract_field, extract_word8_bdds, WalkCtx, SV};
 use theseus_tisc::compile::run_rom_fast;
-use theseus_tisc::types::{Layout, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH, W};
+use theseus_tisc::types::{Layout, StateVals, W};
+
+mod common;
+use common::bveq_support::{
+    const_word8, field_bit_var, n_fields, out_field_bits, read_concrete_pc, sv_bdd_sizes,
+};
 
 // ══════════════════════════════════════════════════════════════════════════
 // SV / field plumbing (bit-interleaved varmap, shared with bveq_invariant_poc).
 // var(field f, bit b) = b*nf + f.
 // ══════════════════════════════════════════════════════════════════════════
 
-fn n_fields(layout: &Layout) -> usize {
-    layout.num_cpu_fields()
-}
-fn field_bit_var(vs: &BddVariableSet, nf: usize, f: usize, b: usize) -> Bdd {
-    vs.mk_var(vs.variables()[b * nf + f])
-}
-fn const_word8(val: u8, vs: &BddVariableSet) -> SV {
-    let mut sv = SV::Bit(if (val >> (W - 1)) & 1 == 1 {
-        vs.mk_true()
-    } else {
-        vs.mk_false()
-    });
-    for b in (0..W - 1).rev() {
-        let bit = if (val >> b) & 1 == 1 {
-            vs.mk_true()
-        } else {
-            vs.mk_false()
-        };
-        sv = SV::pair(SV::Bit(bit), sv);
-    }
-    sv
-}
 fn word8_from_bits(bits: &[Bdd]) -> SV {
     let mut sv = SV::Bit(bits[W - 1].clone());
     for b in (0..W - 1).rev() {
@@ -106,53 +89,6 @@ fn build_state<F: Fn(usize) -> SV>(layout: &Layout, mk: F) -> SV {
         sv = SV::pair(mk(f), sv);
     }
     sv
-}
-fn out_field_bits(out: &SV, layout: &Layout, f: usize) -> Vec<Bdd> {
-    let nf = n_fields(layout);
-    extract_word8_bdds(extract_field(out, f, nf)).to_vec()
-}
-fn read_concrete_field(out: &SV, layout: &Layout, f: usize) -> Option<u32> {
-    let bits = out_field_bits(out, layout, f);
-    let mut v = 0u32;
-    for (b, bit) in bits.iter().enumerate() {
-        if bit.is_true() {
-            v |= 1 << b;
-        } else if bit.is_false() {
-        } else {
-            return None;
-        }
-    }
-    Some(v)
-}
-fn read_concrete_pc(out: &SV, layout: &Layout) -> Option<usize> {
-    let lo = read_concrete_field(out, layout, layout.pc_field())? as usize;
-    if layout.pc_fields() >= 2 {
-        let hi = read_concrete_field(out, layout, layout.pc_hi_field())? as usize;
-        Some((hi << 8) | lo)
-    } else {
-        Some(lo)
-    }
-}
-fn sv_bdd_sizes(sv: &SV) -> (usize, usize) {
-    fn walk(sv: &SV, peak: &mut usize, sum: &mut usize) {
-        match sv {
-            SV::Unit => {}
-            SV::Bit(b) => {
-                let s = b.size();
-                if s > *peak {
-                    *peak = s;
-                }
-                *sum += s;
-            }
-            SV::Pair(a, b) => {
-                walk(a, peak, sum);
-                walk(b, peak, sum);
-            }
-        }
-    }
-    let (mut peak, mut sum) = (0usize, 0usize);
-    walk(sv, &mut peak, &mut sum);
-    (peak, sum)
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -415,17 +351,6 @@ fn nested_reference(n: u8, m: u8) -> u8 {
     acc
 }
 
-fn zero_state() -> StateVals {
-    StateVals {
-        regs: [0u8; NUM_REGS],
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0u8; NUM_SCRATCH],
-        mem: [0u8; MEM_WORDS],
-    }
-}
-
 // ══════════════════════════════════════════════════════════════════════════
 // TEST 1 -- CONCRETE ANCHOR: the hand-assembled nested ROM runs on the real CPU
 // (run_rom_fast, real Swapbr/pc_update semantics) and computes n*m for a grid of
@@ -473,7 +398,7 @@ fn nested_rom_concrete_anchor() {
 /// would not self-terminate; the come-from PREDICATE is the loop's control law,
 /// which the symbolic come-from lemma proves and the concrete runner enforces.)
 fn run_nested_structured(rom: &[u32], geom: &NestGeom, n: u8, m: u8) -> u8 {
-    let mut st = zero_state();
+    let mut st = StateVals::zero_state();
     st.regs[R_N as usize] = n;
     st.regs[R_M as usize] = m;
     // OUTER

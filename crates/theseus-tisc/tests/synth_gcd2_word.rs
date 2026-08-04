@@ -33,7 +33,7 @@ use theseus_tisc::synth::{
     emit_weqzero, emit_weqzero_width, emit_wlt, emit_wlt_width, table_to_regtransfer,
     transcribe_word_bennett_peak, weqzero_ntemp, wlt_ntemp, WForward, WValue,
 };
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::{StateVals, NUM_REGS};
 
 // ── The pinned GCD rule (copied verbatim from `synth_gcd2.rs` -- test DATA, not a
 //    re-derivation). Carrier byte order [tag, a, b, h]. ────────────────────────
@@ -94,17 +94,6 @@ fn canonical_states() -> Vec<[u8; 4]> {
         }
     }
     v
-}
-
-fn zero_state() -> StateVals {
-    StateVals {
-        regs: [0u8; NUM_REGS],
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0u8; NUM_SCRATCH],
-        mem: [0u8; MEM_WORDS],
-    }
 }
 
 // ── The analytically-derived inverse (verified == the true inverse table on 256
@@ -660,7 +649,7 @@ fn width_aware_macros_gate_and_temp_counts() {
     for hv in 0u8..8 {
         let mut body = Vec::new();
         emit_weqzero_width(0, 1, 3, &[10, 11, 12, 13], &mut body).unwrap();
-        let mut st = zero_state();
+        let mut st = StateVals::zero_state();
         st.operand_set(1, hv);
         for &ins in &body {
             exec_instr(ins, &mut st);
@@ -676,7 +665,7 @@ fn width_aware_macros_gate_and_temp_counts() {
         for bv in 0u8..4 {
             let mut body = Vec::new();
             emit_wlt_width(0, 1, 2, 2, &[10, 11, 12], &mut body).unwrap();
-            let mut st = zero_state();
+            let mut st = StateVals::zero_state();
             st.operand_set(1, av);
             st.operand_set(2, bv);
             for &ins in &body {
@@ -721,7 +710,7 @@ fn andbit_masked_exec_through_bennett() {
     for av in 0u8..4 {
         for bv in 0u8..4 {
             for &cv in &[0u8, 1, 0x5A, 0xFF] {
-                let mut st = zero_state();
+                let mut st = StateVals::zero_state();
                 st.operand_set(0, av);
                 st.operand_set(1, bv);
                 st.operand_set(2, cv);
@@ -1014,7 +1003,7 @@ fn synth_and_exec_wide(slot: usize, sf: &WForward, sb: &WForward) -> (usize, usi
         Ok((body, peak)) => {
             // fits ≤ 9 → exec-verify 256/256 (byte lands at fwd, others preserved, net-zero).
             for s in canonical_states() {
-                let mut st = zero_state();
+                let mut st = StateVals::zero_state();
                 for (i, &r) in PHYS.iter().enumerate() {
                     st.operand_set(r, s[i]);
                 }

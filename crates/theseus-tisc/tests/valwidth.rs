@@ -9,12 +9,13 @@
 //! T6: canonicalization -- Flat(4) Xor register bytes stay < 16.
 //! T-neg: Flat(9) rejected; Prod(Flat(4),Flat(4)) is 2 leaves.
 
-use std::collections::BTreeMap;
-
-use theseus_core::prim::{enumerate_values, PrimDef};
+use theseus_core::prim::enumerate_values;
 use theseus_core::{Iso, Type, Value};
 
 use theseus_tisc::asm::Instr;
+
+mod common;
+use common::prim_builders::xor_prim_iso;
 use theseus_tisc::compile::{
     compile, compile_with_metadata, run_on_cpu, run_on_cpu_fast, value_from_leaf_bytes_pub,
     value_to_leaf_bytes_pub,
@@ -29,44 +30,6 @@ fn thermo(k: usize) -> Value {
         v = Value::right(v);
     }
     v
-}
-
-/// Build a bare byte-Xor PrimDef over Flat(n) × Flat(n):
-/// (a, b) ↦ (a, a ^ b). Self-inverse.
-fn xor_prim_def(n: u8) -> PrimDef {
-    let flat = Type::Flat(n);
-    let ty = Type::prod(flat.clone(), flat.clone());
-    let vals = enumerate_values(&ty);
-
-    let mut forward = BTreeMap::new();
-    let mut backward = BTreeMap::new();
-
-    for v in &vals {
-        let bytes = value_to_leaf_bytes_pub(v, &ty);
-        let a = bytes[0];
-        let b = bytes[1];
-        let out_b = a ^ b;
-        let out_bytes = vec![a, out_b];
-        let (out_val, _) = value_from_leaf_bytes_pub(&out_bytes, &ty);
-        forward.insert(v.clone(), out_val.clone());
-        // Self-inverse: backward is the same function
-        backward.insert(v.clone(), out_val);
-    }
-
-    PrimDef {
-        forward_name: "xorInto".into(),
-        backward_name: "xorInto".into(),
-        input_ty: ty.clone(),
-        output_ty: ty,
-        forward,
-        backward,
-        symbolic: None,
-    }
-}
-
-/// Build the Xor prim Iso, MOVING the PrimDef into the Iso (no clone).
-fn xor_prim_iso(n: u8) -> Iso {
-    Iso::Prim(Box::new(xor_prim_def(n)))
 }
 
 // ── T1: structural properties ───────────────────────────────────────

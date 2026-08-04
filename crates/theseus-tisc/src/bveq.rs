@@ -59,6 +59,40 @@ impl RegTransfer {
     }
 }
 
+/// Rewrite a `BvExpr`, replacing every `Var` whose operand appears in
+/// `zero_regs` with `Const(false)` (i.e. pinning those registers to zero).
+///
+/// Structural recursion over the `BvExpr` AST -- every other node is
+/// rebuilt from its zeroed children. Used to specialize a symbolic transfer
+/// to a starting state where some registers are known zero.
+pub fn zero_out(e: &BvExpr, zero_regs: &[usize]) -> BvExpr {
+    match e {
+        BvExpr::Var { operand, .. } if zero_regs.contains(operand) => BvExpr::Const(false),
+        BvExpr::Var { .. } | BvExpr::Const(_) => e.clone(),
+        BvExpr::Not(a) => zero_out(a, zero_regs).not(),
+        BvExpr::Xor(a, b) => zero_out(a, zero_regs).xor(zero_out(b, zero_regs)),
+        BvExpr::And(a, b) => zero_out(a, zero_regs).and(zero_out(b, zero_regs)),
+        BvExpr::Or(a, b) => zero_out(a, zero_regs).or(zero_out(b, zero_regs)),
+        BvExpr::Mux { sel, then_, else_ } => BvExpr::mux(
+            zero_out(sel, zero_regs),
+            zero_out(then_, zero_regs),
+            zero_out(else_, zero_regs),
+        ),
+    }
+}
+
+/// Row-wise [`zero_out`] over a whole [`RegTransfer`]: pin every operand in
+/// `zero_regs` to zero across every register-bit expression.
+pub fn transfer_zero_out(t: &RegTransfer, zero_regs: &[usize]) -> RegTransfer {
+    RegTransfer {
+        regs: t
+            .regs
+            .iter()
+            .map(|row| row.iter().map(|e| zero_out(e, zero_regs)).collect())
+            .collect(),
+    }
+}
+
 // ── VarMap (shared variable mapping -- TCB) ──────────────
 
 /// Pinned variable mapping: `(operand, bit) → BddVariable`.

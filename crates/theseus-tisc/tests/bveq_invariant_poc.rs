@@ -111,45 +111,6 @@ use theseus_tisc::types::{state_ty_with, Layout, StateVals, MEM_WORDS, NUM_REGS,
 // var(field f, bit b) = b*nf + f (VarMap convention, shared with the step POCs).
 // ══════════════════════════════════════════════════════════════════════════
 
-fn n_fields(layout: &Layout) -> usize {
-    layout.num_cpu_fields()
-}
-fn n_vars(layout: &Layout) -> u16 {
-    (n_fields(layout) * W) as u16
-}
-fn field_bit_var(vs: &BddVariableSet, nf: usize, f: usize, b: usize) -> Bdd {
-    vs.mk_var(vs.variables()[b * nf + f])
-}
-fn field_bits(vs: &BddVariableSet, nf: usize, f: usize) -> Vec<Bdd> {
-    (0..W).map(|b| field_bit_var(vs, nf, f, b)).collect()
-}
-fn const_word8(val: u8, vs: &BddVariableSet) -> SV {
-    let mut sv = SV::Bit(if (val >> (W - 1)) & 1 == 1 {
-        vs.mk_true()
-    } else {
-        vs.mk_false()
-    });
-    for b in (0..W - 1).rev() {
-        let bit = if (val >> b) & 1 == 1 {
-            vs.mk_true()
-        } else {
-            vs.mk_false()
-        };
-        sv = SV::pair(SV::Bit(bit), sv);
-    }
-    sv
-}
-fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
-    let bits: Vec<SV> = (0..W)
-        .map(|b| SV::Bit(field_bit_var(vs, nf, f, b)))
-        .collect();
-    let mut sv = bits[W - 1].clone();
-    for b in (0..W - 1).rev() {
-        sv = SV::pair(bits[b].clone(), sv);
-    }
-    sv
-}
-
 /// Build a CpuState SV field-by-field from a per-field closure. Mirrors
 /// `state_ty_with(&layout)` (right-nested product of `num_cpu_fields()` fields).
 fn build_state<F: Fn(usize) -> SV>(layout: &Layout, mk: F) -> SV {
@@ -163,75 +124,9 @@ fn build_state<F: Fn(usize) -> SV>(layout: &Layout, mk: F) -> SV {
     sv
 }
 
-/// Read a field of `out` as a CONCRETE integer, requiring every bit to be a BDD
-/// constant. Returns `None` if any bit is symbolic. Used for the PC-agreement
-/// soundness assert (item 4 of the review): before we re-pin PC to a compile-time
-/// constant we CONFIRM the datapath's own PC output is exactly that constant -- a
-/// PC-datapath bug would otherwise be masked by the re-pin.
-fn read_concrete_field(out: &SV, layout: &Layout, f: usize) -> Option<u32> {
-    let bits = out_field_bits(out, layout, f);
-    let mut v = 0u32;
-    for (b, bit) in bits.iter().enumerate() {
-        if bit.is_true() {
-            v |= 1 << b;
-        } else if bit.is_false() {
-            // 0
-        } else {
-            return None; // symbolic bit ⇒ not concrete
-        }
-    }
-    Some(v)
-}
-
-/// Read the concrete PC (lo byte, plus hi byte if a 2-field PC) from an output SV.
-fn read_concrete_pc(out: &SV, layout: &Layout) -> Option<usize> {
-    let lo = read_concrete_field(out, layout, layout.pc_field())? as usize;
-    if layout.pc_fields() >= 2 {
-        let hi = read_concrete_field(out, layout, layout.pc_hi_field())? as usize;
-        Some((hi << 8) | lo)
-    } else {
-        Some(lo)
-    }
-}
-
-fn sv_field_count(sv: &SV) -> usize {
-    match sv {
-        SV::Unit => 0,
-        SV::Bit(_) => 1,
-        SV::Pair(a, b) => sv_field_count(a) + sv_field_count(b),
-    }
-}
-
 // ── Field extraction from an output SV ─────────────────────────────────────
 
-fn out_field_bits(out: &SV, layout: &Layout, f: usize) -> Vec<Bdd> {
-    let nf = n_fields(layout);
-    extract_word8_bdds(extract_field(out, f, nf)).to_vec()
-}
-
 // ── BDD size metric: peak per-bit + sum over the whole state SV ─────────────
-
-fn sv_bdd_sizes(sv: &SV) -> (usize, usize) {
-    fn walk(sv: &SV, peak: &mut usize, sum: &mut usize) {
-        match sv {
-            SV::Unit => {}
-            SV::Bit(b) => {
-                let s = b.size();
-                if s > *peak {
-                    *peak = s;
-                }
-                *sum += s;
-            }
-            SV::Pair(a, b) => {
-                walk(a, peak, sum);
-                walk(b, peak, sum);
-            }
-        }
-    }
-    let (mut peak, mut sum) = (0usize, 0usize);
-    walk(sv, &mut peak, &mut sum);
-    (peak, sum)
-}
 
 // ══════════════════════════════════════════════════════════════════════════
 // THE BODY-LEMMA ENGINE.
@@ -528,19 +423,6 @@ fn rot_step(tag: u8, v: u8, h: u8, k: u8, hb: u8) -> (u8, u8, u8) {
     )
 }
 
-fn state_with_regs(bytes: &[u8]) -> StateVals {
-    let mut r = [0u8; NUM_REGS];
-    r[..bytes.len()].copy_from_slice(bytes);
-    StateVals {
-        regs: r,
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; NUM_SCRATCH],
-        mem: [0; MEM_WORDS],
-    }
-}
-
 /// Build the halve-until-odd body prim (whole-domain bijective by construction).
 fn build_v2_body_sized(k: u8, hb: u8) -> (Iso, Type, Type) {
     let u = Type::prod(Type::flat(k), Type::flat(hb));
@@ -551,7 +433,7 @@ fn build_v2_body_sized(k: u8, hb: u8) -> (Iso, Type, Type) {
     for val in &vals {
         let sv = marshal(val, &carrier);
         let (nt, nv, nh) = rot_step(sv.regs[0], sv.regs[1], sv.regs[2], k, hb);
-        let out_val = unmarshal(&state_with_regs(&[nt, nv, nh]), &carrier);
+        let out_val = unmarshal(&StateVals::state_with_regs(&[nt, nv, nh]), &carrier);
         forward.insert(val.clone(), out_val.clone());
         backward.insert(out_val, val.clone());
     }
@@ -1883,6 +1765,12 @@ fn trip_count(v0: u8, h0: u8) -> usize {
 }
 
 use theseus_core::Value;
+
+mod common;
+use common::bveq_support::{
+    const_word8, field_bit_var, field_bits, n_fields, n_vars, out_field_bits, read_concrete_pc,
+    sv_bdd_sizes, sv_field_count, symbolic_word8,
+};
 
 /// The T ∈ {1,2,3} sample (one representative per trip count, h0=0).
 fn trip_sample(u_ty: &Type) -> Vec<Value> {

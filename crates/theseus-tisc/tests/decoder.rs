@@ -29,21 +29,12 @@ use theseus_netlist::{
 use theseus_tisc::decoder::{self, Op};
 use theseus_tisc::types::{StateVals, MEM_WORDS};
 
+mod common;
+use common::{eval_state, i_ins, r_ins};
+
 const EVAL_FUEL: u64 = 4_000_000_000;
 
 // ── Instruction encoders (F1 spec §3) ──────────────────────────────
-
-// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
-//                  I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
-fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
-    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
-    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
-}
-
-fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
-    assert!(opc < 64 && rd < 16);
-    (opc << 25) | (rd << 20) | u32::from(imm)
-}
 
 // ── Reference model of the ISA ─────────────────────────────────────
 
@@ -217,13 +208,6 @@ fn reserved_samples() -> Vec<StateVals> {
 
 // ── Eval helper ────────────────────────────────────────────────────
 
-fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
-    let mut fuel = EVAL_FUEL;
-    let ev = theseus_eval::eval(iso, s.encode(), &mut fuel)
-        .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
-    StateVals::decode(&ev)
-}
-
 // ══════════════════════════════════════════════════════════════════════
 // 1. Register-select crossbar in isolation
 // ══════════════════════════════════════════════════════════════════════
@@ -245,7 +229,7 @@ fn select_reg_crossbar_isolated() {
     // are permuted per the documented model, all other fields preserved.
     for rd in 0..8u32 {
         let s = st(regs_b(), r_ins(0, rd, 0, 0)); // R_RD reads IR bits 10-8
-        let got = eval_state("select_reg", &iso, &s);
+        let got = eval_state("select_reg", &iso, &s, EVAL_FUEL);
         let mut expected = s.clone();
         decoder::crossbar_model(rd as usize, &mut expected.regs);
         assert_eq!(got, expected, "select_reg: rd={rd}");
@@ -258,7 +242,7 @@ fn select_reg_crossbar_isolated() {
     // Round trip: select ; unselect == identity.
     let rt = Iso::seq(iso.clone(), Iso::sym(iso));
     let s = st(regs_a(), r_ins(0, 5, 0, 0));
-    assert_eq!(eval_state("select_reg roundtrip", &rt, &s), s);
+    assert_eq!(eval_state("select_reg roundtrip", &rt, &s, EVAL_FUEL), s);
 }
 
 #[test]
@@ -266,7 +250,7 @@ fn select_scratch_crossbar_isolated() {
     let iso = decoder::select_scratch(decoder::R_RT);
     for sx in 0..8u32 {
         let s = st(regs_b(), r_ins(0, 0, 0, sx)); // R_RT reads IR bits 4-2
-        let got = eval_state("select_scratch", &iso, &s);
+        let got = eval_state("select_scratch", &iso, &s, EVAL_FUEL);
         let mut expected = s.clone();
         decoder::crossbar_model(sx as usize, &mut expected.scratch);
         assert_eq!(got, expected, "select_scratch: sx={sx}");
@@ -295,7 +279,7 @@ fn per_instruction_lowering_and_semantics() {
 
         // Semantics on this op's samples (eval-level).
         for (i, s) in op_samples(op).iter().enumerate() {
-            let got = eval_state(&format!("{op:?}[{i}]"), &iso, s);
+            let got = eval_state(&format!("{op:?}[{i}]"), &iso, s, EVAL_FUEL);
             assert_eq!(
                 got,
                 reference(s),
@@ -312,21 +296,27 @@ fn dispatch_exclusivity() {
     // Branch tree at the value level).
     let add = decoder::instruction(Op::Add);
     let sub_sample = &op_samples(Op::Sub)[0];
-    assert_eq!(eval_state("add-on-sub", &add, sub_sample), *sub_sample);
+    assert_eq!(
+        eval_state("add-on-sub", &add, sub_sample, EVAL_FUEL),
+        *sub_sample
+    );
     let addi_sample = &op_samples(Op::Addi)[0];
-    assert_eq!(eval_state("add-on-addi", &add, addi_sample), *addi_sample);
+    assert_eq!(
+        eval_state("add-on-addi", &add, addi_sample, EVAL_FUEL),
+        *addi_sample
+    );
 
     let swapbr = decoder::instruction(Op::Swapbr);
     let add_sample = &op_samples(Op::Add)[0];
     assert_eq!(
-        eval_state("swapbr-on-add", &swapbr, add_sample),
+        eval_state("swapbr-on-add", &swapbr, add_sample, EVAL_FUEL),
         *add_sample
     );
 
     let rotli = decoder::instruction(Op::Rotli);
     let rotri_sample = &op_samples(Op::Rotri)[0];
     assert_eq!(
-        eval_state("rotli-on-rotri", &rotli, rotri_sample),
+        eval_state("rotli-on-rotri", &rotli, rotri_sample, EVAL_FUEL),
         *rotri_sample
     );
 }
@@ -528,7 +518,7 @@ fn blocker2_ccnot_uses_scratch_operand_through_decode_execute() {
         scratch: [0x00, 0x00, 0xAA, 0, 0, 0, 0, 0],
         mem: [0; MEM_WORDS],
     };
-    let got = eval_state("blocker2/ccnot-s2", light_ctx(), &s);
+    let got = eval_state("blocker2/ccnot-s2", light_ctx(), &s, EVAL_FUEL);
     assert_eq!(
         got.regs[0], 0xAA,
         "Ccnot r0,r1,s2 must use s2 (0xAA) → r0=0xAA; got {:#04x} \
@@ -569,7 +559,7 @@ fn blocker1_odd_imm_iop_does_not_fire_xchg_through_decode_execute() {
         scratch: scratch0,
         mem: [0; MEM_WORDS],
     };
-    let got = eval_state("blocker1/addi-odd", light_ctx(), &s);
+    let got = eval_state("blocker1/addi-odd", light_ctx(), &s, EVAL_FUEL);
     assert_eq!(got.regs[7], 0x88, "Addi r7,#1: r7 must be 0x87+1=0x88");
     assert_eq!(
         got.scratch, scratch0,
@@ -601,7 +591,7 @@ fn blocker1_odd_imm_xori_clean_through_decode_execute() {
         scratch: scratch0,
         mem: [0; MEM_WORDS],
     };
-    let got = eval_state("blocker1/xori-odd", light_ctx(), &s);
+    let got = eval_state("blocker1/xori-odd", light_ctx(), &s, EVAL_FUEL);
     assert_eq!(got.regs[5], 0xF0 ^ 0x0B, "Xori r5,#0x0B");
     assert_eq!(
         got.scratch, scratch0,
@@ -683,7 +673,7 @@ fn b12_config_exclusion_and_fmt_gate() {
     for opc in 0u32..16 {
         let ir = r_ins(opc, WD_RD, WD_RS, 2);
         let s = wd_state(ir, 0xC7, 0x3E);
-        let got = eval_state("cfg/R", unified, &s);
+        let got = eval_state("cfg/R", unified, &s, EVAL_FUEL);
         assert_eq!(
             got,
             reference(&s),
@@ -695,7 +685,7 @@ fn b12_config_exclusion_and_fmt_gate() {
         for imm in [0x00u8, 0x9D, 0xFF] {
             let ir = i_ins(opc, WD_RD, imm);
             let s = wd_state(ir, 0xC7, 0x3E);
-            let got = eval_state("cfg/I", unified, &s);
+            let got = eval_state("cfg/I", unified, &s, EVAL_FUEL);
             assert_eq!(
                 got,
                 reference(&s),
@@ -739,7 +729,7 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
     // fmt bit 31 = 0 (I-format); opcode 0b000 = ADDI.
     let ir1: u32 = (0b000 << 25) | (3 << 20) | (0xF << 15) | 0x34;
     let s1 = bg(ir1);
-    let got1 = eval_state("iformat-steer/addi", unified, &s1);
+    let got1 = eval_state("iformat-steer/addi", unified, &s1, EVAL_FUEL);
     let mut exp1 = s1.clone();
     exp1.regs[3] = exp1.regs[3].wrapping_add(0x34); // r3 += 0x34 (mod 256)
     assert_eq!(
@@ -760,7 +750,7 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
     // distinct crossbar-steer bit pattern.
     let ir2: u32 = (0b010 << 25) | (3 << 20) | (0b10101 << 15) | 0x6C;
     let s2 = bg(ir2);
-    let got2 = eval_state("iformat-steer/xori", unified, &s2);
+    let got2 = eval_state("iformat-steer/xori", unified, &s2, EVAL_FUEL);
     let mut exp2 = s2.clone();
     exp2.regs[3] ^= 0x6C; // r3 ^= 0x6C
     assert_eq!(
@@ -829,8 +819,8 @@ fn b13_cswap_scratch_operand_equiv() {
             scratch: [0x00, 0x00, 0x3C, 0xAD, 0xBE, 0xEF, 0x33, 0x11],
             mem: [0; MEM_WORDS],
         };
-        let g_uni = eval_state("cswap-s2/unified", unified, &s);
-        let g_ref = eval_state("cswap-s2/ref", &refer, &s);
+        let g_uni = eval_state("cswap-s2/unified", unified, &s, EVAL_FUEL);
+        let g_ref = eval_state("cswap-s2/ref", &refer, &s, EVAL_FUEL);
         assert_eq!(
             g_uni, g_ref,
             "Cswap rd=r3({rd_val:#04x} {note}) rs=r5 rt=s2 mismatch\n uni={g_uni:?}\n ref={g_ref:?}"
@@ -876,7 +866,7 @@ fn b13_s0_restored_to_zero() {
             scratch: [0x00, 0x00, 0xC2, 0xD3, 0xE4, 0xF5, 0x1A, 0x2B],
             mem: [0; MEM_WORDS],
         };
-        let got = eval_state(&format!("s0-restore/{name}"), dec, &s);
+        let got = eval_state(&format!("s0-restore/{name}"), dec, &s, EVAL_FUEL);
         assert_eq!(
             got.scratch[0], 0,
             "{name}: s0 must be restored to 0 after decode (L15 imm_to_a precondition); got {:#04x}",
@@ -909,7 +899,7 @@ fn b13_rt_field_inert_for_reg_imm() {
         scratch: [0x00, 0x00, 0xC2, 0xD3, 0xE4, 0xF5, 0x1A, 0x2B],
         mem: [0; MEM_WORDS],
     };
-    let got = eval_state("rt-inert/addi", dec, &s);
+    let got = eval_state("rt-inert/addi", dec, &s, EVAL_FUEL);
     let mut exp = s.clone();
     exp.regs[3] = exp.regs[3].wrapping_add(0x34);
     assert_eq!(
@@ -925,7 +915,7 @@ fn b13_rt_field_inert_for_reg_imm() {
         ir: ir_r,
         ..s.clone()
     };
-    let got2 = eval_state("rt-inert/add", dec, &s2);
+    let got2 = eval_state("rt-inert/add", dec, &s2, EVAL_FUEL);
     let mut exp2 = s2.clone();
     exp2.regs[2] = exp2.regs[2].wrapping_add(exp2.regs[4]);
     assert_eq!(
@@ -954,9 +944,9 @@ fn b12_high_opcode_bits_dontcare_matches_reference() {
     // Must execute exactly as instruction(Op::Add) on a nonzero state.
     let ir_r = r_ins(0b110000, WD_RD, WD_RS, 0);
     let s_r = wd_state(ir_r, 0xC7, 0x3E);
-    let got_r = eval_state("hi-opc/R-add-alias", unified, &s_r);
+    let got_r = eval_state("hi-opc/R-add-alias", unified, &s_r, EVAL_FUEL);
     let ref_add = decoder::instruction(Op::Add);
-    let exp_r = eval_state("hi-opc/R-add-ref", &ref_add, &s_r);
+    let exp_r = eval_state("hi-opc/R-add-ref", &ref_add, &s_r, EVAL_FUEL);
     assert_eq!(
         got_r, exp_r,
         "R opcode 0b110000 (high bits set, low=Add) must decode/execute as \
@@ -967,9 +957,9 @@ fn b12_high_opcode_bits_dontcare_matches_reference() {
     // fmt=0 (I-format); i_ins sets fmt=0 and shifts opc<<25.
     let ir_i = i_ins(0b111000, WD_RD, 0x5B);
     let s_i = wd_state(ir_i, 0xC7, 0x3E);
-    let got_i = eval_state("hi-opc/I-addi-alias", unified, &s_i);
+    let got_i = eval_state("hi-opc/I-addi-alias", unified, &s_i, EVAL_FUEL);
     let ref_addi = decoder::instruction(Op::Addi);
-    let exp_i = eval_state("hi-opc/I-addi-ref", &ref_addi, &s_i);
+    let exp_i = eval_state("hi-opc/I-addi-ref", &ref_addi, &s_i, EVAL_FUEL);
     assert_eq!(
         got_i, exp_i,
         "I opcode 0b111000 (high bits set, low=Addi) must decode/execute as \

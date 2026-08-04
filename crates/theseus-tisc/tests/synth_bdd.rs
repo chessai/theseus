@@ -20,12 +20,14 @@
 //! Plus `assert_all_encode` on every emitted instruction.
 
 use theseus_tisc::asm::{encode, Instr};
-use theseus_tisc::bveq::{equiv, expr_to_bdd, symbolic_exec, BvExpr, RegTransfer, VarMap, BITS};
+use theseus_tisc::bveq::{
+    equiv, expr_to_bdd, symbolic_exec, transfer_zero_out, BvExpr, RegTransfer, VarMap, BITS,
+};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{
     transcribe_bdd_bennett, transcribe_bennett_general, BddHelpers, HelperBank,
 };
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::{StateVals, NUM_REGS};
 
 // ── Shared helpers (mirror synth_bennett.rs) ──────────────────────────
 
@@ -48,43 +50,6 @@ fn assert_all_encode(body: &[Instr]) {
         encode(ins).unwrap_or_else(|e| {
             panic!("emitted instr {i} ({ins:?}) fails asm::encode: {e} -- body is not assemblable")
         });
-    }
-}
-
-fn zero_state() -> StateVals {
-    StateVals {
-        regs: [0u8; NUM_REGS],
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0u8; NUM_SCRATCH],
-        mem: [0u8; MEM_WORDS],
-    }
-}
-
-fn zero_out(e: &BvExpr, zero_regs: &[usize]) -> BvExpr {
-    match e {
-        BvExpr::Var { operand, .. } if zero_regs.contains(operand) => BvExpr::Const(false),
-        BvExpr::Var { .. } | BvExpr::Const(_) => e.clone(),
-        BvExpr::Not(a) => zero_out(a, zero_regs).not(),
-        BvExpr::Xor(a, b) => zero_out(a, zero_regs).xor(zero_out(b, zero_regs)),
-        BvExpr::And(a, b) => zero_out(a, zero_regs).and(zero_out(b, zero_regs)),
-        BvExpr::Or(a, b) => zero_out(a, zero_regs).or(zero_out(b, zero_regs)),
-        BvExpr::Mux { sel, then_, else_ } => BvExpr::mux(
-            zero_out(sel, zero_regs),
-            zero_out(then_, zero_regs),
-            zero_out(else_, zero_regs),
-        ),
-    }
-}
-
-fn transfer_zero_out(t: &RegTransfer, zero_regs: &[usize]) -> RegTransfer {
-    RegTransfer {
-        regs: t
-            .regs
-            .iter()
-            .map(|row| row.iter().map(|e| zero_out(e, zero_regs)).collect())
-            .collect(),
     }
 }
 
@@ -198,7 +163,7 @@ fn bdd_bennett_exec_netzero(
 
     for sample in samples {
         assert_eq!(sample.len(), n, "sample must set every carrier");
-        let mut st = zero_state();
+        let mut st = StateVals::zero_state();
         for (i, &op) in carrier_ops.iter().enumerate() {
             st.operand_set(op, sample[i]);
         }
@@ -449,7 +414,7 @@ fn bdd_wrong_backward_breaks_exec_netzero() {
         nodes: &nodes,
     };
     let body = transcribe_bdd_bennett(&fwd, &wrong, &carrier_ops, &ancilla_ops, helpers).unwrap();
-    let mut st = zero_state();
+    let mut st = StateVals::zero_state();
     st.operand_set(0, 0x0F);
     st.operand_set(1, 0x03); // control fires ⇒ carriers change
     for &instr in &body {

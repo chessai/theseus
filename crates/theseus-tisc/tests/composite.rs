@@ -15,6 +15,9 @@ use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_netlist::{rail_width, PhasedCellNetlist, RailPair};
 use theseus_tisc::compile::{compile, marshal, run_on_cpu, run_on_cpu_fast};
 use theseus_tisc::decoder;
+
+mod common;
+use common::{i_ins, r_ins};
 use theseus_tisc::types::{
     decode_bus, decode_composite, decode_system, encode_composite, encode_system, MemWidth,
     StateVals, MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, W,
@@ -421,16 +424,6 @@ fn c1_real_select_mem_composite_ancilla_clean_n8() {
 //
 // Contract: on non-MEXCH opcodes, decode_execute'(v) ==
 // proj_CpuState(system_decode_execute(v, mem=0)).
-
-// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
-//                  I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
-fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
-    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
-}
-
-fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
-    (opc << 25) | (rd << 20) | u32::from(imm)
-}
 
 /// Sample IR words covering all 14 non-MEXCH opcodes + reserved.
 fn non_mexch_ir_samples() -> Vec<u32> {

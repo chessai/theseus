@@ -36,82 +36,14 @@ use theseus_netlist::{balance, bits_of, lower_iso, rail_width, simulate, CellKin
 use theseus_tisc::step::{fetch, pc_add_br, pc_inc, step};
 use theseus_tisc::types::{StateVals, MEM_WORDS};
 
+mod common;
+use common::{eval_state, i_ins, r_ins, ref_step};
+
 const EVAL_FUEL: u64 = 8_000_000_000;
 
 // ── Instruction encoders (spec §3) ─────────────────────────────────
 
-// A-0 32-bit word: R: fmt(31) | op[30:25] | rd[24:20] | rs[19:15] | rt[14:10].
-//                  I: fmt(31)=0 | op[30:25] | rd[24:20] | imm[19:0].
-fn r_ins(opcode: u32, rd: u32, rs: u32, rt: u32) -> u32 {
-    assert!(opcode < 64 && rd < 16 && rs < 16 && rt < 16);
-    (1 << 31) | (opcode << 25) | (rd << 20) | (rs << 15) | (rt << 10)
-}
-
-fn i_ins(opc: u32, rd: u32, imm: u8) -> u32 {
-    assert!(opc < 64 && rd < 16);
-    (opc << 25) | (rd << 20) | u32::from(imm)
-}
-
 // ── Reference emulator ─────────────────────────────────────────────
-
-/// Apply the semantics of one instruction word to the register state.
-/// SWAPBR rd swaps BR ↔ r[rd] (ADR-0034 D1). Reserved opcodes and
-/// word 0 are no-ops given s0 = 0 (asserted in ref_step).
-fn ref_instr(word: u32, s: &mut StateVals) {
-    if word & (1 << 31) != 0 {
-        let opcode = (word >> 25) & 0x3F;
-        let rd = ((word >> 20) & 0x1F) as usize;
-        let rs = ((word >> 15) & 0x1F) as usize;
-        let rt = ((word >> 10) & 0x1F) as usize;
-        match opcode {
-            0b0000 => s.regs[rd] = s.regs[rd].wrapping_add(s.regs[rs]),
-            0b0001 => s.regs[rd] = s.regs[rd].wrapping_sub(s.regs[rs]),
-            0b0010 => s.regs[rd] ^= s.regs[rs],
-            0b0011 => s.regs.swap(rd, rs),
-            0b0100 => s.regs[rd] = s.regs[rd].rotate_left(u32::from(s.regs[rs] & 7)),
-            0b0101 => s.regs[rd] = s.regs[rd].rotate_right(u32::from(s.regs[rs] & 7)),
-            0b0110 => {
-                if s.regs[rd] & 1 == 1 {
-                    s.regs.swap(rs, rt);
-                }
-            }
-            0b0111 => std::mem::swap(&mut s.regs[rd], &mut s.scratch[rt]),
-            0b1000 => {
-                let t = s.regs[rd];
-                s.regs[rd] = s.br as u8;
-                s.br = u16::from(t);
-            }
-            0b1001 if rt < MEM_WORDS => std::mem::swap(&mut s.regs[rd], &mut s.mem[rt]),
-            _ => {} // reserved
-        }
-    } else {
-        let opc = (word >> 25) & 0x3F;
-        let rd = ((word >> 20) & 0x1F) as usize;
-        let imm = (word & 0xFF) as u8;
-        match opc {
-            0b000 => s.regs[rd] = s.regs[rd].wrapping_add(imm),
-            0b001 => s.regs[rd] = s.regs[rd].wrapping_sub(imm),
-            0b010 => s.regs[rd] ^= imm,
-            0b011 => s.regs[rd] = s.regs[rd].rotate_left(u32::from(imm & 7)),
-            0b100 => s.regs[rd] = s.regs[rd].rotate_right(u32::from(imm & 7)),
-            _ => {} // reserved
-        }
-    }
-}
-
-/// One reference machine cycle: fetch rom[pc] (0 out of range), apply
-/// it, PC += BR + 1 (ADR-0034 D2). IR stays 0 across the step.
-fn ref_step(rom: &[u32], s: &StateVals) -> StateVals {
-    assert_eq!(s.ir, 0, "P4: IR must be 0 between steps");
-    assert_eq!(s.scratch[0], 0, "s0 convention (ADDI / IR=0 degeneracy)");
-    assert_eq!(s.scratch[1], 0, "s1 reserved-zero convention");
-    let mut out = s.clone();
-    let word = rom.get(s.pc as usize).copied().unwrap_or(0);
-    ref_instr(word, &mut out);
-    // ADR-0034 D2 / A-6.4: PC += sext(BR) + 1 (mod 2^W_PC), post-execute BR.
-    out.pc = theseus_tisc::compile::pc_update(s.pc, out.br as u8);
-    out
-}
 
 // ── Test ROMs (straight-line, no aliasing, no s0/s1 in XCHG) ───────
 
@@ -165,13 +97,6 @@ fn regs_b() -> [u8; 8] {
 
 // ── Eval helper ────────────────────────────────────────────────────
 
-fn eval_state(name: &str, iso: &Iso, s: &StateVals) -> StateVals {
-    let mut fuel = EVAL_FUEL;
-    let ev = theseus_eval::eval(iso, s.encode(), &mut fuel)
-        .unwrap_or_else(|e| panic!("{name}: eval failed: {e:?}"));
-    StateVals::decode(&ev)
-}
-
 // ══════════════════════════════════════════════════════════════════════
 // 1. Phase isolation: fetch, pc_add_br, and pc_inc
 // ══════════════════════════════════════════════════════════════════════
@@ -193,7 +118,7 @@ fn fetch_isolated() {
     // of range; everything else preserved.
     for pc in [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 42, 255] {
         let s = st(regs_a(), pc);
-        let got = eval_state("fetch", &iso, &s);
+        let got = eval_state("fetch", &iso, &s, EVAL_FUEL);
         let mut expected = s.clone();
         expected.ir = rom.get(pc as usize).copied().unwrap_or(0);
         assert_eq!(got, expected, "fetch: pc={pc}");
@@ -202,7 +127,7 @@ fn fetch_isolated() {
     // Involution: fetch ; fetch == identity (unfetch is the same iso).
     let twice = Iso::seq(iso.clone(), iso);
     let s = st(regs_b(), 3u16);
-    assert_eq!(eval_state("fetch twice", &twice, &s), s);
+    assert_eq!(eval_state("fetch twice", &twice, &s, EVAL_FUEL), s);
 }
 
 // ── A-6.4 widen-PC F-2 regression: narrow-fetch A_fetch=16 aliasing guard ──
@@ -244,7 +169,7 @@ fn fetch_a15_boundary_no_aliasing() {
         (0xFFFFu16, 0u32),
     ] {
         let s = st(regs_a(), pc);
-        let got = eval_state("fetch a=15", &iso, &s);
+        let got = eval_state("fetch a=15", &iso, &s, EVAL_FUEL);
         let mut expected = s.clone();
         expected.ir = want_ir;
         assert_eq!(
@@ -299,13 +224,13 @@ fn pc_add_br_isolated() {
     ] {
         let mut s = st(regs_a(), pc);
         s.br = u16::from(br);
-        let got = eval_state("pc_add_br", &iso, &s);
+        let got = eval_state("pc_add_br", &iso, &s, EVAL_FUEL);
         let mut expected = s.clone();
         expected.pc = pc.wrapping_add(sext(br));
         assert_eq!(got, expected, "pc_add_br: pc={pc:#06x}, br={br:#04x}");
 
         // Adjoint = subtract sext(BR).
-        let back = eval_state("pc_sub_br", &Iso::sym(iso.clone()), &got);
+        let back = eval_state("pc_sub_br", &Iso::sym(iso.clone()), &got, EVAL_FUEL);
         assert_eq!(back, s, "pc_add_br adjoint: pc={pc:#06x}, br={br:#04x}");
     }
 }
@@ -316,7 +241,7 @@ fn pc_add_br_sampled_br0_is_identity() {
     let iso = pc_add_br();
     for pc in [0u8, 1, 7, 8, 0x7F, 0x80, 0xFE, 0xFF] {
         let s = st(regs_b(), pc);
-        let got = eval_state("pc_add_br/br0", &iso, &s);
+        let got = eval_state("pc_add_br/br0", &iso, &s, EVAL_FUEL);
         assert_eq!(got, s, "pc_add_br with BR=0 must be identity (pc={pc})");
     }
 }
@@ -327,7 +252,7 @@ fn pc_add_br_exhaustive_br0_is_identity() {
     let iso = pc_add_br();
     for pc in 0..=255u8 {
         let s = st(regs_b(), pc);
-        let got = eval_state("pc_add_br/br0", &iso, &s);
+        let got = eval_state("pc_add_br/br0", &iso, &s, EVAL_FUEL);
         assert_eq!(got, s, "pc_add_br with BR=0 must be identity (pc={pc})");
     }
 }
@@ -351,13 +276,13 @@ fn pc_inc_isolated() {
         0xFFFF,
     ] {
         let s = st(regs_a(), pc);
-        let got = eval_state("pc_inc", &iso, &s);
+        let got = eval_state("pc_inc", &iso, &s, EVAL_FUEL);
         let mut expected = s.clone();
         expected.pc = pc.wrapping_add(1);
         assert_eq!(got, expected, "pc_inc: pc={pc:#06x}");
 
         // Adjoint = decrement.
-        let back = eval_state("pc_dec", &Iso::sym(iso.clone()), &got);
+        let back = eval_state("pc_dec", &Iso::sym(iso.clone()), &got, EVAL_FUEL);
         assert_eq!(back, s, "pc_inc adjoint: pc={pc:#06x}");
     }
 }
@@ -370,7 +295,7 @@ fn pc_inc_sampled() {
         0u16, 1, 7, 8, 0x7F, 0x80, 0xFE, 0xFF, 0x00FF, 0x0100, 0x7FFF, 0x8000, 0xFFFF,
     ] {
         let s = st(regs_b(), pc);
-        let got = eval_state("pc_inc/sampled", &iso, &s);
+        let got = eval_state("pc_inc/sampled", &iso, &s, EVAL_FUEL);
         let mut expected = s.clone();
         expected.pc = pc.wrapping_add(1);
         assert_eq!(
@@ -416,7 +341,7 @@ fn adr0034_split_add_sampled() {
         for br in [0u8, 1, 5, 0x7F, 0x80, 0xF6, 0xFF] {
             let mut s = st(regs_a(), pc);
             s.br = u16::from(br);
-            let got = eval_state("split_add", &iso, &s);
+            let got = eval_state("split_add", &iso, &s, EVAL_FUEL);
             assert_eq!(
                 got.pc,
                 expect(pc, br),
@@ -572,7 +497,7 @@ fn step_semantics_rom2_eval_only() {
     for pc in 0..4u8 {
         for regs in [regs_a(), regs_b()] {
             let s = st(regs, pc);
-            let got = eval_state(&format!("rom2/pc={pc}"), &iso, &s);
+            let got = eval_state(&format!("rom2/pc={pc}"), &iso, &s, EVAL_FUEL);
             assert_eq!(got, ref_step(&rom, &s), "rom2: pc={pc}");
         }
     }
@@ -588,8 +513,8 @@ fn step_adjoint_recovers_input() {
     let back = Iso::sym(iso.clone());
     for pc in [0u8, 3, 6] {
         let s = st(regs_a(), pc);
-        let fwd = eval_state("adjoint/fwd", iso, &s);
-        let rec = eval_state("adjoint/back", &back, &fwd);
+        let fwd = eval_state("adjoint/fwd", iso, &s, EVAL_FUEL);
+        let rec = eval_state("adjoint/back", &back, &fwd, EVAL_FUEL);
         assert_eq!(rec, s, "sym(step) must recover the input (pc={pc})");
     }
 }
@@ -608,7 +533,7 @@ fn forward_then_backward_run() {
     let mut cur = start.clone();
     let mut refs = vec![start.clone()];
     for t in 0..T {
-        let next = eval_state(&format!("run/fwd[{t}]"), iso, &cur);
+        let next = eval_state(&format!("run/fwd[{t}]"), iso, &cur, EVAL_FUEL);
         let expected = ref_step(rom, &cur);
         assert_eq!(
             next, expected,
@@ -620,7 +545,7 @@ fn forward_then_backward_run() {
     assert_eq!(cur.pc, T as u16, "PC must have advanced T times");
 
     for t in (0..T).rev() {
-        cur = eval_state(&format!("run/back[{t}]"), &back, &cur);
+        cur = eval_state(&format!("run/back[{t}]"), &back, &cur, EVAL_FUEL);
         assert_eq!(cur, refs[t], "backward run diverged at step {t}");
     }
     assert_eq!(cur, start, "T forward + T backward must return to start");
@@ -646,7 +571,7 @@ fn swapbr_step_swaps_br_and_rd() {
     let s = st(regs_a(), 0u16);
     // regs_a() = [0x00, 0xFF, 0xAA, 0x55, 0x01, 0x80, 0x7F, 0xC3]
     // s.br = 0 from st()
-    let got = eval_state("swapbr/r2", &iso, &s);
+    let got = eval_state("swapbr/r2", &iso, &s, EVAL_FUEL);
     let expected = ref_step(&rom, &s);
     assert_eq!(got, expected, "SWAPBR r2 step semantics mismatch");
     assert_eq!(got.regs[2], 0, "r2 should get old BR value (0)");
@@ -662,12 +587,15 @@ fn swapbr_step_swaps_br_and_rd() {
     assert_eq!(got.scratch[1], 0, "s1 must be restored");
 
     // Reversibility: adjoint recovers the input.
-    let rec = eval_state("swapbr/back", &back, &got);
+    let rec = eval_state("swapbr/back", &back, &got, EVAL_FUEL);
     assert_eq!(rec, s, "SWAPBR step must stay reversible");
 
     // The non-SWAPBR instruction in the same ROM still works (at pc=1).
     let s2 = st(regs_b(), 1u16);
-    assert_eq!(eval_state("swapbr-rom/add", &iso, &s2), ref_step(&rom, &s2));
+    assert_eq!(
+        eval_state("swapbr-rom/add", &iso, &s2, EVAL_FUEL),
+        ref_step(&rom, &s2)
+    );
 }
 
 #[test]
@@ -699,7 +627,7 @@ fn v1_counterexample_distinct_post_states() {
         scratch: [0; 8],
         mem: [0; MEM_WORDS],
     };
-    let a_out = eval_state("counterex/A", &iso, &a);
+    let a_out = eval_state("counterex/A", &iso, &a, EVAL_FUEL);
 
     // State B: PC=9, BR=5, regs Y (choose Y so that under v1 they
     // would collide, but under v2 they don't).
@@ -713,7 +641,7 @@ fn v1_counterexample_distinct_post_states() {
         scratch: [0; 8],
         mem: [0; MEM_WORDS],
     };
-    let b_out = eval_state("counterex/B", &iso, &b);
+    let b_out = eval_state("counterex/B", &iso, &b, EVAL_FUEL);
 
     // A: SWAPBR r0 swaps BR ↔ r0. r0 was 0x42, BR was 9.
     // After execute: r0=9, BR=0x42. PC = 5 + 0x42 + 1 = 0x48.
@@ -735,8 +663,8 @@ fn v1_counterexample_distinct_post_states() {
 
     // Both are individually reversible.
     let back = Iso::sym(iso.clone());
-    let a_rec = eval_state("counterex/A/back", &back, &a_out);
-    let b_rec = eval_state("counterex/B/back", &back, &b_out);
+    let a_rec = eval_state("counterex/A/back", &back, &a_out, EVAL_FUEL);
+    let b_rec = eval_state("counterex/B/back", &back, &b_out, EVAL_FUEL);
     assert_eq!(a_rec, a, "A must round-trip");
     assert_eq!(b_rec, b, "B must round-trip");
 }

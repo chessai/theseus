@@ -14,12 +14,13 @@
 //! MINOR-3: should_panic for value_to/from_leaf_bytes range.
 //! MAJOR-1: negative test for memexch_prim_idx with multi-leaf idx.
 
-use std::collections::BTreeMap;
-
-use theseus_core::prim::{enumerate_values, PrimDef};
+use theseus_core::prim::enumerate_values;
 use theseus_core::{Iso, Type, Value};
 
 use theseus_tisc::asm::Instr;
+
+mod common;
+use common::prim_builders::xor_prim_iso;
 use theseus_tisc::compile::{
     compile_with_metadata_resident, marshal_resident, memexch_prim_idx, run_on_cpu_resident,
     run_rom_fast, unmarshal_resident, value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
@@ -69,42 +70,6 @@ fn memexch_iso(w: u8) -> Iso {
     let b = bit();
     let def = memexch_prim_idx(&flat, &b, 2).expect("memexch_prim_idx(Flat(w), Bit, 2)");
     Iso::Prim(Box::new(def))
-}
-
-/// Build the byte-wide XOR prim: `(a, b) ↦ (a, a^b)` on `Flat(w) × Flat(w)`.
-/// Self-inverse (involution).
-fn xor_prim_def(w: u8) -> PrimDef {
-    let flat = Type::Flat(w);
-    let ty = Type::prod(flat.clone(), flat.clone());
-    let vals = enumerate_values(&ty);
-
-    let mut forward = BTreeMap::new();
-    let mut backward = BTreeMap::new();
-
-    for v in &vals {
-        let bytes = value_to_leaf_bytes_pub(v, &ty);
-        let a = bytes[0];
-        let b = bytes[1];
-        let out_b = a ^ b;
-        let out_bytes = vec![a, out_b];
-        let (out_val, _) = value_from_leaf_bytes_pub(&out_bytes, &ty);
-        forward.insert(v.clone(), out_val.clone());
-        backward.insert(v.clone(), out_val);
-    }
-
-    PrimDef {
-        forward_name: "xorInto".into(),
-        backward_name: "xorInto".into(),
-        input_ty: ty.clone(),
-        output_ty: ty,
-        forward,
-        backward,
-        symbolic: None,
-    }
-}
-
-fn xor_prim_iso(w: u8) -> Iso {
-    Iso::Prim(Box::new(xor_prim_def(w)))
 }
 
 /// `reduceStep : (acc, data) ↦ (acc⊕data, data) = SwapProd ; xor ; SwapProd`

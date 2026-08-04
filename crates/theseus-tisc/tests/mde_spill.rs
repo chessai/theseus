@@ -26,7 +26,7 @@ use theseus_tisc::compile::{
     compile, compile_with_metadata, marshal, mde_walk_bytes, run_on_cpu_fast, run_rom_on_cpu,
     unmarshal, CompileError,
 };
-use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
+use theseus_tisc::types::{StateVals, NUM_SCRATCH};
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -38,19 +38,6 @@ fn nat_chain(n: usize) -> Type {
         t = Type::sum(Type::One, t);
     }
     t
-}
-
-fn state_with_regs(bytes: &[u8]) -> StateVals {
-    let mut r = [0u8; NUM_REGS];
-    r[..bytes.len()].copy_from_slice(bytes);
-    StateVals {
-        regs: r,
-        pc: 0,
-        br: 0,
-        ir: 0,
-        scratch: [0; NUM_SCRATCH],
-        mem: [0; MEM_WORDS],
-    }
 }
 
 /// Build the walk PrimDef on Sum(N5, Bit) from the byte map + marshal.
@@ -66,7 +53,7 @@ fn build_walk_body() -> (Iso, Type, Type) {
         let sv = marshal(v, &carrier);
         let mut bytes: Vec<u8> = sv.regs[..5].to_vec();
         mde_walk_bytes(&mut bytes);
-        let out_val = unmarshal(&state_with_regs(&bytes), &carrier);
+        let out_val = unmarshal(&StateVals::state_with_regs(&bytes), &carrier);
         // Closure: the byte map must land on a canonical encoding.
         let out_re = marshal(&out_val, &carrier);
         assert_eq!(
