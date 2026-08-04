@@ -3,7 +3,8 @@
 //! characterization (measured once, loaded from `data/rung0-chardb.ron`).
 
 use theseus_core::{enumerate_values, type_of, Iso};
-use theseus_netlist::{balance, bits_of, lower_iso, rail_width, simulate, CellKind, PhasedCellNetlist};
+use theseus_netlist::lower::lower_iso_with_ancillas;
+use theseus_netlist::{balance, bits_of, rail_width, simulate, CellKind, PhasedCellNetlist};
 use theseus_spice::annotate::compiled_energy;
 use theseus_spice::chardb;
 
@@ -55,30 +56,37 @@ fn elaborate(src: &str, iso_name: &str) -> Iso {
 
 // ── Extend input with ancilla bits ──────────────────────────────────
 
-fn extend_with_ancilla(data_bits: &[bool], net: &PhasedCellNetlist) -> Vec<bool> {
+// Append the netlist's REQUIRED ancilla initial values to the data bits.
+// The R1/K1 garbage-free construction (ADR-0040) is only ancilla-clean --
+// and only computes the right function -- when every ancilla starts at the
+// value the lowering allocated it with (K1 AND-chains need 0; a k=0 R1
+// control needs 1). Feeding a guessed pattern corrupts those reductions
+// and silently produces a wrong bit, so the differential oracle must use
+// the real values from `lower_iso_with_ancillas`, not invent them.
+fn extend_with_ancilla(data_bits: &[bool], ancilla_values: &[bool]) -> Vec<bool> {
     let mut bits = data_bits.to_vec();
-    let n_ancilla = net.inputs.len() - data_bits.len();
-    for i in 0..n_ancilla {
-        bits.push(i % 2 == 0);
-    }
+    bits.extend_from_slice(ancilla_values);
     bits
 }
 
 // ── Compile pipeline (shared by tests) ──────────────────────────────
 
-fn compile_fa5() -> (Iso, PhasedCellNetlist) {
+fn compile_fa5() -> (Iso, PhasedCellNetlist, Vec<bool>) {
     let src = full_adder_source();
     let iso = elaborate(&src, "fa5");
-    let net = lower_iso(&iso).expect("fa5 lowering succeeds");
+    let (net, ancilla_values) =
+        lower_iso_with_ancillas(&iso).expect("fa5 lowering succeeds");
     let balanced = balance(&net).expect("balance succeeds");
-    (iso, balanced)
+    // balance() maps primary inputs 1:1 in order, so the ancilla init
+    // vector still lines up with balanced.inputs[n_data..].
+    (iso, balanced, ancilla_values)
 }
 
-// ── Test (a): energy report has total_j > 0 with K0 and K3 breakdown ──
+// ── Test (a): energy report has total_j > 0 with K0 and R1 breakdown ──
 
 #[test]
-fn energy_report_has_k0_and_k3() {
-    let (_iso, balanced) = compile_fa5();
+fn energy_report_has_k0_and_r1() {
+    let (_iso, balanced, _ancilla_values) = compile_fa5();
     let db = chardb::rung0_measured();
     let t_ramp = 1e-7;
 
@@ -90,9 +98,13 @@ fn energy_report_has_k0_and_k3() {
         "breakdown must contain cswap-k0; got keys: {:?}",
         report.by_kind.keys().collect::<Vec<_>>()
     );
+    // The full adder now lowers its conditional NOTs to the R1 rail-role
+    // swap (ADR-0040), so the garbage-free construction uses the K1-chain
+    // + R1 vocabulary rather than a K3 swap. Assert the R1 path that ACTUALLY
+    // fires (do NOT force the retired k3 path back).
     assert!(
-        report.by_kind.contains_key("cswap-k3"),
-        "breakdown must contain cswap-k3; got keys: {:?}",
+        report.by_kind.contains_key("cswap-r1"),
+        "breakdown must contain cswap-r1; got keys: {:?}",
         report.by_kind.keys().collect::<Vec<_>>()
     );
 
@@ -104,9 +116,9 @@ fn energy_report_has_k0_and_k3() {
         "K0 count mismatch"
     );
     assert_eq!(
-        report.by_kind["cswap-k3"].count,
-        counts[&CellKind::K3],
-        "K3 count mismatch"
+        report.by_kind["cswap-r1"].count,
+        counts[&CellKind::R1],
+        "R1 count mismatch"
     );
 
     eprintln!("energy report:\n{report}");
@@ -116,13 +128,13 @@ fn energy_report_has_k0_and_k3() {
 
 #[test]
 fn differential_oracle_all_32_inputs() {
-    let (iso, balanced) = compile_fa5();
+    let (iso, balanced, ancilla_values) = compile_fa5();
     let (in_ty, out_ty) = type_of(&iso).expect("iso types");
     let n_data_out = rail_width(&out_ty).unwrap();
 
     for v in enumerate_values(&in_ty) {
         let data_bits = bits_of(&v, &in_ty).unwrap();
-        let full_input = extend_with_ancilla(&data_bits, &balanced);
+        let full_input = extend_with_ancilla(&data_bits, &ancilla_values);
         let sim = simulate(&balanced, &full_input)
             .unwrap_or_else(|e| panic!("timed sim failed on {v:?}: {e:?}"));
         let sim_data = &sim.outputs[..n_data_out];
@@ -146,10 +158,10 @@ fn energy_is_deterministic() {
     let db = chardb::rung0_measured();
     let t_ramp = 1e-7;
 
-    let (_iso1, balanced1) = compile_fa5();
+    let (_iso1, balanced1, _anc1) = compile_fa5();
     let report1 = compiled_energy(&balanced1, &db, t_ramp).expect("run 1");
 
-    let (_iso2, balanced2) = compile_fa5();
+    let (_iso2, balanced2, _anc2) = compile_fa5();
     let report2 = compiled_energy(&balanced2, &db, t_ramp).expect("run 2");
 
     assert_eq!(report1, report2, "energy reports must be identical across two runs");
