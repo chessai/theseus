@@ -22,12 +22,16 @@ Mathlib's base axioms; no `sorry`/`axiom`/`native_decide`). Mechanized:
   (fueled, `card U + 1` budget);
 * the **class-wide exactness / trajectory disjointness** (ADR-0007 TH-1b) as
   `traj_cross_injective` + `traj_disjoint` (vertex-disjointness) and
-  `traj_card_bound` (the `Sigma_inputs (T_i - 1) <= |u|` carrier-sizing bound).
+  `traj_card_bound` -- the genuine per-input `Sigma_{x in S} fuel x <= |u|`
+  carrier bound (each `fuel x = T_x - 1`), NOT a uniform-fuel product;
+  `traj_cross_injective` takes a separate fuel per input to support it.
 
-The `Injective`/`Fintype` hypotheses are kernel-verified load-bearing. Only the
-`|u|`-*iterations* restatement (as opposed to the mechanized body-application
-bound) and the WCET/register corollaries below remain text-only (see the scope
-note in the Lean file's header).
+The `Injective`/`Fintype` hypotheses are kernel-verified load-bearing. Text-only:
+(i) the `|u|`-*iterations* restatement (as opposed to the mechanized
+body-application bound); (ii) tightness for GENERAL `|u|` -- the tightness witness
+is mechanized at `|u| = 2` (`hamF_*`), and the claim that a maximal Hamiltonian
+walk exists at every enumerated finite `|u|` remains a text argument; and (iii) the
+WCET/register corollaries below (see the scope note in the Lean file's header).
 
 ## Hypothesis and its discharge (read this first)
 
@@ -123,9 +127,13 @@ by application `|u|+1` at the latest. Forward termination proved. ∎
 
 **Mechanized** as `trace_mutual_inverse` (fuel-free, over the `Steps` exit
 relation) and `run_symm_entry` (fueled, with the explicit `card U + 1` budget)
-in `FiniteTrace.lean`. The reversed-trajectory equation `f†(t_k) = s_{k-1}` is
-the Lean lemma `steps_reaches` (the backward run walks the forward outputs `t_k`
-in reverse), and output-uniqueness of the loop is `steps_output_unique`.
+in `FiniteTrace.lean`. The reversed-trajectory equation `f†(t_k) = s_{k-1}`
+underlies `steps_reaches`, which states the backward run *reaches* `f s` from
+`inr y` (the per-index equation is discharged inside its induction); loop
+output-uniqueness is `steps_output_unique`. NOTE: `trace_mutual_inverse` mechanizes
+the `id_a` direction (forward exit `x ↦ y` ⇒ backward exit `y ↦ x`); the `id_b`
+direction is the same statement instantiated at `f := f.symm` (with `f.symm.symm =
+f`), not a separately named lemma.
 
 Backward evaluation of `trace f` is *defined* as forward evaluation of the
 adjoint: `eval(sym (trace f)) = eval(trace (f†))`, using the definitional law
@@ -148,12 +156,15 @@ a genuine isomorphism, not merely bidirectionally terminating. ∎
 **Mechanized** at `|u| = 2` by `hamF_*` (`hamF_underfueled` shows `|u|` fuel
 still loops; `hamF_exits` shows `|u|+1` exits), and the *class-wide* exactness /
 carrier-sizing direction (ADR-0007 TH-1b) by `traj_cross_injective`,
-`traj_disjoint`, and `traj_card_bound` (`Sigma_inputs (T_i - 1) <= |u|`) in
-`FiniteTrace.lean`.
+`traj_disjoint`, and `traj_card_bound` -- the genuine per-input
+`Sigma_{x in S} fuel x <= |u|` bound (`fuel x = T_x - 1`) -- in `FiniteTrace.lean`.
+The single-instance tightness witness is mechanized at `|u| = 2`; the argument
+below that a maximal Hamiltonian walk exists for GENERAL enumerated finite `u`
+(so `|u|+1` is achieved at every size) is a text argument, not mechanized.
 
 The `|u|` / `|u|+1` bound is achieved: over `u ≅ Bitⁿ` (`|u| = 2ⁿ`) with
-`|a| = |b| = 1` -- and the successor walk generalizes to any enumerated finite
-`u` -- the bijection `inr x ↦ inl 0⃗`, `inl k ↦ inl(k+1)` for
+`|a| = |b| = 1` -- and the successor walk generalizes (text argument) to any
+enumerated finite `u` -- the bijection `inr x ↦ inl 0⃗`, `inl k ↦ inl(k+1)` for
 `k < 2ⁿ−1`, `inl(2ⁿ−1) ↦ inr y` is a Hamiltonian walk: one trajectory visits all
 `|u|` loop-states then exits, using exactly `|u|` iterations and `|u|+1` body
 applications. The exit application's *input* is the last loop-state (already

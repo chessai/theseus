@@ -247,39 +247,71 @@ constructor (whose case is the `Bijective.iterate` argument above). Surfaced as 
 named Tier-2 fact because "a bounded reversible loop is reversible" is the loop
 form of the reversibility guarantee. ∎
 
-### Theorem (fold/unfold mutual inverse) -- `fold_unfold_inv`, `unfold_fold_inv`, `foldBits_bijective`
+### Theorem (fold/unfold mutual inverse)
 
-**Model.** ADR-0037's `fold` applies a body iso structurally at every cell of a
-recursive data type; `unfold` is its adjoint anamorphism. We model the recursive
-carrier as `List Bool` (a BitList of arbitrary length) and, given a per-cell
-bijection `e : Bool =~= Bool`:
+theseus has two fold-shaped constructs over a recursive carrier; we mechanize
+both, and are explicit about which is ADR-0037's actual `fold`.
+
+**(a) Cellwise map (the accumulator-free special case) -- `fold_unfold_inv`,
+`unfold_fold_inv`, `foldBits_bijective`.** Given a per-cell bijection
+`e : Bool =~= Bool`, over `List Bool` of arbitrary length:
 
 ```
 foldBits   e = List.map e
 unfoldBits e = List.map e.symm
 ```
 
-**Statement (`fold_unfold_inv`).** `unfoldBits e o foldBits e = id`.
+`unfoldBits e (foldBits e l) = List.map e.symm (List.map e l) =
+List.map (e.symm o e) l` by `List.map_map`, and `e.symm o e = id`
+(`Equiv.symm_comp_self`), so `= List.map id l = l`; the reverse is symmetric with
+`Equiv.self_comp_symm`. Hence `foldBits e` is a bijection with `unfoldBits e` its
+two-sided inverse. **Here reversibility is genuinely a per-cell fact and traversal
+order is irrelevant -- which is exactly what makes this only the DEGENERATE case
+of ADR-0037's fold, not the real construct.**
 
-*Proof.* For any list `l`, `unfoldBits e (foldBits e l) = List.map e.symm
-(List.map e l) = List.map (e.symm o e) l` by `List.map_map` (map fusion). Since
-`e` is an equivalence, `e.symm o e = id` (`Equiv.symm_comp_self`), so this is
-`List.map id l = l` (`List.map_id`). Cell by cell, unfold undoes fold at every
-length. ∎
+**(b) The genuine ADR-0037 accumulator fold -- `unfold_fold_acc`,
+`fold_unfold_acc`, `foldAcc_bijective`.** ADR-0037's `fold` is a reversible
+`mapAccumL`: a body bijection `f : Bool x Bool =~= Bool x Bool` threads an
+accumulator (the first component) head-to-tail along the list, so the cells are
+COUPLED through the accumulator and traversal order matters. Over `List Bool`:
 
-**Statement (`unfold_fold_inv`).** `foldBits e o unfoldBits e = id`.
+```
+foldAcc   f acc []        = (acc, [])
+foldAcc   f acc (b :: bs) = let (acc',b') = f (acc,b)
+                            let (accf,bs') = foldAcc f acc' bs
+                            (accf, b' :: bs')
+unfoldAcc f acc []          = (acc, [])
+unfoldAcc f acc (b' :: bs') = let (acc1,bs) = unfoldAcc f acc bs'
+                              let (acc0,b)  = f.symm (acc1, b')
+                              (acc0, b :: bs)
+```
 
-*Proof.* Symmetric: `List.map e (List.map e.symm l) = List.map (e o e.symm) l =
-List.map id l = l`, using `Equiv.self_comp_symm` for `e o e.symm = id`. ∎
+`foldAcc` runs `f` head-to-tail; the adjoint `unfoldAcc` runs `f.symm`
+tail-to-head -- it recurses into the tail FIRST and inverts the head cell LAST,
+walking fold's accumulator trajectory in reverse.
 
-**Statement (`foldBits_bijective`).** `Bijective (foldBits e)`.
+**Statement (`unfold_fold_acc`).** For every `l` and `acc`,
+`unfoldAcc f (foldAcc f acc l).1 (foldAcc f acc l).2 = (acc, l)`.
 
-*Proof.* `unfoldBits e` is a two-sided inverse of `foldBits e`: it is a left
-inverse (from `fold_unfold_inv`, pointwise) hence `foldBits e` is injective
-(`LeftInverse.injective`), and a right inverse (from `unfold_fold_inv`) hence
-`foldBits e` is surjective (`RightInverse.surjective`). Injective + surjective =
-bijective. So the reversible catamorphism over the whole recursive structure is
-itself reversible, with the anamorphism as its inverse. ∎
+*Proof.* Induction on `l` (general in `acc`). Empty: both sides `(acc, [])`. Cons
+`b :: bs`: put `(acc',b') = f (acc,b)`. Forward, `foldAcc f acc (b::bs)` returns
+final accumulator `accf` and list `b' :: bs'`, where `(accf,bs') = foldAcc f acc'
+bs`. Backward, `unfoldAcc` on `(accf, b' :: bs')` recurses on `bs'` from `accf`
+first; the induction hypothesis at `acc'` gives `unfoldAcc f accf bs' = (acc',
+bs)`, so the head cell inverts as `f.symm (acc', b') = (acc, b)`
+(`Equiv.symm_apply_apply`, since `(acc',b') = f (acc,b)`), yielding `(acc, b ::
+bs)`. ∎
+
+**Statement (`fold_unfold_acc`).** The other direction,
+`foldAcc f (unfoldAcc f acc l).1 (unfoldAcc f acc l).2 = (acc, l)`, by the mirror
+induction using `Equiv.apply_symm_apply`.
+
+**Statement (`foldAcc_bijective`).** `Bijective (fun p => foldAcc f p.1 p.2)` on
+`Bool x List Bool`, with `fun p => unfoldAcc f p.1 p.2` the two-sided inverse
+(`Function.bijective_iff_has_inverse`). This is the real theorem: an
+accumulator-threading reversible fold over an arbitrary-length structure whose
+adjoint reverses the traversal -- not a cellwise permutation dressed up as a
+fold. ∎
 
 ### Theorem (SWAPBR come-from involution) -- `comefrom_involution`, `swapbrIso_involution`
 
@@ -303,9 +335,11 @@ where `swapbrIso := Iso.swapT` on `prod bit bit`.
 
 *Proof.* For `(b, r) : Bool x Bool`,
 `swapbr (swapbr (b, r)) = swapbr (r, b) = (b, r)`. A transposition composed with
-itself is the identity. This is the control-flow reversibility witness: the
-come-from `SWAPBR rj` at the target undoes the `SWAPBR rj` at the site, restoring
-the paired registers so sequential execution resumes (D5: "BR <- 0"). ∎
+itself is the identity. This is the algebraic core of the control-flow
+reversibility witness: the come-from `SWAPBR rj` at the target undoes the `SWAPBR
+rj` at the site, restoring the paired registers. (That sequential execution then
+resumes at the target additionally needs the in-flight instructions to leave
+`(BR, rj)` fixed -- an unmodeled static property of D5; see Modeling scope.) ∎
 
 **Statement (`swapbrIso_involution`).**
 `denote swapbrIso o denote swapbrIso = id`.
@@ -315,6 +349,17 @@ the paired registers so sequential execution resumes (D5: "BR <- 0"). ∎
 = swapbr`), then apply `comefrom_involution`. This states the involution through
 the *iso denotation*, tying the come-from witness to the reversible iso algebra
 rather than to a bespoke `Prod.swap` fact. ∎
+
+### Theorem (NOT is an involution) -- `notI_involution`
+
+**Statement.** `denote notI o denote notI = id` (with behavioral pins
+`denote notI (inl ()) = inr ()` and `denote notI (inr ()) = inl ()`).
+
+*Proof.* `denote notI = Sum.swap` on `unit (+) unit`; swapping the two one-point
+summands twice returns the original tag (`cases` on the two inhabitants, each by
+`rfl`). NOT = `SwapSum(1,1)` is thus its own inverse -- the sum-side companion to
+the product-side `comefrom_involution`, both instances of a transposition being
+self-inverse. ∎
 
 ---
 
@@ -340,31 +385,37 @@ model.
   fragment); these are out of scope for the reversibility-by-construction claim and
   are tracked elsewhere (TH-3 rig coherence, ADR-0014).
 
-* **`iter` -- faithful as bounded iteration; loop control is TH-1's job.** `iter n`
-  is the honest `n`-fold iterate of a body endo-iso, and its reversibility is a
-  real corollary of the core theorem. It abstracts *how many times the body runs*:
-  the concrete `trace` loop derives its iteration count from a data-dependent
-  fixed point, and that count's finiteness/exactness (`<= |u|`) is the separate,
-  already-mechanized TH-1 theorem (`finite-trace-totality.md` /
-  `FiniteTrace.lean`). `iter` proves "any bounded iteration of a reversible body is
-  reversible"; TH-1 proves "the loop's bound is finite and exact." The two compose
-  but are deliberately kept separate concerns; `iter` does not re-prove TH-1.
+* **`fold`/`unfold` -- the genuine accumulator fold is mechanized; two honest
+  boundaries.** ADR-0037's `fold` is a reversible `mapAccumL` whose reversibility
+  is NOT per-cell: the accumulator threaded head-to-tail couples the cells, and the
+  adjoint must reverse the traversal (tail-to-head). This threading -- the actual
+  content of the ADR -- IS mechanized: `foldAcc`/`unfoldAcc` over `List Bool` of
+  arbitrary length, with `unfold_fold_acc`/`fold_unfold_acc` proving mutual
+  inversion at every length and `foldAcc_bijective` the resulting bijection. The
+  recursion is real structural recursion, and the tail-to-head un-threading is the
+  genuine reversal, not a reshuffle. Two boundaries remain, both explicit:
+  (i) **cell type.** The per-cell body is `Bool x Bool =~= Bool x Bool` (accumulator
+  and payload each one bit) rather than an arbitrary `Iso (prod a c) (prod a c)`; a
+  fully `Iso`-typed recursive carrier would need recursive `mu`-types in `Ty`
+  (scoped OUT, as for the object language generally). The accumulator-threading
+  argument is uniform in the body bijection, so the one-bit case is representative
+  of the reversibility mechanism, but it is a representative case, not the fully
+  general `Iso` statement. (ii) The separate `foldBits`/`unfoldBits` map is the
+  accumulator-FREE special case (`List.map e`); it is honestly labelled as the
+  degenerate, per-cell case and is NOT claimed to be ADR-0037's fold.
 
-* **`fold`/`unfold` -- faithful catamorphism/anamorphism over a genuine recursion,
-  abstracting the cell payload.** The recursion is real: `List.map` is structural
-  recursion over an arbitrary-length `List Bool`, and the mutual-inverse theorems
-  hold at *every* length, not a fixed shape. The abstraction is the **cell type**:
-  we take the per-cell bijection to be `Bool =~= Bool` rather than an arbitrary
-  `Iso a a`. This is faithful to the reversibility claim because the catamorphism's
-  reversibility is entirely a *per-cell* fact composed structurally -- the argument
-  (`map_map` fusion + `e.symm o e = id` at each cell) is uniform in the cell
-  bijection, so `Bool =~= Bool` is representative of any `denoteTy a =~= denoteTy a`.
-  A fully general `fold : Iso a a -> Iso (list a) (list a)` over an `Iso`-typed
-  recursive carrier would require adding recursive types to `Ty`; that is a larger
-  effort (a `mu`-type extension of the object language) and is scoped OUT here. What
-  is NOT abstracted: the arbitrary length and the genuine structural recursion --
-  so this is a real anamorphism-inverts-catamorphism theorem, not a fixed
-  permutation dressed up as a fold.
+* **`iter` -- faithful as bounded iteration; loop control is TH-1's job; the count
+  is a meta-parameter.** `iter n` is the honest `n`-fold iterate of a body endo-iso.
+  Two things it abstracts: (a) *how many times the body runs* -- the concrete
+  `trace` loop derives its count from a data-dependent fixed point whose
+  finiteness/exactness (`<= |u|`) is the separate, already-mechanized TH-1
+  (`finite-trace-totality.md` / `FiniteTrace.lean`); and (b) the count's
+  representation -- ADR-0036's denotation carries the count in the value as
+  `<k, x> |-> <k, f^k x>`, whereas `Iso.iter n` takes `n` as an external Lean
+  parameter. The data-carried version is a trivial fibrewise lift of
+  `iter_bijective` (bijective in `x` for each fixed `k`), so nothing is lost for the
+  reversibility claim; `iter` proves "any bounded iteration of a reversible body is
+  reversible" and does not re-prove TH-1.
 
 * **`swapbr` / come-from -- faithful on the acted-on slice, abstracting the
   unchanged registers.** ADR-0034's `SWAPBR rd` exchanges `BR` with `rd` and leaves
@@ -377,9 +428,15 @@ model.
   registers) is faithful because they are acted on by the identity, which commutes
   with and is unaffected by the exchange; including them would change `Bool x Bool`
   to `Bool x Bool x (rest)` with `swapbr = Prod.swap x id` and leave the involution
-  identical. Not modeled: the opcode-predicate gating (whether a given step *is* a
-  SWAPBR) -- that is control-flow *dispatch*, orthogonal to the reversibility *of*
-  the exchange, which is what D5's come-from correctness rests on.
+  identical. Not modeled, two items: (i) the opcode-predicate gating (whether a
+  given step *is* a SWAPBR) -- control-flow *dispatch*, orthogonal to the
+  reversibility *of* the exchange; and (ii) the *in-flight invariance* -- that the
+  instructions executed between the paired site/target SWAPBRs leave `(BR, rj)`
+  fixed. `comefrom_involution` composes the two exchanges with nothing in between,
+  so it is the algebraic core (the exchange is self-inverse); the claim that
+  sequential execution actually resumes at the target additionally needs that
+  in-flight invariance, which is a separate static-discipline property of D5, not
+  proved here.
 
 ## Provenance (borrowed vs. novel)
 

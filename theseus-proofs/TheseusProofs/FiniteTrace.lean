@@ -25,9 +25,9 @@ SCOPE — what is and is NOT mechanized here (keep the obligation ledger honest)
     `f†(t_k) = s_{k-1}`) and `steps_output_unique`.
   * Mechanized (class-wide exactness / disjointness, ADR-0007 TH-1b):
     `traj_cross_injective` (distinct inputs are backward-deterministically
-    vertex-disjoint in the carrier), `traj_disjoint` (its `x ≠ x'` corollary),
-    and `traj_card_bound` (the `Σ_inputs (Tᵢ − 1) ≤ |u|` carrier-sizing bound,
-    here `|S| · fuel ≤ |u|`).
+    vertex-disjoint in the carrier, under per-input fuels), `traj_disjoint` (its
+    `x ≠ x'` corollary), and `traj_card_bound` (the genuine per-input
+    `Σ_{x ∈ S} fuel x ≤ |u|` carrier-sizing bound).
   * NOT mechanized: the `|u|`-*iterations* (as opposed to body-application)
     restatement and the WCET/register corollaries. These remain text-only in
     `finite-trace-totality.md`.
@@ -392,10 +392,10 @@ shared carrier state would have two predecessors walking back to two distinct
 single injection into `U`.
 
 `traj_cross_injective` is the disjointness core (distinct `(input, step)` pairs
-land on distinct carrier states), and `traj_card_bound` is the packaged
-`Σ (Tᵢ − 1) ≤ |u|` bound over any finite set of inputs, each in its own no-exit
-regime for `fuel` steps (so `Tᵢ − 1 = fuel` loop-states per input, giving
-`(#inputs) · fuel ≤ |u|`). -/
+land on distinct carrier states), taking a SEPARATE fuel per input, and
+`traj_card_bound` is the packaged `Σ_{x ∈ S} fuel x ≤ |u|` bound over any finite
+set of inputs, each in its own no-exit regime for its own `fuel x` steps
+(`fuel x = Tₓ − 1`) — the genuine per-input sum, not a uniform-fuel product. -/
 
 /-- Cross-input backward-determinism / vertex-disjointness (TH-1b core). Under
     injective `f`, if two inputs `x` and `x'` are both in the no-exit regime for
@@ -409,10 +409,10 @@ regime for `fuel` steps (so `Tᵢ − 1 = fuel` loop-states per input, giving
     together (`a = b`) at the same entry (`inr x = inr x'`, i.e. `x = x'`). -/
 theorem traj_cross_injective
     (f : U ⊕ A → U ⊕ B) (hf : Function.Injective f)
-    (x x' : A) (fuel : Nat)
-    (hno  : ∀ k, k < fuel → ∃ w, f (state f x k) = Sum.inl w)
-    (hno' : ∀ k, k < fuel → ∃ w, f (state f x' k) = Sum.inl w) :
-    ∀ a b, a ≤ fuel → b ≤ fuel →
+    (x x' : A) (fx fx' : Nat)
+    (hno  : ∀ k, k < fx → ∃ w, f (state f x k) = Sum.inl w)
+    (hno' : ∀ k, k < fx' → ∃ w, f (state f x' k) = Sum.inl w) :
+    ∀ a b, a ≤ fx → b ≤ fx' →
       state f x a = state f x' b → x = x' ∧ a = b := by
   -- Descend on `a`, tracking `b` in lockstep.
   intro a
@@ -426,7 +426,7 @@ theorem traj_cross_injective
           exact ⟨Sum.inr.inj hval, rfl⟩
       | succ b' =>
           exfalso
-          have hb'fuel : b' < fuel := by omega
+          have hb'fuel : b' < fx' := by omega
           obtain ⟨wb, hwb⟩ := hno' b' hb'fuel
           have hb1 : state f x' (b' + 1) = Sum.inl wb := by rw [state, hwb]
           rw [hb1] at hval
@@ -436,14 +436,14 @@ theorem traj_cross_injective
       cases b with
       | zero =>
           exfalso
-          have ha'fuel : a' < fuel := by omega
+          have ha'fuel : a' < fx := by omega
           obtain ⟨wa, hwa⟩ := hno a' ha'fuel
           have ha1 : state f x (a' + 1) = Sum.inl wa := by rw [state, hwa]
           rw [ha1] at hval
           simp only [state, reduceCtorEq] at hval
       | succ b' =>
-          have ha'fuel : a' < fuel := by omega
-          have hb'fuel : b' < fuel := by omega
+          have ha'fuel : a' < fx := by omega
+          have hb'fuel : b' < fx' := by omega
           obtain ⟨wa, hwa⟩ := hno a' ha'fuel
           obtain ⟨wb, hwb⟩ := hno' b' hb'fuel
           have ha1 : state f x (a' + 1) = Sum.inl wa := by rw [state, hwa]
@@ -453,8 +453,8 @@ theorem traj_cross_injective
           have hfeq : f (state f x a') = f (state f x' b') := by
             rw [hwa, hwb, hww]
           have hstateq : state f x a' = state f x' b' := hf hfeq
-          have ha'le : a' ≤ fuel := by omega
-          have hb'le : b' ≤ fuel := by omega
+          have ha'le : a' ≤ fx := by omega
+          have hb'le : b' ≤ fx' := by omega
           obtain ⟨hxx, hab⟩ := ih b' ha'le hb'le hstateq
           exact ⟨hxx, by omega⟩
 
@@ -469,50 +469,48 @@ theorem traj_disjoint
     (hxx : x ≠ x') :
     ∀ a b, a ≤ fuel → b ≤ fuel → state f x a ≠ state f x' b := by
   intro a b ha hb hval
-  exact hxx (traj_cross_injective f hf x x' fuel hno hno' a b ha hb hval).1
+  exact hxx (traj_cross_injective f hf x x' fuel fuel hno hno' a b ha hb hval).1
 
-/-- **Class-wide exactness / carrier-sizing bound (ADR-0007 TH-1b (1)).** If each
-    input in a finite set `S` is in the no-exit regime for `fuel` steps, then the
-    loop-states — indexed by `(input in S) × (step < fuel)` — inject into the
-    carrier `U`, so `|S| · fuel ≤ |u|`. This is the `Σ_inputs (Tᵢ − 1) ≤ |u|`
-    bound (here every `Tᵢ − 1 = fuel`, uniform), the sum-over-inputs form of
-    `t ≤ |u| + 1`; a loop carrier must be at least as wide as the iterating input
-    class. The injection is `(x, k) ↦ the loop-state at step k+1`, injective by
-    `traj_cross_injective`. -/
+/-- **Class-wide exactness / carrier-sizing bound (ADR-0007 TH-1b (1)).** Give
+    each input `x` in a finite set `S` its OWN no-exit budget `fuel x` (trajectory
+    length `Tₓ − 1`). The loop-states — indexed by the dependent pairs
+    `(x ∈ S, k < fuel x)` — inject into the carrier `U`, so
+    `Σ_{x ∈ S} fuel x ≤ |u|`. This is exactly the `Σ_inputs (Tᵢ − 1) ≤ |u|`
+    carrier-sizing bound (per-input lengths, NOT a uniform fuel), the
+    sum-over-inputs form of `t ≤ |u| + 1`: a loop carrier must be at least as wide
+    as the total distinct loop-state count across the iterating input class. The
+    injection is `(x, k) ↦ the loop-state at step k+1`, injective by
+    `traj_cross_injective` (which now takes per-input fuels). -/
 theorem traj_card_bound
     [Fintype U] [DecidableEq A]
     (f : U ⊕ A → U ⊕ B) (hf : Function.Injective f)
-    (S : Finset A) (fuel : Nat)
-    (hno : ∀ x ∈ S, ∀ k, k < fuel → ∃ w, f (state f x k) = Sum.inl w) :
-    S.card * fuel ≤ Fintype.card U := by
-  -- Pack (input, step) ↦ carrier state at step (k+1). The step index k < fuel
+    (S : Finset A) (fuel : A → Nat)
+    (hno : ∀ x ∈ S, ∀ k, k < fuel x → ∃ w, f (state f x k) = Sum.inl w) :
+    (∑ x ∈ S, fuel x) ≤ Fintype.card U := by
+  -- Pack (input, step) ↦ carrier state at step (k+1). The step index k < fuel x
   -- gives state at index k+1 (a genuine `inl` carrier vertex), and the choose
   -- extracts the carrier witness `w ∈ U`.
   classical
-  -- If the index set is empty the bound is trivial (`0 ≤ card U`); otherwise the
-  -- no-exit hypothesis hands us a carrier element at step 0, so `U` is inhabited
-  -- and the junk default in `g` below is well-defined (no `[Nonempty U]` needed).
-  rcases Nat.eq_zero_or_pos (S.card * fuel) with h0 | hpos
+  -- If the sum is 0 the bound is trivial (`0 ≤ card U`); otherwise SOME input has
+  -- positive fuel, whose step-0 no-exit witness inhabits `U` (junk default ok).
+  rcases Nat.eq_zero_or_pos (∑ x ∈ S, fuel x) with h0 | hpos
   · rw [h0]; exact Nat.zero_le _
-  have hfpos : 0 < fuel := by
-    rcases Nat.eq_zero_or_pos fuel with h | h
-    · subst h; simp at hpos
-    · exact h
-  have hSpos : 0 < S.card := by
-    rcases Nat.eq_zero_or_pos S.card with h | h
-    · rw [h] at hpos; simp at hpos
-    · exact h
-  obtain ⟨x0, hx0⟩ := Finset.card_pos.mp hSpos
-  obtain ⟨w0, _hw0⟩ := hno x0 hx0 0 hfpos
+  obtain ⟨x0, hx0S, hx0pos⟩ : ∃ x ∈ S, 0 < fuel x := by
+    by_contra hcon
+    simp only [not_exists, not_and, not_lt] at hcon
+    have hz : (∑ x ∈ S, fuel x) = 0 :=
+      Finset.sum_eq_zero (fun x hx => Nat.le_zero.mp (hcon x hx))
+    omega
+  obtain ⟨w0, _hw0⟩ := hno x0 hx0S 0 hx0pos
   haveI : Nonempty U := ⟨w0⟩
-  -- The map into U on the finite index type `S ×ˢ Finset.range fuel`.
-  set P : Finset (A × Nat) := S ×ˢ Finset.range fuel with hP
+  -- Dependent index set: pairs (x ∈ S, k < fuel x). |P| = Σ_{x∈S} fuel x.
+  set P : Finset (Σ _ : A, Nat) := S.sigma (fun x => Finset.range (fuel x)) with hP
   -- `g p` is the carrier witness of the loop-state at step `p.2 + 1` from input `p.1`.
   have gexists : ∀ p ∈ P, ∃ w : U, f (state f p.1 p.2) = Sum.inl w := by
     intro p hp
-    rw [hP, Finset.mem_product, Finset.mem_range] at hp
+    rw [hP, Finset.mem_sigma, Finset.mem_range] at hp
     exact hno p.1 hp.1 p.2 hp.2
-  let g : A × Nat → U := fun p =>
+  let g : (Σ _ : A, Nat) → U := fun p =>
     if h : ∃ w : U, f (state f p.1 p.2) = Sum.inl w then h.choose
     else Classical.arbitrary U
   have hg : ∀ p ∈ P, f (state f p.1 p.2) = Sum.inl (g p) := by
@@ -522,33 +520,37 @@ theorem traj_card_bound
       then h.choose else Classical.arbitrary U)
     rw [dif_pos hex]
     exact hex.choose_spec
-  -- Injectivity of g on the product finset.
-  have hginj : Set.InjOn g (P : Set (A × Nat)) := by
-    intro p hp q hq hpq
+  -- Injectivity of g on the dependent index finset.
+  have hginj : Set.InjOn g (P : Set (Σ _ : A, Nat)) := by
+    rintro ⟨p1, p2⟩ hp ⟨q1, q2⟩ hq hpq
     rw [Finset.mem_coe] at hp hq
-    have hpP : p ∈ P := hp
-    have hqP : q ∈ P := hq
-    rw [hP, Finset.mem_product, Finset.mem_range] at hp hq
-    have hfp := hg p hpP
-    have hfq := hg q hqP
-    have hstep : state f p.1 (p.2 + 1) = state f q.1 (q.2 + 1) := by
-      have h1 : state f p.1 (p.2 + 1) = Sum.inl (g p) := by rw [state, hfp]
-      have h2 : state f q.1 (q.2 + 1) = Sum.inl (g q) := by rw [state, hfq]
+    have hpP : (⟨p1, p2⟩ : Σ _ : A, Nat) ∈ P := hp
+    have hqP : (⟨q1, q2⟩ : Σ _ : A, Nat) ∈ P := hq
+    rw [hP, Finset.mem_sigma, Finset.mem_range] at hp hq
+    have hp2lt : p2 < fuel p1 := hp.2
+    have hq2lt : q2 < fuel q1 := hq.2
+    have hfp := hg _ hpP
+    have hfq := hg _ hqP
+    have hstep : state f p1 (p2 + 1) = state f q1 (q2 + 1) := by
+      have h1 : state f p1 (p2 + 1) = Sum.inl (g ⟨p1, p2⟩) := by rw [state, hfp]
+      have h2 : state f q1 (q2 + 1) = Sum.inl (g ⟨q1, q2⟩) := by rw [state, hfq]
       rw [h1, h2, hpq]
     obtain ⟨hxx, hkk⟩ :=
-      traj_cross_injective f hf p.1 q.1 fuel (hno p.1 hp.1) (hno q.1 hq.1)
-        (p.2 + 1) (q.2 + 1) (by omega) (by omega) hstep
-    have hp2 : p.2 = q.2 := by omega
-    exact Prod.ext hxx hp2
-  -- inject P into U, so |P| ≤ |U|; and |P| = |S| * fuel.
+      traj_cross_injective f hf p1 q1 (fuel p1) (fuel q1)
+        (hno p1 hp.1) (hno q1 hq.1)
+        (p2 + 1) (q2 + 1) (by omega) (by omega) hstep
+    have hp2eq : p2 = q2 := by omega
+    subst hxx; subst hp2eq; rfl
+  -- inject P into U, so |P| ≤ |U|; and |P| = Σ_{x∈S} fuel x.
   have hcard : P.card ≤ Fintype.card U := by
     have himg : (P.image g).card = P.card := Finset.card_image_of_injOn hginj
     calc P.card = (P.image g).card := himg.symm
       _ ≤ Fintype.card U := by
           rw [← Finset.card_univ]
           exact Finset.card_le_card (Finset.subset_univ _)
-  have hPcard : P.card = S.card * fuel := by
-    rw [hP, Finset.card_product, Finset.card_range]
+  have hPcard : P.card = ∑ x ∈ S, fuel x := by
+    rw [hP, Finset.card_sigma]
+    exact Finset.sum_congr rfl (fun x _ => Finset.card_range (fuel x))
   rw [hPcard] at hcard
   exact hcard
 

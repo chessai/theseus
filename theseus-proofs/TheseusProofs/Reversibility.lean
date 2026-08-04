@@ -326,6 +326,72 @@ theorem foldBits_bijective (e : Bool ≃ Bool) :
     fun l => congrFun (unfold_fold_inv e) l
   exact ⟨hL.injective, hR.surjective⟩
 
+/-! ### The genuine ADR-0037 accumulator fold (`foldAcc` / `unfoldAcc`)
+
+`foldBits` above is the accumulator-FREE special case: each cell is transformed
+independently, so its reversibility is a per-cell fact and traversal order is
+irrelevant (`unfoldBits ∘ foldBits = id` holds in either order trivially).
+ADR-0037's actual `fold` is a reversible `mapAccumL`: a body bijection
+`f : Bool × Bool ≃ Bool × Bool` threads an accumulator (the first component)
+head-to-tail through the list, COUPLING the cells. Its reversibility is therefore
+not per-cell -- the adjoint `unfold` must run `f.symm` tail-to-head, un-threading
+the accumulator. We mechanize that genuine construct over `List Bool` (arbitrary
+length, real structural recursion) and prove fold/unfold are two-sided inverses,
+so `foldAcc` is a bijection of `Bool × List Bool`. -/
+
+/-- ADR-0037 reversible fold as a `mapAccumL`: thread the accumulator `acc` (first
+    component) head-to-tail through the per-cell bijection `f`, returning the final
+    accumulator and the transformed list. Cells are COUPLED through the
+    accumulator, unlike the cellwise `foldBits`. -/
+def foldAcc (f : Bool × Bool ≃ Bool × Bool) : Bool → List Bool → Bool × List Bool
+  | acc, []      => (acc, [])
+  | acc, b :: bs =>
+      ((foldAcc f (f (acc, b)).1 bs).1,
+       (f (acc, b)).2 :: (foldAcc f (f (acc, b)).1 bs).2)
+
+/-- The adjoint anamorphism: run `f.symm` tail-to-head, un-threading the
+    accumulator. The recursion descends to the tail first and inverts the head
+    cell LAST -- exactly reversing `foldAcc`'s head-to-tail order. -/
+def unfoldAcc (f : Bool × Bool ≃ Bool × Bool) : Bool → List Bool → Bool × List Bool
+  | acc, []        => (acc, [])
+  | acc, b' :: bs' =>
+      ((f.symm ((unfoldAcc f acc bs').1, b')).1,
+       (f.symm ((unfoldAcc f acc bs').1, b')).2 :: (unfoldAcc f acc bs').2)
+
+/-- unfold undoes fold at every length, WITH the accumulator threaded: running
+    `foldAcc f` from `acc` then `unfoldAcc f` from the produced final accumulator
+    recovers `(acc, l)`. The inverse walks fold's accumulator trajectory in
+    reverse -- the content that the cellwise `foldBits` lacks. -/
+theorem unfold_fold_acc (f : Bool × Bool ≃ Bool × Bool) (l : List Bool) :
+    ∀ acc, unfoldAcc f (foldAcc f acc l).1 (foldAcc f acc l).2 = (acc, l) := by
+  induction l with
+  | nil => intro acc; rfl
+  | cons b bs ih =>
+      intro acc
+      simp [foldAcc, unfoldAcc, ih (f (acc, b)).1]
+
+/-- fold undoes unfold at every length (the other direction). -/
+theorem fold_unfold_acc (f : Bool × Bool ≃ Bool × Bool) (l : List Bool) :
+    ∀ acc, foldAcc f (unfoldAcc f acc l).1 (unfoldAcc f acc l).2 = (acc, l) := by
+  induction l with
+  | nil => intro acc; rfl
+  | cons b' bs' ih =>
+      intro acc
+      simp [foldAcc, unfoldAcc, ih acc]
+
+/-- The genuine accumulator fold is a bijection of `Bool × List Bool`, with the
+    tail-to-head `unfoldAcc` as its two-sided inverse. -/
+theorem foldAcc_bijective (f : Bool × Bool ≃ Bool × Bool) :
+    Function.Bijective (fun p : Bool × List Bool => foldAcc f p.1 p.2) := by
+  apply Function.bijective_iff_has_inverse.mpr
+  refine ⟨fun p => unfoldAcc f p.1 p.2, ?_, ?_⟩
+  · intro p
+    show unfoldAcc f (foldAcc f p.1 p.2).1 (foldAcc f p.1 p.2).2 = p
+    rw [unfold_fold_acc f p.2 p.1]
+  · intro p
+    show foldAcc f (unfoldAcc f p.1 p.2).1 (unfoldAcc f p.1 p.2).2 = p
+    rw [fold_unfold_acc f p.2 p.1]
+
 /-! ### SWAPBR come-from involution (ADR-0034 control-flow reversibility)
 
 ADR-0034 D1/D6: the only control-flow instruction is `SWAPBR rd`, which SWAPS
@@ -338,9 +404,12 @@ control-flow reversibility witness modeled here.
 
 We model the relevant slice of State as the pair `(BR, rd)` and `swapbr` as the
 exchange `(br, rd) ↦ (rd, br)` — exactly a `swapT`-shaped transposition. The
-theorem `comefrom_involution` is `swapbr ∘ swapbr = id`: the come-from `SWAPBR`
-undoes the site `SWAPBR`, which is why sequential execution resumes at the target
-(D5: "BR ← 0 — sequential execution resumes"). -/
+theorem `comefrom_involution` is `swapbr ∘ swapbr = id`: applying the SAME
+exchange twice is the identity on `(BR, rd)` — the algebraic core of D5. NOTE the
+scope: this composes the two SWAPBRs with nothing in between; that sequential
+execution actually resumes at the target additionally requires the instructions
+in flight to leave `(BR, rd)` fixed (an in-flight invariance, a separate static
+property of D5, not modeled here — see reversibility.md Modeling scope). -/
 
 /-- The (BR, rd) slice of machine State that `SWAPBR rd` acts on. -/
 abbrev BrState := Bool × Bool
@@ -357,10 +426,11 @@ def swapbrIso : Iso (prod bit bit) (prod bit bit) := Iso.swapT
 theorem swapbr_eq_denote_swapT : swapbr = denote swapbrIso := rfl
 
 /-- CONTROL-FLOW REVERSIBILITY WITNESS (ADR-0034 D5 come-from): `SWAPBR` is its
-    own inverse — `swapbr ∘ swapbr = id`. Applying the come-from `SWAPBR rj` at
-    the jump target undoes the `SWAPBR rj` at the jump site, restoring the paired
-    registers so sequential execution resumes. A transposition composed with
-    itself is the identity. -/
+    own inverse — `swapbr ∘ swapbr = id`. The come-from `SWAPBR rj` at the target
+    undoes the `SWAPBR rj` at the site, restoring the paired registers (a
+    transposition composed with itself is the identity). This is the algebraic
+    core; resumption of sequential execution additionally assumes the in-flight
+    instructions leave `(BR, rj)` fixed — see the section note. -/
 theorem comefrom_involution : swapbr ∘ swapbr = id := by
   funext x
   simp [swapbr]
