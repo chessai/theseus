@@ -32,7 +32,23 @@
         # ADR-0024: PDK version pinned in the flake like the toolchain.
         sky130-pdk = import ./nix/sky130-pdk.nix { inherit pkgs; };
 
-        src = craneLib.cleanCargoSource ./.;
+        # cleanCargoSource keeps only Rust/Cargo files, but the build and test
+        # graph also pull in non-Rust assets at compile time via include_str!
+        # (theseus-check's stdlib/prelude.thse, theseus-spice's golden
+        # rung0-chardb.ron) and the conformance corpus the test binaries embed
+        # (*.thse/*.expect/*.diag). Dropping those makes the sandboxed
+        # nix-flake-check build fail where a local `cargo build` (which sees the
+        # whole tree) succeeds. Keep Cargo sources plus those asset extensions.
+        src = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          name = "theseus-source";
+          filter = path: type:
+            (craneLib.filterCargoSources path type)
+            || pkgs.lib.hasSuffix ".thse" path
+            || pkgs.lib.hasSuffix ".expect" path
+            || pkgs.lib.hasSuffix ".diag" path
+            || pkgs.lib.hasSuffix ".ron" path;
+        };
         commonArgs = { inherit src; strictDeps = true; };
 
         # One deps derivation shared by every check (crane's cargoArtifacts).
