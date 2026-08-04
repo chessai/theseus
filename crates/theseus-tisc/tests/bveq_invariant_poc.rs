@@ -953,7 +953,7 @@ fn read_come_from(geom: &LoopGeom) -> ComeFrom {
             // rt is rb.
             let rb = rt as usize;
             match instrs[geom.lend_pc] {
-                Instr::Swapbr { rd } => assert_eq!(rd as usize, rb, "Lend SWAPBR rb mismatch"),
+                Instr::Swapbr { rd, rs: _ } => assert_eq!(rd as usize, rb, "Lend SWAPBR rb mismatch"),
                 ref o => panic!("Lend must be SWAPBR rb, got {o:?}"),
             }
             ComeFrom { ctrl, tag, temp, rb, delta_u, route_start }
@@ -1286,7 +1286,7 @@ fn invariant_come_from_lemma_vart_halve() {
 /// Read the Ltop `SWAPBR rc` register, so L0 is robust to the allocation.
 fn read_rc(geom: &LoopGeom) -> usize {
     match geom.lowered_instrs[LTOP] {
-        Instr::Swapbr { rd } => rd as usize,
+        Instr::Swapbr { rd, rs: _ } => rd as usize,
         ref o => panic!("Ltop must be SWAPBR rc, got {o:?}"),
     }
 }
