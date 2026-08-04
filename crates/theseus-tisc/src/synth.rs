@@ -324,7 +324,7 @@ fn recognize_inplace_row(row: &[BvExpr], r: usize) -> Result<Row, SynthError> {
     let mut classes: Vec<BitClass> = Vec::with_capacity(BITS);
     for (b, terms) in per_bit_terms.iter().enumerate() {
         let mut sources = Vec::new();
-        // MINOR-1: const is a PARITY fold, not a bool -- `x ⊕ 1 ⊕ 1` is identity,
+        // const is a PARITY fold, not a bool -- `x ⊕ 1 ⊕ 1` is identity,
         // so two Const(true) terms at one bit cancel (no flip).
         let mut const_parity = false;
         let mut at_bit_and: Option<(usize, usize)> = None;
@@ -499,15 +499,15 @@ pub fn transcribe_into(
         }
     }
 
-    // ── MAJOR-2 / MINOR-3: validate the DESTINATION operand map. Only rows
+    // ── validate the DESTINATION operand map. Only rows
     // that actually emit gates matter (a spec-identity row whose dst self-maps
-    // to its own src contributes nothing -- MINOR-4). For every row that will
+    // to its own src contributes nothing). For every row that will
     // emit, the dst operand must be a legal operand and pairwise-distinct from
     // every OTHER emitting row's dst (aliased fresh targets clobber each other).
     let mut used_dsts: Vec<u8> = Vec::new();
     for (i, row) in spec.regs.iter().enumerate() {
         let dst = dst_ops[i];
-        // MINOR-4: the skip fires ONLY on a genuine IDENTITY row that self-maps
+        // the skip fires ONLY on a genuine IDENTITY row that self-maps
         // (dst == src for its own reg). Any NON-identity row that happens to
         // alias a source is a caller contract violation, not a no-op -- never
         // silently drop its gates.
@@ -532,7 +532,7 @@ pub fn transcribe_into(
         // NOTE: unlike the in-place case, there is NO self-term to peel -- the
         // fresh target already holds 0 and we XOR the whole function onto it.
         let (xor_sources, const_mask, and_term) = recognize_into_row(row, i)?;
-        // MINOR-4: only skip genuine identity self-maps (validated above). If we
+        // only skip genuine identity self-maps (validated above). If we
         // reach here with a non-identity row, every gate is emitted -- no source
         // may alias the dst (that would be an ISA-illegal self-XOR / self-Ccnot).
         let is_id_selfmap = is_identity_row(row, i) && dst == src_ops[i];
@@ -542,7 +542,7 @@ pub fn transcribe_into(
         for &y in &xor_sources {
             let rs = src_ops[y];
             // A copy where dst == src on a non-identity row is an ISA-illegal
-            // self-XOR AND silently drops a needed term (MINOR-4 CE:
+            // self-XOR AND silently drops a needed term (CE:
             // `row0 = v0⊕v1`, dst[0]=1 would drop the self-copy). Reject.
             if rs == dst {
                 return Err(SynthError::MalformedSpec {
@@ -590,7 +590,7 @@ const NUM_OPERAND_LOCS: usize = 16;
 /// `asm::check_operand`): `0..8` = registers, `10..16` = scratch s2..s7.
 /// Rejected: `8`/`9` (decoder-reserved s0/s1) and `≥16` (no crossbar route,
 /// and ≥16 would panic `operand_get`). Returns `Err(MalformedSpec)` -- a
-/// verification-time reject, not a ROM-time panic (MINOR-3).
+/// verification-time reject, not a ROM-time panic.
 fn check_operand_legal(what: &str, op: u8) -> Result<(), SynthError> {
     // The operand cap is the strict machine cap `NUM_OPERAND_LOCS` in
     // production. Under the `measurement` feature it may be RAISED for the
@@ -682,7 +682,7 @@ fn recognize_into_row(row: &[BvExpr], r: usize) -> Result<IntoRow, SynthError> {
     for (b, e) in row.iter().enumerate() {
         let terms = flatten_xor(e);
         let mut sources = Vec::new();
-        // MINOR-1: parity fold -- even count of Const(true) is no flip.
+        // parity fold -- even count of Const(true) is no flip.
         let mut const_parity = false;
         let mut at_bit_and: Option<(usize, usize)> = None;
         for t in terms {
@@ -804,7 +804,7 @@ pub fn transcribe_bennett(
             ),
         });
     }
-    // MINOR-3: every carrier and every USED ancilla operand must be a legal
+    // every carrier and every USED ancilla operand must be a legal
     // operand (reject reserved s0/s1 = 8/9 and out-of-range ≥16, which would
     // otherwise panic `operand_get` at exec time rather than fail verification).
     for &c in &carrier_ops[..n] {
@@ -814,7 +814,7 @@ pub fn transcribe_bennett(
         check_operand_legal("ancilla", a)?;
     }
 
-    // MAJOR-2: the operand maps must be internally disjoint with no dups:
+    // the operand maps must be internally disjoint with no dups:
     //   * no carrier repeated; no USED ancilla word repeated (aliased ancilla
     //     `[3,3]` defeats "ancilla returned to 0" teeth -- CE);
     //   * carriers and used ancilla disjoint (Bennett requires fresh scratch).
@@ -843,7 +843,7 @@ pub fn transcribe_bennett(
         }
     }
 
-    // MAJOR-1: a carrier row (0..n) may only READ carriers. `Var(y)` with
+    // a carrier row (0..n) may only READ carriers. `Var(y)` with
     // `y ≥ n` reads a register OUTSIDE the carrier set; the src_map padding
     // below wired every such read to a bogus operand (operand 0), silently
     // producing a wrong body + dirty ancilla. A permutation spec on `n`
@@ -1160,7 +1160,7 @@ fn emit_anf_term(
 }
 
 /// Collect every register operand index READ by a `BvExpr` (walks all node
-/// kinds; used by the Bennett carrier-read validation, MAJOR-1).
+/// kinds; used by the Bennett carrier-read validation).
 fn collect_var_operands(e: &BvExpr, out: &mut Vec<usize>) {
     match e {
         BvExpr::Var { operand, .. } => out.push(*operand),
@@ -2066,7 +2066,7 @@ fn lines_equal(a: Line, b: Line) -> bool {
 /// but the compute/uncompute steps use [`transcribe_bdd_into`] (BDD synthesis,
 /// compact) instead of ANF. Same net-zero guarantee.
 ///
-/// Carries the same MAJOR-1/2 / reserved-operand validation as
+/// Carries the same carrier-read / operand-disjointness / reserved-operand validation as
 /// [`transcribe_bennett`]: rejects non-carrier reads, duplicate/aliased/reserved
 /// carrier & ancilla operands, and specs touching non-carrier registers.
 pub fn transcribe_bdd_bennett(
@@ -2107,7 +2107,7 @@ pub fn transcribe_bdd_bennett(
         check_operand_legal("node", w)?;
     }
 
-    // Internal-disjointness + no-dup guards (MAJOR-2).
+    // Internal-disjointness + no-dup guards.
     for i in 0..n {
         for j in (i + 1)..n {
             if carrier_ops[i] == carrier_ops[j] {
@@ -2142,7 +2142,7 @@ pub fn transcribe_bdd_bennett(
         }
     }
 
-    // MAJOR-1: a carrier row may only READ carriers (a permutation on `n`
+    // a carrier row may only READ carriers (a permutation on `n`
     // carriers is a function of those carriers alone).
     for spec in [fwd, bwd] {
         for r in 0..n {
@@ -2210,7 +2210,7 @@ pub fn transcribe_bdd_bennett(
 // building blocks a word-level Bennett wrapper (W.1) composes. All operand
 // indices are over reg∪scratch (0..8 reg, 10..16 legal scratch); every operand
 // is validated with `check_operand_legal` (rejecting reserved 8/9 and ≥16) and
-// Ccnot/Cswap operands must be pairwise distinct (the MINOR-2 guard).
+// Ccnot/Cswap operands must be pairwise distinct.
 
 /// A word-level operation over operand indices (0..8 reg, 10..16 legal scratch).
 ///
@@ -2246,7 +2246,7 @@ pub type WSpec = Vec<WOp>;
 /// -- no separate output words). Every operand is validated with
 /// [`check_operand_legal`] (reject reserved s0/s1 = 8/9 and out-of-range ≥16);
 /// two-operand ops require `d != s` (the ISA's non-aliasing rule), and
-/// `WCcnot`/`WCswap` require pairwise-distinct operands (the MINOR-2 guard).
+/// `WCcnot`/`WCswap` require pairwise-distinct operands.
 ///
 /// The result, when `Ok`, is an assemblable body realizing the WSpec. Callers
 /// still verify with the symbolic oracle (`symbolic_exec` + `equiv`) -- this
@@ -2271,7 +2271,7 @@ fn check_two_distinct(mnemonic: &str, d: u8, s: u8) -> Result<(), SynthError> {
 }
 
 /// Reject a three-operand op whose operands are not pairwise distinct (Ccnot /
-/// Cswap ISA requirement; non-distinct is ISA-illegal / non-bijective -- MINOR-2).
+/// Cswap ISA requirement; non-distinct is ISA-illegal / non-bijective).
 fn check_three_distinct(mnemonic: &str, a: u8, b: u8, c: u8) -> Result<(), SynthError> {
     if a == b || a == c || b == c {
         return Err(SynthError::MalformedSpec {
@@ -3505,7 +3505,7 @@ fn transcribe_word_bennett_peak_impl(
             seen.push(op);
         }
     }
-    // MAJOR-1 analogue + slot validation: every Var read names a real carrier;
+    // carrier-read + slot validation: every Var read names a real carrier;
     // every output slot is in range and written at most once. Returns the ordered
     // set of ACTIVE slots (those the permutation actually writes).
     let check_slots = |wf: &WForward, which: &str| -> Result<Vec<usize>, SynthError> {
@@ -3603,7 +3603,7 @@ fn transcribe_word_bennett_peak_impl(
 }
 
 /// Reject a [`WValue`] that reads a carrier index ≥ `n` (a permutation output
-/// must be a function of the carriers alone -- the MAJOR-1 analogue).
+/// must be a function of the carriers alone).
 fn check_wvalue_vars(val: &WValue, n: usize, which: &str) -> Result<(), SynthError> {
     match val {
         WValue::Var(i) => {
