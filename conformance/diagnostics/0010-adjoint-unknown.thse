@@ -1,0 +1,5 @@
+-- D0010: name resolution reaches through ~.
+type Bit = O | I
+
+iso u : Bit <-> Bit
+= ~missing

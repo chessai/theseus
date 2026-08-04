@@ -1,0 +1,11 @@
+[package]
+name = "theseus-check"
+version = "0.1.0-dev"
+edition = "2021"
+
+[dependencies]
+theseus-syntax = { path = "../theseus-syntax" }
+theseus-core = { path = "../theseus-core" }
+
+[dev-dependencies]
+theseus-eval = { path = "../theseus-eval" }

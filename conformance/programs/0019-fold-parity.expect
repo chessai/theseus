@@ -1,0 +1,15 @@
+# iso: parity
+# List preserved; accumulator xored with the list's I-count. Graded forward
+# AND backward (the adjoint = unfold cnot un-threads the accumulator).
+# Bound: static_bound(fold l f) = (layers(l) - 1) * (1 + B(f)) = 3 * 1 = 3.
+# fuel-bound: 3
+(Nil, O) |-> (Nil, O)
+(Nil, I) |-> (Nil, I)
+(Cons (O, Nil), O) |-> (Cons (O, Nil), O)
+(Cons (I, Nil), O) |-> (Cons (I, Nil), I)
+(Cons (I, Nil), I) |-> (Cons (I, Nil), O)
+(Cons (I, Cons (I, Nil)), O) |-> (Cons (I, Cons (I, Nil)), O)
+(Cons (I, Cons (O, Nil)), I) |-> (Cons (I, Cons (O, Nil)), O)
+(Cons (O, Cons (I, Nil)), O) |-> (Cons (O, Cons (I, Nil)), I)
+(Cons (I, Cons (O, Cons (I, Nil))), O) |-> (Cons (I, Cons (O, Cons (I, Nil))), O)
+(Cons (I, Cons (I, Cons (I, Nil))), O) |-> (Cons (I, Cons (I, Cons (I, Nil))), I)

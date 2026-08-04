@@ -1,0 +1,5 @@
+# iso: flipfst
+(O, O) |-> (I, O)
+(O, I) |-> (I, I)
+(I, O) |-> (O, O)
+(I, I) |-> (O, I)

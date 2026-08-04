@@ -1,0 +1,9 @@
+-- Conformance 0016 (dialect: software, v0.2 μ-types increment 1 — ADR-0035)
+-- A recursive nominal type, checked and elaborated via bounded unrolling at
+-- the default depth D = 4: Nat lowers to 1 + (1 + (1 + (1 + 0))), i.e. the
+-- numerals 0..=3. Coverage enumerates the truncated (finite) domain.
+type Nat = Zero | Succ Nat
+
+iso idNat : Nat <-> Nat
+| Zero <-> Zero
+| Succ n <-> Succ n

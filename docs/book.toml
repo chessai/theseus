@@ -1,0 +1,7 @@
+[book]
+title = "theseus: design, spec, and decision record"
+authors = ["chessai"]
+src = "src"
+
+[build]
+create-missing = false

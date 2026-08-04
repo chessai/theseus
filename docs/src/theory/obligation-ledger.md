@@ -1,0 +1,46 @@
+# Proof-obligation ledger
+
+The honest inventory of what the implementation leans on
+(ADR-0021). States: **proved** / **sketched** / **assumed**.
+
+| ID | Claim | Leaned on by | State |
+|---|---|---|---|
+| TH-1 | Finite-trace totality with exact bound, *both directions* (mutual-inverse), incl. immediate-exit edge case | ADR-0007 WCET diagnostics; TraceLoop unrolling | **proved** (`theory/finite-trace-totality.md`), adversarially reviewed. The label-loop bijection hypothesis is discharged by the **conjunction** of Lean-mechanized TH-1 (forward termination for an *abstract* bijection body) + **text**-argued **TH-4a-label** (`theory/coverage-bijectivity-labels.md`, which reduces label isos to plain bijections): the *end-to-end* discharge is **scoped and documented**, not itself mechanically proved (the Lean proof does not know the body came from a label loop). Report WCET `≤ |u|` iterations, fuel budget `|u|+1` applications. **Lean-mechanized** (`theseus-proofs/TheseusProofs/FiniteTrace.lean`, `lake build`-checked, no `sorry`/`axiom`/`native_decide`, axioms = Mathlib base `{propext, Classical.choice, Quot.sound}`): forward core `state_injOn` (§Lemma) + `trace_terminates` (§Theorem forward bound, under `Injective f`; `trace_terminates_of_equiv` restates under the bijection hypothesis) + `hamF_*` (§Tightness at \|u\|=2); **mutual-inverse/backward run** `trace_mutual_inverse` (fuel-free) + `run_symm_entry` (fueled `\|u\|+1`), on `Steps`/`steps_reaches`/`steps_output_unique`; **class-wide exactness / trajectory-disjointness (TH-1b)** `traj_cross_injective` (per-input fuels) + `traj_disjoint` + `traj_card_bound` (the genuine per-input `Σ_{x∈S} fuel x ≤ \|u\|`, i.e. `Σ_inputs (Tᵢ−1) ≤ \|u\|` with each `fuel x = Tₓ−1`, NOT a uniform-fuel product). **Not** mechanized: only the `\|u\|`-*iterations* restatement (vs. the mechanized body-application bound), general-`\|u\|` tightness (mechanized at `\|u\|=2` via `hamF_*`), and WCET/register corollaries stay text-only |
+| TH-2 | Bidirectional descent: forward totality ⇏ backward totality; v0.2 combinators are symmetric-total | ADR-0007/0009 v0.2 design | sketched |
+| TH-3 | Mac Lane coherence ⇒ Permute canonicity, rig fragment | ADR-0014 canonicalizer completeness test | assumed (textbook) + executable test; re-examine under fractional/negative types |
+| TH-4a | Clause coverage + linearity ⇔ total bijection on typed values, plain fragment | ADR-0004; static-semantics soundness | **Plain:** proved (text) (`theory/coverage-bijectivity.md`). **Label-extended:** proved (text) (`theory/coverage-bijectivity-labels.md`, TH-4a-label, find-then-confirm reviewed) -- a *reduction*: the label checks reduce to the plain checks over the extended type `U + A ≅ U + B`, so no new bijectivity obligation is re-proved (inherited from the plain case), and this is the text half that discharges TH-1's label-body hypothesis. Neither fragment is Lean-mechanized (contrast TH-1/TH-REV-* below). Modulo the standing (tested, not proved) elaboration obligation `eval Φ =` clause denotation |
+| TH-4b | The bijection's mux/demux lowering is invertible under the padded bit encoding | ADR-0012 lowering lemmas | sketched -- M2 obligation |
+| TH-5 | Guard recomputability condition suffices for reversible guards | v0.2 proposal (ADR-0017) | sketched |
+| TH-6 | Physical adjointness: reversed phase sequence executes the adjoint on the same fabric | C2.5 design goal; time-travel-on-silicon demo | empirical -- B5 reverse-drive tests per cell and per block; fallback: mirrored-netlist emission |
+| TH-E1 | Cell energies compose additively over a netlist | ADR-0028 static reports | empirical -- whole-block SPICE battery, ±15% abs / ±0.1 slope budget |
+| TH-E2 | Per-run energy is data-independent to first order | static-report primacy; DPA observation | empirical -- phased-sim input sweeps, variance bound |
+| TH-E3 | Per-cell fits are statistically adequate over swept ranges | every DB-derived number | statistical -- residual bounds checked at DB build |
+| TH-7 | Specializing `step` to a fixed ROM constant-folds the CPU into the program's circuit (temporal/spatial duality) | ADR-0030 framing; possible paper note | sketched |
+| TH-REV-1 | **Reversible by construction (core):** every iso combinator denotes a bijection of finite value types, DERIVED by structural induction from a single assumed primitive `Equiv` -- not baked into the type (raw-function denotation) | ADR-0007 / ADR-0034 iso algebra; "reversibility is a theorem" | **proved** -- prose `theory/reversibility.md` (§denote_bijective), Lean `theseus-proofs/TheseusProofs/Reversibility.lean` (`denote_bijective`, `toEquiv`), `lake build`-checked, axioms = Mathlib base `{propext, Classical.choice, Quot.sound}`. Algebra spans the reversible-rig fragment: `id`/`seq`/`times`/`plus`/`swapT`/`swapS`/`assocT`/`assocS`/`unitTl`/`distrib`/`notI`(=`SwapSum(1,1)`)/`inv`/`prim`/`iter`. **Modeling scope:** closed unit/bit/prod/sum object language; recursive `mu`-types and negative/fractional types out of scope (see reversibility.md §Modeling scope) |
+| TH-REV-2 | **Adjoint inverts (two-sided) + algebraic laws (denotationally):** `denote (inv i) = (toEquiv i).symm`; left/right inverse; `denote (inv (inv i)) = denote i`; `denote (inv (i;j)) = denote (inv j ; inv i)` (contravariance) -- equalities of DENOTATIONS, not syntactic terms | reversible adjoint / `sym` laws | **proved** -- prose `theory/reversibility.md` (§adjoint), Lean `denote_inv`, `denote_inv_leftInverse`, `denote_inv_rightInverse`, `inv_inv`, `seq_inv`. Same axiom base; `Classical.choice` enters via `Function.invFun` (the denotation of `inv`) |
+| TH-REV-3 | **Finite iteration is reversible:** `iter n` unrolls (`iter_succ`/`iter_zero`) and every bounded iterate of a reversible body is bijective | loop reversibility | **proved** -- prose `theory/reversibility.md` (§iter), Lean `iter_succ`, `iter_zero`, `iter_bijective`. Same axiom base. **Modeling scope:** `iter n` abstracts the iteration COUNT; the loop's data-dependent bound (`<= |u|`, finiteness/exactness) is the separate TH-1 (`finite-trace-totality.md` / `FiniteTrace.lean`), not re-proved here |
+| TH-REV-4 | **fold/unfold mutual inverse:** ADR-0037's reversible fold is a `mapAccumL` that threads an accumulator head-to-tail (cells COUPLED); the adjoint `unfold` runs `f.symm` tail-to-head, and the two are mutual inverses at every length, so `foldAcc` is bijective | ADR-0037 fold/unfold reversibility | **proved** -- prose `theory/reversibility.md` (§fold/unfold), Lean **`unfold_fold_acc`, `fold_unfold_acc`, `foldAcc_bijective`** (the genuine accumulator fold over `List Bool`), plus `fold_unfold_inv`/`unfold_fold_inv`/`foldBits_bijective` for the accumulator-free cellwise-map special case. Same axiom base. **Modeling scope:** recursive carrier = `List Bool` (genuine structural recursion, arbitrary length); the per-cell body is `Bool × Bool ≃ Bool × Bool` (accumulator+payload one bit each) -- the threading argument is uniform in the body, so representative, but a fully `Iso`-typed recursive carrier needs `mu`-types (scoped OUT). `foldBits` (`List.map`) is explicitly the DEGENERATE per-cell case, not ADR-0037's fold (reversibility.md §fold/unfold) |
+| TH-REV-5 | **SWAPBR come-from involution:** the control-flow reversibility witness -- `SWAPBR` is its own inverse, realized as `swapT`'s self-inverse through the SAME iso denotation | ADR-0034 D5 come-from control flow | **proved** -- prose `theory/reversibility.md` (§SWAPBR), Lean `comefrom_involution`, `swapbr_eq_denote_swapT`, `swapbrIso_involution`, `notI_involution`. Same axiom base. **Modeling scope:** models the acted-on `(BR, rd)` slice as `Bool × Bool`; untouched registers dropped (identity commutes, involution unchanged). The involution is the algebraic core; NOT modeled: opcode-predicate gating (dispatch), and the in-flight invariance (that instructions between the paired SWAPBRs leave `(BR, rj)` fixed) that resumption of sequential execution additionally needs (reversibility.md §Modeling scope) |
+
+## Verification: deferred / future work
+
+Noted, not planned for now. The mechanized core above stands on its own; these
+would deepen coverage rather than fix a defect:
+
+1. **Model-to-Rust correspondence.** The Lean `denote` / `run` / `foldAcc` are
+   hand-transcribed abstractions of the algebra; nothing mechanically links them
+   to `crates/theseus-tisc`. Closing this (code extraction, or translation
+   validation against the Rust) is the largest remaining gap -- a Rust/Lean
+   divergence is not caught today.
+2. **Generalize the modeled fragments.** `mu`-types (recursive object types) for a
+   fully `Iso`-typed fold rather than the `Bool x Bool`-cell representative;
+   arbitrary-`Iso` fold cells; and general-`|u|` tightness (mechanized only at
+   `|u| = 2`).
+3. **Independent proof-specialist review.** The adversarial review was
+   fresh-context and cross-model, but still an LLM; a Lean expert's eyes would add
+   assurance.
+
+**Already enforced (NOT future work):** the axiom whitelist is checked at BUILD
+time by `theseus-proofs/TheseusProofs/AxiomGuard.lean` -- `lake build` (and CI, on
+a fresh checkout) fails on any `sorry` / `native_decide` / stray axiom, so proof
+soundness cannot silently regress.

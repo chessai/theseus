@@ -1,0 +1,2 @@
+-- D0009: signature disagrees with the test registry (test-spec-m1).
+prim id8 : (U8, U8) <-> U8 = "theseus.test.id8"

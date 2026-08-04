@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/theseus-syntax",
+  "crates/theseus-core",
+  "crates/theseus-check",
+  "crates/theseus-eval",
+  "crates/theseus-netlist",
+  "crates/theseus-spice",
+  "crates/theseus-cli",
+  "crates/theseus-tisc",
+]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/chessai/theseus"
+
+# Dependencies are declared here as they are adopted (ADR-0020).
+[workspace.dependencies]
+logos = "0.14"                                    # lexer
+serde = { version = "1", features = ["derive"] }  # (de)serialization
+ron = "0.8"                                        # energy-artifact format
+thiserror = "2"                                    # error types
+clap = { version = "4", features = ["derive"] }    # CLI
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+todo = "deny"         # skeleton phase over: no todo!() stubs may ship
+
+# The TISC-1 decoder tests (theseus-tisc/tests/decoder.rs) walk
+# multi-million-node iso terms through canonicalize/lower/eval/simulate;
+# at opt-level 0 that is impractically slow. Optimize just the
+# interpreter/lowering crates in dev builds — test code itself stays
+# unoptimized for fast iteration.
+[profile.dev.package.theseus-core]
+opt-level = 2
+
+[profile.dev.package.theseus-eval]
+opt-level = 2
+
+[profile.dev.package.theseus-netlist]
+opt-level = 2

@@ -1,0 +1,13 @@
+-- Conformance P0011 (dialect: synthesizable)
+-- Label loop: net identity via a 2-bit counter walk.
+-- WCET note <= 8 iterations (|u| for (Bit,(Bit,Bit))); static fuel bound B = 9.
+-- Actual: 4 iterations = 5 body applications; Done at fuel >= 5 (entry + 3
+-- counter steps + exit). See .expect keys fuel-bound/steps/wcet.
+type Bit = O | I
+
+iso spin : Bit <-> Bit
+| b <-> $go (b, (O, O))
+| $go (b, (O, O)) <-> $go (b, (O, I))
+| $go (b, (O, I)) <-> $go (b, (I, O))
+| $go (b, (I, O)) <-> $go (b, (I, I))
+| $go (b, (I, I)) <-> b

@@ -1,0 +1,6 @@
+-- Conformance P0014 (dialect: synthesizable)
+-- Literal syntax against the blessed stdlib type U1 (ADR-0017).
+
+iso flip1 : U1 <-> U1
+| 0 <-> 1
+| 1 <-> 0

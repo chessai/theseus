@@ -1,0 +1,12 @@
+-- Conformance 0017 (dialect: software, v0.2 μ-types increment 1 — ADR-0035)
+-- A NONTRIVIAL structural bijection over a recursive type: flip the head bit
+-- of a list, keep the tail. At depth D = 4 BitList lowers to the finite type
+-- 1 + (Bit × L₃) (15 inhabitants); elaboration synthesizes
+-- Plus(Id, Times(not, Id)) — no new core Iso/Type variants needed.
+type Bit = O | I
+type BitList = Nil | Cons (Bit * BitList)
+
+iso flipHead : BitList <-> BitList
+| Nil <-> Nil
+| Cons (O, t) <-> Cons (I, t)
+| Cons (I, t) <-> Cons (O, t)

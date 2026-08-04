@@ -1,0 +1,9 @@
+-- Conformance P0007 (dialect: synthesizable)
+type Bit = O | I
+
+iso notb : Bit <-> Bit
+| O <-> I
+| I <-> O
+
+iso nn : Bit <-> Bit
+= notb ; notb

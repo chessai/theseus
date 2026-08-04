@@ -1,0 +1,5 @@
+# iso: flipL
+L O |-> L I
+L I |-> L O
+R O |-> R O
+R I |-> R I

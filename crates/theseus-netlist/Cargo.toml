@@ -1,0 +1,26 @@
+[package]
+name = "theseus-netlist"
+description = "Typed hierarchical reversible netlist IR + cycle simulators"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+theseus-core = { path = "../theseus-core" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# Differential oracle: the untimed cell-netlist evaluation in tests is
+# checked against the core interpreter (ADR-0008/0018 oracle chain).
+theseus-eval = { path = "../theseus-eval" }
+# Cross-check: CellKind::eval / char-DB keys against the characterized
+# k-CSWAP truth functions (pure functions only; no ngspice needed).
+theseus-spice = { path = "../theseus-spice" }
+# Elaboration pipeline for differential-oracle tests against elaborated
+# programs (conformance suite).
+theseus-check = { path = "../theseus-check" }
+theseus-syntax = { path = "../theseus-syntax" }
+
+[lints]
+workspace = true

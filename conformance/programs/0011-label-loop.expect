@@ -1,0 +1,6 @@
+# iso: spin
+# fuel-bound: 9
+# steps: 5
+# wcet: 8
+O |-> O
+I |-> I

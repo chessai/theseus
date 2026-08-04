@@ -1,0 +1,338 @@
+//! Characterization database: per-cell energy sweeps, model fits, and
+//! strict interpolation-only query (ADR-0028 C3.1).
+
+use std::collections::BTreeMap;
+use std::fmt;
+
+use crate::adiabatic::{adiabatic_tg_curve_rung, DeviceRung};
+use crate::cswap::{cell_energy_curve, cswap_energy_curve, CellTopo};
+use crate::energy::{self, EnergyFit};
+
+/// A single measured (t_ramp, energy) data point.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CharPoint {
+    pub t_ramp: f64,
+    pub energy: f64,
+}
+
+/// Characterization record for one cell: sorted sweep points + fitted model.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CellChar {
+    pub key: String,
+    pub points: Vec<CharPoint>,
+    pub fit: EnergyFit,
+}
+
+/// The full characterization database (deterministic key order via BTreeMap).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CharDb {
+    pub cells: BTreeMap<String, CellChar>,
+}
+
+/// Errors returned by [`CharDb::query`].
+#[derive(Debug, PartialEq)]
+pub enum QueryError {
+    /// The requested t_ramp is outside the cell's swept range.
+    OutOfRange {
+        key: String,
+        t_ramp: f64,
+        min: f64,
+        max: f64,
+    },
+    /// No cell with the given key exists in the database.
+    NoSuchCell(String),
+}
+
+impl fmt::Display for QueryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            QueryError::OutOfRange {
+                key,
+                t_ramp,
+                min,
+                max,
+            } => {
+                write!(
+                    f,
+                    "t_ramp {t_ramp} out of range [{min}, {max}] for cell {key:?}"
+                )
+            }
+            QueryError::NoSuchCell(key) => write!(f, "no such cell: {key:?}"),
+        }
+    }
+}
+
+/// Build a [`CharDb`] from raw per-cell sweep data.
+///
+/// Each entry is `(cell_key, unsorted_points)`. Points are sorted ascending
+/// by `t_ramp` and a model is fitted for each cell.
+pub fn rebuild(raw: &[(String, Vec<CharPoint>)]) -> CharDb {
+    let mut cells = BTreeMap::new();
+    for (key, pts) in raw {
+        let mut sorted: Vec<CharPoint> = pts.clone();
+        sorted.sort_by(|a, b| a.t_ramp.partial_cmp(&b.t_ramp).unwrap());
+
+        let fit_input: Vec<(f64, f64)> = sorted.iter().map(|p| (p.t_ramp, p.energy)).collect();
+        let fit = energy::fit(&fit_input);
+
+        cells.insert(
+            key.clone(),
+            CellChar {
+                key: key.clone(),
+                points: sorted,
+                fit,
+            },
+        );
+    }
+    CharDb { cells }
+}
+
+/// Characterize every admitted reversible cell at `rung` over `periods` and
+/// [`rebuild`] the results into a [`CharDb`] (ADR-0028 C3.1 / TH-E3).
+///
+/// The admitted reversible library is the adiabatic transmission-gate buffer
+/// (`adiabatic-tg`), the k-CSWAP family for k ∈ {0, 1, 2, 3}
+/// (`cswap-k0`/`cswap-k1`/`cswap-k2`/`cswap-k3`), and the R1 rail-role swap
+/// (`cswap-r1`, ADR-0040). For each cell we sweep energy-per-op vs
+/// power-clock period at `rung`, convert each `(period, energy)` sample to a
+/// [`CharPoint`] `{ t_ramp: period, energy }`, and hand the whole raw set to
+/// [`rebuild`], which sorts each cell's points and fits the ADR-0028 energy
+/// model (`energy::fit`) per cell.
+///
+/// This is pure assembly over the existing sweep functions -- no new physics --
+/// so the DB byte-round-trips and rebuilds deterministically for a fixed
+/// `rung`/`periods` (the sweeps are deterministic).
+///
+/// # Panics
+///
+/// Panics if a k-CSWAP sweep fails to run (ngspice I/O error), or if `periods`
+/// has fewer than 3 points (the 3-parameter [`energy::fit`] is under-determined).
+/// Callers characterizing at [`DeviceRung::Rung1Sky130`] must first gate on
+/// [`crate::adiabatic::sky130_available`] (and ngspice availability).
+pub fn build_char_db(rung: DeviceRung, periods: &[f64]) -> CharDb {
+    let mut raw: Vec<(String, Vec<CharPoint>)> = Vec::new();
+
+    // Admitted cell 1: the adiabatic transmission-gate buffer.
+    let tg = adiabatic_tg_curve_rung(periods, rung);
+    raw.push((
+        "adiabatic-tg".to_string(),
+        tg.points
+            .iter()
+            .map(|&(t_ramp, energy)| CharPoint { t_ramp, energy })
+            .collect(),
+    ));
+
+    // Admitted cells 2-5: the k-CSWAP family (k = 0, 1, 2, 3).
+    for k in 0..=3usize {
+        let sweep = cswap_energy_curve(k, rung, periods)
+            .unwrap_or_else(|e| panic!("cswap-k{k} energy sweep failed: {e}"));
+        raw.push((
+            format!("cswap-k{k}"),
+            sweep
+                .iter()
+                .map(|p| CharPoint {
+                    t_ramp: p.period_s,
+                    energy: p.etot.abs(),
+                })
+                .collect(),
+        ));
+    }
+
+    // Admitted cell 6: the R1 rail-role swap (ADR-0040) -- the same TG
+    // fabric as K1 with one routed conductor pair instead of two.
+    let sweep = cell_energy_curve(CellTopo::R1, rung, periods)
+        .unwrap_or_else(|e| panic!("cswap-r1 energy sweep failed: {e}"));
+    raw.push((
+        "cswap-r1".to_string(),
+        sweep
+            .iter()
+            .map(|p| CharPoint {
+                t_ramp: p.period_s,
+                energy: p.etot.abs(),
+            })
+            .collect(),
+    ));
+
+    rebuild(&raw)
+}
+
+/// The real rung-0 ngspice characterization (adiabatic-tg + cswap-k0..k3 +
+/// cswap-r1, periods \[1e-8, 1e-7, 1e-6, 1e-5\]), generated by
+/// [`build_char_db`] and committed at `data/rung0-chardb.ron`.
+///
+/// Regenerate via `cargo run --example characterize_rung0 > data/rung0-chardb.ron`.
+pub fn rung0_measured() -> CharDb {
+    CharDb::from_ron(include_str!("../data/rung0-chardb.ron")).expect("golden rung0 char DB parses")
+}
+
+impl CharDb {
+    /// Serialize to pretty RON text (deterministic).
+    pub fn to_ron(&self) -> String {
+        ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+            .expect("CharDb serialization should not fail")
+    }
+
+    /// Deserialize from RON text.
+    pub fn from_ron(s: &str) -> Result<CharDb, ron::error::SpannedError> {
+        ron::from_str(s)
+    }
+
+    /// Query the fitted energy for `key` at `t_ramp`.
+    ///
+    /// **Contract (ADR-0028 C3.1):** only values within the cell's swept
+    /// `[min, max]` range are accepted -- no extrapolation.
+    pub fn query(&self, key: &str, t_ramp: f64) -> Result<f64, QueryError> {
+        let cell = self
+            .cells
+            .get(key)
+            .ok_or_else(|| QueryError::NoSuchCell(key.to_string()))?;
+
+        let min = cell.points.first().unwrap().t_ramp;
+        let max = cell.points.last().unwrap().t_ramp;
+
+        if t_ramp < min || t_ramp > max {
+            return Err(QueryError::OutOfRange {
+                key: key.to_string(),
+                t_ramp,
+                min,
+                max,
+            });
+        }
+
+        Ok(cell.fit.eval(t_ramp))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adiabatic::sky130_available;
+    use crate::bench::ngspice_available;
+
+    /// The six admitted reversible cells, in the DB's deterministic key order.
+    const CELLS: [&str; 6] = [
+        "adiabatic-tg",
+        "cswap-k0",
+        "cswap-k1",
+        "cswap-k2",
+        "cswap-k3",
+        "cswap-r1",
+    ];
+
+    /// A fast rung-0 period axis: 4 points spanning ~3 decades (>=3 for the fit).
+    fn rung0_periods() -> Vec<f64> {
+        vec![1e-8, 1e-7, 1e-6, 1e-5]
+    }
+
+    /// Rung-0 assembly: every admitted cell characterizes with a fit, an
+    /// in-range query interpolates, and the DB byte-round-trips + rebuilds
+    /// deterministically (byte-identical RON).
+    #[test]
+    fn build_char_db_rung0_all_cells_fit_query_and_round_trip() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        let periods = rung0_periods();
+        let db = build_char_db(DeviceRung::Rung0Level1, &periods);
+
+        // (a) Every admitted cell is present with points and a fit.
+        for key in CELLS {
+            let cell = db
+                .cells
+                .get(key)
+                .unwrap_or_else(|| panic!("cell {key} missing from char DB"));
+            assert_eq!(cell.key, key);
+            assert_eq!(
+                cell.points.len(),
+                periods.len(),
+                "cell {key} should have one point per swept period"
+            );
+            // Points are sorted ascending by t_ramp (rebuild guarantee).
+            for w in cell.points.windows(2) {
+                assert!(w[0].t_ramp < w[1].t_ramp, "cell {key} points not sorted");
+                assert!(w[0].energy > 0.0, "cell {key} energy must be positive");
+            }
+            eprintln!(
+                "{key}: k_adia={:.4e} k_leak={:.4e} k_res={:.4e} r2={:.5}",
+                cell.fit.k_adia, cell.fit.k_leak, cell.fit.k_res, cell.fit.r_squared
+            );
+        }
+
+        // (b) An in-range query interpolates (a period strictly inside the
+        // swept range) and returns a positive, finite energy.
+        let mid = 1e-7; // inside [1e-8, 1e-5]
+        for key in CELLS {
+            let e = db
+                .query(key, mid)
+                .unwrap_or_else(|err| panic!("in-range query for {key} failed: {err}"));
+            assert!(e.is_finite() && e > 0.0, "query {key}@{mid} = {e}");
+            eprintln!("query {key}@{mid:.0e} = {e:.4e} J");
+        }
+        // Out-of-range is refused (no extrapolation).
+        assert!(matches!(
+            db.query("adiabatic-tg", 1e-3),
+            Err(QueryError::OutOfRange { .. })
+        ));
+
+        // (c) to_ron -> from_ron round-trips exactly.
+        let ron = db.to_ron();
+        let back = CharDb::from_ron(&ron).expect("RON round-trip must parse");
+        assert_eq!(db, back, "char DB did not survive a RON round-trip");
+
+        // (d) rebuild is deterministic: a second build over the same axis is
+        // byte-identical in its serialized form.
+        let db2 = build_char_db(DeviceRung::Rung0Level1, &periods);
+        assert_eq!(
+            db.to_ron().as_bytes(),
+            db2.to_ron().as_bytes(),
+            "char DB build is not byte-deterministic"
+        );
+    }
+
+    /// Drift guard: a freshly-built char DB must match the committed golden
+    /// RON artifact (`data/rung0-chardb.ron`). Ensures the committed DB
+    /// stays in sync with the ngspice model.
+    #[test]
+    #[ignore = "~15min: runs the full ngspice characterization"]
+    fn drift_guard_rung0_matches_committed_golden() {
+        let golden = super::rung0_measured();
+        let fresh = build_char_db(DeviceRung::Rung0Level1, &rung0_periods());
+        assert_eq!(
+            golden.to_ron(),
+            fresh.to_ron(),
+            "committed golden rung0 char DB has drifted from a fresh build_char_db run"
+        );
+    }
+
+    /// Rung-1 (sky130): the DB builds on real cells over a MODEST period set
+    /// (sims are slow). Gated on the PDK + ngspice, like the other rung-1 tests.
+    #[test]
+    fn build_char_db_sky130_builds_on_real_cells() {
+        if !ngspice_available() {
+            eprintln!("[skip] ngspice unavailable");
+            return;
+        }
+        if !sky130_available() {
+            eprintln!("[skip] sky130 PDK unavailable (THESEUS_SKY130_LIB unset/missing)");
+            return;
+        }
+        // Modest: 3 points (fit minimum) inside the adiabatic regime.
+        let periods = [1e-8, 1e-7, 1e-6];
+        let db = build_char_db(DeviceRung::Rung1Sky130, &periods);
+        for key in CELLS {
+            let cell = db
+                .cells
+                .get(key)
+                .unwrap_or_else(|| panic!("cell {key} missing from sky130 char DB"));
+            assert_eq!(cell.points.len(), periods.len());
+            for p in &cell.points {
+                assert!(p.energy > 0.0, "cell {key} rung1 energy must be positive");
+            }
+            eprintln!(
+                "sky130 {key}: k_adia={:.4e} k_leak={:.4e} k_res={:.4e} r2={:.5}",
+                cell.fit.k_adia, cell.fit.k_leak, cell.fit.k_res, cell.fit.r_squared
+            );
+        }
+    }
+}

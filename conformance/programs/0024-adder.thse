@@ -1,0 +1,94 @@
+-- Conformance 0024 (dialect: synthesizable, compositional)
+-- Preserved-input reversible half-adder built COMPOSITIONALLY from prelude
+-- gates: cnot (parity/XOR) and toffoli (carry/AND).
+--
+-- Wire order: (a, b, s, c) = (Bit, (Bit, (Bit, Bit))).
+-- Semantics: (a, b, s, c) <-> (a, b, s XOR (a XOR b), c XOR (a AND b)).
+-- Inputs a, b are PRESERVED; s accumulates the sum (XOR), c the carry (AND).
+--
+-- Construction:
+--   swap23  — swap s,c to put c at position 2 (adjacent to a,b)
+--   tofAt3  — toffoli(a, b, c): c <- c XOR (a AND b)
+--   swap23  — swap back
+--   cnotAt1 — cnot(b, s): s <- s XOR b
+--   swap01  — swap a,b to put a at position 1
+--   cnotAt1 — cnot(a, s): s <- s XOR a
+--   swap01  — swap back
+--
+-- All routing uses adjacent-transposition primitives (asc/swapBit) following
+-- the fib_gen pattern. No dense truth tables.
+
+type Bit = O | I
+
+-- Prelude gates (structural dedup drops these when the prelude is applied)
+iso notb : Bit <-> Bit
+| O <-> I
+| I <-> O
+
+iso swapBit : Bit * Bit <-> Bit * Bit
+| (a, b) <-> (b, a)
+
+iso cnot : Bit * Bit <-> Bit * Bit
+| (O, b) <-> (O, b)
+| (I, O) <-> (I, I)
+| (I, I) <-> (I, O)
+
+iso toffoli : (Bit, Bit, Bit) <-> (Bit, Bit, Bit)
+| (O, b, t) <-> (O, b, t)
+| (I, O, t) <-> (I, O, t)
+| (I, I, O) <-> (I, I, I)
+| (I, I, I) <-> (I, I, O)
+
+-- Bit identity (1-wire)
+iso idb : Bit <-> Bit
+| O <-> O
+| I <-> I
+
+-- Pair identity (2-wire)
+iso id2 : (Bit, Bit) <-> (Bit, Bit)
+| (x, y) <-> (x, y)
+
+-- 3-wire left-association: (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)
+iso asc : (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)
+| (x, (y, z)) <-> ((x, y), z)
+
+-- 4-wire association for toffoli grouping:
+--   (Bit, ((Bit, Bit), Bit)) <-> ((Bit, (Bit, Bit)), Bit)
+iso asc2 : (Bit, ((Bit, Bit), Bit)) <-> ((Bit, (Bit, Bit)), Bit)
+| (x, (y, z)) <-> ((x, y), z)
+
+-- 4-wire top-level association:
+--   (Bit, (Bit, (Bit, Bit))) <-> ((Bit, Bit), (Bit, Bit))
+iso ascTop : (Bit, (Bit, (Bit, Bit))) <-> ((Bit, Bit), (Bit, Bit))
+| (x, (y, z)) <-> ((x, y), z)
+
+-- cnot applied to positions 0,1 of a 3-wire tuple (Bit, (Bit, Bit)):
+--   cnot(a, b) with identity on c.
+iso cnotMid : (Bit, (Bit, Bit)) <-> (Bit, (Bit, Bit))
+= asc ; (cnot * idb) ; ~asc
+
+-- Swap positions 2,3 on a 4-wire tuple: (a, (b, (s, c))) <-> (a, (b, (c, s)))
+iso swap23 : (Bit, Bit, Bit, Bit) <-> (Bit, Bit, Bit, Bit)
+= idb * (idb * swapBit)
+
+-- Toffoli on positions 0,1,2 of a 4-wire tuple.
+iso tofAt3 : (Bit, Bit, Bit, Bit) <-> (Bit, Bit, Bit, Bit)
+= (idb * asc) ; asc2 ; (toffoli * idb) ; ~asc2 ; (idb * ~asc)
+
+-- cnot on positions 1,2 of a 4-wire tuple.
+iso cnotAt1 : (Bit, Bit, Bit, Bit) <-> (Bit, Bit, Bit, Bit)
+= idb * cnotMid
+
+-- Swap positions 0,1 on a 4-wire tuple.
+iso swap01 : (Bit, Bit, Bit, Bit) <-> (Bit, Bit, Bit, Bit)
+= ascTop ; (swapBit * id2) ; ~ascTop
+
+-- Preserved-input half-adder: (a, b, s, c) <-> (a, b, s XOR a XOR b, c XOR (a AND b)).
+iso ha4 : (Bit, Bit, Bit, Bit) <-> (Bit, Bit, Bit, Bit)
+= swap23
+; tofAt3
+; swap23
+; cnotAt1
+; swap01
+; cnotAt1
+; swap01

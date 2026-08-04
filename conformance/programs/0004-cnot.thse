@@ -1,0 +1,7 @@
+-- Conformance P0004 (dialect: synthesizable)
+type Bit = O | I
+
+iso cnot : (Bit, Bit) <-> (Bit, Bit)
+| (O, b) <-> (O, b)
+| (I, O) <-> (I, I)
+| (I, I) <-> (I, O)

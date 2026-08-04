@@ -1,0 +1,12 @@
+-- Conformance 0021 (dialect: software, v0.2 μ-types — ADR-0035 depth annotation)
+-- Use-site depth annotation: `Nat@6` overrides the default unroll depth D = 4
+-- to D = 6, giving 6 inhabitants (numerals 0..=5) instead of 4 (numerals 0..=3).
+-- The combinator `iter Nat@6 notb` iterates over the 6-numeral domain.
+type Nat = Zero | Succ Nat
+type Bit = O | I
+
+iso notb : Bit <-> Bit
+| O <-> I
+| I <-> O
+
+iso spinN6 : Nat@6 * Bit <-> Nat@6 * Bit = iter Nat@6 notb
