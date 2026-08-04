@@ -17,7 +17,9 @@ algebra.
 
 Two tiers:
 
-  * TIER 1 — reversible by construction: `denote_bijective`, the adjoint
+  * TIER 1 — reversible by construction: `denote_bijective` (over the full
+    reversible-rig algebra — symmetries, associators, left unitor, distributor,
+    and NOT = `SwapSum(1,1)`, each with DERIVED bijectivity), the adjoint
     `denote_inv` (inv really inverts, both directions), `inv_inv`, `seq_inv`.
   * TIER 2 — loops and branches: `iter` (n-fold endo-iteration) with `iter_succ`
     / `iter_bijective`; a `fold`/`unfold` inverse pair over a bounded vector
@@ -72,9 +74,11 @@ instance : (t : Ty) → Inhabited (denoteTy t)
       letI := instInhabitedDenoteTy a
       letI := instInhabitedDenoteTy b
       inferInstanceAs (Inhabited (denoteTy a × denoteTy b))
-  | sum a b =>
+  | sum a _ =>
       letI := instInhabitedDenoteTy a
-      inferInstanceAs (Inhabited (denoteTy a ⊕ denoteTy b))
+      -- `Inhabited (α ⊕ β)` is not a default instance (left/right ambiguity), so
+      -- pick the left injection explicitly.
+      ⟨Sum.inl default⟩
 
 instance : (t : Ty) → Fintype (denoteTy t)
   | unit     => inferInstanceAs (Fintype Unit)
@@ -92,7 +96,15 @@ instance : (t : Ty) → Fintype (denoteTy t)
 
 /-- Typed reversible combinators. `prim` is the ONLY primitive-bijection input;
     every other constructor is a structural combinator whose reversibility is a
-    theorem, not an assumption. `inv` is the syntactic adjoint. -/
+    theorem, not an assumption. `inv` is the syntactic adjoint.
+
+    The structural algebra spans the reversible-rig fragment: the two symmetries
+    (`swapT`/`swapS`), the two associators (`assocT`/`assocS`), the left unitor
+    (`unitTl`), the distributor of product over sum (`distrib`), and NOT =
+    `SwapSum(1,1)` (`notI`, exchanging the two one-point summands of
+    `unit ⊕ unit`). Each is denoted by a Mathlib structure `Equiv` yet its
+    bijectivity is still DERIVED in `denote_bijective` (the denotation is a raw
+    function; the bijection is the theorem). -/
 inductive Iso : Ty → Ty → Type 1
   | id    : Iso a a
   | seq   : Iso a b → Iso b c → Iso a c
@@ -100,6 +112,11 @@ inductive Iso : Ty → Ty → Type 1
   | plus  : Iso a b → Iso c d → Iso (sum a c) (sum b d)
   | swapT : Iso (prod a b) (prod b a)
   | swapS : Iso (sum a b) (sum b a)
+  | assocT : Iso (prod (prod a b) c) (prod a (prod b c))
+  | assocS : Iso (sum (sum a b) c) (sum a (sum b c))
+  | unitTl : Iso (prod unit a) a
+  | distrib : Iso (prod a (sum b c)) (sum (prod a b) (prod a c))
+  | notI  : Iso (sum unit unit) (sum unit unit)
   | inv   : Iso a b → Iso b a
   | prim  : (denoteTy a ≃ denoteTy b) → Iso a b
   | iter  : Nat → Iso a a → Iso a a
@@ -116,6 +133,11 @@ noncomputable def denote : {a b : Ty} → Iso a b → denoteTy a → denoteTy b
   | _, _, .plus i j    => Sum.map (denote i) (denote j)
   | _, _, .swapT       => Prod.swap
   | _, _, .swapS       => Sum.swap
+  | _, _, .assocT      => Equiv.prodAssoc _ _ _
+  | _, _, .assocS      => Equiv.sumAssoc _ _ _
+  | _, _, .unitTl      => Equiv.uniqueProd _ Unit
+  | _, _, .distrib     => Equiv.prodSumDistrib _ _ _
+  | _, _, .notI        => Sum.swap
   | _, _, .inv i       => Function.invFun (denote i)
   | _, _, .prim e      => e
   | _, _, .iter n i    => (denote i)^[n]
@@ -143,6 +165,21 @@ theorem denote_bijective : ∀ {a b : Ty} (i : Iso a b), Function.Bijective (den
       ⟨hi.1.sumMap hj.1, hi.2.sumMap hj.2⟩
   | _, _, .swapT     => (Equiv.prodComm _ _).bijective
   | _, _, .swapS     => (Equiv.sumComm _ _).bijective
+  | _, _, .assocT    =>
+      -- product associator: reassociation is an Equiv, hence a bijection.
+      (Equiv.prodAssoc _ _ _).bijective
+  | _, _, .assocS    =>
+      -- sum associator: reassociation is an Equiv, hence a bijection.
+      (Equiv.sumAssoc _ _ _).bijective
+  | _, _, .unitTl    =>
+      -- left unitor: pairing with the unique inhabitant of `unit` is an Equiv.
+      (Equiv.uniqueProd _ Unit).bijective
+  | _, _, .distrib   =>
+      -- distributor of product over sum: an Equiv, hence a bijection.
+      (Equiv.prodSumDistrib _ _ _).bijective
+  | _, _, .notI      =>
+      -- NOT = SwapSum(1,1): swap of the two one-point summands, an Equiv.
+      (Equiv.sumComm Unit Unit).bijective
   | _, _, .inv i     =>
       -- The set-theoretic inverse of a bijection is a bijection: it is injective
       -- (f is its left inverse) and surjective (from injectivity of f).
@@ -183,39 +220,43 @@ theorem denote_inv_leftInverse {a b : Ty} (i : Iso a b) :
     Function.LeftInverse (denote (Iso.inv i)) (denote i) := by
   rw [denote_inv]
   intro x
-  simp
+  -- goal: `(toEquiv i).symm (denote i x) = x`; `denote i x` is defeq `toEquiv i x`.
+  exact (toEquiv i).symm_apply_apply x
 
 /-- `inv i` pre-composed with `i` is the identity (adjoint right-inverts). -/
 theorem denote_inv_rightInverse {a b : Ty} (i : Iso a b) :
     Function.RightInverse (denote (Iso.inv i)) (denote i) := by
   rw [denote_inv]
   intro y
-  simp
+  -- goal: `denote i ((toEquiv i).symm y) = y`; `denote i _` is defeq `toEquiv i _`.
+  exact (toEquiv i).apply_symm_apply y
 
 /-- Adjoint is an involution on denotations: `inv (inv i)` denotes the same
     function as `i`. -/
 theorem inv_inv {a b : Ty} (i : Iso a b) :
     denote (Iso.inv (Iso.inv i)) = denote i := by
-  rw [denote_inv (Iso.inv i), denote_inv i]
-  ext x
-  simp
+  -- Both `denote (inv (inv i))` and `denote i` invert `denote (inv i)`; a left
+  -- inverse equals a right inverse, so they are equal.
+  apply Function.LeftInverse.eq_rightInverse (f := denote (Iso.inv i))
+  · exact denote_inv_leftInverse (Iso.inv i)
+  · exact denote_inv_leftInverse i
 
 /-- Adjoint of a composite reverses order: `inv (i ; j)` denotes the same as
     `inv j ; inv i`. This is the contravariance of the adjoint. -/
 theorem seq_inv {a b c : Ty} (i : Iso a b) (j : Iso b c) :
     denote (Iso.inv (Iso.seq i j)) = denote (Iso.seq (Iso.inv j) (Iso.inv i)) := by
-  -- Both sides are the inverse of denote (seq i j); use injectivity of that map's
-  -- right composite. Compare via the shared bijection.
-  have hbij : Function.Bijective (denote (Iso.seq i j)) := denote_bijective _
-  apply Function.LeftInverse.eq_rightInverse (g := denote (Iso.seq i j))
+  -- Both sides are the inverse of denote (seq i j): the LHS is a left inverse and
+  -- the RHS a right inverse of that map, and a left inverse equals a right inverse.
+  apply Function.LeftInverse.eq_rightInverse (f := denote (Iso.seq i j))
   · -- denote (inv (i;j)) is a left inverse of denote (i;j)
     exact denote_inv_leftInverse (Iso.seq i j)
-  · -- denote (inv j ; inv i) is a right inverse of denote (i;j)
+  · -- denote (inv j ; inv i) is a right inverse of denote (i;j):
+    -- `RightInverse g₂ f` unfolds to `∀ x, f (g₂ x) = x`.
     intro x
-    show denote (Iso.seq (Iso.inv j) (Iso.inv i)) (denote (Iso.seq i j) x) = x
+    show denote (Iso.seq i j) (denote (Iso.seq (Iso.inv j) (Iso.inv i)) x) = x
     -- denote (seq p q) = denote q ∘ denote p
-    show denote (Iso.inv i) (denote (Iso.inv j) (denote j (denote i x))) = x
-    rw [denote_inv_leftInverse j (denote i x), denote_inv_leftInverse i x]
+    show denote j (denote i (denote (Iso.inv i) (denote (Iso.inv j) x))) = x
+    rw [denote_inv_rightInverse i (denote (Iso.inv j) x), denote_inv_rightInverse j x]
 
 /-! ## TIER 2 — loops and branches
 
@@ -266,14 +307,14 @@ theorem fold_unfold_inv (e : Bool ≃ Bool) :
     unfoldBits e ∘ foldBits e = id := by
   funext l
   simp only [Function.comp, foldBits, unfoldBits, List.map_map,
-    Equiv.symm_comp_self, List.map_id]
+    Equiv.symm_comp_self, List.map_id, id_eq]
 
 /-- unfold then fold is the identity too (the other direction). -/
 theorem unfold_fold_inv (e : Bool ≃ Bool) :
     foldBits e ∘ unfoldBits e = id := by
   funext l
   simp only [Function.comp, foldBits, unfoldBits, List.map_map,
-    Equiv.self_comp_symm, List.map_id]
+    Equiv.self_comp_symm, List.map_id, id_eq]
 
 /-- Every fold of a reversible body is itself reversible: `foldBits e` is a
     bijection of BitLists, with `unfoldBits e` as a two-sided inverse. -/
@@ -331,5 +372,35 @@ theorem swapbrIso_involution :
     denote swapbrIso ∘ denote swapbrIso = id := by
   rw [← swapbr_eq_denote_swapT]
   exact comefrom_involution
+
+/-! ## Behavioral pins for the strengthened algebra
+
+Small `by decide`/`rfl`-level checks that the new structural constructors denote
+exactly the intended maps (guarding against a mis-wired `Equiv`). These are
+kernel-checked, no `native_decide`. -/
+
+/-- `notI` really is NOT on the two-point sum: it swaps the summands. -/
+example : denote Iso.notI (Sum.inl ()) = Sum.inr () := rfl
+example : denote Iso.notI (Sum.inr ()) = Sum.inl () := rfl
+
+/-- `notI` is its own inverse (NOT is an involution). -/
+theorem notI_involution :
+    denote Iso.notI ∘ denote Iso.notI = id := by
+  funext x; cases x <;> rfl
+
+/-- `distrib` pushes a product into a sum on the left branch. -/
+example {a b c : Ty} (x : denoteTy a) (y : denoteTy b) :
+    denote (Iso.distrib (a := a) (b := b) (c := c)) (x, Sum.inl y) = Sum.inl (x, y) := rfl
+
+/-- `distrib` pushes a product into a sum on the right branch. -/
+example {a b c : Ty} (x : denoteTy a) (z : denoteTy c) :
+    denote (Iso.distrib (a := a) (b := b) (c := c)) (x, Sum.inr z) = Sum.inr (x, z) := rfl
+
+/-- `unitTl` drops the unit factor, returning the payload. -/
+example {a : Ty} (x : denoteTy a) : denote (Iso.unitTl (a := a)) ((), x) = x := rfl
+
+/-- `assocT` reassociates a nested product. -/
+example {a b c : Ty} (x : denoteTy a) (y : denoteTy b) (z : denoteTy c) :
+    denote (Iso.assocT (a := a) (b := b) (c := c)) ((x, y), z) = (x, (y, z)) := rfl
 
 end Theseus.Reversibility

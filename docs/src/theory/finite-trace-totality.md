@@ -8,16 +8,26 @@ isomorphism. Quantitatively, a run applies the body at most `|u| + 1` times
 (equivalently: performs at most `|u|` loop iterations), and this bound is exact
 over the class of all such `f`.
 
-**Mechanization.** The forward-termination core of this proof -- the Lemma
-(no loop-state repeats) and the Theorem (forward termination + the `|u|+1`
-upper bound), plus the tightness witness -- is machine-checked in Lean 4 +
-Mathlib at `theseus-proofs/TheseusProofs/FiniteTrace.lean` (`lake build`,
-depending only on Mathlib's base axioms). Both hypotheses are kernel-verified
-load-bearing (explicit counterexamples when injectivity or finiteness is
-dropped) and the `|u|+1` constant is verified tight at `|u| = 2`. The
-mutual-inverse direction, the class-wide exactness claim, and the
-iteration-count corollaries below remain proved in this text only (see the
-scope note in the Lean file's header).
+**Mechanization.** This proof is machine-checked in Lean 4 + Mathlib at
+`theseus-proofs/TheseusProofs/FiniteTrace.lean` (`lake build`, depending only on
+Mathlib's base axioms; no `sorry`/`axiom`/`native_decide`). Mechanized:
+
+* the Lemma (no loop-state repeats) as `state_injOn`, and the Theorem (forward
+  termination + the `|u|+1` upper bound) as `trace_terminates`
+  (`trace_terminates_of_equiv` under the bijection hypothesis);
+* the tightness witness at `|u| = 2` (`hamF_*`) -- the `|u|+1` constant is
+  verified load-bearing;
+* the **mutual-inverse / backward run** ("both directions are one reversed
+  trajectory") as `trace_mutual_inverse` (fuel-free) and `run_symm_entry`
+  (fueled, `card U + 1` budget);
+* the **class-wide exactness / trajectory disjointness** (ADR-0007 TH-1b) as
+  `traj_cross_injective` + `traj_disjoint` (vertex-disjointness) and
+  `traj_card_bound` (the `Sigma_inputs (T_i - 1) <= |u|` carrier-sizing bound).
+
+The `Injective`/`Fintype` hypotheses are kernel-verified load-bearing. Only the
+`|u|`-*iterations* restatement (as opposed to the mechanized body-application
+bound) and the WCET/register corollaries below remain text-only (see the scope
+note in the Lean file's header).
 
 ## Hypothesis and its discharge (read this first)
 
@@ -111,6 +121,12 @@ by application `|u|+1` at the latest. Forward termination proved. ∎
 
 ## Both directions are one reversed trajectory (mutual inverse)
 
+**Mechanized** as `trace_mutual_inverse` (fuel-free, over the `Steps` exit
+relation) and `run_symm_entry` (fueled, with the explicit `card U + 1` budget)
+in `FiniteTrace.lean`. The reversed-trajectory equation `f†(t_k) = s_{k-1}` is
+the Lean lemma `steps_reaches` (the backward run walks the forward outputs `t_k`
+in reverse), and output-uniqueness of the loop is `steps_output_unique`.
+
 Backward evaluation of `trace f` is *defined* as forward evaluation of the
 adjoint: `eval(sym (trace f)) = eval(trace (f†))`, using the definitional law
 `(trace f)† = trace(f†)` (the sym-pushing table, `core-pi.md`) and
@@ -128,6 +144,12 @@ eval(trace f) = id_a`, and symmetrically `= id_b` the other way. So `trace f` is
 a genuine isomorphism, not merely bidirectionally terminating. ∎
 
 ## Tightness
+
+**Mechanized** at `|u| = 2` by `hamF_*` (`hamF_underfueled` shows `|u|` fuel
+still loops; `hamF_exits` shows `|u|+1` exits), and the *class-wide* exactness /
+carrier-sizing direction (ADR-0007 TH-1b) by `traj_cross_injective`,
+`traj_disjoint`, and `traj_card_bound` (`Sigma_inputs (T_i - 1) <= |u|`) in
+`FiniteTrace.lean`.
 
 The `|u|` / `|u|+1` bound is achieved: over `u ≅ Bitⁿ` (`|u| = 2ⁿ`) with
 `|a| = |b| = 1` -- and the successor walk generalizes to any enumerated finite

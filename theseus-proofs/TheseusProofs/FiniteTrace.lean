@@ -8,17 +8,29 @@ run exits within `|u| + 1` body applications (`|u| = Fintype.card U`), in the
 text's fuel unit of one charge per body application.
 
 SCOPE — what is and is NOT mechanized here (keep the obligation ledger honest):
-  * Mechanized: the text's §Lemma (no loop-state repeats) as `state_injOn`, and
-    its §Theorem (forward termination + the `|u|+1` upper bound) as
-    `trace_terminates`. Proven under the *weaker* hypothesis `Injective f`
-    (the text assumes a bijection; the forward direction only needs injectivity,
-    so this strengthens the result). `trace_terminates_of_equiv` restates it
-    under the text's bijection hypothesis. `tight_card_two` mechanizes the
+  * Mechanized (forward core): the text's §Lemma (no loop-state repeats) as
+    `state_injOn`, and its §Theorem (forward termination + the `|u|+1` upper
+    bound) as `trace_terminates`. Proven under the *weaker* hypothesis
+    `Injective f` (the text assumes a bijection; the forward direction only needs
+    injectivity, so this strengthens the result). `trace_terminates_of_equiv`
+    restates it under the text's bijection hypothesis. `hamF_*` mechanizes the
     §Tightness / "granting only `|u|` fuel would OutOfFuel" corollary at |u|=2.
-  * NOT mechanized: the backward run / mutual-inverse ("totality as isomorphism"
-    half, text §Both directions), tightness as a *class-wide* exactness
-    statement, the `|u|`-iterations restatement, and the WCET/register
-    corollaries. These remain text-only in `finite-trace-totality.md`.
+  * Mechanized (backward / mutual inverse, text §"Both directions are one
+    reversed trajectory"): `trace_mutual_inverse` — for a bijection `f`, a
+    forward exit `x ↦ y` implies a backward exit `y ↦ x` under `f.symm`, i.e. the
+    two runs are one reversed trajectory (`trace f` is a genuine isomorphism);
+    `run_symm_entry` is the fueled `card U + 1` restatement. Built on the fuel-
+    free exit relation `Steps` (`run`-equivalent via `run_some_of_steps` /
+    `steps_of_run_some`), `steps_reaches` (the reversed-trajectory equation
+    `f†(t_k) = s_{k-1}`) and `steps_output_unique`.
+  * Mechanized (class-wide exactness / disjointness, ADR-0007 TH-1b):
+    `traj_cross_injective` (distinct inputs are backward-deterministically
+    vertex-disjoint in the carrier), `traj_disjoint` (its `x ≠ x'` corollary),
+    and `traj_card_bound` (the `Σ_inputs (Tᵢ − 1) ≤ |u|` carrier-sizing bound,
+    here `|S| · fuel ≤ |u|`).
+  * NOT mechanized: the `|u|`-*iterations* (as opposed to body-application)
+    restatement and the WCET/register corollaries. These remain text-only in
+    `finite-trace-totality.md`.
 
 The mechanization strategy mirrors the text's "minimal-repeat descent":
 
@@ -198,5 +210,346 @@ theorem hamF_underfueled :
 /-- `|u| + 1` fuel exits — matching `trace_terminates` at its bound exactly. -/
 theorem hamF_exits :
     (run hamF (Fintype.card (Fin 2) + 1) (Sum.inr ())).isSome := by decide
+
+/-!
+## Mutual inverse / backward run (text §"Both directions are one reversed trajectory")
+
+The text argues that backward evaluation of `trace f` is forward evaluation of
+the adjoint `f†` — for a bijection `f`, `f† = f.symm` — and that the two runs are
+ONE trajectory traversed in opposite directions, so `trace f` is a genuine
+isomorphism rather than merely bidirectionally terminating.
+
+We mechanize this fuel-free, on a `Steps` predicate that captures "the loop
+started at state `s` eventually exits with output `y`" independent of the fuel
+budget. `Steps` is inter-derivable with the fueled `run` (`run_some_of_steps`,
+`steps_of_run_some`), so a claim about `Steps` is a claim about `run`. The heart
+is `steps_reaches`: the backward loop of `f.symm` from `inr y` walks the SAME
+trajectory in reverse (the text's `f†(t_k) = s_{k-1}`), and `steps_of_reaches`
+turns that walk, once it reaches an exit, into a `Steps f.symm`. Specialised to
+entries it is
+`trace_mutual_inverse` — a forward run of `f` from `x` exiting with `y` implies
+the backward run (forward run of `f.symm`) from `y` exits with `x` — and, in
+fueled form with the `trace_terminates` bound, `run_symm_entry`. -/
+
+/-- Fuel-free exit relation: `Steps f s y` iff the trace loop entered at state
+    `s : U ⊕ A` eventually exits with output `y : B`. `exit`: the body exits now
+    (`f s = inr y`). `loop`: the body feeds back `inl w` and the loop from `inl w`
+    exits with `y`. This is exactly `run f _ s = some y` with the fuel abstracted
+    away (see `run_some_of_steps` / `steps_of_run_some`). -/
+inductive Steps (f : U ⊕ A → U ⊕ B) : (U ⊕ A) → B → Prop
+  | exit {s : U ⊕ A} {y : B} : f s = Sum.inr y → Steps f s y
+  | loop {s : U ⊕ A} {w : U} {y : B} :
+      f s = Sum.inl w → Steps f (Sum.inl w) y → Steps f s y
+
+/-- `Steps` gives a concrete fuel: an exiting trajectory is an exiting fueled run
+    (with fuel one more than the number of loop steps). -/
+theorem run_some_of_steps
+    (f : U ⊕ A → U ⊕ B) {s : U ⊕ A} {y : B} (h : Steps f s y) :
+    ∃ fuel, run f fuel s = some y := by
+  induction h with
+  | @exit s y hfs => exact ⟨1, by rw [run, hfs]⟩
+  | @loop s w y hfs _ ih =>
+      obtain ⟨fuel, hfuel⟩ := ih
+      exact ⟨fuel + 1, by rw [run, hfs]; exact hfuel⟩
+
+/-- Conversely a successful fueled run witnesses an exiting trajectory. -/
+theorem steps_of_run_some
+    (f : U ⊕ A → U ⊕ B) :
+    ∀ (fuel : Nat) (s : U ⊕ A) (y : B), run f fuel s = some y → Steps f s y := by
+  intro fuel
+  induction fuel with
+  | zero => intro s y h; simp only [run, reduceCtorEq] at h
+  | succ fuel ih =>
+      intro s y h
+      rw [run] at h
+      cases hfs : f s with
+      | inr b =>
+          rw [hfs] at h
+          have : b = y := Option.some.inj h
+          subst this
+          exact Steps.exit hfs
+      | inl w =>
+          rw [hfs] at h
+          exact Steps.loop hfs (ih (Sum.inl w) y h)
+
+/-- One backward loop-step: from backward state `z : U ⊕ B` the inverse body
+    feeds back `inl w`, and the loop continues at `inl w`. The reversed
+    trajectory is a chain of these (`Relation.ReflTransGen`). -/
+def BStep (g : U ⊕ B → U ⊕ A) (z z' : U ⊕ B) : Prop :=
+  ∃ w : U, g z = Sum.inl w ∧ z' = Sum.inl w
+
+/-- Reversed-trajectory reachability (text §"Both directions are one reversed
+    trajectory," the equation `f†(t_k) = s_{k-1}`). If the forward loop from `s`
+    exits with `y`, then the backward loop (steps of `g = f.symm`) started at the
+    forward output `inr y` walks the SAME trajectory in reverse and reaches the
+    forward output `f s` of the entry state — i.e. the backward states are the
+    forward outputs `t_k` visited in reverse order. Only `g (f v) = v` is used. -/
+theorem steps_reaches
+    (f : (U ⊕ A) ≃ (U ⊕ B)) {s : U ⊕ A} {y : B}
+    (h : Steps (f : U ⊕ A → U ⊕ B) s y) :
+    Relation.ReflTransGen (BStep (f.symm : U ⊕ B → U ⊕ A))
+      (Sum.inr y) (f s) := by
+  induction h with
+  | @exit s y hfs =>
+      -- `f s = inr y`, so the target `f s` is the start `inr y`; `rw` discharges
+      -- the resulting reflexive `ReflTransGen` goal via its `@[refl]` lemma.
+      rw [hfs]
+  | @loop s w y hfs _ ih =>
+      -- IH: backward reaches `f (inl w)`. One more backward step lands at
+      -- `f s = inl w`, since `g (f (inl w)) = inl w = f s`.
+      refine ih.tail ?_
+      refine ⟨w, ?_, ?_⟩
+      · -- g (f (inl w)) = inl w
+        show (f.symm : U ⊕ B → U ⊕ A) (f (Sum.inl w)) = Sum.inl w
+        simp
+      · -- target `f s = inl w`
+        rw [hfs]
+
+/-- If the backward loop reaches, via `BStep`s, a state `z` whose body exits to
+    `inr a`, then the whole backward run from the start exits with `a`. Front-
+    building companion to `steps_reaches`. -/
+theorem steps_of_reaches
+    (g : U ⊕ B → U ⊕ A) {start z : U ⊕ B} {a : A}
+    (hreach : Relation.ReflTransGen (BStep g) start z)
+    (hexit : g z = Sum.inr a) :
+    Steps g start a := by
+  induction hreach using Relation.ReflTransGen.head_induction_on with
+  | refl => exact Steps.exit hexit
+  | @head p q hpq _ ih =>
+      obtain ⟨w, hgp, hq⟩ := hpq
+      subst hq
+      exact Steps.loop hgp ih
+
+/-- `Steps` is deterministic: the body `f` is a function, so a state exits with
+    at most one output. -/
+theorem steps_output_unique
+    (f : U ⊕ A → U ⊕ B) {s : U ⊕ A} {y y' : B}
+    (h : Steps f s y) (h' : Steps f s y') : y = y' := by
+  induction h with
+  | @exit s y hfs =>
+      cases h' with
+      | @exit _ y' hfs' =>
+          rw [hfs] at hfs'; exact Sum.inr.inj hfs'
+      | @loop _ w' y' hfs' _ =>
+          rw [hfs] at hfs'; exact absurd hfs' (by simp)
+  | @loop s w y hfs hnext ih =>
+      cases h' with
+      | @exit _ y' hfs' =>
+          rw [hfs] at hfs'; exact absurd hfs'.symm (by simp)
+      | @loop _ w' y' hfs' hnext' =>
+          rw [hfs] at hfs'
+          have hww : w = w' := Sum.inl.inj hfs'
+          subst hww
+          exact ih hnext'
+
+/-- **Mutual inverse (text §"Both directions are one reversed trajectory").**
+    For a bijection `f`, if the forward trace loop from entry `x` exits with `y`,
+    then the backward trace loop — the forward loop of the adjoint `f.symm` — from
+    entry `y` exits with `x`. The two runs are one trajectory traversed in
+    opposite directions, so `trace f` is a genuine isomorphism. Fuel-free. -/
+theorem trace_mutual_inverse
+    (f : (U ⊕ A) ≃ (U ⊕ B)) {x : A} {y : B}
+    (h : Steps (f : U ⊕ A → U ⊕ B) (Sum.inr x) y) :
+    Steps (f.symm : U ⊕ B → U ⊕ A) (Sum.inr y) x := by
+  have hreach := steps_reaches f h
+  refine steps_of_reaches (f.symm : U ⊕ B → U ⊕ A) hreach ?_
+  -- backward exits at `f (inr x)`: `g (f (inr x)) = inr x`.
+  show (f.symm : U ⊕ B → U ⊕ A) (f (Sum.inr x)) = Sum.inr x
+  simp
+
+/-- Fueled restatement of mutual inverse. For a bijection `f`, a successful
+    forward run from `x` (any fuel) implies a successful backward run of `f.symm`
+    from `y` — with an explicit `card U + 1` fuel budget, matching
+    `trace_terminates`. This is the `run`-level "both directions terminate and
+    are mutually inverse" claim. -/
+theorem run_symm_entry
+    [Fintype U] (f : (U ⊕ A) ≃ (U ⊕ B)) {x : A} {y : B}
+    (fuel : Nat) (h : run (f : U ⊕ A → U ⊕ B) fuel (Sum.inr x) = some y) :
+    run (f.symm : U ⊕ B → U ⊕ A) (Fintype.card U + 1) (Sum.inr y) = some x := by
+  have hsteps : Steps (f : U ⊕ A → U ⊕ B) (Sum.inr x) y :=
+    steps_of_run_some (f : U ⊕ A → U ⊕ B) fuel (Sum.inr x) y h
+  have hback : Steps (f.symm : U ⊕ B → U ⊕ A) (Sum.inr y) x :=
+    trace_mutual_inverse f hsteps
+  -- The backward run terminates within `card U + 1`; identify its output as `x`.
+  have hbterm := trace_terminates (f.symm : U ⊕ B → U ⊕ A) f.symm.injective y
+  rw [Option.isSome_iff_exists] at hbterm
+  obtain ⟨x', hx'⟩ := hbterm
+  have hback' : Steps (f.symm : U ⊕ B → U ⊕ A) (Sum.inr y) x' :=
+    steps_of_run_some (f.symm : U ⊕ B → U ⊕ A) (Fintype.card U + 1) (Sum.inr y) x' hx'
+  -- `Steps` output is unique, so `x' = x`.
+  have := steps_output_unique (f.symm : U ⊕ B → U ⊕ A) hback hback'
+  rw [hx', this]
+
+/-!
+## Trajectory disjointness / class-wide exactness (ADR-0007 TH-1b)
+
+TH-1b is the *formulation-independent* consequence of body injectivity: a
+bijective (indeed merely injective) body is backward-deterministic, so
+**trajectories from distinct inputs are vertex-disjoint in the carrier `U`** — a
+shared carrier state would have two predecessors walking back to two distinct
+`Right` entries. From this the sum-over-inputs cardinality bound
+`Σ_inputs (Tᵢ − 1) ≤ |u|` follows: pack each input's distinct loop-states into a
+single injection into `U`.
+
+`traj_cross_injective` is the disjointness core (distinct `(input, step)` pairs
+land on distinct carrier states), and `traj_card_bound` is the packaged
+`Σ (Tᵢ − 1) ≤ |u|` bound over any finite set of inputs, each in its own no-exit
+regime for `fuel` steps (so `Tᵢ − 1 = fuel` loop-states per input, giving
+`(#inputs) · fuel ≤ |u|`). -/
+
+/-- Cross-input backward-determinism / vertex-disjointness (TH-1b core). Under
+    injective `f`, if two inputs `x` and `x'` are both in the no-exit regime for
+    `fuel` steps, then equal loop-states at steps `a ≤ fuel`, `b ≤ fuel` force
+    `x = x'` AND `a = b`. In particular trajectories of distinct inputs share no
+    carrier vertex (`x ≠ x' ⇒ state f x a ≠ state f x' b` for `a,b ≤ fuel`), and
+    no vertex is revisited within one trajectory (the `x = x'` diagonal recovers
+    `state_injOn`). Proof: lockstep descent — injectivity turns a shared vertex
+    into a shared *predecessor*, decrementing both indices until one hits the
+    `inr` entry; a lone `inr` clashes with the other's `inl`, so both hit `0`
+    together (`a = b`) at the same entry (`inr x = inr x'`, i.e. `x = x'`). -/
+theorem traj_cross_injective
+    (f : U ⊕ A → U ⊕ B) (hf : Function.Injective f)
+    (x x' : A) (fuel : Nat)
+    (hno  : ∀ k, k < fuel → ∃ w, f (state f x k) = Sum.inl w)
+    (hno' : ∀ k, k < fuel → ∃ w, f (state f x' k) = Sum.inl w) :
+    ∀ a b, a ≤ fuel → b ≤ fuel →
+      state f x a = state f x' b → x = x' ∧ a = b := by
+  -- Descend on `a`, tracking `b` in lockstep.
+  intro a
+  induction a with
+  | zero =>
+      intro b _ hb hval
+      -- `state x 0 = inr x`. Force `b = 0` (else `inr` vs `inl` clash), then read off `x = x'`.
+      cases b with
+      | zero =>
+          simp only [state] at hval
+          exact ⟨Sum.inr.inj hval, rfl⟩
+      | succ b' =>
+          exfalso
+          have hb'fuel : b' < fuel := by omega
+          obtain ⟨wb, hwb⟩ := hno' b' hb'fuel
+          have hb1 : state f x' (b' + 1) = Sum.inl wb := by rw [state, hwb]
+          rw [hb1] at hval
+          simp only [state, reduceCtorEq] at hval
+  | succ a' ih =>
+      intro b ha hb hval
+      cases b with
+      | zero =>
+          exfalso
+          have ha'fuel : a' < fuel := by omega
+          obtain ⟨wa, hwa⟩ := hno a' ha'fuel
+          have ha1 : state f x (a' + 1) = Sum.inl wa := by rw [state, hwa]
+          rw [ha1] at hval
+          simp only [state, reduceCtorEq] at hval
+      | succ b' =>
+          have ha'fuel : a' < fuel := by omega
+          have hb'fuel : b' < fuel := by omega
+          obtain ⟨wa, hwa⟩ := hno a' ha'fuel
+          obtain ⟨wb, hwb⟩ := hno' b' hb'fuel
+          have ha1 : state f x (a' + 1) = Sum.inl wa := by rw [state, hwa]
+          have hb1 : state f x' (b' + 1) = Sum.inl wb := by rw [state, hwb]
+          rw [ha1, hb1] at hval
+          have hww : wa = wb := Sum.inl.inj hval
+          have hfeq : f (state f x a') = f (state f x' b') := by
+            rw [hwa, hwb, hww]
+          have hstateq : state f x a' = state f x' b' := hf hfeq
+          have ha'le : a' ≤ fuel := by omega
+          have hb'le : b' ≤ fuel := by omega
+          obtain ⟨hxx, hab⟩ := ih b' ha'le hb'le hstateq
+          exact ⟨hxx, by omega⟩
+
+/-- Vertex-disjointness, restated as the text puts it: distinct inputs have no
+    shared carrier vertex in the no-exit regime. Immediate from
+    `traj_cross_injective`. -/
+theorem traj_disjoint
+    (f : U ⊕ A → U ⊕ B) (hf : Function.Injective f)
+    (x x' : A) (fuel : Nat)
+    (hno  : ∀ k, k < fuel → ∃ w, f (state f x k) = Sum.inl w)
+    (hno' : ∀ k, k < fuel → ∃ w, f (state f x' k) = Sum.inl w)
+    (hxx : x ≠ x') :
+    ∀ a b, a ≤ fuel → b ≤ fuel → state f x a ≠ state f x' b := by
+  intro a b ha hb hval
+  exact hxx (traj_cross_injective f hf x x' fuel hno hno' a b ha hb hval).1
+
+/-- **Class-wide exactness / carrier-sizing bound (ADR-0007 TH-1b (1)).** If each
+    input in a finite set `S` is in the no-exit regime for `fuel` steps, then the
+    loop-states — indexed by `(input in S) × (step < fuel)` — inject into the
+    carrier `U`, so `|S| · fuel ≤ |u|`. This is the `Σ_inputs (Tᵢ − 1) ≤ |u|`
+    bound (here every `Tᵢ − 1 = fuel`, uniform), the sum-over-inputs form of
+    `t ≤ |u| + 1`; a loop carrier must be at least as wide as the iterating input
+    class. The injection is `(x, k) ↦ the loop-state at step k+1`, injective by
+    `traj_cross_injective`. -/
+theorem traj_card_bound
+    [Fintype U] [DecidableEq A]
+    (f : U ⊕ A → U ⊕ B) (hf : Function.Injective f)
+    (S : Finset A) (fuel : Nat)
+    (hno : ∀ x ∈ S, ∀ k, k < fuel → ∃ w, f (state f x k) = Sum.inl w) :
+    S.card * fuel ≤ Fintype.card U := by
+  -- Pack (input, step) ↦ carrier state at step (k+1). The step index k < fuel
+  -- gives state at index k+1 (a genuine `inl` carrier vertex), and the choose
+  -- extracts the carrier witness `w ∈ U`.
+  classical
+  -- If the index set is empty the bound is trivial (`0 ≤ card U`); otherwise the
+  -- no-exit hypothesis hands us a carrier element at step 0, so `U` is inhabited
+  -- and the junk default in `g` below is well-defined (no `[Nonempty U]` needed).
+  rcases Nat.eq_zero_or_pos (S.card * fuel) with h0 | hpos
+  · rw [h0]; exact Nat.zero_le _
+  have hfpos : 0 < fuel := by
+    rcases Nat.eq_zero_or_pos fuel with h | h
+    · subst h; simp at hpos
+    · exact h
+  have hSpos : 0 < S.card := by
+    rcases Nat.eq_zero_or_pos S.card with h | h
+    · rw [h] at hpos; simp at hpos
+    · exact h
+  obtain ⟨x0, hx0⟩ := Finset.card_pos.mp hSpos
+  obtain ⟨w0, _hw0⟩ := hno x0 hx0 0 hfpos
+  haveI : Nonempty U := ⟨w0⟩
+  -- The map into U on the finite index type `S ×ˢ Finset.range fuel`.
+  set P : Finset (A × Nat) := S ×ˢ Finset.range fuel with hP
+  -- `g p` is the carrier witness of the loop-state at step `p.2 + 1` from input `p.1`.
+  have gexists : ∀ p ∈ P, ∃ w : U, f (state f p.1 p.2) = Sum.inl w := by
+    intro p hp
+    rw [hP, Finset.mem_product, Finset.mem_range] at hp
+    exact hno p.1 hp.1 p.2 hp.2
+  let g : A × Nat → U := fun p =>
+    if h : ∃ w : U, f (state f p.1 p.2) = Sum.inl w then h.choose
+    else Classical.arbitrary U
+  have hg : ∀ p ∈ P, f (state f p.1 p.2) = Sum.inl (g p) := by
+    intro p hp
+    have hex := gexists p hp
+    show f (state f p.1 p.2) = Sum.inl (if h : ∃ w : U, f (state f p.1 p.2) = Sum.inl w
+      then h.choose else Classical.arbitrary U)
+    rw [dif_pos hex]
+    exact hex.choose_spec
+  -- Injectivity of g on the product finset.
+  have hginj : Set.InjOn g (P : Set (A × Nat)) := by
+    intro p hp q hq hpq
+    rw [Finset.mem_coe] at hp hq
+    have hpP : p ∈ P := hp
+    have hqP : q ∈ P := hq
+    rw [hP, Finset.mem_product, Finset.mem_range] at hp hq
+    have hfp := hg p hpP
+    have hfq := hg q hqP
+    have hstep : state f p.1 (p.2 + 1) = state f q.1 (q.2 + 1) := by
+      have h1 : state f p.1 (p.2 + 1) = Sum.inl (g p) := by rw [state, hfp]
+      have h2 : state f q.1 (q.2 + 1) = Sum.inl (g q) := by rw [state, hfq]
+      rw [h1, h2, hpq]
+    obtain ⟨hxx, hkk⟩ :=
+      traj_cross_injective f hf p.1 q.1 fuel (hno p.1 hp.1) (hno q.1 hq.1)
+        (p.2 + 1) (q.2 + 1) (by omega) (by omega) hstep
+    have hp2 : p.2 = q.2 := by omega
+    exact Prod.ext hxx hp2
+  -- inject P into U, so |P| ≤ |U|; and |P| = |S| * fuel.
+  have hcard : P.card ≤ Fintype.card U := by
+    have himg : (P.image g).card = P.card := Finset.card_image_of_injOn hginj
+    calc P.card = (P.image g).card := himg.symm
+      _ ≤ Fintype.card U := by
+          rw [← Finset.card_univ]
+          exact Finset.card_le_card (Finset.subset_univ _)
+  have hPcard : P.card = S.card * fuel := by
+    rw [hP, Finset.card_product, Finset.card_range]
+  rw [hPcard] at hcard
+  exact hcard
 
 end Theseus.FiniteTrace

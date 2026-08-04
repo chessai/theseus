@@ -93,6 +93,7 @@
 - [Coverage ⇔ bijectivity (TH-4a)](theory/coverage-bijectivity.md)
 - [Label-extended coverage ⇔ bijectivity (TH-4a-label)](theory/coverage-bijectivity-labels.md)
 - [Finite-trace totality](theory/finite-trace-totality.md)
+- [Reversibility by construction (TH-REV)](theory/reversibility.md)
 - [Reversible memory closure (M-C2)](theory/reversible-memory-closure.md)
 - [The bidirectional-descent trap](theory/bidirectional-descent.md)
 - [Coherence and canonical permutations](theory/coherence.md)
