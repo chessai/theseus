@@ -39,11 +39,10 @@ use theseus_netlist::bennett::bennett_wrap;
 use theseus_netlist::lower::{
     lower_iso_with_ancillas, lower_iso_with_ancillas_traced, prim_from_bits,
 };
-use theseus_netlist::{bits_of, rail_width, CellKind, PhasedCellNetlist, RailPair};
+use theseus_netlist::{bits_of, rail_width, CellKind};
 
-fn bit() -> Type {
-    Type::sum(Type::One, Type::One)
-}
+mod common;
+use common::*;
 
 fn prim_from_fn(
     name: &str,
@@ -61,10 +60,6 @@ fn cnot_prim() -> PrimDef {
         Type::prod(bit(), bit()),
         |b| vec![b[0], b[0] ^ b[1]],
     )
-}
-
-fn three_bits() -> Type {
-    Type::prod(bit(), Type::prod(bit(), bit()))
 }
 
 fn four_bits() -> Type {
@@ -103,34 +98,6 @@ fn add2_prim() -> PrimDef {
         let s = (a + b) & 0b11;
         vec![bits[0], bits[1], s & 0b10 != 0, s & 0b01 != 0]
     })
-}
-
-/// Untimed functional evaluation of the cell netlist (cells are in
-/// topological/emission order; INV-TOKEN asserted at every pair read).
-fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
-    let mut line: Vec<Option<bool>> = vec![None; net.num_lines as usize];
-    fn set_pair(line: &mut [Option<bool>], p: RailPair, v: bool) {
-        line[p.line1.0 as usize] = Some(v);
-        line[p.line0.0 as usize] = Some(!v);
-    }
-    fn get_pair(line: &[Option<bool>], p: RailPair) -> bool {
-        let v1 = line[p.line1.0 as usize].expect("1-line driven");
-        let v0 = line[p.line0.0 as usize].expect("0-line driven");
-        assert_ne!(v0, v1, "INV-TOKEN violated: pair not 1-of-2");
-        v1
-    }
-    assert_eq!(input_bits.len(), net.inputs.len());
-    for (&p, &v) in net.inputs.iter().zip(input_bits) {
-        set_pair(&mut line, p, v);
-    }
-    for cell in &net.cells {
-        let vals: Vec<bool> = cell.inputs.iter().map(|&p| get_pair(&line, p)).collect();
-        let outs = cell.kind.eval(&vals);
-        for (&p, &v) in cell.outputs.iter().zip(&outs) {
-            set_pair(&mut line, p, v);
-        }
-    }
-    net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
 }
 
 fn eval_oracle(iso: &Iso, v: &theseus_core::Value) -> theseus_core::Value {

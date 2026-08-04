@@ -60,6 +60,34 @@ impl RailPair {
             line1: self.line0,
         }
     }
+
+    /// Drive this pair's two token lines to encode the logical bit `v`
+    /// under the 1-of-2 dual-rail discipline (INV-TOKEN): `line1` pulses
+    /// for `v`, `line0` pulses for `!v`. This is the single authoritative
+    /// encoding used by every netlist evaluator (`sim`, `balance`,
+    /// `lower_iter`) so the invariant lives in exactly one place.
+    ///
+    /// `line` is the per-line pulse map (`None` = not yet driven).
+    pub fn set(self, line: &mut [Option<bool>], v: bool) {
+        line[self.line1.0 as usize] = Some(v);
+        line[self.line0.0 as usize] = Some(!v);
+    }
+
+    /// Decode this pair's logical bit from the per-line pulse map,
+    /// asserting the 1-of-2 dual-rail invariant (INV-TOKEN): both lines
+    /// must be driven and hold opposite pulses. The paired read for
+    /// [`RailPair::set`]; the single authoritative decoder.
+    ///
+    /// # Panics
+    /// Panics if either line is undriven. In debug builds also panics if
+    /// the pair is not 1-of-2 (`debug_assert`); mirrors the historical
+    /// production path (`lower_iter::eval_net_untimed`).
+    pub fn get(self, line: &[Option<bool>]) -> bool {
+        let v1 = line[self.line1.0 as usize].expect("1-line driven");
+        let v0 = line[self.line0.0 as usize].expect("0-line driven");
+        debug_assert_ne!(v0, v1, "INV-TOKEN violated: pair not 1-of-2");
+        v1
+    }
 }
 
 /// Cell kind: the k-CSWAP family (ADR-0027) plus the controlled

@@ -23,6 +23,14 @@ fn block_swap_sigma(la: usize, lb: usize) -> Vec<usize> {
     (la..la + lb).chain(0..la).collect()
 }
 
+/// σ for the associativity/unit reassociations (Assoc{L,R}, Unit{e,i}) in
+/// either monoid: reassociation only reparenthesizes -- the flattened
+/// slot order is unchanged -- so σ is the identity over the input layer's
+/// slot count. One definition for all eight such sites.
+fn assoc_permute(monoid: Monoid, input: &Type) -> Vec<usize> {
+    identity_sigma(flatten_layer(monoid, input).len())
+}
+
 /// Canonicalize a Core Π iso term into the typed netlist IR. Fails only
 /// on ill-typed terms.
 ///
@@ -53,7 +61,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
                 output: output.clone(),
                 kind: NodeKind::Permute {
                     monoid: Monoid::Prod,
-                    sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
+                    sigma: assoc_permute(Monoid::Prod, &input),
                 },
             })
         }
@@ -130,7 +138,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
                 output,
                 kind: NodeKind::Permute {
                     monoid: Monoid::Prod,
-                    sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
+                    sigma: assoc_permute(Monoid::Prod, &input),
                 },
             })
         }
@@ -142,7 +150,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
                 output,
                 kind: NodeKind::Permute {
                     monoid: Monoid::Prod,
-                    sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
+                    sigma: assoc_permute(Monoid::Prod, &input),
                 },
             })
         }
@@ -154,7 +162,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
                 output,
                 kind: NodeKind::Permute {
                     monoid: Monoid::Prod,
-                    sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
+                    sigma: assoc_permute(Monoid::Prod, &input),
                 },
             })
         }
@@ -166,7 +174,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
                 output,
                 kind: NodeKind::Permute {
                     monoid: Monoid::Prod,
-                    sigma: identity_sigma(flatten_layer(Monoid::Prod, &input).len()),
+                    sigma: assoc_permute(Monoid::Prod, &input),
                 },
             })
         }
@@ -195,7 +203,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
                 output,
                 kind: NodeKind::Permute {
                     monoid: Monoid::Sum,
-                    sigma: identity_sigma(flatten_layer(Monoid::Sum, &input).len()),
+                    sigma: assoc_permute(Monoid::Sum, &input),
                 },
             })
         }
@@ -207,7 +215,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
                 output,
                 kind: NodeKind::Permute {
                     monoid: Monoid::Sum,
-                    sigma: identity_sigma(flatten_layer(Monoid::Sum, &input).len()),
+                    sigma: assoc_permute(Monoid::Sum, &input),
                 },
             })
         }
@@ -219,7 +227,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
                 output,
                 kind: NodeKind::Permute {
                     monoid: Monoid::Sum,
-                    sigma: identity_sigma(flatten_layer(Monoid::Sum, &input).len()),
+                    sigma: assoc_permute(Monoid::Sum, &input),
                 },
             })
         }
@@ -231,7 +239,7 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
                 output,
                 kind: NodeKind::Permute {
                     monoid: Monoid::Sum,
-                    sigma: identity_sigma(flatten_layer(Monoid::Sum, &input).len()),
+                    sigma: assoc_permute(Monoid::Sum, &input),
                 },
             })
         }

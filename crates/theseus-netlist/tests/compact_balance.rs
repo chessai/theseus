@@ -16,13 +16,8 @@ use theseus_netlist::{
     balance, balance_compact, bits_of, lower, lower_iso, prim_from_bits, simulate,
 };
 
-fn bit() -> Type {
-    Type::sum(Type::One, Type::One)
-}
-
-fn three_bits() -> Type {
-    Type::prod(bit(), Type::prod(bit(), bit()))
-}
+mod common;
+use common::*;
 
 fn fredkin_prim() -> theseus_core::PrimDef {
     prim_from_bits("fredkin", three_bits(), three_bits(), |b| {

@@ -11,16 +11,10 @@ use std::collections::BTreeMap;
 use theseus_core::{enumerate_values, type_of, Iso, PrimDef, Type};
 use theseus_netlist::{
     bits_of, lower_iso, prim_from_bits, rail_width, value_from_bits, CellKind, PhasedCellNetlist,
-    RailPair,
 };
 
-fn bit() -> Type {
-    Type::sum(Type::One, Type::One)
-}
-
-fn three_bits() -> Type {
-    Type::prod(bit(), Type::prod(bit(), bit()))
-}
+mod common;
+use common::*;
 
 fn fredkin_prim() -> PrimDef {
     prim_from_bits("fredkin", three_bits(), three_bits(), |b| {
@@ -29,37 +23,10 @@ fn fredkin_prim() -> PrimDef {
     .unwrap()
 }
 
-/// Untimed functional evaluation of the cell netlist: propagate token
-/// values line by line, asserting INV-TOKEN at every pair read.
-fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
-    let mut line: Vec<Option<bool>> = vec![None; net.num_lines as usize];
-    fn set_pair(line: &mut [Option<bool>], p: RailPair, v: bool) {
-        line[p.line1.0 as usize] = Some(v);
-        line[p.line0.0 as usize] = Some(!v);
-    }
-    fn get_pair(line: &[Option<bool>], p: RailPair) -> bool {
-        let v1 = line[p.line1.0 as usize].expect("1-line driven");
-        let v0 = line[p.line0.0 as usize].expect("0-line driven");
-        assert_ne!(v0, v1, "INV-TOKEN violated: pair not 1-of-2");
-        v1
-    }
-
-    assert_eq!(input_bits.len(), net.inputs.len());
-    for (&p, &v) in net.inputs.iter().zip(input_bits) {
-        set_pair(&mut line, p, v);
-    }
-    for cell in &net.cells {
-        let vals: Vec<bool> = cell.inputs.iter().map(|&p| get_pair(&line, p)).collect();
-        let outs = cell.kind.eval(&vals);
-        for (&p, &v) in cell.outputs.iter().zip(&outs) {
-            set_pair(&mut line, p, v);
-        }
-    }
-    net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
-}
-
-/// The differential oracle: for every input value, the lowered netlist's
-/// untimed evaluation must agree with `theseus_eval::eval`.
+/// The differential oracle (ancilla-free, `lower_iso`): for every input
+/// value, the lowered netlist's untimed evaluation must agree with
+/// `theseus_eval::eval`. Kept local: this variant carries no ancillas
+/// (unlike the shared `common::assert_lowering_agrees`).
 fn assert_lowering_agrees(iso: &Iso) -> PhasedCellNetlist {
     let (in_ty, out_ty) = type_of(iso).expect("iso types");
     let net = lower_iso(iso).expect("lowering succeeds");

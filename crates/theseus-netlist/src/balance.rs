@@ -155,8 +155,7 @@ impl CompactBalanced {
         // high[line] = the line's logical value; None until driven.
         let mut high: Vec<Option<bool>> = vec![None; self.net.num_lines as usize];
         for (p, &tok) in self.net.inputs.iter().zip(input_tokens) {
-            high[p.line1.0 as usize] = Some(tok);
-            high[p.line0.0 as usize] = Some(!tok);
+            p.set(&mut high, tok);
         }
 
         // Walk active cells in topological order and evaluate.
@@ -168,8 +167,7 @@ impl CompactBalanced {
                 .collect();
             let outs = cell.kind.eval(&ins);
             for (p, &v) in cell.outputs.iter().zip(&outs) {
-                high[p.line1.0 as usize] = Some(v);
-                high[p.line0.0 as usize] = Some(!v);
+                p.set(&mut high, v);
             }
         }
 

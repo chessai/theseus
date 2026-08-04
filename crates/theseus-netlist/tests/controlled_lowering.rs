@@ -5,89 +5,10 @@
 //! These tests exercise the differential oracle over the WHOLE finite
 //! domain for elaborated controlled-NOT, Toffoli, and swapMaybe.
 
-use theseus_core::{enumerate_values, type_of, Iso, Type};
-use theseus_netlist::lower::lower_iso_with_ancillas;
-use theseus_netlist::{bits_of, rail_width, PhasedCellNetlist, RailPair};
+use theseus_core::{Iso, Type};
 
-fn bit() -> Type {
-    Type::sum(Type::One, Type::One)
-}
-
-/// Untimed functional evaluation of the cell netlist, with support for
-/// ancilla inputs (seeded with their real init values from
-/// `lower_iso_with_ancillas`).
-fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
-    let mut line: Vec<Option<bool>> = vec![None; net.num_lines as usize];
-    fn set_pair(line: &mut [Option<bool>], p: RailPair, v: bool) {
-        line[p.line1.0 as usize] = Some(v);
-        line[p.line0.0 as usize] = Some(!v);
-    }
-    fn get_pair(line: &[Option<bool>], p: RailPair) -> bool {
-        let v1 = line[p.line1.0 as usize].expect("1-line driven");
-        let v0 = line[p.line0.0 as usize].expect("0-line driven");
-        assert_ne!(v0, v1, "INV-TOKEN violated: pair not 1-of-2");
-        v1
-    }
-
-    assert_eq!(input_bits.len(), net.inputs.len());
-    for (&p, &v) in net.inputs.iter().zip(input_bits) {
-        set_pair(&mut line, p, v);
-    }
-    for cell in &net.cells {
-        let vals: Vec<bool> = cell.inputs.iter().map(|&p| get_pair(&line, p)).collect();
-        let outs = cell.kind.eval(&vals);
-        for (&p, &v) in cell.outputs.iter().zip(&outs) {
-            set_pair(&mut line, p, v);
-        }
-    }
-    net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
-}
-
-/// Provide data bits plus the lowering's real ancilla init values.
-fn extend_with_ancilla(data_bits: &[bool], ancillas: &[bool]) -> Vec<bool> {
-    let mut bits = data_bits.to_vec();
-    bits.extend_from_slice(ancillas);
-    bits
-}
-
-/// Differential oracle: for every input value, the lowered netlist's
-/// untimed evaluation must agree with `theseus_eval::eval`.  Handles
-/// ancilla inputs/outputs transparently.
-fn assert_lowering_agrees(iso: &Iso) -> PhasedCellNetlist {
-    let (in_ty, out_ty) = type_of(iso).expect("iso types");
-    let (net, ancillas) = lower_iso_with_ancillas(iso).expect("lowering succeeds");
-    assert_eq!(net.validate(), Ok(()), "lowered netlist validates");
-    let n_data_out = rail_width(&out_ty).unwrap();
-    for v in enumerate_values(&in_ty) {
-        let data_bits = bits_of(&v, &in_ty).unwrap();
-        let full_input = extend_with_ancilla(&data_bits, &ancillas);
-        let got_full = eval_cells(&net, &full_input);
-        let got = &got_full[..n_data_out];
-        let mut fuel = 10_000u64;
-        let expected = theseus_eval::eval(iso, v.clone(), &mut fuel)
-            .unwrap_or_else(|e| panic!("core eval failed on {v:?}: {e:?}"));
-        assert_eq!(
-            got,
-            &bits_of(&expected, &out_ty).unwrap()[..],
-            "netlist disagrees with core eval on {v:?}"
-        );
-    }
-    net
-}
-
-// ── Helper: elaborate a Theseus source program to an Iso ────────────
-
-fn elaborate(src: &str, iso_name: &str) -> Iso {
-    let program = theseus_syntax::parse(src).expect("parse");
-    let diags = theseus_check::check(&program);
-    assert!(diags.is_empty(), "check diagnostics: {diags:?}");
-    let env = theseus_check::env::resolve(&program);
-    let isos = theseus_check::elaborate::elaborate_program(&program, &env);
-    isos.get(iso_name)
-        .unwrap_or_else(|| panic!("iso {iso_name:?} not found in elaboration"))
-        .clone()
-        .unwrap_or_else(|e| panic!("elaboration of {iso_name:?} failed: {e:?}"))
-}
+mod common;
+use common::*;
 
 // ── Elaborated conformance programs ─────────────────────────────────
 
@@ -103,21 +24,21 @@ iso cnot : (Bit, Bit) <-> (Bit, Bit)
 #[test]
 fn elaborated_cnot_agrees_with_eval() {
     let iso = elaborate(CNOT_SRC, "cnot");
-    assert_lowering_agrees(&iso);
+    assert_lowering_agrees(&iso, 10_000, None);
 }
 
 #[test]
 fn elaborated_toffoli_agrees_with_eval() {
     let src = include_str!("../../../conformance/programs/0006-toffoli.thse");
     let iso = elaborate(src, "tof");
-    assert_lowering_agrees(&iso);
+    assert_lowering_agrees(&iso, 10_000, None);
 }
 
 #[test]
 fn elaborated_swap_maybe_agrees_with_eval() {
     let src = include_str!("../../../conformance/programs/0001-swap-maybe.thse");
     let iso = elaborate(src, "swapMaybe");
-    assert_lowering_agrees(&iso);
+    assert_lowering_agrees(&iso, 10_000, None);
 }
 
 // ── Branch with zero-cell NOT arms (direct Iso construction) ────────
@@ -131,21 +52,21 @@ fn not_iso() -> Iso {
 fn branch_not_id_on_bit_sum() {
     // Plus(NOT, Id) on Bit + Bit: when tag=true, NOT; when tag=false, Id.
     let iso = Iso::plus(not_iso(), Iso::Id(bit()));
-    assert_lowering_agrees(&iso);
+    assert_lowering_agrees(&iso, 10_000, None);
 }
 
 #[test]
 fn branch_id_not_on_bit_sum() {
     // Plus(Id, NOT) on Bit + Bit: when tag=false, NOT; when tag=true, Id.
     let iso = Iso::plus(Iso::Id(bit()), not_iso());
-    assert_lowering_agrees(&iso);
+    assert_lowering_agrees(&iso, 10_000, None);
 }
 
 #[test]
 fn branch_not_not_on_bit_sum() {
     // Plus(NOT, NOT) on Bit + Bit: always NOT (both arms).
     let iso = Iso::plus(not_iso(), not_iso());
-    assert_lowering_agrees(&iso);
+    assert_lowering_agrees(&iso, 10_000, None);
 }
 
 #[test]
@@ -153,7 +74,7 @@ fn branch_id_not_unequal_widths() {
     // Plus(Id(One), NOT) on (One + Bit): swapMaybe-like.
     // wa=0, wb=1.
     let iso = Iso::plus(Iso::Id(Type::One), not_iso());
-    assert_lowering_agrees(&iso);
+    assert_lowering_agrees(&iso, 10_000, None);
 }
 
 #[test]
@@ -161,5 +82,5 @@ fn branch_not_id_unequal_widths() {
     // Plus(NOT, Id(One)) on (Bit + One): NOT on left arm.
     // wa=1, wb=0.
     let iso = Iso::plus(not_iso(), Iso::Id(Type::One));
-    assert_lowering_agrees(&iso);
+    assert_lowering_agrees(&iso, 10_000, None);
 }

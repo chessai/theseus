@@ -176,8 +176,7 @@ pub fn simulate(net: &PhasedCellNetlist, input_tokens: &[bool]) -> Result<SimRes
     // until driven. Dual-rail encode the inputs at tick 0.
     let mut high: Vec<Option<bool>> = vec![None; net.num_lines as usize];
     for (p, &tok) in net.inputs.iter().zip(input_tokens) {
-        high[p.line1.0 as usize] = Some(tok);
-        high[p.line0.0 as usize] = Some(!tok);
+        p.set(&mut high, tok);
     }
 
     let ticks = net.depth();
@@ -204,8 +203,7 @@ pub fn simulate(net: &PhasedCellNetlist, input_tokens: &[bool]) -> Result<SimRes
                     .collect();
                 let outs = cell.kind.eval(&ins);
                 for (p, &v) in cell.outputs.iter().zip(&outs) {
-                    high[p.line1.0 as usize] = Some(v);
-                    high[p.line0.0 as usize] = Some(!v);
+                    p.set(&mut high, v);
                 }
             }
         }

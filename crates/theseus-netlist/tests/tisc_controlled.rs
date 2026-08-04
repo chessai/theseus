@@ -35,17 +35,16 @@
 use theseus_core::{adjoint, type_of, Iso, Type, Value};
 use theseus_netlist::{
     balance, bits_of, prim_from_bits, rail_width, simulate, value_from_bits, CellKind,
-    PhasedCellNetlist, RailPair,
+    PhasedCellNetlist,
 };
+
+mod common;
+use common::*;
 
 const W: usize = 8;
 const EVAL_FUEL: u64 = 50_000_000;
 
 // ── Types: Bit, flat bit products, Word8 ────────────────────────────
-
-fn bit() -> Type {
-    Type::sum(Type::One, Type::One)
-}
 
 /// Right-nested product of `n` Bits: `B x (B x (... x B))`, index 0 = LSB.
 fn flat(n: usize) -> Type {
@@ -269,43 +268,6 @@ fn rotl_iso() -> Iso {
 /// ROTR rd, rs = the adjoint of ROTL, per the spec table.
 fn rotr_iso() -> Iso {
     Iso::sym(rotl_iso())
-}
-
-// ── Netlist evaluation helpers (same pattern as the sibling tests) ──
-
-/// Untimed functional evaluation of the cell netlist.
-fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
-    let mut line: Vec<Option<bool>> = vec![None; net.num_lines as usize];
-    fn set_pair(line: &mut [Option<bool>], p: RailPair, v: bool) {
-        line[p.line1.0 as usize] = Some(v);
-        line[p.line0.0 as usize] = Some(!v);
-    }
-    fn get_pair(line: &[Option<bool>], p: RailPair) -> bool {
-        let v1 = line[p.line1.0 as usize].expect("1-line driven");
-        let v0 = line[p.line0.0 as usize].expect("0-line driven");
-        assert_ne!(v0, v1, "INV-TOKEN violated: pair not 1-of-2");
-        v1
-    }
-    assert_eq!(input_bits.len(), net.inputs.len());
-    for (&p, &v) in net.inputs.iter().zip(input_bits) {
-        set_pair(&mut line, p, v);
-    }
-    for cell in &net.cells {
-        let vals: Vec<bool> = cell.inputs.iter().map(|&p| get_pair(&line, p)).collect();
-        let outs = cell.kind.eval(&vals);
-        for (&p, &v) in cell.outputs.iter().zip(&outs) {
-            set_pair(&mut line, p, v);
-        }
-    }
-    net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
-}
-
-/// Append the lowering's real ancilla init values to the data bits
-/// (positional, from `lower_iso_with_ancillas`).
-fn extend_with_ancilla(data_bits: &[bool], ancillas: &[bool]) -> Vec<bool> {
-    let mut bits = data_bits.to_vec();
-    bits.extend_from_slice(ancillas);
-    bits
 }
 
 // ── Oracle harness ──────────────────────────────────────────────────

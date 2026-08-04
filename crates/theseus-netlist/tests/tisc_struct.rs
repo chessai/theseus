@@ -9,13 +9,12 @@
 //! theseus_eval::eval, and eval matches the reference semantics.
 
 use theseus_core::{type_of, Iso, Type, Value};
-use theseus_netlist::{bits_of, prim_from_bits, rail_width, CellKind, PhasedCellNetlist, RailPair};
+use theseus_netlist::{bits_of, prim_from_bits, rail_width, CellKind, PhasedCellNetlist};
+
+mod common;
+use common::*;
 
 // ── Type helpers ─────────────────────────────────────────────────────
-
-fn bit() -> Type {
-    Type::sum(Type::One, Type::One)
-}
 
 fn word8() -> Type {
     let b = bit();
@@ -78,42 +77,6 @@ fn decode_pair(v: &Value) -> (u8, u8) {
     } else {
         panic!("expected Pair for word8 pair");
     }
-}
-
-// ── Untimed netlist evaluator (with ancilla support) ─────────────────
-
-fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
-    let mut line: Vec<Option<bool>> = vec![None; net.num_lines as usize];
-    fn set_pair(line: &mut [Option<bool>], p: RailPair, v: bool) {
-        line[p.line1.0 as usize] = Some(v);
-        line[p.line0.0 as usize] = Some(!v);
-    }
-    fn get_pair(line: &[Option<bool>], p: RailPair) -> bool {
-        let v1 = line[p.line1.0 as usize].expect("1-line driven");
-        let v0 = line[p.line0.0 as usize].expect("0-line driven");
-        assert_ne!(v0, v1, "INV-TOKEN violated");
-        v1
-    }
-    assert_eq!(input_bits.len(), net.inputs.len());
-    for (&p, &v) in net.inputs.iter().zip(input_bits) {
-        set_pair(&mut line, p, v);
-    }
-    for cell in &net.cells {
-        let vals: Vec<bool> = cell.inputs.iter().map(|&p| get_pair(&line, p)).collect();
-        let outs = cell.kind.eval(&vals);
-        for (&p, &v) in cell.outputs.iter().zip(&outs) {
-            set_pair(&mut line, p, v);
-        }
-    }
-    net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
-}
-
-/// Append the lowering's real ancilla init values to the data bits
-/// (positional, from `lower_iso_with_ancillas`).
-fn extend_with_ancilla(data_bits: &[bool], ancillas: &[bool]) -> Vec<bool> {
-    let mut bits = data_bits.to_vec();
-    bits.extend_from_slice(ancillas);
-    bits
 }
 
 // ── Right-nested product helper ──────────────────────────────────────

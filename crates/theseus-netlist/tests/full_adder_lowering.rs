@@ -11,61 +11,12 @@
 //! all -- and its lowering is ancilla-clean (asserted below). K2/K3
 //! promotion is still exercised by the Branch/iter tests.
 
-use theseus_core::{enumerate_values, type_of, Iso};
+use theseus_core::{enumerate_values, type_of};
 use theseus_netlist::lower::lower_iso_with_ancillas;
-use theseus_netlist::{
-    balance, bits_of, rail_width, simulate, CellKind, PhasedCellNetlist, RailPair,
-};
+use theseus_netlist::{balance, bits_of, rail_width, simulate, CellKind};
 
-/// Untimed functional evaluation of the cell netlist with ancilla support.
-fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
-    let mut line: Vec<Option<bool>> = vec![None; net.num_lines as usize];
-    fn set_pair(line: &mut [Option<bool>], p: RailPair, v: bool) {
-        line[p.line1.0 as usize] = Some(v);
-        line[p.line0.0 as usize] = Some(!v);
-    }
-    fn get_pair(line: &[Option<bool>], p: RailPair) -> bool {
-        let v1 = line[p.line1.0 as usize].expect("1-line driven");
-        let v0 = line[p.line0.0 as usize].expect("0-line driven");
-        assert_ne!(v0, v1, "INV-TOKEN violated: pair not 1-of-2");
-        v1
-    }
-
-    assert_eq!(input_bits.len(), net.inputs.len());
-    for (&p, &v) in net.inputs.iter().zip(input_bits) {
-        set_pair(&mut line, p, v);
-    }
-    for cell in &net.cells {
-        let vals: Vec<bool> = cell.inputs.iter().map(|&p| get_pair(&line, p)).collect();
-        let outs = cell.kind.eval(&vals);
-        for (&p, &v) in cell.outputs.iter().zip(&outs) {
-            set_pair(&mut line, p, v);
-        }
-    }
-    net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
-}
-
-/// Append the lowering's real ancilla init values to the data bits
-/// (positional, from `lower_iso_with_ancillas`).
-fn extend_with_ancilla(data_bits: &[bool], ancillas: &[bool]) -> Vec<bool> {
-    let mut bits = data_bits.to_vec();
-    bits.extend_from_slice(ancillas);
-    bits
-}
-
-// ── Helper: elaborate a Theseus source program to an Iso ────────────
-
-fn elaborate(src: &str, iso_name: &str) -> Iso {
-    let program = theseus_syntax::parse(src).expect("parse");
-    let diags = theseus_check::check(&program);
-    assert!(diags.is_empty(), "check diagnostics: {diags:?}");
-    let env = theseus_check::env::resolve(&program);
-    let isos = theseus_check::elaborate::elaborate_program(&program, &env);
-    isos.get(iso_name)
-        .unwrap_or_else(|| panic!("iso {iso_name:?} not found in elaboration"))
-        .clone()
-        .unwrap_or_else(|e| panic!("elaboration of {iso_name:?} failed: {e:?}"))
-}
+mod common;
+use common::*;
 
 // ── Full adder source generation ────────────────────────────────────
 

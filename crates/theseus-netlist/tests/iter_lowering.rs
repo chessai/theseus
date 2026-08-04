@@ -12,80 +12,36 @@ use std::collections::BTreeMap;
 
 use theseus_core::{enumerate_values, type_of, Iso, PrimDef, Type, Value};
 use theseus_netlist::lower::lower_iso_with_ancillas;
-use theseus_netlist::{bits_of, rail_width, CellKind, PhasedCellNetlist, RailPair};
+use theseus_netlist::{bits_of, rail_width, CellKind, PhasedCellNetlist};
 
-fn bit() -> Type {
-    Type::sum(Type::One, Type::One)
-}
+mod common;
+use common::*;
 
 fn three_ty() -> Type {
     Type::sum(Type::One, bit())
 }
 
-/// Untimed functional evaluation of the cell netlist.  All input pairs
-/// (data + ancilla) must be provided in `input_bits`.
-fn eval_cells(net: &PhasedCellNetlist, input_bits: &[bool]) -> Vec<bool> {
-    let mut line: Vec<Option<bool>> = vec![None; net.num_lines as usize];
-    fn set_pair(line: &mut [Option<bool>], p: RailPair, v: bool) {
-        line[p.line1.0 as usize] = Some(v);
-        line[p.line0.0 as usize] = Some(!v);
-    }
-    fn get_pair(line: &[Option<bool>], p: RailPair) -> bool {
-        let v1 = line[p.line1.0 as usize].expect("1-line driven");
-        let v0 = line[p.line0.0 as usize].expect("0-line driven");
-        assert_ne!(v0, v1, "INV-TOKEN violated: pair not 1-of-2");
-        v1
-    }
-
-    assert_eq!(input_bits.len(), net.inputs.len());
-    for (&p, &v) in net.inputs.iter().zip(input_bits) {
-        set_pair(&mut line, p, v);
-    }
-    for cell in &net.cells {
-        let vals: Vec<bool> = cell.inputs.iter().map(|&p| get_pair(&line, p)).collect();
-        let outs = cell.kind.eval(&vals);
-        for (&p, &v) in cell.outputs.iter().zip(&outs) {
-            set_pair(&mut line, p, v);
-        }
-    }
-    net.outputs.iter().map(|&p| get_pair(&line, p)).collect()
-}
-
-/// Differential oracle: for every input value, the lowered netlist's
-/// untimed evaluation must agree with `theseus_eval::eval`; the net
-/// must validate, balance, and stay within the admitted vocabulary
-/// (K0-K3 CSWAPs + the R1 rail-role swap, ADR-0040).
+/// Differential oracle over the whole finite domain (fuel 100_000), plus
+/// this suite's extra invariant: every produced net must stay within the
+/// K0-K3 + R1 vocabulary and balance cleanly (these nets are tiny).
+/// Delegates the sweep to the shared `common::assert_lowering_agrees`.
 fn assert_lowering_agrees(iso: &Iso) -> PhasedCellNetlist {
-    let (in_ty, out_ty) = type_of(iso).expect("iso types");
-    let (netlist, ancilla_values) = lower_iso_with_ancillas(iso).expect("lowering succeeds");
-    assert_eq!(netlist.validate(), Ok(()), "lowered netlist validates");
-    assert!(
-        netlist
-            .cells
-            .iter()
-            .all(|c| c.kind <= CellKind::K3 || c.kind == CellKind::R1),
-        "no cell outside the K0-K3 + R1 vocabulary (max promotion budget)"
-    );
-    // These nets are tiny: the tick-exact balancer must handle them.
-    let balanced = theseus_netlist::balance(&netlist).expect("netlist balances");
-    assert_eq!(balanced.validate(), Ok(()), "balanced netlist validates");
-
-    let n_data_out = rail_width(&out_ty).unwrap();
-    for v in enumerate_values(&in_ty) {
-        let mut full_input = bits_of(&v, &in_ty).unwrap();
-        full_input.extend_from_slice(&ancilla_values);
-        let got_full = eval_cells(&netlist, &full_input);
-        let got = &got_full[..n_data_out];
-        let mut fuel = 100_000u64;
-        let expected = theseus_eval::eval(iso, v.clone(), &mut fuel)
-            .unwrap_or_else(|e| panic!("core eval failed on {v:?}: {e:?}"));
-        assert_eq!(
-            got,
-            &bits_of(&expected, &out_ty).unwrap()[..],
-            "netlist disagrees with core eval on {v:?}"
-        );
-    }
-    netlist
+    common::assert_lowering_agrees(
+        iso,
+        100_000,
+        Some(&|netlist: &PhasedCellNetlist| {
+            assert!(
+                netlist
+                    .cells
+                    .iter()
+                    .all(|c| c.kind <= CellKind::K3 || c.kind == CellKind::R1),
+                "no cell outside the K0-K3 + R1 vocabulary (max promotion budget)"
+            );
+            // These nets are tiny: the tick-exact balancer must handle them.
+            let balanced = theseus_netlist::balance(netlist).expect("netlist balances");
+            assert_eq!(balanced.validate(), Ok(()), "balanced netlist validates");
+        }),
+    )
 }
 
 /// Same oracle against the TIMED phased simulation of the balanced
