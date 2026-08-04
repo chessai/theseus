@@ -48,6 +48,21 @@ characterized silicon -- and, at the top of the stack, a reversible **CPU**
 Canonical branch: **`chessai/theseus-v2`** (unpushed). Tip `216d4cd` (docs/POC refs only);
 last MERGED code milestone `e918e33` (below).
 
+> **Lean meta-theory expanded (2026-08-03, merged `04c9bec`).** The machine-checked
+> core (Lean 4 / Mathlib, `theseus-proofs/`) now covers, beyond TH-1 forward
+> termination: TH-1's **mutual-inverse / backward run** (`trace_mutual_inverse`,
+> `run_symm_entry`) and the **per-input class-wide carrier bound** (`traj_card_bound`,
+> `Σ_{x∈S} fuel x ≤ |u|`); and **reversibility-by-construction** over the full
+> reversible-rig iso algebra (`denote_bijective`), the two-sided adjoint laws, finite
+> `iter`, the genuine ADR-0037 **accumulator fold** (`foldAcc`/`unfoldAcc` mutual
+> inverse -- not the degenerate cellwise map), and the SWAPBR come-from involution.
+> Each theorem is paired with a natural-language proof (`theory/reversibility.md`,
+> `theory/finite-trace-totality.md`) and an obligation-ledger row; `#print axioms`
+> on every key theorem reduces to `{propext, Classical.choice, Quot.sound}` (no
+> `sorry`/`native_decide`). Fresh-context cross-model adversarial review passed; its
+> two blocking findings (fold accumulator, per-input Σ bound) were mechanized, not
+> re-scoped.
+
 > **IN FLIGHT -- T-loops Slice A: narrow the fetch address-compare** (not yet merged; see
 > memory `tloops-fetch-narrow-state`). fetch compares a
 > full-W `PC==addr` per ROM entry, but the PC only ever ∈ [0,B) so its high bits are provably zero →
