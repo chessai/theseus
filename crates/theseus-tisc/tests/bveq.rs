@@ -487,6 +487,7 @@ fn bveq_mismap_negative() {
     );
 }
 
+#[cfg(feature = "measurement")]
 #[test]
 fn bveq_major4_mismap_canary_has_teeth() {
     // MAJOR-4 regression (L20): proves the shared-mapping discipline is

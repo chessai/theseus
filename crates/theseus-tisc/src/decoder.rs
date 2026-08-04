@@ -29,7 +29,7 @@
 //!
 //!    **Reserved opcodes.** The predicates test only the **low 4** opcode
 //!    bits (R) / **low 3** (I) -- the two high opcode bits are NOT tested
-//!    (MAJOR-3, widening deferred: `pred_compute` caps at 5 controls and
+//!    (widening deferred: `pred_compute` caps at 5 controls and
 //!    s1 bit 4 is CSWAP's control copy, so fmt + 6 opcode bits = 7 controls
 //!    do not fit without the s1-convention rework). Consequently a word
 //!    whose HIGH opcode bits are set ALIASES the live op with the same low
@@ -445,7 +445,7 @@ pub fn operand_field(i: usize) -> usize {
 /// swaps `base(i) ↔ base(i+8)` for i = 2..8, bringing a scratch word
 /// into the register half when the operand names scratch.
 ///
-/// A-0 BLOCKER-1 fix (scratch-rd operand crossbar): the level-3 swap
+/// A-0 fix (scratch-rd operand crossbar): the level-3 swap
 /// range starts at **i = 2**, NOT i = 0. `base(8)` and `base(9)` are
 /// `s0`/`s1` -- the fixed operand buffer (`AUX_OPERAND_FIELD`) and the
 /// predicate word (`AUX_PRED_FIELD`), which are decoder-reserved and
@@ -477,7 +477,7 @@ pub fn operand_field(i: usize) -> usize {
 ///     hardcoded 8. Deeper scratch levels (present only when `num_scratch >
 ///     num_regs`) route within the descended half.
 ///
-/// **s0/s1 protection (A-0 BLOCKER-1 + B-2.1b review F2).** Operand positions
+/// **s0/s1 protection (A-0 + B-2.1b review).** Operand positions
 /// `num_regs` and `num_regs+1` are `s0`/`s1` -- the reserved operand buffer
 /// (`AUX_OPERAND_FIELD`) and predicate/config word (`AUX_PRED_FIELD`, which
 /// holds B-1's config one-hots), never legal operands. NO swap at ANY level may
@@ -522,7 +522,7 @@ pub fn select_operand_l(layout: &Layout, sel: RegSel, base: impl Fn(usize) -> us
             // `AUX_PRED_FIELD`) are IMMOVABLE: NO swap at ANY level may touch
             // them. Otherwise, at a reduced `num_regs`, a descent level would
             // displace s0 / corrupt the s1 config word mid-instruction -- and the
-            // s1 config one-hots are B-1's load-bearing state (B-2.1b review F2).
+            // s1 config one-hots are B-1's load-bearing state (B-2.1b review).
             // At `num_regs = 8` this position-based exclusion is exactly the
             // split-level `(0,8)/(1,9)` skip -- BYTE-IDENTICAL to the shipped
             // topology; at `num_regs < 8` it also kills the descent-level
@@ -807,7 +807,7 @@ fn gated_rotl_gates_w(
     t0: usize,
     ctrl: impl Fn(usize) -> usize,
 ) -> Vec<Iso> {
-    // B-2.1c review MAJOR-3: the barrel rotator uses `log2(w)` shift stages,
+    // B-2.1c review: the barrel rotator uses `log2(w)` shift stages,
     // valid ONLY for a power-of-two data-word width. At a non-pow-2 `w` (e.g.
     // Flat(5)/Flat(6) from a future w_data auto-derive) `trailing_zeros` silently
     // under-counts the stages → Rotl degenerates toward identity with no error.
@@ -841,16 +841,16 @@ fn gated_rotl_gates_w(
 ///
 /// B-2.1a: the swap moves a `word8()` (control-width) field, and
 /// `select_operand` routes over `layout.num_regs`; both derive from `layout`.
-/// W_BR-b: the swap is lifted via `at_fields_typed(.., &layout.cpu_field_widths())`
+/// The swap is lifted via `at_fields_typed(.., &layout.cpu_field_widths())`
 /// (the layout's real field carrier), not the default-carrier `at_fields`.
 fn fetch_operand(layout: &Layout, src: RegSel) -> Iso {
-    // A-0 (BLOCKER-2 fix): route over reg∪scratch (the full 16-way
+    // A-0 fix: route over reg∪scratch (the full 16-way
     // crossbar), not the 8-way register-only tree. A register operand
     // (idx 0..8) has operand-bit 3 = 0, so the top crossbar level is
     // inert and behaviour is identical to the old `select_reg`; a scratch
     // operand (idx 8..16) brings s[idx-8] to the fixed slot `operand_field(0)`.
     let sel = select_operand_l(layout, src, |i| operand_field_l(layout, i));
-    // B-2.1/W_BR-b: lift the operand↔s0 swap over the ACTUAL per-layout field
+    // B-2.1: lift the operand↔s0 swap over the ACTUAL per-layout field
     // carrier (`cpu_field_widths()`), NOT the hardcoded-default `at_fields`
     // (which fixes the carrier at `NUM_FIELDS` = 23, the w_br=8 count). At a
     // widened layout (w_br=16 → 24 CPU fields) the default carrier is off by a
@@ -870,7 +870,7 @@ fn fetch_operand(layout: &Layout, src: RegSel) -> Iso {
 }
 
 /// Route operand `sel` (over reg∪scratch) to the fixed slot, apply
-/// `core`, route back. A-0 (BLOCKER-2 fix): the crossbar spans reg∪scratch.
+/// `core`, route back. A-0 fix: the crossbar spans reg∪scratch.
 fn with_target(layout: &Layout, sel: RegSel, core: Iso) -> Iso {
     let s = select_operand_l(layout, sel, |i| operand_field_l(layout, i));
     Iso::seq(s.clone(), Iso::seq(core, Iso::sym(s)))
@@ -1064,7 +1064,7 @@ fn cswap_instr(layout: &Layout) -> Iso {
 /// CcnotNotDistinct.
 /// CCNOT's rt→BR swap-fetch bracket (self-inverse). select_operand(R_RT)
 /// routes the (reg∪scratch) operand rt to the fixed r0-slot, swaps it ↔
-/// BR, then routes back. A-0 (BLOCKER-2 fix): reg∪scratch crossbar.
+/// BR, then routes back. A-0 fix: reg∪scratch crossbar.
 /// Content-agnostic: whatever was in BR rides in operand rt's cell.
 ///
 /// Split out (A-0 shared-crossbar) so it can be hoisted as a shared
@@ -1073,7 +1073,7 @@ fn cswap_instr(layout: &Layout) -> Iso {
 /// crossbar (but inside/beside `fetch_rs`, disjoint slots).
 fn ccnot_fetch_rt_br(layout: &Layout) -> Iso {
     let sel_rt = select_operand_l(layout, R_RT, |i| operand_field_l(layout, i));
-    // B-2.1/W_BR-b: same latent carrier bug as `fetch_operand` -- lift the
+    // B-2.1: same latent carrier bug as `fetch_operand` -- lift the
     // r0-slot↔BR swap over the ACTUAL per-layout field carrier, not the
     // hardcoded-default `at_fields`. This replicated CCNOT fetch is not on the
     // shared step path (the step uses `shared_fetch_rt_br_gated`), but it is
@@ -1168,7 +1168,7 @@ fn ccnot_instr(layout: &Layout) -> Iso {
 
 /// XCHG rd, sx: gated swap of the routed register and scratch slots.
 ///
-/// A-0 (BLOCKER-1 fix): the scratch crossbar scrambles s1's position, so
+/// A-0 fix: the scratch crossbar scrambles s1's position, so
 /// the predicate cannot be read directly at the swap. It is instead copied
 /// onto IR[0] (a routing-stable IR wire), which the reg/scratch crossbars
 /// never touch. But A-0 turned IR[0] into the I-format immediate LSB, so
@@ -1295,7 +1295,7 @@ fn cross_factor_gated_swap(
 fn swapbr_core(layout: &Layout) -> Iso {
     let w = layout.w_data;
     let wc = layout.w_ctl;
-    // W_BR-b: the come-from swap is the TWO-transposition involution
+    // The come-from swap is the TWO-transposition involution
     //   swap(r[rd], BR_lo) ; swap(r[rs], BR_hi)
     // -- the r[rd]↔BR_lo swap runs on the ROUTED r0-slot (rd), the r[rs]↔BR_hi
     // swap runs on the s0-slot (rs was fetched there by `swapbr_instr`'s
@@ -1307,7 +1307,7 @@ fn swapbr_core(layout: &Layout) -> Iso {
     // low transposition is emitted -- byte-identical to the shipped one-operand
     // SWAPBR (the s0-slot↔BR_hi gates simply do not exist). The high gates are
     // added under `br_fields()==2` ONLY, so the w_br=8 netlist is unchanged
-    // (MINOR-B, the golden guards this).
+    // (the golden guards this).
     let wide = layout.br_fields() >= 2;
 
     if !wide {
@@ -1355,9 +1355,9 @@ fn swapbr_core(layout: &Layout) -> Iso {
 }
 
 fn swapbr_instr(layout: &Layout) -> Iso {
-    // A-0 (BLOCKER-2 fix): route rd over reg∪scratch.
+    // A-0 fix: route rd over reg∪scratch.
     let core = with_target(layout, R_RD, swapbr_core(layout));
-    // W_BR-b: at w_br=16 ONLY, fetch r[rs] into the s0-slot (like
+    // At w_br=16 ONLY, fetch r[rs] into the s0-slot (like
     // `with_two_regs`) so swapbr_core's high transposition can pair r[rs] with
     // BR_hi. The fetch bracket ADDS cells, so it is gated on `br_fields()==2` --
     // at w_br=8 the block is EXACTLY the shipped `predicated(with_target(R_RD,
@@ -1534,7 +1534,7 @@ pub fn instruction(op: Op) -> Iso {
 /// B-2.1a: layout-parameterized [`instruction`]. The zero-arg entry
 /// delegates at `Layout::default()`.
 pub fn instruction_l(layout: &Layout, op: Op) -> Iso {
-    // B-2.1c review MAJOR-1: this LEGACY replicated per-op path (fetch_operand +
+    // B-2.1c review: this LEGACY replicated per-op path (fetch_operand +
     // per-op cores) is NOT yet mixed-width-safe -- its brackets/cores still assume
     // uniform width (k·w offsets, `SwapProd(word8,word8)`). Every caller today
     // passes the default layout; fail LOUD if invoked at a reduced w_data before
@@ -1638,6 +1638,10 @@ pub fn decode_execute_ops(ops: &[Op]) -> Iso {
 ///
 /// Swapbr / Ccnot / Cswap / Xchg stay separate (their brackets differ --
 /// see `decode_execute_shared`).
+///
+/// MEASUREMENT-ONLY: the pre-B1.3 reg+imm block, reachable only via
+/// `reg_imm_shared_for_measurement`. The wired decoder uses `shared_alu_block`.
+#[cfg(feature = "measurement")]
 fn reg_imm_shared(layout: &Layout) -> Iso {
     let fetch_rs = fetch_rs_fmt_gated(layout);
     let inner = with_target(layout, R_RD, reg_imm_alu(layout));
@@ -1768,6 +1772,9 @@ fn imm_to_a(layout: &Layout) -> Iso {
 /// cores). Kept ONLY so `poc_b11_shared_alu_measure` can lower it and
 /// report the Group-A-portion delta vs the shared configurable ALU
 /// (`group_a_shared`). NOT wired into the decoder.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn group_a_pre_b11_for_measurement() -> Iso {
     let l = &Layout::default();
     let cores = seq_balanced(vec![
@@ -1786,6 +1793,9 @@ pub fn group_a_pre_b11_for_measurement() -> Iso {
 /// group_a_alu_view())` -- the register-only fold (no imm A-source, no
 /// I-format config lines), kept so the B1.1 Group-A-portion Δ is still
 /// reproducible after the unification.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn group_a_shared_for_measurement() -> Iso {
     let l = &Layout::default();
     with_two_regs(l, R_RD, R_RS, group_a_alu_view(l))
@@ -1794,16 +1804,22 @@ pub fn group_a_shared_for_measurement() -> Iso {
 /// B1.2 measurement hook: the UNIFIED reg+imm block (was group_a_shared +
 /// group_b_shared). Its balanced cell mass vs (B1.1 group_a + group_b) is
 /// the apples-to-apples "did we remove the group_b block" number.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn reg_imm_shared_for_measurement() -> Iso {
     reg_imm_shared(&Layout::default())
 }
 
 /// B1.3 measurement/equiv hook: the UNIVERSAL 3-operand shared block
-/// (reg+imm + Ccnot + Cswap). Its balanced mass vs the pre-B1.3 (reg_imm
-/// 185864 + ccnot 75520 + cswap 63770) is the "did the two private
+/// (reg+imm + Ccnot + Cswap). Its balanced mass vs the pre-B1.3 sum of the
+/// separate reg_imm, ccnot, and cswap blocks is the "did the two private
 /// crossbars collapse" number; it is also the isolated block the B1.3
 /// whole-domain equiv test evaluates (all other blocks -- xchg/swapbr -- are
 /// the identity for reg+imm/ccnot/cswap opcodes).
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn shared_alu_block_for_measurement() -> Iso {
     shared_alu_block(&Layout::default())
 }
@@ -1811,6 +1827,9 @@ pub fn shared_alu_block_for_measurement() -> Iso {
 /// B1.2 measurement hook: the pre-B1.2 group_b (5 per-op predicated
 /// immediate cores under one shared sel_rd), so its balanced mass can be
 /// summed with B1.1's group_a for the removal comparison. NOT wired.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn group_b_pre_b12_for_measurement() -> Iso {
     let l = &Layout::default();
     let sel_rd = select_operand(R_RD, operand_field);
@@ -1828,6 +1847,9 @@ pub fn group_b_pre_b12_for_measurement() -> Iso {
 /// each block's BALANCED cell mass can be measured individually. This
 /// grounds the B-1 re-sequencing decision -- where the un-shared *routing*
 /// mass actually lives (the controlled ops each carry a PRIVATE crossbar).
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature.
+#[cfg(feature = "measurement")]
 pub fn decode_blocks_for_measurement() -> Vec<(&'static str, Iso)> {
     let l = &Layout::default();
     vec![
@@ -2060,6 +2082,10 @@ fn alu_config_decode_families(layout: &Layout, include_i: bool) -> Iso {
 /// adjoint gated on `CFG_ROT_REV` (`Iso::sym` of the config-wired forward
 /// block, so the whole reverse block still carries the config line as its
 /// per-gate control).
+///
+/// MEASUREMENT-ONLY: reachable only through `reg_imm_shared`. The wired
+/// decoder's ALU cores live inside `shared_alu_block`.
+#[cfg(feature = "measurement")]
 fn reg_imm_alu(layout: &Layout) -> Iso {
     let imm = imm_to_a(layout);
     let decode = alu_config_decode(layout);
@@ -2161,7 +2187,8 @@ fn cswap_core_at(layout: &Layout, cfg: usize) -> Iso {
 /// six cores don't consume (they're computed + uncomputed, unused here), so
 /// this is no longer bit-identical to the pre-B1.2 `group_a_alu` -- treat the
 /// number as indicative, not exact. Measurement-only; NOT wired into the
-/// decoder (the wired path is `reg_imm_alu` inside `shared_alu_block`).
+/// decoder (the wired ALU path is `shared_alu_block`).
+#[cfg(feature = "measurement")]
 fn group_a_alu_view(layout: &Layout) -> Iso {
     let decode = alu_config_decode_families(layout, false);
     let core = seq_balanced(vec![
@@ -2466,7 +2493,7 @@ pub fn emit_on_cpu_bus() -> Iso {
         let pred_cpu = pred_compute(&layout, &r_pred(0b1001));
         let pred = Iso::times(pred_cpu, bus_id.clone());
 
-        // A-0 (BLOCKER-2 fix): route rd over reg∪scratch (bit3=0 for a
+        // A-0 fix: route rd over reg∪scratch (bit3=0 for a
         // register operand ⇒ inert top level, behaviour unchanged).
         let selr = Iso::times(select_operand(R_RD, operand_field), bus_id.clone());
 

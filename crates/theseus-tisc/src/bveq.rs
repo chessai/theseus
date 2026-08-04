@@ -13,11 +13,11 @@
 //! - biodivine's textbook ROBDD reduce+apply (external, mature)
 //! - our `BvExpr → Bdd` encoder + `Instr → BvExpr` model (this module)
 //! - the SINGLE pinned variable mapping shared by both sides of every
-//!   equivalence (r2 MAJOR-3)
+//!   equivalence
 //!
 //! Defended by: tri-model reconciliation (symbolic ≡ exec_instr ≡ netlist),
 //! Z3 differential cross-check (feature-gated), and the I4 upper-output-bits
-//! obligation (r2 MAJOR-1).
+//! obligation.
 
 use crate::asm::Instr;
 use crate::types::NUM_REGS;
@@ -38,7 +38,7 @@ pub use theseus_core::bvexpr::{eval_expr, BvExpr};
 /// Transfer function for the full register file (NUM_REGS × BITS).
 ///
 /// `regs[r][b]` is the BvExpr for bit `b` of register `r` after the transfer.
-/// Identity for untouched registers. Full-frame (r2 MAJOR-2).
+/// Identity for untouched registers. Full-frame.
 #[derive(Clone, Debug)]
 pub struct RegTransfer {
     pub regs: Vec<Vec<BvExpr>>,
@@ -59,7 +59,7 @@ impl RegTransfer {
     }
 }
 
-// ── VarMap (shared variable mapping -- TCB, r2 MAJOR-3) ──────────────
+// ── VarMap (shared variable mapping -- TCB) ──────────────
 
 /// Pinned variable mapping: `(operand, bit) → BddVariable`.
 ///
@@ -69,7 +69,7 @@ impl RegTransfer {
 ///
 /// **This mapping is TCB.** One instance must be shared by BOTH sides of
 /// every equivalence check. Using different mappings for the two sides
-/// makes unequal functions compare equal (r2 MAJOR-3).
+/// makes unequal functions compare equal.
 pub struct VarMap {
     num_operands: usize,
     bdd_vars: BddVariableSet,
@@ -79,7 +79,7 @@ pub struct VarMap {
 impl VarMap {
     /// Create a new variable map for `num_operands` registers, each `BITS` wide.
     ///
-    /// Returns `Err` if `BITS * num_operands` overflows `u16` (NIT-1).
+    /// Returns `Err` if `BITS * num_operands` overflows `u16`.
     pub fn new(num_operands: usize) -> Result<Self, BveqError> {
         let total = BITS
             .checked_mul(num_operands)
@@ -116,7 +116,7 @@ impl VarMap {
 
     /// Checked lookup: returns `Err` on out-of-range `(operand, bit)` instead
     /// of panicking. Used by `expr_to_bdd` to reject adversarial `Var` nodes
-    /// (MAJOR-3: silent aliasing fix).
+    /// (silent aliasing fix).
     fn checked_var(&self, operand: usize, bit: usize) -> Result<BddVariable, BveqError> {
         if operand >= self.num_operands || bit >= BITS {
             return Err(BveqError::VarOutOfRange {
@@ -143,7 +143,7 @@ impl VarMap {
 /// Convert a `BvExpr` to a canonical BDD using the shared variable mapping.
 ///
 /// Returns `Err(VarOutOfRange)` if any `Var` node references an out-of-range
-/// `(operand, bit)` -- no silent aliasing, no panic (MAJOR-3).
+/// `(operand, bit)` -- no silent aliasing, no panic.
 pub fn expr_to_bdd(expr: &BvExpr, map: &VarMap) -> Result<Bdd, BveqError> {
     match expr {
         BvExpr::Var { operand, bit } => {
@@ -167,9 +167,13 @@ pub fn expr_to_bdd(expr: &BvExpr, map: &VarMap) -> Result<Bdd, BveqError> {
 }
 
 /// Encode a `BvExpr` to BDD with operand indices shifted by
-/// `operand_shift` (mod `num_operands`). Used by the MAJOR-4 canary test to
+/// `operand_shift` (mod `num_operands`). Used by the mismap canary test to
 /// prove the shared-mapping discipline is load-bearing: under a shifted
 /// mapping, genuinely-equal transfers produce different BDDs.
+///
+/// MEASUREMENT-ONLY: gated behind the `measurement` feature; it exists solely
+/// for the canary test and is not part of the default public API.
+#[cfg(feature = "measurement")]
 #[doc(hidden)]
 pub fn expr_to_bdd_shifted(
     expr: &BvExpr,
@@ -264,7 +268,7 @@ fn bv_and(a: &[BvExpr], b: &[BvExpr]) -> Vec<BvExpr> {
         .collect()
 }
 
-// NIT-2: tie barrel-network stage count to BITS.
+// tie barrel-network stage count to BITS.
 const _: () = assert!(BITS == 8, "barrel rotate take(3) assumes BITS == 8");
 
 /// Constant left rotation by `amount` positions (wire permutation).
@@ -333,48 +337,59 @@ fn imm_bits(imm: u8) -> Vec<BvExpr> {
 // ── Error type ──────────────────────────────────────────────────────
 
 /// Error from symbolic execution or equivalence checking.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum BveqError {
     /// Instruction is not register-pure (Swapbr, Xchg, Mexch, MexchReg).
-    /// These move state off the register file -- reject, don't corrupt (r2 MAJOR-2).
+    /// These move state off the register file -- reject, don't corrupt.
+    #[error("non-register-pure instruction rejected: {0:?}")]
     NonRegisterPure(Instr),
-    /// Register index out of range (rd/rs/rt ≥ NUM_REGS) in an instruction.
-    /// MAJOR-3: apply_instr must reject, not panic.
+    /// Register index out of range (rd/rs/rt >= NUM_REGS) in an instruction.
+    /// apply_instr must reject, not panic.
+    #[error("register index out of range in {instr:?}: {which}={val} (max {})", NUM_REGS - 1)]
     RegisterOutOfRange {
         instr: Instr,
         which: &'static str,
         val: u8,
     },
     /// Two-operand instruction has rd == rs -- the ISA rejects these
-    /// (non-injective datapath) and the hardware deviates. MAJOR-5.
+    /// (non-injective datapath) and the hardware deviates.
+    #[error("aliased operands rejected (ISA-illegal): {instr:?}")]
     AliasedOperands { instr: Instr },
     /// Three-operand instruction has non-distinct operands -- the ISA rejects
-    /// these (Cswap/Ccnot pairwise-distinct rule). MAJOR-5.
+    /// these (Cswap/Ccnot pairwise-distinct rule).
+    #[error("non-distinct operands rejected (ISA-illegal): {instr:?}")]
     NonDistinctOperands { instr: Instr },
     /// BvExpr Var node references an out-of-range (operand, bit).
-    /// MAJOR-3: silent aliasing fix -- Var(20,0) no longer maps onto Var(4,2).
+    /// Guards against silent aliasing -- Var(20,0) no longer maps onto Var(4,2).
+    #[error("BvExpr Var out of range: operand={operand} (max {num_operands}), bit={bit} (max {})", BITS)]
     VarOutOfRange {
         operand: usize,
         bit: usize,
         num_operands: usize,
     },
     /// Width parameter out of range (w > BITS or w == 0).
+    #[error("width out of range: w={w} (must be 1..={BITS})")]
     WidthOutOfRange { w: usize },
     /// RegTransfer frame size mismatch (must be NUM_REGS).
+    #[error("RegTransfer frame size mismatch on {side}: len={len} (expected {NUM_REGS})")]
     FrameSizeMismatch { side: &'static str, len: usize },
-    /// A register bit-row has the wrong length (must be BITS). N3: a short row
+    /// A register bit-row has the wrong length (must be BITS). A short row
     /// must return Err, not panic on index.
+    #[error("RegTransfer bit-row size mismatch on {side} reg {reg}: len={len} (expected {BITS})")]
     RowSizeMismatch {
         side: &'static str,
         reg: usize,
         len: usize,
     },
-    /// An `operand_regs` entry is out of range (≥ NUM_REGS). N2: the new
-    /// MAJOR-2 parameter must be validated, not fed to VarMap::var (which panics).
+    /// An `operand_regs` entry is out of range (>= NUM_REGS). The
+    /// operand-register parameter must be validated, not fed to VarMap::var (which panics).
+    #[error("operand_regs entry out of range: {reg} (max {})", NUM_REGS - 1)]
     OperandRegOutOfRange { reg: usize },
     /// VarMap::new overflow: BITS * num_operands exceeds u16.
+    #[error("VarMap overflow: BITS({BITS}) * num_operands({num_operands}) exceeds u16")]
     VarMapOverflow { num_operands: usize },
     /// The two transfers are not equivalent; includes a concrete counterexample.
+    #[error("transfers not equivalent: {0}")]
     NotEquivalent(Counterexample),
 }
 
@@ -387,66 +402,6 @@ impl BveqError {
         }
     }
 }
-
-impl std::fmt::Display for BveqError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BveqError::NonRegisterPure(instr) => {
-                write!(f, "non-register-pure instruction rejected: {instr:?}")
-            }
-            BveqError::RegisterOutOfRange { instr, which, val } => {
-                write!(
-                    f,
-                    "register index out of range in {instr:?}: {which}={val} (max {})",
-                    NUM_REGS - 1
-                )
-            }
-            BveqError::AliasedOperands { instr } => {
-                write!(f, "aliased operands rejected (ISA-illegal): {instr:?}")
-            }
-            BveqError::NonDistinctOperands { instr } => {
-                write!(f, "non-distinct operands rejected (ISA-illegal): {instr:?}")
-            }
-            BveqError::VarOutOfRange {
-                operand,
-                bit,
-                num_operands,
-            } => {
-                write!(f, "BvExpr Var out of range: operand={operand} (max {num_operands}), bit={bit} (max {})", BITS)
-            }
-            BveqError::WidthOutOfRange { w } => {
-                write!(f, "width out of range: w={w} (must be 1..={BITS})")
-            }
-            BveqError::FrameSizeMismatch { side, len } => {
-                write!(
-                    f,
-                    "RegTransfer frame size mismatch on {side}: len={len} (expected {NUM_REGS})"
-                )
-            }
-            BveqError::RowSizeMismatch { side, reg, len } => {
-                write!(f, "RegTransfer bit-row size mismatch on {side} reg {reg}: len={len} (expected {BITS})")
-            }
-            BveqError::OperandRegOutOfRange { reg } => {
-                write!(
-                    f,
-                    "operand_regs entry out of range: {reg} (max {})",
-                    NUM_REGS - 1
-                )
-            }
-            BveqError::VarMapOverflow { num_operands } => {
-                write!(
-                    f,
-                    "VarMap overflow: BITS({BITS}) * num_operands({num_operands}) exceeds u16"
-                )
-            }
-            BveqError::NotEquivalent(cex) => {
-                write!(f, "transfers not equivalent: {cex}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for BveqError {}
 
 // ── Counterexample ──────────────────────────────────────────────────
 
@@ -498,7 +453,7 @@ fn decode_counterexample(
     }
 }
 
-// ── Instruction semantics (single symbolic model, r2 §4) ───────────
+// ── Instruction semantics (single symbolic model) ───────────
 
 /// Check that a register index is in range (< NUM_REGS).
 fn check_reg(instr: &Instr, which: &'static str, val: u8) -> Result<(), BveqError> {
@@ -512,7 +467,7 @@ fn check_reg(instr: &Instr, which: &'static str, val: u8) -> Result<(), BveqErro
     Ok(())
 }
 
-/// Check that a 2-operand instruction has distinct rd and rs (MAJOR-5).
+/// Check that a 2-operand instruction has distinct rd and rs.
 /// Mirrors `asm::encode`'s `check_distinct`.
 fn check_two_op_distinct(instr: &Instr, rd: u8, rs: u8) -> Result<(), BveqError> {
     if rd == rs {
@@ -521,7 +476,7 @@ fn check_two_op_distinct(instr: &Instr, rd: u8, rs: u8) -> Result<(), BveqError>
     Ok(())
 }
 
-/// Check that a 3-operand instruction has pairwise distinct operands (MAJOR-5).
+/// Check that a 3-operand instruction has pairwise distinct operands.
 /// Mirrors `asm::encode`'s Cswap/Ccnot distinctness check.
 fn check_three_op_distinct(instr: &Instr, rd: u8, rs: u8, rt: u8) -> Result<(), BveqError> {
     if rd == rs || rd == rt || rs == rt {
@@ -535,10 +490,10 @@ fn check_three_op_distinct(instr: &Instr, rd: u8, rs: u8, rt: u8) -> Result<(), 
 /// Returns `Err(NonRegisterPure)` for instructions that move state off the
 /// register file (Swapbr, Xchg, Mexch, MexchReg) -- reject, don't corrupt.
 ///
-/// Returns `Err(RegisterOutOfRange)` if any register index ≥ NUM_REGS (MAJOR-3).
+/// Returns `Err(RegisterOutOfRange)` if any register index ≥ NUM_REGS.
 ///
 /// Returns `Err(AliasedOperands)` / `Err(NonDistinctOperands)` for instructions
-/// the ISA rejects due to aliasing (MAJOR-5). Mirrors `asm::encode`.
+/// the ISA rejects due to aliasing. Mirrors `asm::encode`.
 fn apply_instr(transfer: &mut RegTransfer, instr: &Instr) -> Result<(), BveqError> {
     match *instr {
         Instr::Add { rd, rs } => {
@@ -663,7 +618,7 @@ fn apply_instr(transfer: &mut RegTransfer, instr: &Instr) -> Result<(), BveqErro
             let result = bv_rotr_const(&transfer.regs[rd], amount);
             transfer.regs[rd] = result;
         }
-        // Non-register-pure: reject, don't corrupt (r2 MAJOR-2).
+        // Non-register-pure: reject, don't corrupt.
         Instr::Xchg { .. }
         | Instr::Swapbr { .. }
         | Instr::Mexch { .. }
@@ -685,10 +640,10 @@ pub fn instr_semantics(instr: &Instr) -> Result<RegTransfer, BveqError> {
 /// Returns the resulting `RegTransfer` (identity for untouched registers).
 /// Hard-rejects any instruction outside the register-pure subset
 /// {Add, Sub, Xor, Exch, Rotl, Rotr, Cswap, Ccnot, Addi, Subi, Xori,
-/// Rotli, Rotri} -- reject, don't corrupt (r2 MAJOR-2).
+/// Rotli, Rotri} -- reject, don't corrupt.
 ///
-/// Also rejects instructions with out-of-range register indices (MAJOR-3)
-/// and ISA-illegal aliased operands (MAJOR-5).
+/// Also rejects instructions with out-of-range register indices
+/// and ISA-illegal aliased operands.
 pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
     let mut transfer = RegTransfer::identity();
     for instr in instrs {
@@ -702,11 +657,11 @@ pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
 /// Check equivalence of two register transfers at Flat(`w`) bit-width.
 ///
 /// Compares per-output-bit BDDs over the FULL register-file frame (all
-/// registers, identity for untouched -- r2 MAJOR-2). Uses ONE shared
-/// `VarMap` for both sides (r2 MAJOR-3: differing maps make unequal
+/// registers, identity for untouched). Uses ONE shared
+/// `VarMap` for both sides (differing maps make unequal
 /// functions compare equal).
 ///
-/// # `operand_regs` (MAJOR-2)
+/// # `operand_regs`
 ///
 /// The caller-supplied set of registers that hold Flat(`w`) values. Only these
 /// registers have their input bits `w..7` forced false and their output bits
@@ -714,7 +669,7 @@ pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
 /// free (Flat(8)), preventing a global constraint from certifying a corrupting
 /// sequence as identity.
 ///
-/// **CALLER OBLIGATION (N5):** `operand_regs` must be derived from the prim's
+/// **CALLER OBLIGATION:** `operand_regs` must be derived from the prim's
 /// TYPE, never from the candidate instruction sequence. `equiv` trusts it and
 /// cannot validate it:
 /// - **Over-declaring** a register that is not actually Flat(`w`) forces its
@@ -725,13 +680,13 @@ pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
 ///   degrades `equiv` to full unconstrained Flat(8) equality (ignoring `w`) --
 ///   strictly stricter (fail-safe), but surprising.
 ///
-/// # I4 obligation (r2 MAJOR-1 + N1, MANDATORY)
+/// # I4 obligation (MANDATORY)
 ///
 /// For `w < 8` (Flat(w) spec), **under the Flat(w) input constraint** on the
 /// operand registers (invariant preservation: Flat(w) in ⇒ Flat(w) out):
 /// - Low `w` output bits of `a` must equal `b` (the spec) for all registers.
 /// - Output bits `w..7` of BOTH `a` AND `b` must be false *under the input
-///   constraint* for operand registers (MAJOR-1: BOTH sides; N1: UNDER the
+///   constraint* for operand registers (BOTH sides; UNDER the
 ///   constraint, not unconditionally -- an unconditional check rejects every
 ///   reversible model, since a bijection's output bit is never identically
 ///   false).
@@ -743,7 +698,7 @@ pub fn symbolic_exec(instrs: &[Instr]) -> Result<RegTransfer, BveqError> {
 /// `Err(...)` for validation failures (out-of-range, etc.).
 ///
 /// **Never panics** across the recognizer boundary on any register/width/frame
-/// input (returns `Result` -- r2 MAJOR-3). The ONE remaining abort is a stack
+/// input (returns `Result`). The ONE remaining abort is a stack
 /// overflow from a pathologically deep `BvExpr` (unbounded recursion in
 /// `expr_to_bdd`/`eval_expr`); this is unreachable from `symbolic_exec`, which
 /// only builds straight-line-bounded expressions.
@@ -753,7 +708,7 @@ pub fn equiv(
     w: usize,
     operand_regs: &[usize],
 ) -> Result<(), BveqError> {
-    // MAJOR-3: convert asserts to Err.
+    // convert asserts to Err.
     if w == 0 || w > BITS {
         return Err(BveqError::WidthOutOfRange { w });
     }
@@ -769,7 +724,7 @@ pub fn equiv(
             len: b.regs.len(),
         });
     }
-    // N3: validate every bit-row length, else a short row panics on index
+    // validate every bit-row length, else a short row panics on index
     // below (a slice-2 spec-builder emitting only `w` bits is the obvious bug).
     for (side, t) in [("a", a), ("b", b)] {
         for (reg, row) in t.regs.iter().enumerate() {
@@ -782,9 +737,9 @@ pub fn equiv(
             }
         }
     }
-    // N2: validate operand_regs entries (the new MAJOR-2 parameter), else the
+    // validate operand_regs entries (the operand_regs parameter), else the
     // constraint builder feeds an OOB index to VarMap::var → panic (which would
-    // itself violate the MAJOR-3 never-panic contract).
+    // itself violate the never-panic contract).
     for &op in operand_regs {
         if op >= NUM_REGS {
             return Err(BveqError::OperandRegOutOfRange { reg: op });
@@ -793,7 +748,7 @@ pub fn equiv(
 
     let map = VarMap::new(NUM_REGS)?;
 
-    // MAJOR-2: Build the Flat(w) input constraint ONLY for operand_regs.
+    // Build the Flat(w) input constraint ONLY for operand_regs.
     // All other registers' bits are fully free (Flat(8)).
     let constraint = if w < BITS {
         let mut c = map.bdd_vars.mk_true();
@@ -827,7 +782,7 @@ pub fn equiv(
                     )));
                 }
             } else {
-                // I4 (N1 fix): upper output bits w..7 of operand registers must
+                // I4: upper output bits w..7 of operand registers must
                 // be identically false UNDER the Flat(w) input constraint -- i.e.
                 // Flat(w) inputs produce Flat(w) outputs (invariant preservation,
                 // NOT circular). Pass-through upper bits (`Var(op, b≥w)`) are
@@ -837,7 +792,7 @@ pub fn equiv(
                 // unconstrained bits) stays satisfiable and is REJECTED.
                 // The prior UNCONDITIONAL check rejected every reversible model at
                 // w<8 (identity ≡ identity included), since an output bit of a
-                // bijection can never be identically false. MAJOR-1: BOTH sides.
+                // bijection can never be identically false. BOTH sides.
                 let a_bdd = expr_to_bdd(&a.regs[reg][bit], &map)?;
                 let b_bdd = expr_to_bdd(&b.regs[reg][bit], &map)?;
                 for side_bdd in [&a_bdd, &b_bdd] {
@@ -898,7 +853,7 @@ mod z3_tests {
     /// equivalent at width `w` with the given operand registers, and return
     /// the script string.
     ///
-    /// Updated for MAJOR-1 (I4 both sides) and MAJOR-2 (per-operand constraint).
+    /// Updated for I4 both sides and the per-operand constraint.
     fn build_smt_script(
         a: &RegTransfer,
         b: &RegTransfer,
@@ -910,7 +865,7 @@ mod z3_tests {
         for r in 0..NUM_REGS {
             script.push_str(&format!("(declare-const r{r} (_ BitVec 8))\n"));
         }
-        // MAJOR-2: Flat(w) constraint only on operand_regs
+        // Flat(w) constraint only on operand_regs
         if w < BITS {
             for &r in operand_regs {
                 for bit in w..BITS {
@@ -931,7 +886,7 @@ mod z3_tests {
                     let b_smt = expr_to_smt(&b.regs[reg][bit]);
                     disjuncts.push(format!("(distinct {a_smt} {b_smt})"));
                 } else {
-                    // MAJOR-1: I4 on BOTH sides for operand regs
+                    // I4 on BOTH sides for operand regs
                     let a_smt = expr_to_smt(&a.regs[reg][bit]);
                     let b_smt = expr_to_smt(&b.regs[reg][bit]);
                     disjuncts.push(format!("(distinct {a_smt} #b0)"));
@@ -1000,7 +955,7 @@ mod z3_tests {
                 vec![0, 1],
                 false,
             ),
-            // MINOR-4: w<8 / I4 case -- byte-Add rejected against Flat(4) addInto spec
+            // w<8 / I4 case -- byte-Add rejected against Flat(4) addInto spec
             // This exercises the Flat(w) constraint and upper-bit SMT path.
             (
                 "add_ne_flat4_add",
@@ -1013,7 +968,7 @@ mod z3_tests {
                 // under I4 -- this is the exact T3 scenario.
                 false,
             ),
-            // N4: w<8 pass-through ACCEPT case -- the case that distinguishes the
+            // w<8 pass-through ACCEPT case -- the case that distinguishes the
             // correct UNDER-constraint I4 (accept) from the old unconditional bug
             // (which rejected every reversible model at w<8). Exch's Flat(4)
             // upper output bits are pass-throughs of constrained-zero inputs.
@@ -1143,8 +1098,8 @@ fn remap_expr_operands(expr: &BvExpr, operand_regs: &[usize]) -> BvExpr {
 /// This is the symbolic bijectivity certificate for prims that have no table.
 /// Core stays BDD-free; this function lives in tisc.
 ///
-/// `num_operands` is the number of leaf operands (e.g. 3 for a 3-op prim).
-/// `width` is the bit-width per leaf (from the spec).
+/// The leaf count (e.g. 3 for a 3-op prim) and the per-leaf bit-width are read
+/// from `spec.forward` (`leaves.len()` and `width`).
 pub fn admit_symbolic(spec: &theseus_core::prim::PrimSpec) -> Result<(), BveqError> {
     let width = spec.forward.width as usize;
     let num_operands = spec.forward.leaves.len();

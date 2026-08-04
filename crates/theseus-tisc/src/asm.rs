@@ -30,8 +30,6 @@
 //! [`decode`] is the inverse (for round-trip checks and listings);
 //! reserved opcodes and set pad bits decode to `None`.
 
-use std::fmt;
-
 use crate::types::{MEM_WORDS, NUM_REGS, NUM_SCRATCH, PC_ADDR_SPACE};
 
 // ── A-0 32-bit instruction-word layout ─────────────────────────────
@@ -59,105 +57,60 @@ const IMM_BITS: u32 = 20;
 const NUM_OPERAND_LOCS: usize = NUM_REGS + NUM_SCRATCH;
 
 /// Assembler error: an instruction or program violates a legality rule.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AsmError {
     /// An operand index is out of range (must be < 16 = `reg ∪ scratch`;
     /// A-0). `which` is "rd"/"rs"/"rd".
+    #[error("register index out of range: {which}={val}")]
     RegOutOfRange { which: &'static str, val: u8 },
     /// An operand names decoder-reserved scratch s0 (idx 8) or s1 (idx 9)
     /// as an rd/rs/rt operand. s0 is the operand/immediate buffer and s1
     /// the predicate/carry scratch -- routing them into the datapath
     /// mid-instruction corrupts decode. Legal scratch operands are
     /// s2..s7 (idx 10..15). `which` is "rd"/"rs"/"rt".
+    #[error(
+        "operand {which}={val} names decoder-reserved scratch s{} \
+         (s0/s1 are the operand/predicate buffers; legal scratch operands are s2..s7)",
+        val - NUM_REGS as u8
+    )]
     OperandReservedScratch { which: &'static str, val: u8 },
     /// A two-operand instruction has `rd == rs` (non-injective datapath).
+    #[error("{mnemonic} r{rd}, r{rs}: aliased operands are illegal (non-injective datapath)")]
     AliasedOperands {
         mnemonic: &'static str,
         rd: u8,
         rs: u8,
     },
     /// CSWAP operands are not pairwise distinct.
+    #[error("CSWAP r{rd}, r{rs}, r{rt}: operands must be pairwise distinct")]
     CswapNotDistinct { rd: u8, rs: u8, rt: u8 },
     /// CCNOT operands are not pairwise distinct.
+    #[error("CCNOT r{rd}, r{rs}, r{rt}: operands must be pairwise distinct")]
     CcnotNotDistinct { rd: u8, rs: u8, rt: u8 },
     /// XCHG scratch index out of range (must be < NUM_SCRATCH).
+    #[error("XCHG scratch index out of range: s{sx}")]
     XchgScratchOutOfRange { sx: u8 },
     /// XCHG names decoder-reserved scratch s0 or s1.
+    #[error("XCHG s{sx}: s0/s1 are decoder-reserved (operand/predicate scratch)")]
     XchgScratchReserved { sx: u8 },
     /// MEXCH memory address out of range (must be < MEM_WORDS).
+    #[error("MEXCH memory address out of range: m{addr} (MEM_WORDS={MEM_WORDS})")]
     MexchAddrOutOfRange { addr: u8 },
     /// MEXCHR address register aliases data register (ra == rd),
     /// which breaks bus-quiescence (the mem phase mutates reg[rd],
     /// so absorb's re-read of reg[ra=rd] gets a different value).
+    #[error(
+        "MEXCHR r{rd}, r{ra}: address register aliases data register \
+         (ra == rd breaks bus-quiescence)"
+    )]
     MexchAddrAliasesData { rd: u8, ra: u8 },
     /// SWAPBR register index out of range (must be < NUM_REGS).
+    #[error("SWAPBR r{rd}: register index out of range")]
     SwapbrRegOutOfRange { rd: u8 },
     /// Program exceeds the PC address space (A-6.4: > 2^W_PC instructions).
+    #[error("program exceeds the PC address space: {len} > {PC_ADDR_SPACE}")]
     ProgramTooLong { len: usize },
 }
-
-impl fmt::Display for AsmError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AsmError::RegOutOfRange { which, val } => {
-                write!(f, "register index out of range: {which}={val}")
-            }
-            AsmError::OperandReservedScratch { which, val } => {
-                write!(
-                    f,
-                    "operand {which}={val} names decoder-reserved scratch s{} \
-                     (s0/s1 are the operand/predicate buffers; legal scratch operands are s2..s7)",
-                    val - NUM_REGS as u8
-                )
-            }
-            AsmError::AliasedOperands { mnemonic, rd, rs } => {
-                write!(f, "{mnemonic} r{rd}, r{rs}: aliased operands are illegal (non-injective datapath)")
-            }
-            AsmError::CswapNotDistinct { rd, rs, rt } => {
-                write!(
-                    f,
-                    "CSWAP r{rd}, r{rs}, r{rt}: operands must be pairwise distinct"
-                )
-            }
-            AsmError::CcnotNotDistinct { rd, rs, rt } => {
-                write!(
-                    f,
-                    "CCNOT r{rd}, r{rs}, r{rt}: operands must be pairwise distinct"
-                )
-            }
-            AsmError::XchgScratchOutOfRange { sx } => {
-                write!(f, "XCHG scratch index out of range: s{sx}")
-            }
-            AsmError::XchgScratchReserved { sx } => {
-                write!(
-                    f,
-                    "XCHG s{sx}: s0/s1 are decoder-reserved (operand/predicate scratch)"
-                )
-            }
-            AsmError::MexchAddrOutOfRange { addr } => {
-                write!(
-                    f,
-                    "MEXCH memory address out of range: m{addr} (MEM_WORDS={MEM_WORDS})"
-                )
-            }
-            AsmError::MexchAddrAliasesData { rd, ra } => {
-                write!(
-                    f,
-                    "MEXCHR r{rd}, r{ra}: address register aliases data register \
-                     (ra == rd breaks bus-quiescence)"
-                )
-            }
-            AsmError::SwapbrRegOutOfRange { rd } => {
-                write!(f, "SWAPBR r{rd}: register index out of range")
-            }
-            AsmError::ProgramTooLong { len } => {
-                write!(f, "program exceeds the PC address space: {len} > {PC_ADDR_SPACE}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for AsmError {}
 
 /// One TISC-1 instruction with typed operands.
 ///

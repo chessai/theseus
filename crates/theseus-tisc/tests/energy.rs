@@ -555,6 +555,7 @@ fn me_a4_honest_crossing() {
 //
 // Baseline (design doc §1.1, pre-B1.1): decode_execute = 874 510 cells;
 // step_j = 2.5259595646e-9 J; B=24 / T=20.
+#[cfg(feature = "measurement")]
 #[test]
 fn poc_b11_shared_alu_measure() {
     const BASE_DECODE_CELLS: usize = 874_510;
@@ -659,6 +660,7 @@ fn poc_b11_shared_alu_measure() {
 // (B1.1 group_a 148414 + group_b 107642 = 256056) -- the apples-to-apples
 // "did we remove the group_b block" number. Prints only (goldens re-pinned
 // at finish, after adversarial review).
+#[cfg(feature = "measurement")]
 #[test]
 fn poc_b12_shared_alu_measure() {
     const BASE_DECODE_CELLS: usize = 874_510;
@@ -760,6 +762,7 @@ fn poc_b12_shared_alu_measure() {
 // the pre-B1.3 (reg_imm 185864 + ccnot 75520 + cswap 63770 = 325154) -- the
 // "did the two private crossbars collapse" number. Prints only (goldens
 // re-pinned at finish after adversarial review).
+#[cfg(feature = "measurement")]
 #[test]
 fn poc_b13_shared_alu_measure() {
     const BASE_DECODE_CELLS: usize = 874_510;
@@ -859,6 +862,7 @@ fn poc_b13_shared_alu_measure() {
 // whereas Group A/B were already route-shared by A-0. This tells us which
 // blocks the universal 3-operand shared bracket must absorb to capture the
 // design's 12→3 routing collapse (the real B-1 win).
+#[cfg(feature = "measurement")]
 #[test]
 fn poc_b1_perblock_measure() {
     let blocks = theseus_tisc::decoder::decode_blocks_for_measurement();

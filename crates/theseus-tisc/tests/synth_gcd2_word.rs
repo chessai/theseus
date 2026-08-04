@@ -29,9 +29,10 @@ use theseus_tisc::bveq::{BvExpr, RegTransfer};
 use theseus_tisc::compile::exec_instr;
 use theseus_tisc::synth::{
     emit_weqzero, emit_weqzero_width, emit_wlt, emit_wlt_width, table_to_regtransfer,
-    transcribe_word_bennett_peak, transcribe_word_bennett_peak_measure, weqzero_ntemp, wlt_ntemp,
-    WForward, WValue,
+    transcribe_word_bennett_peak, weqzero_ntemp, wlt_ntemp, WForward, WValue,
 };
+#[cfg(feature = "measurement")]
+use theseus_tisc::synth::transcribe_word_bennett_peak_measure;
 use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
 // ── The pinned GCD rule (copied verbatim from `synth_gcd2.rs` -- test DATA, not a
@@ -916,6 +917,7 @@ fn gcd2_word_synthesize_measure_and_verify() {
 /// is ~778k instrs / peak 23 -- LARGER than the bit-level BDD/ANF, not smaller (the
 /// earlier "peak 10 / len 0" figure was an allocator-first-failure artifact, not a
 /// real placement).
+#[cfg(feature = "measurement")]
 #[test]
 fn gcd2_word_body_length_measurement() {
     let fwd = gcd2_fwd_wforward();

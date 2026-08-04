@@ -468,6 +468,42 @@ pub fn pc_add_br() -> Iso {
     pc_add_br_with(&Layout::default())
 }
 
+/// PROVEN zero-ancilla Takahashi-Kunihiro in-place ripple adder: `b += a`
+/// mod `2^np`, over an `n`-wire register. `a`/`b` map bit index `i` (0..np)
+/// to its wire; `a` is the operand and `b` the (in-place) target. Shared by
+/// [`pc_add_br_with`] (a = op = sext(BR)) and [`pc_inc_with`] (a = constant 1)
+/// so the two adders cannot drift. Returns the gate sequence; the caller
+/// materializes/uncomputes `a` around it.
+fn tk_add_inplace<A, B>(n: usize, np: usize, a: A, b: B) -> Vec<Iso>
+where
+    A: Fn(usize) -> usize,
+    B: Fn(usize) -> usize,
+{
+    let mut add: Vec<Iso> = Vec::new();
+    for i in 1..np - 1 {
+        add.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+    }
+    for i in (1..np - 1).rev() {
+        add.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
+    }
+    for i in 0..np - 1 {
+        add.push(gate_at(n, &[a(i), b(i), a(i + 1)], toffoli_prim()));
+    }
+    add.push(gate_at(n, &[a(np - 1), b(np - 1)], cnot_prim()));
+    add.push(gate_at(n, &[a(np - 2), b(np - 2), a(np - 1)], toffoli_prim()));
+    for i in (1..np - 1).rev() {
+        add.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+        add.push(gate_at(n, &[a(i - 1), b(i - 1), a(i)], toffoli_prim()));
+    }
+    for i in 1..np - 1 {
+        add.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
+    }
+    for i in 0..np - 1 {
+        add.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
+    }
+    add
+}
+
 /// B-2.1a: layout-parameterized [`pc_add_br`]. PC/BR/s0/s1 are all
 /// control-region (`w_ctl`); PC is `w_pc` bits. The zero-arg entry
 /// delegates at `Layout::default()`.
@@ -504,30 +540,7 @@ pub fn pc_add_br_with(layout: &Layout) -> Iso {
     // ── PROVEN TK zero-ancilla in-place adder: PC += op (mod 2^np) ──────
     // (the shipped 8-bit adder, generalized from W to np bits; operand a =
     // op, target b = PC.)
-    let a = op;
-    let b = pc;
-    let mut add: Vec<Iso> = Vec::new();
-    for i in 1..np - 1 {
-        add.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
-    }
-    for i in (1..np - 1).rev() {
-        add.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
-    }
-    for i in 0..np - 1 {
-        add.push(gate_at(n, &[a(i), b(i), a(i + 1)], toffoli_prim()));
-    }
-    add.push(gate_at(n, &[a(np - 1), b(np - 1)], cnot_prim()));
-    add.push(gate_at(n, &[a(np - 2), b(np - 2), a(np - 1)], toffoli_prim()));
-    for i in (1..np - 1).rev() {
-        add.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
-        add.push(gate_at(n, &[a(i - 1), b(i - 1), a(i)], toffoli_prim()));
-    }
-    for i in 1..np - 1 {
-        add.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
-    }
-    for i in 0..np - 1 {
-        add.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
-    }
+    let add = tk_add_inplace(n, np, op, pc);
 
     // ── Uncompute op (sym of the materialization) ──────────────────────
     let mut unbuild = build.clone();
@@ -593,29 +606,7 @@ pub fn pc_inc_with(layout: &Layout) -> Iso {
     gates.push(at_wire(n, op(0), not_iso()));
 
     // PROVEN TK zero-ancilla in-place adder: PC += op (mod 2^np).
-    let a = op;
-    let b = pc;
-    for i in 1..np - 1 {
-        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
-    }
-    for i in (1..np - 1).rev() {
-        gates.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
-    }
-    for i in 0..np - 1 {
-        gates.push(gate_at(n, &[a(i), b(i), a(i + 1)], toffoli_prim()));
-    }
-    gates.push(gate_at(n, &[a(np - 1), b(np - 1)], cnot_prim()));
-    gates.push(gate_at(n, &[a(np - 2), b(np - 2), a(np - 1)], toffoli_prim()));
-    for i in (1..np - 1).rev() {
-        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
-        gates.push(gate_at(n, &[a(i - 1), b(i - 1), a(i)], toffoli_prim()));
-    }
-    for i in 1..np - 1 {
-        gates.push(gate_at(n, &[a(i), a(i + 1)], cnot_prim()));
-    }
-    for i in 0..np - 1 {
-        gates.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
-    }
+    gates.extend(tk_add_inplace(n, np, op, pc));
 
     // Clear op[0] (sym of the NOT).
     gates.push(at_wire(n, op(0), not_iso()));

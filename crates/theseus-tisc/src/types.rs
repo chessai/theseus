@@ -2,9 +2,10 @@
 //!
 //! ## Carrier types (M-C2 Stage 1a-B)
 //!
-//! **CpuState** (= `state_ty()`, 22 Word8 fields -- A-0 widened IR 16→32,
-//! adding two IR byte-fields):
-//!   [r0..r7, PC, BR, IR_b0, IR_b1, IR_b2, IR_b3, s0..s7]
+//! **CpuState** (= `state_ty()`, `num_cpu_fields()` Word8 fields = 23 at the
+//! default layout -- 22 base fields below plus the appended PC_hi from
+//! `pc_fields()-1`; A-0 widened IR 16->32, adding two IR byte-fields):
+//!   [r0..r7, PC, BR, IR_b0, IR_b1, IR_b2, IR_b3, s0..s7, PC_hi]
 //!
 //! **MemState** (= `mem_state_ty()`, `MEM_WORDS` Word8 fields):
 //!   [m0..m_{MEM_WORDS-1}]
@@ -129,7 +130,8 @@ impl Layout {
         self.w_pc / self.w_ctl
     }
 
-    /// Number of Word-sized fields BR occupies (`⌈w_br / w_ctl⌉`).
+    /// Number of Word-sized fields BR occupies (`w_br / w_ctl`, floor;
+    /// w_br is always a whole multiple of w_ctl, so floor == exact).
     pub const fn br_fields(&self) -> usize {
         self.w_br / self.w_ctl
     }
@@ -262,7 +264,7 @@ impl Layout {
 
     /// The per-field width vector for the whole CpuState product
     /// (`num_cpu_fields()` entries), used to drive the width-aware field
-    /// routers. At the default layout this is `[8; 24]`.
+    /// routers. At the default layout this is `[8; 23]`.
     pub fn cpu_field_widths(&self) -> Vec<usize> {
         (0..self.num_cpu_fields()).map(|i| self.field_width(i)).collect()
     }
@@ -455,7 +457,7 @@ pub fn data_word(layout: &Layout) -> Type {
 
 /// CpuState type for a given `Layout` (core, layout-parameterized).
 ///
-/// Field order (index), at the default layout (24 fields):
+/// Field order (index), at the default layout (23 fields, indices 0..=22):
 ///   0..8   = r0..r7    (general registers)
 ///   8      = PC_lo     (bits 0..8 of the 16-bit PC)
 ///   9      = BR        (8-bit branch offset, sign-extended into PC)
@@ -541,26 +543,6 @@ pub const PC_HI_FIELD: usize = Layout::default().pc_hi_field();
 /// (W_BR-a). Callers on the wide path must guard on `layout.br_fields()`.
 pub const BR_HI_FIELD: usize = Layout::default().br_hi_field();
 
-/// The Word8 field index of PC byte `k` under the **default** layout
-/// (`k=0` → low, `k=1` → high). B-2.2a: this is a default-layout convenience
-/// (it has no `Layout` param and no callers in the reduced-`w_pc` path -- see
-/// the grep in the B-2.2 design Q4.1); the bound is
-/// `Layout::default().pc_fields()` (= 2 at w_pc=16) rather than a hardcoded
-/// "2", so it does not silently bake the 2-field assumption. A reduced-layout
-/// caller should address PC via `layout.pc_field()` / `layout.pc_hi_field()`
-/// guarded on `layout.pc_fields()`.
-pub const fn pc_byte_field(k: usize) -> usize {
-    assert!(
-        k < Layout::default().pc_fields(),
-        "pc_byte_field: k out of range for the default layout's pc_fields()"
-    );
-    match k {
-        0 => PC_FIELD,
-        1 => PC_HI_FIELD,
-        _ => unreachable!(),
-    }
-}
-
 /// Field index of IR byte 0 (bits 0..8 of the 32-bit IR).
 pub const IR_B0_FIELD: usize = Layout::default().ir_byte_field(0);
 /// Field index of IR byte 1 (bits 8..16).
@@ -569,11 +551,6 @@ pub const IR_B1_FIELD: usize = Layout::default().ir_byte_field(1);
 pub const IR_B2_FIELD: usize = Layout::default().ir_byte_field(2);
 /// Field index of IR byte 3 (bits 24..32).
 pub const IR_B3_FIELD: usize = Layout::default().ir_byte_field(3);
-
-/// Legacy alias: IR byte 0 (was `IR_lo` of the 16-bit IR).
-pub const IR_LO_FIELD: usize = IR_B0_FIELD;
-/// Legacy alias: IR byte 1 (was `IR_hi` of the 16-bit IR).
-pub const IR_HI_FIELD: usize = IR_B1_FIELD;
 
 /// Field index of scratch word `i` (0..8).
 pub fn scratch_field(i: usize) -> usize {
@@ -630,7 +607,8 @@ fn read_ir_bits(bits: &[bool], offset: usize) -> u32 {
 
 impl StateVals {
     /// Encode this State's CPU fields as a `Value` inhabiting `state_ty()`
-    /// (CpuState, 22 fields -- A-0 32-bit IR). Memory fields are NOT
+    /// (CpuState, `num_cpu_fields()` fields = 23 at the default layout --
+    /// A-0 32-bit IR, plus the appended PC_hi). Memory fields are NOT
     /// included -- use [`encode_composite`] for the system_step carrier.
     pub fn encode(&self) -> Value {
         let ty = state_ty();
@@ -825,10 +803,10 @@ impl StateVals {
         }
         let pc = read_pc_bits(&all_bits);
         let br = u16::from(read_u8_bits(&all_bits, BR_FIELD * W));
-        let ir = read_ir_bits(&all_bits, 10 * W);
+        let ir = read_ir_bits(&all_bits, IR_B0_FIELD * W);
         let mut scratch = [0u8; NUM_SCRATCH];
         for (i, s) in scratch.iter_mut().enumerate() {
-            *s = read_u8_bits(&all_bits, (14 + i) * W);
+            *s = read_u8_bits(&all_bits, scratch_field(i) * W);
         }
 
         StateVals {
@@ -929,10 +907,10 @@ pub fn decode_composite(val: &Value) -> StateVals {
     }
     let pc = read_pc_bits(&cpu_bits);
     let br = u16::from(read_u8_bits(&cpu_bits, BR_FIELD * W));
-    let ir = read_ir_bits(&cpu_bits, 10 * W);
+    let ir = read_ir_bits(&cpu_bits, IR_B0_FIELD * W);
     let mut scratch = [0u8; NUM_SCRATCH];
     for (i, s) in scratch.iter_mut().enumerate() {
-        *s = read_u8_bits(&cpu_bits, (14 + i) * W);
+        *s = read_u8_bits(&cpu_bits, scratch_field(i) * W);
     }
 
     let mem_bits = bits_of(mem_val, &mem_ty).expect("decode_composite: mem bits");
