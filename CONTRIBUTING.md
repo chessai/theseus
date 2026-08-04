@@ -24,8 +24,8 @@ A component or compiler pass ships only when **all** of the following hold:
 - **Heavy (`--features heavy-tests`, advisor pre-merge):** integration-test
   binaries dominated by netlist lowering, system-ring simulation, whole-domain
   BDD/energy, or large whole-domain sweeps — each 30 s to many minutes.
-- **Nightly:** large property budgets, fuzzing, SAT lemma checks
-  (`--verify-lowering`), Verilator differentials, mutation testing. Hours.
+- **Nightly:** large property budgets, fuzzing, Verilator differentials,
+  mutation testing. Hours.
   Nightly failures auto-minimize into the regression corpus.
 
 ### The `heavy-tests` gate (why the default `cargo test` is fast)
