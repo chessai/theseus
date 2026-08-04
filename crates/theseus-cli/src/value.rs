@@ -173,10 +173,7 @@ fn tuple_to_core(elems: &[SVal], ty: &Type, env: &Env) -> Value {
         }
         [a, rest @ ..] => {
             if let Type::Prod(ta, tb, _) = ty {
-                Value::pair(
-                    to_core(a, ta, env),
-                    tuple_to_core(rest, tb, env),
-                )
+                Value::pair(to_core(a, ta, env), tuple_to_core(rest, tb, env))
             } else {
                 panic!("expected Prod type for n-tuple, got {ty:?}");
             }
@@ -190,12 +187,15 @@ fn ctor_to_core(name: &str, args: &[SVal], ty: &Type, env: &Env) -> Value {
     if is_numeric(name) && args.is_empty() {
         if let Type::Name(n) = strip_paren_ty(ty) {
             if is_un_type(&n.text) {
-                let k: usize = name.parse().unwrap_or_else(|_| panic!("bad numeric literal: {name}"));
+                let k: usize = name
+                    .parse()
+                    .unwrap_or_else(|_| panic!("bad numeric literal: {name}"));
                 let core_ty = env.lower(ty);
                 let values = enumerate_values(&core_ty);
-                return values.into_iter().nth(k).unwrap_or_else(|| {
-                    panic!("literal {k} out of range for type {}", n.text)
-                });
+                return values
+                    .into_iter()
+                    .nth(k)
+                    .unwrap_or_else(|| panic!("literal {k} out of range for type {}", n.text));
             }
         }
     }

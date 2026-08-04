@@ -94,7 +94,11 @@ fn instr_to_op(instr: &Instr) -> Op {
     }
 }
 
-fn assert_word8_zero(sv: &theseus_tisc::bveq_netlist::SV, vs: &biodivine_lib_bdd::BddVariableSet, ctx: &str) {
+fn assert_word8_zero(
+    sv: &theseus_tisc::bveq_netlist::SV,
+    vs: &biodivine_lib_bdd::BddVariableSet,
+    ctx: &str,
+) {
     let bits = sv_flatten(sv);
     let f = vs.mk_false();
     for (i, b) in bits.iter().enumerate() {
@@ -117,7 +121,11 @@ fn assert_word8_const(
     }
 }
 
-fn assert_word8_identity(sv: &theseus_tisc::bveq_netlist::SV, entry: &theseus_tisc::bveq_netlist::SV, ctx: &str) {
+fn assert_word8_identity(
+    sv: &theseus_tisc::bveq_netlist::SV,
+    entry: &theseus_tisc::bveq_netlist::SV,
+    ctx: &str,
+) {
     let out = sv_flatten(sv);
     let ent = sv_flatten(entry);
     for i in 0..W {
@@ -153,7 +161,11 @@ fn sv_right_nested(svs: &[theseus_tisc::bveq_netlist::SV]) -> theseus_tisc::bveq
 /// instead of pinned to 0 -- so a spurious scratch read (output depends on s2..)
 /// or write (output != symbolic input) is caught by the identity assertion.
 /// s0/s1 stay CONTROL (pinned per `pin_s0`/convention).
-fn build_cpu_init_scratch_symbolic(map: &VarMap, word: u32, pin_s0: bool) -> theseus_tisc::bveq_netlist::SV {
+fn build_cpu_init_scratch_symbolic(
+    map: &VarMap,
+    word: u32,
+    pin_s0: bool,
+) -> theseus_tisc::bveq_netlist::SV {
     use theseus_tisc::bveq_netlist::SV;
     let vs = map.bdd_vars();
     let mut fields: Vec<SV> = Vec::with_capacity(NUM_CPU_FIELDS);
@@ -173,7 +185,7 @@ fn build_cpu_init_scratch_symbolic(map: &VarMap, word: u32, pin_s0: bool) -> the
         fields.push(sv_word8_symbolic(map, OP_S0));
     }
     fields.push(sv_word8_const(0, vs)); // s1 (control) = 0
-    // s2..s7 (DATA scratch) SYMBOLIC.
+                                        // s2..s7 (DATA scratch) SYMBOLIC.
     for j in 0..N_SYM_SCRATCH {
         fields.push(sv_word8_symbolic(map, OP_S2_BASE + j));
     }
@@ -215,7 +227,8 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
     let walk_s = t0.elapsed().as_secs_f64();
 
     // Registers ≡ INDEPENDENT instr_semantics (the dispatch obligation).
-    let semantics = instr_semantics(&instr).unwrap_or_else(|e| panic!("{label}: instr_semantics: {e}"));
+    let semantics =
+        instr_semantics(&instr).unwrap_or_else(|e| panic!("{label}: instr_semantics: {e}"));
     for reg in 0..NUM_REGS {
         let out_bdds = extract_word8_bdds(extract_field(&out_sv, reg, NUM_CPU_FIELDS));
         for bit in 0..BITS {
@@ -231,9 +244,17 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
     // Frame: PC_lo=0 (decode_execute does not touch PC), BR/s0 restored,
     // IR preserved (concrete word), s1 = 0, s2..s7 = identity (symbolic in),
     // PC_hi (field 22) = 0 (MAJOR-3: a stray write into PC_hi was invisible).
-    assert_word8_zero(extract_field(&out_sv, 8, NUM_CPU_FIELDS), vs, &format!("{label}: PC_lo"));
+    assert_word8_zero(
+        extract_field(&out_sv, 8, NUM_CPU_FIELDS),
+        vs,
+        &format!("{label}: PC_lo"),
+    );
     let br_entry = sv_word8_symbolic(&map, OP_BR);
-    assert_word8_identity(extract_field(&out_sv, 9, NUM_CPU_FIELDS), &br_entry, &format!("{label}: BR"));
+    assert_word8_identity(
+        extract_field(&out_sv, 9, NUM_CPU_FIELDS),
+        &br_entry,
+        &format!("{label}: BR"),
+    );
     for byte in 0..4 {
         assert_word8_const(
             extract_field(&out_sv, 10 + byte, NUM_CPU_FIELDS),
@@ -243,13 +264,25 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
         );
     }
     if pin_s0 {
-        assert_word8_zero(extract_field(&out_sv, 14, NUM_CPU_FIELDS), vs, &format!("{label}: s0"));
+        assert_word8_zero(
+            extract_field(&out_sv, 14, NUM_CPU_FIELDS),
+            vs,
+            &format!("{label}: s0"),
+        );
     } else {
         let s0_entry = sv_word8_symbolic(&map, OP_S0);
-        assert_word8_identity(extract_field(&out_sv, 14, NUM_CPU_FIELDS), &s0_entry, &format!("{label}: s0"));
+        assert_word8_identity(
+            extract_field(&out_sv, 14, NUM_CPU_FIELDS),
+            &s0_entry,
+            &format!("{label}: s0"),
+        );
     }
     // s1 (control) = 0.
-    assert_word8_zero(extract_field(&out_sv, 15, NUM_CPU_FIELDS), vs, &format!("{label}: s1"));
+    assert_word8_zero(
+        extract_field(&out_sv, 15, NUM_CPU_FIELDS),
+        vs,
+        &format!("{label}: s1"),
+    );
     // s2..s7: SYMBOLIC input must be restored to IDENTITY (a spurious scratch
     // read/write -- invisible when s2.. was pinned to 0 -- is caught here).
     for j in 0..N_SYM_SCRATCH {
@@ -262,8 +295,15 @@ fn prove_wired_decoder(instr: Instr, label: &str) -> f64 {
     }
     // MAJOR-3: PC_hi is field 22 (NUM_CPU_FIELDS=23, build_cpu_init puts PC_hi
     // there); a stray write into it was previously unasserted (invisible).
-    assert_eq!(NUM_CPU_FIELDS, 23, "field layout: NUM_CPU_FIELDS must be 23 (PC_hi at 22)");
-    assert_word8_zero(extract_field(&out_sv, 22, NUM_CPU_FIELDS), vs, &format!("{label}: PC_hi"));
+    assert_eq!(
+        NUM_CPU_FIELDS, 23,
+        "field layout: NUM_CPU_FIELDS must be 23 (PC_hi at 22)"
+    );
+    assert_word8_zero(
+        extract_field(&out_sv, 22, NUM_CPU_FIELDS),
+        vs,
+        &format!("{label}: PC_hi"),
+    );
     walk_s
 }
 
@@ -294,10 +334,38 @@ fn decoder_bveq_whole_domain() {
         (Instr::Rotl { rd: 1, rs: 3 }, "Rotl(1,3)".into()),
         (Instr::Rotl { rd: 0, rs: 1 }, "Rotl(0,1)".into()),
         (Instr::Rotr { rd: 5, rs: 2 }, "Rotr(5,2)".into()),
-        (Instr::Cswap { rd: 0, rs: 1, rt: 2 }, "Cswap(0,1,2)".into()),
-        (Instr::Cswap { rd: 4, rs: 3, rt: 6 }, "Cswap(4,3,6)".into()),
-        (Instr::Ccnot { rd: 0, rs: 1, rt: 2 }, "Ccnot(0,1,2)".into()),
-        (Instr::Ccnot { rd: 5, rs: 3, rt: 7 }, "Ccnot(5,3,7)".into()),
+        (
+            Instr::Cswap {
+                rd: 0,
+                rs: 1,
+                rt: 2,
+            },
+            "Cswap(0,1,2)".into(),
+        ),
+        (
+            Instr::Cswap {
+                rd: 4,
+                rs: 3,
+                rt: 6,
+            },
+            "Cswap(4,3,6)".into(),
+        ),
+        (
+            Instr::Ccnot {
+                rd: 0,
+                rs: 1,
+                rt: 2,
+            },
+            "Ccnot(0,1,2)".into(),
+        ),
+        (
+            Instr::Ccnot {
+                rd: 5,
+                rs: 3,
+                rt: 7,
+            },
+            "Ccnot(5,3,7)".into(),
+        ),
     ];
 
     // ── IMMEDIATE bit-lane coverage (MAJOR-2) ───────────────────────────
@@ -359,8 +427,12 @@ fn reference_regs(instr: Instr, regs: &[u8; 8], scratch2: u8) -> [u8; 8] {
         Instr::Sub { rd, rs } => r[rd as usize] = r[rd as usize].wrapping_sub(r[rs as usize]),
         Instr::Xor { rd, rs } => r[rd as usize] ^= r[rs as usize],
         Instr::Exch { rd, rs } => r.swap(rd as usize, rs as usize),
-        Instr::Rotl { rd, rs } => r[rd as usize] = r[rd as usize].rotate_left(u32::from(r[rs as usize] & 7)),
-        Instr::Rotr { rd, rs } => r[rd as usize] = r[rd as usize].rotate_right(u32::from(r[rs as usize] & 7)),
+        Instr::Rotl { rd, rs } => {
+            r[rd as usize] = r[rd as usize].rotate_left(u32::from(r[rs as usize] & 7))
+        }
+        Instr::Rotr { rd, rs } => {
+            r[rd as usize] = r[rd as usize].rotate_right(u32::from(r[rs as usize] & 7))
+        }
         Instr::Cswap { rd, rs, rt } => {
             if r[rd as usize] & 1 == 1 {
                 r.swap(rs as usize, rt as usize);
@@ -371,7 +443,9 @@ fn reference_regs(instr: Instr, regs: &[u8; 8], scratch2: u8) -> [u8; 8] {
         Instr::Subi { rd, imm } => r[rd as usize] = r[rd as usize].wrapping_sub(imm),
         Instr::Xori { rd, imm } => r[rd as usize] ^= imm,
         Instr::Rotli { rd, imm } => r[rd as usize] = r[rd as usize].rotate_left(u32::from(imm & 7)),
-        Instr::Rotri { rd, imm } => r[rd as usize] = r[rd as usize].rotate_right(u32::from(imm & 7)),
+        Instr::Rotri { rd, imm } => {
+            r[rd as usize] = r[rd as usize].rotate_right(u32::from(imm & 7))
+        }
         _ => {}
     }
     let _ = scratch2;
@@ -397,8 +471,16 @@ fn decoder_bveq_bootstrap() {
         Instr::Exch { rd: 2, rs: 7 },
         Instr::Rotl { rd: 1, rs: 3 },
         Instr::Rotr { rd: 5, rs: 2 },
-        Instr::Cswap { rd: 0, rs: 1, rt: 2 },
-        Instr::Ccnot { rd: 5, rs: 3, rt: 7 },
+        Instr::Cswap {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        },
+        Instr::Ccnot {
+            rd: 5,
+            rs: 3,
+            rt: 7,
+        },
         Instr::Addi { rd: 3, imm: 255 },
         Instr::Subi { rd: 2, imm: 100 },
         Instr::Xori { rd: 5, imm: 0xFF },
@@ -484,11 +566,17 @@ fn decoder_bveq_negative_control() {
             if out_r0[bit] != add_bdd {
                 found = true;
                 let diff = out_r0[bit].xor(&add_bdd);
-                assert!(diff.sat_witness().is_some(), "xor-vs-add bit {bit}: vacuous diff");
+                assert!(
+                    diff.sat_witness().is_some(),
+                    "xor-vs-add bit {bit}: vacuous diff"
+                );
                 break;
             }
         }
-        assert!(found, "NEG: Xor decode vs Add semantics: no mismatch (vacuous!)");
+        assert!(
+            found,
+            "NEG: Xor decode vs Add semantics: no mismatch (vacuous!)"
+        );
 
         // WRONG-2: a DIFFERENT IR word (Add(0,1)) must produce a DIFFERENT
         // wired-decode output on r0 -- proves the walk tracks the opcode.
@@ -498,7 +586,10 @@ fn decoder_bveq_negative_control() {
         let out2 = eval_bdd(&decoder::decode_execute(), init2, vs, &mut ctx2).unwrap();
         let out2_r0 = extract_word8_bdds(extract_field(&out2, 0, NUM_CPU_FIELDS));
         let differs = (0..BITS).any(|b| out2_r0[b] != out_r0[b]);
-        assert!(differs, "NEG: Add word must decode differently from Xor word (teeth)");
+        assert!(
+            differs,
+            "NEG: Add word must decode differently from Xor word (teeth)"
+        );
 
         // WRONG-3 (MAJOR-3 teeth): the real decode leaves PC_hi (field 22) = 0.
         // A stray write into PC_hi (e.g. a copy of r0) would leave it != 0. Prove
@@ -521,7 +612,9 @@ fn decoder_bveq_negative_control() {
             "NEG PC_hi: stray-copy witness (r0 != 0) must be satisfiable"
         );
 
-        eprintln!("DECODER-BVEQ negative control: wired decode ≠ {{Add-semantics, Add-word}}; \
-                   real PC_hi=0 ≠ a stray PC_hi=r0 write -- teeth (incl. MAJOR-3 PC_hi).");
+        eprintln!(
+            "DECODER-BVEQ negative control: wired decode ≠ {{Add-semantics, Add-word}}; \
+                   real PC_hi=0 ≠ a stray PC_hi=r0 write -- teeth (incl. MAJOR-3 PC_hi)."
+        );
     });
 }

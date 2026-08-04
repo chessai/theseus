@@ -214,10 +214,16 @@ pub struct GateResult {
 
 impl GateResult {
     fn pass(detail: String) -> Self {
-        GateResult { passed: true, detail }
+        GateResult {
+            passed: true,
+            detail,
+        }
     }
     fn fail(detail: String) -> Self {
-        GateResult { passed: false, detail }
+        GateResult {
+            passed: false,
+            detail,
+        }
     }
 }
 
@@ -272,7 +278,8 @@ impl AdmissionReport {
 
     /// A multi-line human-readable rendering of the whole report.
     pub fn summary(&self) -> String {
-        let g = |r: &GateResult| format!("{} -- {}", if r.passed { "PASS" } else { "FAIL" }, r.detail);
+        let g =
+            |r: &GateResult| format!("{} -- {}", if r.passed { "PASS" } else { "FAIL" }, r.detail);
         format!(
             "ADMISSION {:?} @ {:?}: {}\n  [1 functional]   {}\n  [2 conservation] {}\n  [3 inv-token]    {}\n  [4 reverse]      {} (recorded, non-blocking)\n  [5 scaling]      {}",
             self.cell,
@@ -379,8 +386,8 @@ fn parse_caps(deck: &str) -> io::Result<Vec<(String, f64)>> {
     for line in deck.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() == 4 && parts[0].starts_with('C') && parts[2] == "0" {
-            let farads = spice_value(parts[3])
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            let farads =
+                spice_value(parts[3]).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             caps.push((parts[1].to_string(), farads));
         }
     }
@@ -410,7 +417,10 @@ fn closure_result(label: &str, e_a: f64, e_b: f64, parts_sum: f64, d_stored: f64
 /// The shared gate-5 verdict: ADR-0028 fit quality plus recoverable-term
 /// dominance at both ends of the swept range.
 fn scaling_verdict(points: Vec<(f64, f64)>) -> (GateResult, ScalingEvidence) {
-    assert!(points.len() >= 5, "gate 5 needs >= 5 sweep points (3 fit exactly)");
+    assert!(
+        points.len() >= 5,
+        "gate 5 needs >= 5 sweep points (3 fit exactly)"
+    );
     let fit = energy::fit(&points);
     let t_min = points.first().expect("nonempty").0;
     let t_max = points.last().expect("nonempty").0;
@@ -463,7 +473,10 @@ fn scaling_verdict(points: Vec<(f64, f64)>) -> (GateResult, ScalingEvidence) {
         leak_share_slow,
     };
     (
-        GateResult { passed: fit_ok && dominance_ok, detail },
+        GateResult {
+            passed: fit_ok && dominance_ok,
+            detail,
+        },
         evidence,
     )
 }
@@ -518,7 +531,10 @@ fn closure_orbit(topo: CellTopo) -> Vec<CswapToken> {
     let CellTopo::K(k) = topo else { unreachable!() };
     match k {
         // Both a-lines pulse.
-        0 => vec![t(false, false, false, true, false), t(false, false, false, false, false)],
+        0 => vec![
+            t(false, false, false, true, false),
+            t(false, false, false, false, false),
+        ],
         // Covers c∧b, c∧¬b, c∧a, c∧¬a, ¬c∧a, ¬c∧¬a, ¬c∧b, ¬c∧¬b.
         1 => vec![
             t(true, false, false, true, false),
@@ -578,11 +594,19 @@ fn admit_fabric_cell(
 
 /// Gate 1 for a TG-fabric cell: typed decode of every per-token line reading
 /// against the truth function.
-fn cell_functional_verdict(topo: CellTopo, rung: DeviceRung, readings: &[CswapReading]) -> GateResult {
+fn cell_functional_verdict(
+    topo: CellTopo,
+    rung: DeviceRung,
+    readings: &[CswapReading],
+) -> GateResult {
     let vdd = rung.vdd();
     let mut mismatches: Vec<String> = Vec::new();
     for r in readings {
-        let want = if r.expected_active { RailState::Asserted } else { RailState::Deasserted };
+        let want = if r.expected_active {
+            RailState::Asserted
+        } else {
+            RailState::Deasserted
+        };
         let got = decode_pair(r.rail_v, r.mirror_v, vdd);
         if got != want {
             mismatches.push(format!(
@@ -591,7 +615,11 @@ fn cell_functional_verdict(topo: CellTopo, rung: DeviceRung, readings: &[CswapRe
             ));
         }
     }
-    let n_tokens = readings.iter().map(|r| r.token_idx).max().map_or(0, |m| m + 1);
+    let n_tokens = readings
+        .iter()
+        .map(|r| r.token_idx)
+        .max()
+        .map_or(0, |m| m + 1);
     let combos = 1usize << topo.signals().len();
     if mismatches.is_empty() {
         GateResult::pass(format!(
@@ -629,7 +657,8 @@ fn cell_token_verdict(topo: CellTopo, rung: DeviceRung, readings: &[CswapReading
         debug_assert_eq!(r1.token_idx, r0.token_idx);
         let s1 = decode_pair(r1.rail_v, r1.mirror_v, vdd);
         let s0 = decode_pair(r0.rail_v, r0.mirror_v, vdd);
-        let asserted = usize::from(s1 == RailState::Asserted) + usize::from(s0 == RailState::Asserted);
+        let asserted =
+            usize::from(s1 == RailState::Asserted) + usize::from(s0 == RailState::Asserted);
         if asserted != 1 || s1 == RailState::Undefined || s0 == RailState::Undefined {
             violations.push(format!(
                 "tick {} pair {}/{}: states {s1:?}/{s0:?} ({} asserted, want exactly 1)",
@@ -651,7 +680,12 @@ fn cell_token_verdict(topo: CellTopo, rung: DeviceRung, readings: &[CswapReading
     } else {
         GateResult::fail(format!(
             "INV-TOKEN violated: {}",
-            violations.iter().chain(count_bad.iter()).cloned().collect::<Vec<_>>().join("; ")
+            violations
+                .iter()
+                .chain(count_bad.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("; ")
         ))
     }
 }
@@ -662,7 +696,11 @@ fn cell_token_verdict(topo: CellTopo, rung: DeviceRung, readings: &[CswapReading
 /// FIND measurements. The measured orbit starts at the first orbit boundary
 /// at or after cycle 8, so rung-1 devices get ≥ 5 leak-settling time
 /// constants (τ ≈ 140 ns at T = 1e-7) before anything is asserted.
-fn cell_conservation_verdict(topo: CellTopo, rung: DeviceRung, period: f64) -> io::Result<GateResult> {
+fn cell_conservation_verdict(
+    topo: CellTopo,
+    rung: DeviceRung,
+    period: f64,
+) -> io::Result<GateResult> {
     let orbit = closure_orbit(topo);
     let len = orbit.len();
     let n0 = (8usize).div_ceil(len) * len; // first measured orbit boundary
@@ -677,16 +715,29 @@ fn cell_conservation_verdict(topo: CellTopo, rung: DeviceRung, period: f64) -> i
         extra.push(format!("meas tran sv{i} FIND V({node}) AT={t0:.9e}"));
         extra.push(format!("meas tran ev{i} FIND V({node}) AT={t1:.9e}"));
     }
-    for (name, node) in
-        [("cs0", "pp0"), ("cs2", "pp2"), ("csv", "ppv"), ("csi", "pint"), ("csa", "pakt")]
-    {
-        extra.push(format!("meas tran {name} INTEG V({node}) FROM={t0:.9e} TO={t1:.9e}"));
+    for (name, node) in [
+        ("cs0", "pp0"),
+        ("cs2", "pp2"),
+        ("csv", "ppv"),
+        ("csi", "pint"),
+        ("csa", "pakt"),
+    ] {
+        extra.push(format!(
+            "meas tran {name} INTEG V({node}) FROM={t0:.9e} TO={t1:.9e}"
+        ));
     }
     let out = run_ngspice_raw(&inject_meas(&deck, &extra))?;
-    let e_orbit_a: f64 = (n0..n0 + len).map(|i| meas(&out, &format!("ecyc{i}"))).sum();
-    let e_orbit_b: f64 = (n0 + len..n0 + 2 * len).map(|i| meas(&out, &format!("ecyc{i}"))).sum();
-    let parts =
-        meas(&out, "cs0") + meas(&out, "cs2") + meas(&out, "csv") + meas(&out, "csi") + meas(&out, "csa");
+    let e_orbit_a: f64 = (n0..n0 + len)
+        .map(|i| meas(&out, &format!("ecyc{i}")))
+        .sum();
+    let e_orbit_b: f64 = (n0 + len..n0 + 2 * len)
+        .map(|i| meas(&out, &format!("ecyc{i}")))
+        .sum();
+    let parts = meas(&out, "cs0")
+        + meas(&out, "cs2")
+        + meas(&out, "csv")
+        + meas(&out, "csi")
+        + meas(&out, "csa");
     let mut d_stored = 0.0;
     for (i, (_, c)) in caps.iter().enumerate() {
         let v0 = meas(&out, &format!("sv{i}"));
@@ -849,12 +900,24 @@ fn tg_admission_deck(
     let step = tran_step(rung, period);
     let stop = 4.0 * period;
     let pwl = if reversed {
-        format!("0 0 {q:.9e} 0 {:.9e} {vdd} {:.9e} {vdd} {period:.9e} 0", 2.0 * q, 3.0 * q)
+        format!(
+            "0 0 {q:.9e} 0 {:.9e} {vdd} {:.9e} {vdd} {period:.9e} 0",
+            2.0 * q,
+            3.0 * q
+        )
     } else {
-        format!("0 0 {q:.9e} {vdd} {:.9e} {vdd} {:.9e} 0 {period:.9e} 0", 2.0 * q, 3.0 * q)
+        format!(
+            "0 0 {q:.9e} {vdd} {:.9e} {vdd} {:.9e} 0 {period:.9e} 0",
+            2.0 * q,
+            3.0 * q
+        )
     };
     // Hold/low window offsets within a cycle, per clock direction.
-    let (hold_off, rest_off) = if reversed { (2.0 * q, 0.0) } else { (q, 3.0 * q) };
+    let (hold_off, rest_off) = if reversed {
+        (2.0 * q, 0.0)
+    } else {
+        (q, 3.0 * q)
+    };
     let mut l: Vec<String> = Vec::new();
     l.push(format!(
         "adiabatic TG buffer admission deck, {rung:?} variant {} load {c_load_f:.4e} F (T={period:.6e} s{})",
@@ -882,7 +945,10 @@ fn tg_admission_deck(
     l.push(format!("tran {step:.9e} {stop:.9e} uic"));
     for i in 0..4 {
         let f = i as f64 * period;
-        l.push(format!("meas tran ecyc{i} INTEG V(ptot) FROM={f:.9e} TO={:.9e}", f + period));
+        l.push(format!(
+            "meas tran ecyc{i} INTEG V(ptot) FROM={f:.9e} TO={:.9e}",
+            f + period
+        ));
     }
     for c in 1..=3usize {
         let base = c as f64 * period;
@@ -901,7 +967,9 @@ fn tg_admission_deck(
     l.push(format!("meas tran sv0 FIND V(out) AT={t0:.9e}"));
     l.push(format!("meas tran ev0 FIND V(out) AT={t1:.9e}"));
     for (name, node) in [("cpc", "ppc"), ("cvd", "pvd"), ("cgt", "pgt")] {
-        l.push(format!("meas tran {name} INTEG V({node}) FROM={t0:.9e} TO={t1:.9e}"));
+        l.push(format!(
+            "meas tran {name} INTEG V({node}) FROM={t0:.9e} TO={t1:.9e}"
+        ));
     }
     l.push(".endc".into());
     l.push(".end".into());
@@ -928,7 +996,12 @@ pub fn admit_tg_sky130_variant(
     c_load_f: f64,
     scaling_points: Vec<(f64, f64)>,
 ) -> io::Result<AdmissionReport> {
-    admit_tg_impl(DeviceRung::Rung1Sky130, variant, c_load_f, Some(scaling_points))
+    admit_tg_impl(
+        DeviceRung::Rung1Sky130,
+        variant,
+        c_load_f,
+        Some(scaling_points),
+    )
 }
 
 fn admit_tg_impl(
@@ -960,7 +1033,9 @@ fn admit_tg_impl(
 
     // Gate 3: single-ended primitive -- the invariant degenerates (see docs).
     let holds: Vec<f64> = (1..=3).map(|c| meas(&out, &format!("vh{c}"))).collect();
-    let all_asserted = holds.iter().all(|&v| decode_rail(v, vdd) == RailState::Asserted);
+    let all_asserted = holds
+        .iter()
+        .all(|&v| decode_rail(v, vdd) == RailState::Asserted);
     let token_invariant = if all_asserted {
         GateResult::pass(format!(
             "asserted-rail count = 1 at all 3 sampled valid ticks (hold mins {holds:?} V). \
@@ -968,7 +1043,9 @@ fn admit_tg_impl(
              the dual-rail 1-of-2 discipline is checked on the k-CSWAP stages"
         ))
     } else {
-        GateResult::fail(format!("output rail not asserted at every valid tick: {holds:?} V"))
+        GateResult::fail(format!(
+            "output rail not asserted at every valid tick: {holds:?} V"
+        ))
     };
 
     // Gate 2: closure over settled cycles 2 and 3.
@@ -989,28 +1066,29 @@ fn admit_tg_impl(
 
     // Gate 4: time-reversed trapezoid; the buffer is self-inverse (identity
     // adjoint), so the same single-row table must decode.
-    let reverse_drive = match run_ngspice_raw(&tg_admission_deck(rung, period, true, variant, c_load_f)) {
-        Err(e) => GateResult::fail(format!(
-            "reverse-drive simulation failed outright ({e}) -- recorded, non-blocking"
-        )),
-        Ok(rout) => {
-            let rvh = meas(&rout, "vh2");
-            let rvr = meas(&rout, "vr2");
-            if decode_rail(rvh, vdd) == RailState::Asserted
-                && decode_rail(rvr, vdd) == RailState::Deasserted
-            {
-                GateResult::pass(format!(
-                    "time-reversed trapezoid: identity adjoint reproduced \
+    let reverse_drive =
+        match run_ngspice_raw(&tg_admission_deck(rung, period, true, variant, c_load_f)) {
+            Err(e) => GateResult::fail(format!(
+                "reverse-drive simulation failed outright ({e}) -- recorded, non-blocking"
+            )),
+            Ok(rout) => {
+                let rvh = meas(&rout, "vh2");
+                let rvr = meas(&rout, "vr2");
+                if decode_rail(rvh, vdd) == RailState::Asserted
+                    && decode_rail(rvr, vdd) == RailState::Deasserted
+                {
+                    GateResult::pass(format!(
+                        "time-reversed trapezoid: identity adjoint reproduced \
                      (hold min {rvh:.4} V, rest max {rvr:.4} V)"
-                ))
-            } else {
-                GateResult::fail(format!(
+                    ))
+                } else {
+                    GateResult::fail(format!(
                     "reversed clock failed decode (hold min {rvh:.4} V, rest max {rvr:.4} V) -- \
                      recorded, non-blocking"
                 ))
+                }
             }
-        }
-    };
+        };
 
     // Gate 5: the cell's own E(period) curve -- the caller-supplied variant
     // sweep when given (the matrix path), else the canonical-cell sweep.
@@ -1046,7 +1124,9 @@ fn cmos_admission_deck(rung: DeviceRung, period: f64) -> String {
     let edge = (period / 1000.0).min(1e-10);
     let td = 0.25 * period;
     let mut l: Vec<String> = Vec::new();
-    l.push(format!("static CMOS inverter admission deck, {rung:?} (T={period:.6e} s)"));
+    l.push(format!(
+        "static CMOS inverter admission deck, {rung:?} (T={period:.6e} s)"
+    ));
     l.push(rung.model_header());
     l.push(format!("Vdd vdd 0 DC {vdd}"));
     l.push(format!(
@@ -1064,7 +1144,10 @@ fn cmos_admission_deck(rung: DeviceRung, period: f64) -> String {
     l.push(format!("tran {step:.9e} {stop:.9e} uic"));
     for i in 0..4 {
         let f = i as f64 * period;
-        l.push(format!("meas tran ecyc{i} INTEG V(ptot) FROM={f:.9e} TO={:.9e}", f + period));
+        l.push(format!(
+            "meas tran ecyc{i} INTEG V(ptot) FROM={f:.9e} TO={:.9e}",
+            f + period
+        ));
     }
     // Input high on [2T+0.25T, 2T+0.75T] → out low; low after → out high.
     let b = 2.0 * period;
@@ -1081,7 +1164,10 @@ fn cmos_admission_deck(rung: DeviceRung, period: f64) -> String {
     l.push(format!("meas tran sv0 FIND V(out) AT={b:.9e}"));
     l.push(format!("meas tran ev0 FIND V(out) AT={:.9e}", b + period));
     for (name, node) in [("cvd", "pvd"), ("cin", "pin")] {
-        l.push(format!("meas tran {name} INTEG V({node}) FROM={b:.9e} TO={:.9e}", b + period));
+        l.push(format!(
+            "meas tran {name} INTEG V({node}) FROM={b:.9e} TO={:.9e}",
+            b + period
+        ));
     }
     l.push(".endc".into());
     l.push(".end".into());
@@ -1152,7 +1238,11 @@ fn pfal_admission_deck(rung: DeviceRung, period: f64, bit: bool) -> String {
     let step = tran_step(rung, period);
     let stop = 4.0 * period;
     let (vin, vinb) = if bit { (vdd, 0.0) } else { (0.0, vdd) };
-    let (act, inact) = if bit { ("out", "outb") } else { ("outb", "out") };
+    let (act, inact) = if bit {
+        ("out", "outb")
+    } else {
+        ("outb", "out")
+    };
     let mut l: Vec<String> = Vec::new();
     l.push(format!(
         "PFAL buffer admission deck, {rung:?} (T={period:.6e} s, in={})",
@@ -1181,13 +1271,20 @@ fn pfal_admission_deck(rung: DeviceRung, period: f64, bit: bool) -> String {
     l.push(format!("tran {step:.9e} {stop:.9e} uic"));
     for i in 0..4 {
         let f = i as f64 * period;
-        l.push(format!("meas tran ecyc{i} INTEG V(ptot) FROM={f:.9e} TO={:.9e}", f + period));
+        l.push(format!(
+            "meas tran ecyc{i} INTEG V(ptot) FROM={f:.9e} TO={:.9e}",
+            f + period
+        ));
     }
     for c in 1..=3usize {
         let w0 = c as f64 * period + q + 0.2 * q;
         let w1 = c as f64 * period + 2.0 * q - 0.2 * q;
-        l.push(format!("meas tran va{c} MIN V({act}) FROM={w0:.9e} TO={w1:.9e}"));
-        l.push(format!("meas tran vi{c} MAX V({inact}) FROM={w0:.9e} TO={w1:.9e}"));
+        l.push(format!(
+            "meas tran va{c} MIN V({act}) FROM={w0:.9e} TO={w1:.9e}"
+        ));
+        l.push(format!(
+            "meas tran vi{c} MAX V({inact}) FROM={w0:.9e} TO={w1:.9e}"
+        ));
     }
     let (t0, t1) = (2.0 * period, 3.0 * period);
     l.push(format!("meas tran svo FIND V(out) AT={t0:.9e}"));
@@ -1195,7 +1292,9 @@ fn pfal_admission_deck(rung: DeviceRung, period: f64, bit: bool) -> String {
     l.push(format!("meas tran svb FIND V(outb) AT={t0:.9e}"));
     l.push(format!("meas tran evb FIND V(outb) AT={t1:.9e}"));
     for (name, node) in [("cpc", "ppc"), ("cvd", "pvd"), ("cgt", "pgt")] {
-        l.push(format!("meas tran {name} INTEG V({node}) FROM={t0:.9e} TO={t1:.9e}"));
+        l.push(format!(
+            "meas tran {name} INTEG V({node}) FROM={t0:.9e} TO={t1:.9e}"
+        ));
     }
     l.push(".endc".into());
     l.push(".end".into());
@@ -1237,7 +1336,10 @@ fn admit_pfal(rung: DeviceRung) -> io::Result<AdmissionReport> {
         let (svb, evb) = (meas(&out, "svb"), meas(&out, "evb"));
         let d_stored = 0.5 * 100e-15 * ((evo * evo - svo * svo) + (evb * evb - svb * svb));
         closures.push(closure_result(
-            &format!("PFAL in={}, T={period:.1e} s, settled cycle 2→3", u8::from(bit)),
+            &format!(
+                "PFAL in={}, T={period:.1e} s, settled cycle 2→3",
+                u8::from(bit)
+            ),
             e2,
             e3,
             parts,
@@ -1247,7 +1349,10 @@ fn admit_pfal(rung: DeviceRung) -> io::Result<AdmissionReport> {
 
     let functional = GateResult {
         passed: functional_ok,
-        detail: format!("clocked-buffer truth table via typed decode: {}", functional_notes.join("; ")),
+        detail: format!(
+            "clocked-buffer truth table via typed decode: {}",
+            functional_notes.join("; ")
+        ),
     };
     let token_invariant = if token_ok {
         GateResult::pass(
@@ -1260,7 +1365,11 @@ fn admit_pfal(rung: DeviceRung) -> io::Result<AdmissionReport> {
     };
     let conservation = GateResult {
         passed: closures.iter().all(|c| c.passed),
-        detail: closures.iter().map(|c| c.detail.clone()).collect::<Vec<_>>().join(" | "),
+        detail: closures
+            .iter()
+            .map(|c| c.detail.clone())
+            .collect::<Vec<_>>()
+            .join(" | "),
     };
     let reverse_drive = GateResult::fail(
         "single-phase power-clock: reversing the phase sequence degenerates to a pure time \
@@ -1302,7 +1411,12 @@ mod tests {
         let fail = || GateResult::fail("f".into());
         let ev = ScalingEvidence {
             points: vec![(1.0, 1.0)],
-            fit: EnergyFit { k_adia: 1.0, k_leak: 0.0, k_res: 0.0, r_squared: 1.0 },
+            fit: EnergyFit {
+                k_adia: 1.0,
+                k_leak: 0.0,
+                k_res: 0.0,
+                r_squared: 1.0,
+            },
             adia_share_fast: 1.0,
             adia_share_slow: 1.0,
             leak_share_slow: 0.0,
@@ -1410,7 +1524,11 @@ mod tests {
         assert!(r.functional.passed, "gate 1 failed:\n{}", r.summary());
         assert!(r.conservation.passed, "gate 2 failed:\n{}", r.summary());
         assert!(r.token_invariant.passed, "gate 3 failed:\n{}", r.summary());
-        assert!(r.reverse_drive.passed, "gate 4 (reverse drive) failed:\n{}", r.summary());
+        assert!(
+            r.reverse_drive.passed,
+            "gate 4 (reverse drive) failed:\n{}",
+            r.summary()
+        );
         assert!(r.scaling.passed, "gate 5 failed:\n{}", r.summary());
         assert!(r.admitted(), "R1 must be admitted:\n{}", r.summary());
     }
@@ -1432,19 +1550,36 @@ mod tests {
             eprintln!("[skip] ngspice unavailable");
             return;
         }
-        let r = admit(CandidateCell::CmosBaseline, DeviceRung::Rung0Level1).expect("ngspice failed");
+        let r =
+            admit(CandidateCell::CmosBaseline, DeviceRung::Rung0Level1).expect("ngspice failed");
         eprintln!("{}", r.summary());
         // The inverter WORKS -- rejection is about reversibility, not function.
-        assert!(r.functional.passed, "the CMOS baseline should compute:\n{}", r.summary());
+        assert!(
+            r.functional.passed,
+            "the CMOS baseline should compute:\n{}",
+            r.summary()
+        );
         // No token discipline, and a flat E(T) has no recoverable term.
-        assert!(!r.token_invariant.passed, "gate 3 must fail for CMOS:\n{}", r.summary());
-        assert!(!r.scaling.passed, "gate 5 must fail for CMOS (flat curve):\n{}", r.summary());
+        assert!(
+            !r.token_invariant.passed,
+            "gate 3 must fail for CMOS:\n{}",
+            r.summary()
+        );
+        assert!(
+            !r.scaling.passed,
+            "gate 5 must fail for CMOS (flat curve):\n{}",
+            r.summary()
+        );
         assert!(
             r.scaling_evidence.adia_share_fast < MIN_ADIA_SHARE,
             "flat CMOS curve must have no dominant k_adia/t term: {:?}",
             r.scaling_evidence
         );
-        assert!(!r.admitted(), "CMOS baseline must be rejected:\n{}", r.summary());
+        assert!(
+            !r.admitted(),
+            "CMOS baseline must be rejected:\n{}",
+            r.summary()
+        );
     }
 
     #[test]
@@ -1456,13 +1591,21 @@ mod tests {
         let r = admit(CandidateCell::PfalBuffer, DeviceRung::Rung0Level1).expect("ngspice failed");
         eprintln!("{}", r.summary());
         // PFAL computes as a clocked buffer -- its failure is the energy floor.
-        assert!(r.functional.passed, "the PFAL baseline should compute:\n{}", r.summary());
+        assert!(
+            r.functional.passed,
+            "the PFAL baseline should compute:\n{}",
+            r.summary()
+        );
         assert!(
             !r.scaling.passed,
             "gate 5 must fail for PFAL (floored / leakage-dominated):\n{}",
             r.summary()
         );
-        assert!(!r.admitted(), "PFAL baseline must be rejected:\n{}", r.summary());
+        assert!(
+            !r.admitted(),
+            "PFAL baseline must be rejected:\n{}",
+            r.summary()
+        );
     }
 
     // ----- rung 1 (sky130): the same checklist on real silicon models -----

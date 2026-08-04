@@ -314,9 +314,14 @@ fn vart_t3_real_cpu_sampled() {
 
         // run_rom_on_cpu to inspect the FULL terminal state (quiescence checks).
         let state = marshal(&v, &in_ty);
-        let final_state =
-            run_rom_on_cpu(&lowered.instrs, state, budget, s_max_val, theseus_eval::eval)
-                .expect("real-cpu run");
+        let final_state = run_rom_on_cpu(
+            &lowered.instrs,
+            state,
+            budget,
+            s_max_val,
+            theseus_eval::eval,
+        )
+        .expect("real-cpu run");
 
         let cpu_out = unmarshal(&final_state, &out_ty);
         let mut fuel = 1_000_000u64;
@@ -330,7 +335,10 @@ fn vart_t3_real_cpu_sampled() {
             "scratch must be all-zero at exit (paging/aux leak check): {:?}",
             final_state.scratch
         );
-        assert_eq!(final_state.br, 0, "BR must be zero at loop exit (park convention)");
+        assert_eq!(
+            final_state.br, 0,
+            "BR must be zero at loop exit (park convention)"
+        );
     }
 }
 
@@ -347,8 +355,7 @@ fn vart_k4_now_lowers_at_wbr16() {
     // `wbr_b_comefrom.rs`.
     let (body, u_ty, _carrier) = build_v2_body_sized(4, 1);
     let iso = Iso::trace(u_ty, body);
-    let lowered =
-        compile_with_metadata(&iso).expect("K=4,HB=1 must LOWER at w_br=16 (W_BR-b)");
+    let lowered = compile_with_metadata(&iso).expect("K=4,HB=1 must LOWER at w_br=16 (W_BR-b)");
     assert_eq!(lowered.w_br, 16, "K=4 lifts to the two-byte come-from");
     assert_eq!(
         lowered.loop_terms[0].iter_len, 137,

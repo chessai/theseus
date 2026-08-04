@@ -186,12 +186,12 @@ fn rejects_reserved_operands() {
 ///   s[i] = 0x20 + i   (0x20..0x28)
 fn distinct_state(operand_index: u32) -> StateVals {
     let mut regs = [0u8; NUM_REGS];
-    for i in 0..NUM_REGS {
-        regs[i] = 0x10 + i as u8;
+    for (i, r) in regs.iter_mut().enumerate() {
+        *r = 0x10 + i as u8;
     }
     let mut scratch = [0u8; NUM_SCRATCH];
-    for i in 0..NUM_SCRATCH {
-        scratch[i] = 0x20 + i as u8;
+    for (i, s) in scratch.iter_mut().enumerate() {
+        *s = 0x20 + i as u8;
     }
     StateVals {
         regs,

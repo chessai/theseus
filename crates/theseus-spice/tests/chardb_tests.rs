@@ -5,7 +5,9 @@ use theseus_spice::energy;
 
 /// Helper: generate synthetic data from E(t) = k_adia/t + k_leak*t + k_res.
 fn synthetic_points(k_adia: f64, k_leak: f64, k_res: f64, ts: &[f64]) -> Vec<(f64, f64)> {
-    ts.iter().map(|&t| (t, k_adia / t + k_leak * t + k_res)).collect()
+    ts.iter()
+        .map(|&t| (t, k_adia / t + k_leak * t + k_res))
+        .collect()
 }
 
 // ── (a) Fit recovers known coefficients within 1% relative ──────────────
@@ -19,10 +21,29 @@ fn fit_recovers_coefficients_within_tolerance() {
     let fit = energy::fit(&points);
 
     let rel = |actual: f64, expected: f64| ((actual - expected) / expected).abs();
-    assert!(rel(fit.k_adia, ka) < 0.01, "k_adia: got {} expected {}", fit.k_adia, ka);
-    assert!(rel(fit.k_leak, kl) < 0.01, "k_leak: got {} expected {}", fit.k_leak, kl);
-    assert!(rel(fit.k_res, kr) < 0.01, "k_res: got {} expected {}", fit.k_res, kr);
-    assert!(fit.r_squared > 0.999, "R² should be ~1 for exact data, got {}", fit.r_squared);
+    assert!(
+        rel(fit.k_adia, ka) < 0.01,
+        "k_adia: got {} expected {}",
+        fit.k_adia,
+        ka
+    );
+    assert!(
+        rel(fit.k_leak, kl) < 0.01,
+        "k_leak: got {} expected {}",
+        fit.k_leak,
+        kl
+    );
+    assert!(
+        rel(fit.k_res, kr) < 0.01,
+        "k_res: got {} expected {}",
+        fit.k_res,
+        kr
+    );
+    assert!(
+        fit.r_squared > 0.999,
+        "R² should be ~1 for exact data, got {}",
+        fit.r_squared
+    );
     assert!(fit.adequate(0.99));
 }
 
@@ -47,7 +68,10 @@ fn test_db() -> CharDb {
     let ts: Vec<f64> = (1..=10).map(|i| i as f64).collect();
     let pts: Vec<CharPoint> = ts
         .iter()
-        .map(|&t| CharPoint { t_ramp: t, energy: ka / t + kl * t + kr })
+        .map(|&t| CharPoint {
+            t_ramp: t,
+            energy: ka / t + kl * t + kr,
+        })
         .collect();
     chardb::rebuild(&[("inv_std".to_string(), pts)])
 }
@@ -66,7 +90,12 @@ fn query_below_min_is_out_of_range() {
     let db = test_db();
     let err = db.query("inv_std", 0.999).unwrap_err();
     match err {
-        QueryError::OutOfRange { ref key, t_ramp, min, max } => {
+        QueryError::OutOfRange {
+            ref key,
+            t_ramp,
+            min,
+            max,
+        } => {
             assert_eq!(key, "inv_std");
             assert!((t_ramp - 0.999).abs() < f64::EPSILON);
             assert!((min - 1.0).abs() < f64::EPSILON);
@@ -106,7 +135,10 @@ fn ron_round_trip_byte_identical() {
 
     // Byte-identical re-serialization
     let ron_text2 = restored.to_ron();
-    assert_eq!(ron_text, ron_text2, "re-serialization must be byte-identical");
+    assert_eq!(
+        ron_text, ron_text2,
+        "re-serialization must be byte-identical"
+    );
 }
 
 // ── (d) Rebuild is deterministic ─────────────────────────────────────────
@@ -117,7 +149,10 @@ fn rebuild_deterministic() {
     let ts: Vec<f64> = (1..=10).map(|i| i as f64).collect();
     let pts: Vec<CharPoint> = ts
         .iter()
-        .map(|&t| CharPoint { t_ramp: t, energy: ka / t + kl * t + kr })
+        .map(|&t| CharPoint {
+            t_ramp: t,
+            energy: ka / t + kl * t + kr,
+        })
         .collect();
 
     let raw = vec![
@@ -127,5 +162,9 @@ fn rebuild_deterministic() {
 
     let db1 = chardb::rebuild(&raw);
     let db2 = chardb::rebuild(&raw);
-    assert_eq!(db1.to_ron(), db2.to_ron(), "two rebuilds must serialize byte-identically");
+    assert_eq!(
+        db1.to_ron(),
+        db2.to_ron(),
+        "two rebuilds must serialize byte-identically"
+    );
 }

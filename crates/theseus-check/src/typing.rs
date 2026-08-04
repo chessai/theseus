@@ -20,10 +20,7 @@ pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
     let mut diags = Vec::new();
     // Surface iso-name collisions detected during resolution as T0101.
     for collision in env.iso_collisions() {
-        diags.push(
-            Diagnostic::new(Code::T0101, collision.span)
-                .with_name(collision.name.clone()),
-        );
+        diags.push(Diagnostic::new(Code::T0101, collision.span).with_name(collision.name.clone()));
     }
     for decl in &program.decls {
         if let Decl::Iso(id) = decl {
@@ -50,8 +47,28 @@ fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
         for (i, clause) in clauses.iter().enumerate() {
             let clause_index = i + 1; // 1-indexed
             let mut var_types: BTreeMap<String, SurfType> = BTreeMap::new();
-            check_pattern(&clause.lhs, &id.lhs, env, Side::Left, clause_index, labels, true, &mut var_types, diags);
-            check_pattern(&clause.rhs, &id.rhs, env, Side::Right, clause_index, labels, true, &mut var_types, diags);
+            check_pattern(
+                &clause.lhs,
+                &id.lhs,
+                env,
+                Side::Left,
+                clause_index,
+                labels,
+                true,
+                &mut var_types,
+                diags,
+            );
+            check_pattern(
+                &clause.rhs,
+                &id.rhs,
+                env,
+                Side::Right,
+                clause_index,
+                labels,
+                true,
+                &mut var_types,
+                diags,
+            );
         }
     }
     for w in &id.wheres {
@@ -125,10 +142,29 @@ fn check_pattern(
                 match args.len() {
                     0 => { /* nullary label -- carrier is unit, nothing to check */ }
                     1 => {
-                        check_pattern(&args[0], carrier, env, side, clause_index, labels, false, var_types, diags);
+                        check_pattern(
+                            &args[0],
+                            carrier,
+                            env,
+                            side,
+                            clause_index,
+                            labels,
+                            false,
+                            var_types,
+                            diags,
+                        );
                     }
                     _ => {
-                        check_curried_args(args, carrier, env, side, clause_index, labels, var_types, diags);
+                        check_curried_args(
+                            args,
+                            carrier,
+                            env,
+                            side,
+                            clause_index,
+                            labels,
+                            var_types,
+                            diags,
+                        );
                     }
                 }
             }
@@ -153,10 +189,29 @@ fn check_pattern(
                     // Nullary ctor applied to no args -- fine.
                 }
                 (Some(payload_ty), [arg]) => {
-                    check_pattern(arg, payload_ty, env, side, clause_index, labels, false, var_types, diags);
+                    check_pattern(
+                        arg,
+                        payload_ty,
+                        env,
+                        side,
+                        clause_index,
+                        labels,
+                        false,
+                        var_types,
+                        diags,
+                    );
                 }
                 (Some(payload_ty), args) if args.len() > 1 => {
-                    check_curried_args(args, payload_ty, env, side, clause_index, labels, var_types, diags);
+                    check_curried_args(
+                        args,
+                        payload_ty,
+                        env,
+                        side,
+                        clause_index,
+                        labels,
+                        var_types,
+                        diags,
+                    );
                 }
                 _ => {
                     // Arity mismatch (e.g. nullary ctor given args, or
@@ -172,8 +227,28 @@ fn check_pattern(
         Pattern::Tuple(a, b, _) => {
             // A tuple pattern is well-typed against a product type.
             if let SurfType::Prod(ty_a, ty_b, _) = ty {
-                check_pattern(a, ty_a, env, side, clause_index, labels, false, var_types, diags);
-                check_pattern(b, ty_b, env, side, clause_index, labels, false, var_types, diags);
+                check_pattern(
+                    a,
+                    ty_a,
+                    env,
+                    side,
+                    clause_index,
+                    labels,
+                    false,
+                    var_types,
+                    diags,
+                );
+                check_pattern(
+                    b,
+                    ty_b,
+                    env,
+                    side,
+                    clause_index,
+                    labels,
+                    false,
+                    var_types,
+                    diags,
+                );
             } else {
                 diags.push(
                     Diagnostic::new(Code::T0102, pat.span())
@@ -183,7 +258,17 @@ fn check_pattern(
             }
         }
         Pattern::Paren(inner, _) => {
-            check_pattern(inner, ty, env, side, clause_index, labels, at_root, var_types, diags);
+            check_pattern(
+                inner,
+                ty,
+                env,
+                side,
+                clause_index,
+                labels,
+                at_root,
+                var_types,
+                diags,
+            );
         }
     }
 }
@@ -204,12 +289,41 @@ fn check_curried_args(
 ) {
     let ty = peel_paren_type(ty);
     if args.len() == 1 {
-        check_pattern(&args[0], ty, env, side, clause_index, labels, false, var_types, diags);
+        check_pattern(
+            &args[0],
+            ty,
+            env,
+            side,
+            clause_index,
+            labels,
+            false,
+            var_types,
+            diags,
+        );
         return;
     }
     if let SurfType::Prod(ty_a, ty_b, _) = ty {
-        check_pattern(&args[0], ty_a, env, side, clause_index, labels, false, var_types, diags);
-        check_curried_args(&args[1..], ty_b, env, side, clause_index, labels, var_types, diags);
+        check_pattern(
+            &args[0],
+            ty_a,
+            env,
+            side,
+            clause_index,
+            labels,
+            false,
+            var_types,
+            diags,
+        );
+        check_curried_args(
+            &args[1..],
+            ty_b,
+            env,
+            side,
+            clause_index,
+            labels,
+            var_types,
+            diags,
+        );
     } else {
         // More args than product components -- arity error.
         diags.push(
@@ -225,9 +339,7 @@ fn type_admits_ctor(ty: &SurfType, type_name: &str) -> bool {
     let ty = peel_paren_type(ty);
     match ty {
         SurfType::Name(n) => n.text == type_name,
-        SurfType::Sum(a, b, _) => {
-            type_admits_ctor(a, type_name) || type_admits_ctor(b, type_name)
-        }
+        SurfType::Sum(a, b, _) => type_admits_ctor(a, type_name) || type_admits_ctor(b, type_name),
         _ => false,
     }
 }
@@ -253,7 +365,10 @@ mod tests {
 
     /// Filter diagnostics to just T0102.
     fn typing_only(diags: Vec<Diagnostic>) -> Vec<Diagnostic> {
-        diags.into_iter().filter(|d| d.code == Code::T0102).collect()
+        diags
+            .into_iter()
+            .filter(|d| d.code == Code::T0102)
+            .collect()
     }
 
     #[test]
@@ -295,7 +410,10 @@ mod tests {
         let program = theseus_syntax::parse(src).unwrap();
         let env = crate::env::resolve(&program);
         let reported = typing_only(check(&program, &env));
-        assert!(!reported.is_empty(), "expected T0102 for label carrier clash");
+        assert!(
+            !reported.is_empty(),
+            "expected T0102 for label carrier clash"
+        );
         let clash_diag = reported
             .iter()
             .find(|d| d.name.as_deref() == Some("go"))
@@ -314,7 +432,10 @@ mod tests {
         let program = theseus_syntax::parse(src).unwrap();
         let env = crate::env::resolve(&program);
         let reported = typing_only(check(&program, &env));
-        assert!(!reported.is_empty(), "expected T0102 for carrier-not-inferable label");
+        assert!(
+            !reported.is_empty(),
+            "expected T0102 for carrier-not-inferable label"
+        );
         let diag = reported
             .iter()
             .find(|d| d.name.as_deref() == Some("go"))
@@ -332,7 +453,10 @@ mod tests {
         let program = theseus_syntax::parse(src).unwrap();
         let env = crate::env::resolve(&program);
         let reported = typing_only(check(&program, &env));
-        assert!(!reported.is_empty(), "expected T0102 for nested label pattern");
+        assert!(
+            !reported.is_empty(),
+            "expected T0102 for nested label pattern"
+        );
         let diag = reported
             .iter()
             .find(|d| d.name.as_deref() == Some("go"))
@@ -377,6 +501,9 @@ mod tests {
         let program = theseus_syntax::parse(src).unwrap();
         let env = crate::env::resolve(&program);
         let reported = typing_only(check(&program, &env));
-        assert!(reported.is_empty(), "unexpected T0102 in spin: {reported:?}");
+        assert!(
+            reported.is_empty(),
+            "unexpected T0102 in spin: {reported:?}"
+        );
     }
 }

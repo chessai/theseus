@@ -104,7 +104,11 @@ fn field_sv(vs: &BddVariableSet, layout: &Layout, f: usize, konst: Option<u32>) 
     let w = layout.field_width(f);
     let bits: Vec<SV> = (0..w)
         .map(|b| match konst {
-            Some(v) => SV::Bit(if (v >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() }),
+            Some(v) => SV::Bit(if (v >> b) & 1 == 1 {
+                vs.mk_true()
+            } else {
+                vs.mk_false()
+            }),
             None => SV::Bit(vs.mk_var(field_var(vs, layout, f, b))),
         })
         .collect();
@@ -145,7 +149,10 @@ fn symbolic_state_sv(layout: &Layout, vs: &BddVariableSet, pc: u8) -> SV {
     // Structural sanity: must match state_ty_with(layout). HARD assert (a
     // carrier-shape misalignment must fault even under --release, not just in
     // debug -- a mis-shaped SV silently mis-routes the whole symbolic walk).
-    assert!(sv_matches_type(&sv, &state_ty_with(layout)), "symbolic_state_sv: SV shape != state_ty_with(layout)");
+    assert!(
+        sv_matches_type(&sv, &state_ty_with(layout)),
+        "symbolic_state_sv: SV shape != state_ty_with(layout)"
+    );
     sv
 }
 
@@ -153,7 +160,9 @@ fn sv_matches_type(sv: &SV, ty: &Type) -> bool {
     match (sv, ty) {
         (SV::Unit, Type::One) => true,
         (SV::Bit(_), Type::Sum(a, b)) => matches!((a.as_ref(), b.as_ref()), (Type::One, Type::One)),
-        (SV::Pair(sa, sb), Type::Prod(ta, tb)) => sv_matches_type(sa, ta) && sv_matches_type(sb, tb),
+        (SV::Pair(sa, sb), Type::Prod(ta, tb)) => {
+            sv_matches_type(sa, ta) && sv_matches_type(sb, tb)
+        }
         _ => false,
     }
 }
@@ -195,7 +204,13 @@ fn ripple_sum(a: &[Bdd], b: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
 }
 fn ripple_plus_const(x: &[Bdd], k: u32, vs: &BddVariableSet) -> Vec<Bdd> {
     let kb: Vec<Bdd> = (0..x.len())
-        .map(|i| if (k >> i) & 1 == 1 { vs.mk_true() } else { vs.mk_false() })
+        .map(|i| {
+            if (k >> i) & 1 == 1 {
+                vs.mk_true()
+            } else {
+                vs.mk_false()
+            }
+        })
         .collect();
     ripple_sum(x, &kb, vs)
 }
@@ -209,7 +224,7 @@ fn ripple_sub(a: &[Bdd], b: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
 fn rotl_spec(a: &[Bdd], amt: &[Bdd]) -> Vec<Bdd> {
     let w = a.len();
     let logw = w.trailing_zeros() as usize; // 2 for w=4
-    // Barrel: for each of logw stages, conditionally rotate by 2^stage.
+                                            // Barrel: for each of logw stages, conditionally rotate by 2^stage.
     let mut cur = a.to_vec();
     for stage in 0..logw {
         let shift = 1usize << stage;
@@ -291,7 +306,10 @@ where
         let got = out_field_bits(&out, layout, layout.reg_field(r));
         let inp = rin(r);
         for i in 0..got.len() {
-            assert!(got[i] == inp[i], "{label}: untouched r{r} bit {i} != identity");
+            assert!(
+                got[i] == inp[i],
+                "{label}: untouched r{r} bit {i} != identity"
+            );
         }
     }
 
@@ -318,14 +336,20 @@ fn assert_frame(layout: &Layout, out: &SV, vs: &BddVariableSet, label: &str) {
     // BR = 0 (the terminal-check invariant the retired sim enforced per point).
     let br = out_field_bits(out, layout, layout.br_field());
     for i in 0..br.len() {
-        assert!(br[i] == f, "{label}: BR out bit {i} != 0 (frame: stray BR write / branch)");
+        assert!(
+            br[i] == f,
+            "{label}: BR out bit {i} != 0 (frame: stray BR write / branch)"
+        );
     }
 
     // PC' = 1 (const): PC(0) + sext(BR=0) + 1 = 1. Low field only holds bit0=1.
     let pc = out_field_bits(out, layout, layout.pc_field());
     for i in 0..pc.len() {
         let want = if i == 0 { &t } else { &f };
-        assert!(pc[i] == *want, "{label}: PC_lo out bit {i} != const 1 (frame)");
+        assert!(
+            pc[i] == *want,
+            "{label}: PC_lo out bit {i} != const 1 (frame)"
+        );
     }
     if layout.pc_fields() >= 2 {
         let pc_hi = out_field_bits(out, layout, layout.pc_hi_field());
@@ -338,7 +362,10 @@ fn assert_frame(layout: &Layout, out: &SV, vs: &BddVariableSet, label: &str) {
     for k in 0..4 {
         let ir = out_field_bits(out, layout, layout.ir_byte_field(k));
         for i in 0..ir.len() {
-            assert!(ir[i] == f, "{label}: IR byte {k} bit {i} != 0 (frame: unfetch)");
+            assert!(
+                ir[i] == f,
+                "{label}: IR byte {k} bit {i} != 0 (frame: unfetch)"
+            );
         }
     }
 
@@ -346,7 +373,10 @@ fn assert_frame(layout: &Layout, out: &SV, vs: &BddVariableSet, label: &str) {
     for s in 0..2 {
         let so = out_field_bits(out, layout, layout.scratch_field(s));
         for i in 0..so.len() {
-            assert!(so[i] == f, "{label}: s{s} bit {i} != 0 (frame: scratch not restored)");
+            assert!(
+                so[i] == f,
+                "{label}: s{s} bit {i} != 0 (frame: scratch not restored)"
+            );
         }
     }
 
@@ -358,7 +388,10 @@ fn assert_frame(layout: &Layout, out: &SV, vs: &BddVariableSet, label: &str) {
             .map(|b| vs.mk_var(field_var(vs, layout, sf, b)))
             .collect();
         for i in 0..so.len() {
-            assert!(so[i] == si[i], "{label}: s{s} bit {i} != identity (frame: crossbar residue)");
+            assert!(
+                so[i] == si[i],
+                "{label}: s{s} bit {i} != identity (frame: crossbar residue)"
+            );
         }
     }
 }
@@ -441,7 +474,13 @@ fn b21c_bveq_whole_domain() {
             move |rin, vs| {
                 let a = rin(0);
                 let xb: Vec<Bdd> = (0..a.len())
-                    .map(|i| if (x >> i) & 1 == 1 { vs.mk_true() } else { vs.mk_false() })
+                    .map(|i| {
+                        if (x >> i) & 1 == 1 {
+                            vs.mk_true()
+                        } else {
+                            vs.mk_false()
+                        }
+                    })
                     .collect();
                 vec![(0, (0..a.len()).map(|i| a[i].xor(&xb[i])).collect())]
             },
@@ -458,7 +497,13 @@ fn b21c_bveq_whole_domain() {
                 let a = rin(0);
                 // a - x mod 2^w = a + (~x)+1 restricted to w bits.
                 let xb: Vec<Bdd> = (0..a.len())
-                    .map(|i| if (x >> i) & 1 == 1 { vs.mk_true() } else { vs.mk_false() })
+                    .map(|i| {
+                        if (x >> i) & 1 == 1 {
+                            vs.mk_true()
+                        } else {
+                            vs.mk_false()
+                        }
+                    })
                     .collect();
                 vec![(0, ripple_sub(&a, &xb, vs))]
             },
@@ -475,7 +520,13 @@ fn b21c_bveq_whole_domain() {
             Instr::Rotli { rd: 0, imm: x },
             move |rin, vs| {
                 let amt: Vec<Bdd> = (0..layout_w(vs).max(2))
-                    .map(|i| if (x >> i) & 1 == 1 { vs.mk_true() } else { vs.mk_false() })
+                    .map(|i| {
+                        if (x >> i) & 1 == 1 {
+                            vs.mk_true()
+                        } else {
+                            vs.mk_false()
+                        }
+                    })
                     .collect();
                 vec![(0, rotl_spec(&rin(0), &amt))]
             },
@@ -486,7 +537,13 @@ fn b21c_bveq_whole_domain() {
             Instr::Rotri { rd: 0, imm: x },
             move |rin, vs| {
                 let amt: Vec<Bdd> = (0..layout_w(vs).max(2))
-                    .map(|i| if (x >> i) & 1 == 1 { vs.mk_true() } else { vs.mk_false() })
+                    .map(|i| {
+                        if (x >> i) & 1 == 1 {
+                            vs.mk_true()
+                        } else {
+                            vs.mk_false()
+                        }
+                    })
                     .collect();
                 vec![(0, rotr_spec(&rin(0), &amt))]
             },
@@ -497,25 +554,40 @@ fn b21c_bveq_whole_domain() {
     // Ccnot r0 ^= r1 & r2  (whole_domain_ccnot, 4096 pts -- one of the hogs)
     total += prove_op(
         &layout,
-        Instr::Ccnot { rd: 0, rs: 1, rt: 2 },
+        Instr::Ccnot {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        },
         |rin, _vs| {
             let a = rin(0);
             let b = rin(1);
             let c = rin(2);
-            vec![(0, (0..a.len()).map(|i| a[i].xor(&b[i].and(&c[i]))).collect())]
+            vec![(
+                0,
+                (0..a.len()).map(|i| a[i].xor(&b[i].and(&c[i]))).collect(),
+            )]
         },
         "Ccnot(0,1,2)",
     );
     // Cswap r1↔r2 iff r0[0]  (whole_domain_cswap, 4096 pts -- the other hog)
     total += prove_op(
         &layout,
-        Instr::Cswap { rd: 0, rs: 1, rt: 2 },
+        Instr::Cswap {
+            rd: 0,
+            rs: 1,
+            rt: 2,
+        },
         |rin, _vs| {
             let ctrl = rin(0)[0].clone();
             let b = rin(1);
             let c = rin(2);
-            let r1: Vec<Bdd> = (0..b.len()).map(|i| ctrl.if_then_else(&c[i], &b[i])).collect();
-            let r2: Vec<Bdd> = (0..b.len()).map(|i| ctrl.if_then_else(&b[i], &c[i])).collect();
+            let r1: Vec<Bdd> = (0..b.len())
+                .map(|i| ctrl.if_then_else(&c[i], &b[i]))
+                .collect();
+            let r2: Vec<Bdd> = (0..b.len())
+                .map(|i| ctrl.if_then_else(&b[i], &c[i]))
+                .collect();
             vec![(1, r1), (2, r2)]
         },
         "Cswap(0,1,2)",
@@ -584,25 +656,61 @@ fn b21c_bveq_bootstrap() {
     ];
     for p in &pts {
         let (a, b, c) = (p[0], p[1], p[2]);
-        assert_eq!(run4(&layout, Instr::Add { rd: 0, rs: 1 }, *p)[0], (a + b) & 0xF, "Add {p:?}");
-        assert_eq!(run4(&layout, Instr::Sub { rd: 0, rs: 1 }, *p)[0], a.wrapping_sub(b) & 0xF, "Sub {p:?}");
-        assert_eq!(run4(&layout, Instr::Xor { rd: 0, rs: 1 }, *p)[0], a ^ b, "Xor {p:?}");
+        assert_eq!(
+            run4(&layout, Instr::Add { rd: 0, rs: 1 }, *p)[0],
+            (a + b) & 0xF,
+            "Add {p:?}"
+        );
+        assert_eq!(
+            run4(&layout, Instr::Sub { rd: 0, rs: 1 }, *p)[0],
+            a.wrapping_sub(b) & 0xF,
+            "Sub {p:?}"
+        );
+        assert_eq!(
+            run4(&layout, Instr::Xor { rd: 0, rs: 1 }, *p)[0],
+            a ^ b,
+            "Xor {p:?}"
+        );
         let ex = run4(&layout, Instr::Exch { rd: 0, rs: 1 }, *p);
         assert_eq!((ex[0], ex[1]), (b, a), "Exch {p:?}");
         assert_eq!(
-            run4(&layout, Instr::Ccnot { rd: 0, rs: 1, rt: 2 }, *p)[0],
+            run4(
+                &layout,
+                Instr::Ccnot {
+                    rd: 0,
+                    rs: 1,
+                    rt: 2
+                },
+                *p
+            )[0],
             a ^ (b & c),
             "Ccnot {p:?}"
         );
-        let cs = run4(&layout, Instr::Cswap { rd: 0, rs: 1, rt: 2 }, *p);
+        let cs = run4(
+            &layout,
+            Instr::Cswap {
+                rd: 0,
+                rs: 1,
+                rt: 2,
+            },
+            *p,
+        );
         let (w1, w2) = if a & 1 == 1 { (c, b) } else { (b, c) };
         assert_eq!((cs[1], cs[2]), (w1, w2), "Cswap {p:?}");
 
         // Register-controlled rotates: amount = r1 & 3 (log2(w_data)=2 bits).
         let rl = rot4_left(a, b & 3);
-        assert_eq!(run4(&layout, Instr::Rotl { rd: 0, rs: 1 }, *p)[0], rl, "Rotl {p:?}");
+        assert_eq!(
+            run4(&layout, Instr::Rotl { rd: 0, rs: 1 }, *p)[0],
+            rl,
+            "Rotl {p:?}"
+        );
         let rr = rot4_right(a, b & 3);
-        assert_eq!(run4(&layout, Instr::Rotr { rd: 0, rs: 1 }, *p)[0], rr, "Rotr {p:?}");
+        assert_eq!(
+            run4(&layout, Instr::Rotr { rd: 0, rs: 1 }, *p)[0],
+            rr,
+            "Rotr {p:?}"
+        );
 
         // Immediate ops: use lane-distinguishing imms so a bit-lane cross would
         // show at the anchor too, not only in the symbolic proof.
@@ -658,9 +766,14 @@ fn b21c_bveq_negative_control() {
     let got_r0 = out_field_bits(&out, &layout, layout.reg_field(0));
 
     // WRONG-1: XOR spec instead of ADD → must differ (add has carries).
-    let wrong_xor: Vec<Bdd> = (0..got_r0.len()).map(|i| rin(0)[i].xor(&rin(1)[i])).collect();
+    let wrong_xor: Vec<Bdd> = (0..got_r0.len())
+        .map(|i| rin(0)[i].xor(&rin(1)[i]))
+        .collect();
     let differs_op = (0..got_r0.len()).any(|i| got_r0[i] != wrong_xor[i]);
-    assert!(differs_op, "NEG: 4-bit Add must DIFFER from an XOR spec (teeth)");
+    assert!(
+        differs_op,
+        "NEG: 4-bit Add must DIFFER from an XOR spec (teeth)"
+    );
 
     // WRONG-2: a real WIDTH tooth. The w_data=4 datapath computes
     // r0 = (a + b) mod 2^4 -- it MASKS the carry out of bit-3. A width-blind
@@ -674,12 +787,28 @@ fn b21c_bveq_negative_control() {
     // dropped carry-out is a genuine, satisfiable function of the operands
     // (a=0xF,b=0x1 ⇒ carry-out=1) -- so a spec that kept it would be a
     // DIFFERENT function than the 4-bit datapath.
-    assert_eq!(got_r0.len(), 4, "NEG width: r0 output must be exactly w_data=4 bits (no high-nibble leak)");
+    assert_eq!(
+        got_r0.len(),
+        4,
+        "NEG width: r0 output must be exactly w_data=4 bits (no high-nibble leak)"
+    );
     let a_ext: Vec<Bdd> = (0..8)
-        .map(|i| if i < 4 { rin(0)[i].clone() } else { vs.mk_false() })
+        .map(|i| {
+            if i < 4 {
+                rin(0)[i].clone()
+            } else {
+                vs.mk_false()
+            }
+        })
         .collect();
     let b_ext: Vec<Bdd> = (0..8)
-        .map(|i| if i < 4 { rin(1)[i].clone() } else { vs.mk_false() })
+        .map(|i| {
+            if i < 4 {
+                rin(1)[i].clone()
+            } else {
+                vs.mk_false()
+            }
+        })
         .collect();
     let wide_sum = ripple_sum(&a_ext, &b_ext, &vs);
     // The low nibble of the wide add EQUALS the datapath output (width tooth is

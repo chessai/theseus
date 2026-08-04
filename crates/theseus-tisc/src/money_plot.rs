@@ -180,7 +180,10 @@ impl CpuMoneyPlot {
 
 impl std::fmt::Display for CpuMoneyPlot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "TISC-1 CPU money plot -- energy/step vs power-clock ramp")?;
+        writeln!(
+            f,
+            "TISC-1 CPU money plot -- energy/step vs power-clock ramp"
+        )?;
         writeln!(f, "{:-<64}", "")?;
         writeln!(
             f,

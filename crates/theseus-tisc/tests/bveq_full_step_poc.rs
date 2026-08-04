@@ -92,7 +92,9 @@ fn const_zero_word8(vs: &BddVariableSet) -> SV {
     sv
 }
 fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
-    let bits: Vec<SV> = (0..W).map(|b| SV::Bit(field_bit_var(vs, nf, f, b))).collect();
+    let bits: Vec<SV> = (0..W)
+        .map(|b| SV::Bit(field_bit_var(vs, nf, f, b)))
+        .collect();
     let mut sv = bits[W - 1].clone();
     for b in (0..W - 1).rev() {
         sv = SV::pair(bits[b].clone(), sv);
@@ -102,7 +104,9 @@ fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
 fn is_word8(ty: &Type) -> bool {
     fn count_bits(ty: &Type) -> Option<usize> {
         match ty {
-            Type::Sum(a, b) if matches!((a.as_ref(), b.as_ref()), (Type::One, Type::One)) => Some(1),
+            Type::Sum(a, b) if matches!((a.as_ref(), b.as_ref()), (Type::One, Type::One)) => {
+                Some(1)
+            }
             Type::Prod(a, b) => Some(count_bits(a)? + count_bits(b)?),
             _ => None,
         }
@@ -226,7 +230,13 @@ fn spec_pc_out(pc: &[Bdd], br: &[Bdd], w_pc: usize, vs: &BddVariableSet) -> Vec<
     assert_eq!(pc.len(), w_pc);
     assert_eq!(br.len(), W);
     let sext: Vec<Bdd> = (0..w_pc)
-        .map(|i| if i < W { br[i].clone() } else { br[W - 1].clone() })
+        .map(|i| {
+            if i < W {
+                br[i].clone()
+            } else {
+                br[W - 1].clone()
+            }
+        })
         .collect();
     ripple_plus_one(&ripple_sum(pc, &sext, vs), vs)
 }
@@ -395,7 +405,10 @@ fn prove_one_instr(layout: &Layout, instr: Instr) -> (f64, f64) {
     // ── BR preserved ──
     let br_out = out_field_bits(&out, layout, layout.br_field());
     for i in 0..W {
-        assert!(br_out[i] == br_in[i], "{instr:?}: BR out bit {i} not preserved");
+        assert!(
+            br_out[i] == br_in[i],
+            "{instr:?}: BR out bit {i} not preserved"
+        );
     }
 
     // ── IR back to 0 (unfetch), s0/s1 restored to 0 ──
@@ -403,7 +416,10 @@ fn prove_one_instr(layout: &Layout, instr: Instr) -> (f64, f64) {
     for k in 0..4 {
         let ir = out_field_bits(&out, layout, layout.ir_byte_field(k));
         for i in 0..W {
-            assert!(ir[i] == zero, "{instr:?}: IR byte {k} bit {i} not re-zeroed (unfetch)");
+            assert!(
+                ir[i] == zero,
+                "{instr:?}: IR byte {k} bit {i} not re-zeroed (unfetch)"
+            );
         }
     }
     for s in 0..2 {
@@ -420,7 +436,10 @@ fn prove_one_instr(layout: &Layout, instr: Instr) -> (f64, f64) {
         let so = out_field_bits(&out, layout, layout.scratch_field(s));
         let si = field_bits(&vs, nf, layout.scratch_field(s));
         for i in 0..W {
-            assert!(so[i] == si[i], "{instr:?}: s{s} bit {i} not restored (crossbar residue)");
+            assert!(
+                so[i] == si[i],
+                "{instr:?}: s{s} bit {i} not restored (crossbar residue)"
+            );
         }
     }
 
@@ -471,12 +490,22 @@ fn concrete_anchor(layout: &Layout, instr: Instr, reg_pts: &[[u8; 8]], brs: &[u8
                 }
                 _ => panic!("anchor: op not covered"),
             }
-            assert_eq!(got.regs, exp, "{instr:?}: real eval regs != spec (br={br:#04x})");
+            assert_eq!(
+                got.regs, exp,
+                "{instr:?}: real eval regs != spec (br={br:#04x})"
+            );
             // PC' = (0 + sext(br) + 1) mod 2^w_pc.
-            let mask: u16 = if layout.w_pc >= 16 { u16::MAX } else { (1u16 << layout.w_pc) - 1 };
+            let mask: u16 = if layout.w_pc >= 16 {
+                u16::MAX
+            } else {
+                (1u16 << layout.w_pc) - 1
+            };
             let sext = (i16::from(br as i8)) as u16;
             let exp_pc = sext.wrapping_add(1) & mask;
-            assert_eq!(got.pc, exp_pc, "{instr:?}: real eval PC' != spec (br={br:#04x})");
+            assert_eq!(
+                got.pc, exp_pc,
+                "{instr:?}: real eval PC' != spec (br={br:#04x})"
+            );
             assert_eq!(got.br, u16::from(br), "{instr:?}: BR preserved");
             assert_eq!(got.ir, 0, "{instr:?}: IR re-zeroed");
             assert_eq!(got.scratch[0], 0, "{instr:?}: s0 restored");
@@ -501,17 +530,29 @@ fn negative_control(layout: &Layout) {
     let wrong_add = ripple_sum(&rin(1), &rin(0), &vs);
     let got_r1 = out_field_bits(&out, layout, layout.reg_field(1));
     let differs_op = (0..W).any(|i| got_r1[i] != wrong_add[i]);
-    assert!(differs_op, "NEG: XOR step must DIFFER from an ADD spec (teeth)");
+    assert!(
+        differs_op,
+        "NEG: XOR step must DIFFER from an ADD spec (teeth)"
+    );
 
     // WRONG-2: drop the +1 in the PC update -- must differ on PC.
     let pc_in: Vec<Bdd> = vec![vs.mk_false(); layout.w_pc];
     let sext: Vec<Bdd> = (0..layout.w_pc)
-        .map(|i| if i < W { br_in[i].clone() } else { br_in[W - 1].clone() })
+        .map(|i| {
+            if i < W {
+                br_in[i].clone()
+            } else {
+                br_in[W - 1].clone()
+            }
+        })
         .collect();
     let wrong_pc = ripple_sum(&pc_in, &sext, &vs); // no +1
     let got_pc = out_pc_bits(&out, layout);
     let differs_pc = (0..layout.w_pc).any(|i| got_pc[i] != wrong_pc[i]);
-    assert!(differs_pc, "NEG: step PC must DIFFER from a drop-+1 spec (teeth)");
+    assert!(
+        differs_pc,
+        "NEG: step PC must DIFFER from a drop-+1 spec (teeth)"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -521,7 +562,10 @@ fn negative_control(layout: &Layout) {
 /// The MINIMAL instance: w_pc=8, one XOR. This is the go/no-go headline.
 #[test]
 fn full_step_xor_minimal_wpc8() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let (walk_s, cmp_s) = prove_one_instr(&layout, Instr::Xor { rd: 1, rs: 0 });
     eprintln!(
         "FULL-STEP POC [w_pc=8, XOR r1,r0]: step_with ≡ step-spec over the WHOLE \
@@ -534,13 +578,20 @@ fn full_step_xor_minimal_wpc8() {
 /// Scale: representative instruction types at w_pc=8.
 #[test]
 fn full_step_instr_family_wpc8() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let cases = [
         Instr::Xor { rd: 1, rs: 0 },
         Instr::Add { rd: 1, rs: 0 },
         Instr::Sub { rd: 1, rs: 0 },
         Instr::Xori { rd: 0, imm: 0xA3 },
-        Instr::Ccnot { rd: 2, rs: 0, rt: 1 },
+        Instr::Ccnot {
+            rd: 2,
+            rs: 0,
+            rt: 1,
+        },
     ];
     for instr in cases {
         let (walk_s, cmp_s) = prove_one_instr(&layout, instr);
@@ -570,7 +621,10 @@ fn full_step_xor_wpc16() {
 /// Reality anchor: SAME step iso through concrete eval == spec (a few points).
 #[test]
 fn full_step_reality_anchor_wpc8() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let pts = [
         [0, 0, 0, 0, 0, 0, 0, 0],
         [0x2A, 0xC3, 0x01, 0, 0, 0, 0, 0x5A],
@@ -583,7 +637,11 @@ fn full_step_reality_anchor_wpc8() {
         Instr::Add { rd: 1, rs: 0 },
         Instr::Sub { rd: 1, rs: 0 },
         Instr::Xori { rd: 0, imm: 0xA3 },
-        Instr::Ccnot { rd: 2, rs: 0, rt: 1 },
+        Instr::Ccnot {
+            rd: 2,
+            rs: 0,
+            rt: 1,
+        },
     ] {
         concrete_anchor(&layout, instr, &pts, &brs);
     }
@@ -599,7 +657,10 @@ fn full_step_reality_anchor_wpc8() {
 /// output-BDD node counts -- the tractability metric for symbolic PC.
 #[test]
 fn full_step_symbolic_pc_wpc8() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let rom = assemble(&[Instr::Xor { rd: 1, rs: 0 }, Instr::Add { rd: 1, rs: 0 }])
         .expect("assemble 2-instr rom");
     assert_eq!(rom.len(), 2);
@@ -622,7 +683,9 @@ fn full_step_symbolic_pc_wpc8() {
     let peak_pc = out_pc.iter().map(|b| b.size()).max().unwrap_or(0);
 
     // PC input variables (LSB..MSB of PC_lo).
-    let pc_vars: Vec<_> = (0..W).map(|b| vs.variables()[b * nf + layout.pc_field()]).collect();
+    let pc_vars: Vec<_> = (0..W)
+        .map(|b| vs.variables()[b * nf + layout.pc_field()])
+        .collect();
     // Restrict PC to a concrete value.
     let pc_val = |v: u8| -> Vec<(biodivine_lib_bdd::BddVariable, bool)> {
         (0..W).map(|b| (pc_vars[b], (v >> b) & 1 == 1)).collect()
@@ -633,7 +696,13 @@ fn full_step_symbolic_pc_wpc8() {
     // sext(BR)+1 spec at PC=p: (p + sext(BR) + 1) mod 2^8.
     let pc_spec_at = |p: u8| -> Vec<Bdd> {
         let pcb: Vec<Bdd> = (0..W)
-            .map(|b| if (p >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() })
+            .map(|b| {
+                if (p >> b) & 1 == 1 {
+                    vs.mk_true()
+                } else {
+                    vs.mk_false()
+                }
+            })
             .collect();
         spec_pc_out(&pcb, &br_in, layout.w_pc, &vs)
     };
@@ -685,7 +754,10 @@ fn full_step_symbolic_pc_wpc8() {
 /// Teeth: a wrong spec (wrong op, drop-+1) must be detected as inequivalent.
 #[test]
 fn full_step_negative_control_wpc8() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     negative_control(&layout);
     eprintln!("FULL-STEP POC negative control [w_pc=8]: step != {{wrong-op, drop-+1}} -- the oracle has TEETH.");
 }

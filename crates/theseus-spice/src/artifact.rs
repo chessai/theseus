@@ -190,10 +190,7 @@ pub fn render_ascii(records: &[MoneyPlotRecord]) -> String {
             .iter()
             .cloned()
             .fold(f64::NEG_INFINITY, f64::max);
-        let log_min = log_energies
-            .iter()
-            .cloned()
-            .fold(f64::INFINITY, f64::min);
+        let log_min = log_energies.iter().cloned().fold(f64::INFINITY, f64::min);
         let log_range = (log_max - log_min).max(1.0);
 
         let bar_width = 40;
@@ -214,7 +211,9 @@ pub fn render_ascii(records: &[MoneyPlotRecord]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adiabatic::{money_plot, money_plot_rung, sky130_available, DeviceRung, MoneyPlotCurve};
+    use crate::adiabatic::{
+        money_plot, money_plot_rung, sky130_available, DeviceRung, MoneyPlotCurve,
+    };
     use crate::bench::{log_log_slope, ngspice_available};
 
     fn regime_periods() -> Vec<f64> {
@@ -308,8 +307,7 @@ mod tests {
         };
 
         let curves = money_plot_rung(&axis, DeviceRung::Rung1Sky130);
-        let records =
-            stamped_money_plot(&curves, Rung::Rung1Sky130Tt, stamps.clone()).unwrap();
+        let records = stamped_money_plot(&curves, Rung::Rung1Sky130Tt, stamps.clone()).unwrap();
 
         // (a) All three rung-1 dut names present.
         for dut in ["adiabatic-tg-sky130", "pfal-sky130", "cmos-static-sky130"] {
@@ -322,7 +320,10 @@ mod tests {
 
         // (b) Rung + PDK version carried in the stamp/rung.
         let text = to_stamped_text(&records);
-        assert!(text.contains("Rung1Sky130Tt"), "artifact missing Rung1Sky130Tt");
+        assert!(
+            text.contains("Rung1Sky130Tt"),
+            "artifact missing Rung1Sky130Tt"
+        );
         assert!(
             text.contains(&pdk),
             "artifact pdk stamp must carry the sky130 version {pdk}"
@@ -334,8 +335,7 @@ mod tests {
 
         // (c) Byte-deterministic across two independent generations.
         let curves2 = money_plot_rung(&axis, DeviceRung::Rung1Sky130);
-        let records2 =
-            stamped_money_plot(&curves2, Rung::Rung1Sky130Tt, stamps).unwrap();
+        let records2 = stamped_money_plot(&curves2, Rung::Rung1Sky130Tt, stamps).unwrap();
         let text2 = to_stamped_text(&records2);
         assert_eq!(
             text.as_bytes(),
@@ -344,13 +344,19 @@ mod tests {
         );
 
         // (d) Recorded slopes match the three-family shape.
-        let adia = records.iter().find(|r| r.dut == "adiabatic-tg-sky130").unwrap();
+        let adia = records
+            .iter()
+            .find(|r| r.dut == "adiabatic-tg-sky130")
+            .unwrap();
         assert!(
             (-1.15..=-0.7).contains(&adia.slope),
             "adiabatic-TG slope {:.4} not in [-1.15, -0.7]",
             adia.slope
         );
-        let cmos = records.iter().find(|r| r.dut == "cmos-static-sky130").unwrap();
+        let cmos = records
+            .iter()
+            .find(|r| r.dut == "cmos-static-sky130")
+            .unwrap();
         assert!(
             cmos.slope.abs() < 0.15,
             "CMOS slope {:.4} must be ≈ 0 (|slope| < 0.15)",

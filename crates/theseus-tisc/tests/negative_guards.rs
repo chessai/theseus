@@ -361,17 +361,26 @@ fn encode_swapbr_operand_legality() {
     // uniform `OperandReservedScratch`, not the old `SwapbrRegOutOfRange`.
     assert!(matches!(
         encode(Instr::Swapbr { rd: 9, rs: 0 }),
-        Err(AsmError::OperandReservedScratch { which: "rd", val: 9 })
+        Err(AsmError::OperandReservedScratch {
+            which: "rd",
+            val: 9
+        })
     ));
     // rd = 8 (= s0, the operand buffer) is likewise reserved.
     assert!(matches!(
         encode(Instr::Swapbr { rd: 8, rs: 0 }),
-        Err(AsmError::OperandReservedScratch { which: "rd", val: 8 })
+        Err(AsmError::OperandReservedScratch {
+            which: "rd",
+            val: 8
+        })
     ));
     // rd = 16 (out of the 0..16 operand space) still rejects.
     assert!(matches!(
         encode(Instr::Swapbr { rd: 16, rs: 0 }),
-        Err(AsmError::RegOutOfRange { which: "rd", val: 16 })
+        Err(AsmError::RegOutOfRange {
+            which: "rd",
+            val: 16
+        })
     ));
 
     // POSITIVE: rd = 10 (= s2, a legal scratch operand) now ENCODES, and

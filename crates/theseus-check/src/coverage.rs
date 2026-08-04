@@ -7,7 +7,9 @@
 
 use theseus_core::prim::{enumerate_values, Value};
 use theseus_core::ty::Type as CoreType;
-use theseus_syntax::ast::{Clause, Decl, IsoBody, IsoDecl, Pattern, Program, Span, Type as SurfType};
+use theseus_syntax::ast::{
+    Clause, Decl, IsoBody, IsoDecl, Pattern, Program, Span, Type as SurfType,
+};
 
 use crate::diagnostics::{Code, Diagnostic, Side};
 use crate::env::{self, Env};
@@ -127,16 +129,16 @@ fn check_side_extended(
 
         if matching.is_empty() {
             match value {
-                Value::Right(inner) => {
+                Value::Right(inner)
                     // Uncovered boundary value → T0301.
-                    if !found_t0301 {
-                        found_t0301 = true;
-                        diags.push(
-                            Diagnostic::new(Code::T0301, span)
-                                .with_side(side)
-                                .with_witness((**inner).clone()),
-                        );
-                    }
+                    if !found_t0301 =>
+                {
+                    found_t0301 = true;
+                    diags.push(
+                        Diagnostic::new(Code::T0301, span)
+                            .with_side(side)
+                            .with_witness((**inner).clone()),
+                    );
                 }
                 Value::Left(carrier_val)
                     // Uncovered label state → T0303.
@@ -160,8 +162,7 @@ fn check_side_extended(
 
         if matching.len() > 1 && !found_t0302 {
             found_t0302 = true;
-            let mut diag = Diagnostic::new(Code::T0302, span)
-                .with_side(side);
+            let mut diag = Diagnostic::new(Code::T0302, span).with_side(side);
             // Unwrap the witness to the same domain as T0301/T0303.
             match value {
                 Value::Right(inner) => {
@@ -308,8 +309,7 @@ fn match_args(value: &Value, args: &[Pattern], payload_ty: Option<&SurfType>, en
                 if let Some(ty) = payload_ty {
                     let ty = peel_paren_type(ty);
                     if let SurfType::Prod(ta, tb, _) = ty {
-                        matches_value(l, first, ta, env)
-                            && match_args(r, rest, Some(tb), env)
+                        matches_value(l, first, ta, env) && match_args(r, rest, Some(tb), env)
                     } else {
                         false
                     }
@@ -421,11 +421,7 @@ mod tests {
             let env = crate::env::resolve(&program);
             let reported: Vec<Diagnostic> = check(&program, &env)
                 .into_iter()
-                .filter(|d| {
-                    d.code == Code::T0301
-                        || d.code == Code::T0302
-                        || d.code == Code::T0303
-                })
+                .filter(|d| d.code == Code::T0301 || d.code == Code::T0302 || d.code == Code::T0303)
                 .collect();
             assert!(
                 reported.is_empty(),
@@ -481,7 +477,10 @@ mod tests {
         let program = theseus_syntax::parse(src).unwrap();
         let env = crate::env::resolve(&program);
         let reported = check(&program, &env);
-        assert!(reported.is_empty(), "unexpected coverage error: {reported:?}");
+        assert!(
+            reported.is_empty(),
+            "unexpected coverage error: {reported:?}"
+        );
     }
 
     #[test]
@@ -517,11 +516,7 @@ mod tests {
         let env = crate::env::resolve(&program);
         let reported: Vec<Diagnostic> = check(&program, &env)
             .into_iter()
-            .filter(|d| {
-                d.code == Code::T0301
-                    || d.code == Code::T0302
-                    || d.code == Code::T0303
-            })
+            .filter(|d| d.code == Code::T0301 || d.code == Code::T0302 || d.code == Code::T0303)
             .collect();
         assert!(
             reported.is_empty(),

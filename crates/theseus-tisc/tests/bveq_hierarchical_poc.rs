@@ -289,10 +289,10 @@ const R_RC: u8 = 6; // outer Swapbr reg
 
 /// Build the nested ROM. Returns (rom_words, instrs, geometry offsets).
 struct NestGeom {
-    inner_top: usize,   // PC of first inner-body instr (INNER loop top)
-    inner_body: usize,  // # straight-line inner-body instrs BEFORE the come-from
+    inner_top: usize,    // PC of first inner-body instr (INNER loop top)
+    inner_body: usize,   // # straight-line inner-body instrs BEFORE the come-from
     inner_swapbr: usize, // PC of the inner come-from Swapbr
-    outer_top: usize,   // PC of the outer-body top (reload inner count)
+    outer_top: usize,    // PC of the outer-body top (reload inner count)
     n_instrs: usize,
 }
 
@@ -525,19 +525,15 @@ fn run_nested_structured(rom: &[u32], geom: &NestGeom, n: u8, m: u8) -> u8 {
 
 /// Symbolic entry state at `pc` with the listed registers symbolic (low `wbits`
 /// bits), everything else 0 -- the flat method's `body_entry_sv`.
-fn entry_sv(
-    layout: &Layout,
-    vs: &BddVariableSet,
-    pc: usize,
-    sym_regs: &[(usize, usize)],
-) -> SV {
+fn entry_sv(layout: &Layout, vs: &BddVariableSet, pc: usize, sym_regs: &[(usize, usize)]) -> SV {
     let nf = n_fields(layout);
     build_state(layout, |f| {
         if f == layout.pc_field() {
             const_word8((pc & 0xFF) as u8, vs)
         } else if layout.pc_fields() >= 2 && f == layout.pc_hi_field() {
             const_word8(((pc >> 8) & 0xFF) as u8, vs)
-        } else if let Some(&(_, wbits)) = sym_regs.iter().find(|&&(r, _)| f == layout.reg_field(r)) {
+        } else if let Some(&(_, wbits)) = sym_regs.iter().find(|&&(r, _)| f == layout.reg_field(r))
+        {
             // MSB (bit W-1) is symbolic iff wbits == W; lower bits symbolic iff b < wbits.
             let msb = if W - 1 < wbits {
                 field_bit_var(vs, nf, f, W - 1)
@@ -606,8 +602,14 @@ fn hierarchical_inner_body_triple_and_substitution() {
     //          the flat body lemma, applied to the INNER loop.
     let sym = [(R_ACC as usize, W), (R_J as usize, W)];
     let inner_entry = entry_sv(&layout, &vs, geom.inner_top, &sym);
-    let (inner_out, inner_peak, inner_conc, inner_secs) =
-        walk_straightline(&engine, &layout, &vs, inner_entry, geom.inner_top, geom.inner_body);
+    let (inner_out, inner_peak, inner_conc, inner_secs) = walk_straightline(
+        &engine,
+        &layout,
+        &vs,
+        inner_entry,
+        geom.inner_top,
+        geom.inner_body,
+    );
     eprintln!("=== (B.1) INNER BODY TRIPLE (flat body lemma on the inner loop) ===");
     eprintln!(
         "inner body {} instrs: peak {} nodes, PC-concrete throughout = {}, {:.3}s",
@@ -691,13 +693,17 @@ fn hierarchical_inner_body_triple_and_substitution() {
     });
     let _ = nf;
     let (sub_peak, _sub_sum) = sv_bdd_sizes(&sub_state);
-    eprintln!("=== (B.3) SUBSTITUTED inner triple (acc += M, j := 0) -- OPAQUE, no inner-Swapbr walk ===");
+    eprintln!(
+        "=== (B.3) SUBSTITUTED inner triple (acc += M, j := 0) -- OPAQUE, no inner-Swapbr walk ==="
+    );
     eprintln!("post-substitution state peak = {sub_peak} nodes (acc = acc0 + M, whole domain)");
 
     // The hierarchical peak = max over the inner triple proof and the outer
     // prefix/substitution.
     let hier_peak = inner_peak.max(pre_peak).max(sub_peak);
-    eprintln!("HIERARCHICAL peak (max of inner-triple, outer-prefix, substitution) = {hier_peak} nodes");
+    eprintln!(
+        "HIERARCHICAL peak (max of inner-triple, outer-prefix, substitution) = {hier_peak} nodes"
+    );
 
     // ── (A) NAIVE baseline: try to cross the inner loop with a SYMBOLIC counter,
     //        i.e. walk from outer_top through the inner Swapbr with j SYMBOLIC.
@@ -756,8 +762,14 @@ fn naive_cross_inner(
     // 1. Walk the inner straight-line body with j symbolic (concrete PC -- fine).
     let sym = [(R_ACC as usize, W), (R_J as usize, W)];
     let inner_entry = entry_sv(layout, vs, geom.inner_top, &sym);
-    let (after_body, body_peak, _conc, _s) =
-        walk_straightline(engine, layout, vs, inner_entry, geom.inner_top, geom.inner_body);
+    let (after_body, body_peak, _conc, _s) = walk_straightline(
+        engine,
+        layout,
+        vs,
+        inner_entry,
+        geom.inner_top,
+        geom.inner_body,
+    );
     let steps = geom.inner_body;
 
     // 2. Build the FAITHFUL data-dependent come-from register rb at the Swapbr.
@@ -769,10 +781,8 @@ fn naive_cross_inner(
         ((geom.inner_top as isize - (swapbr_pc as isize + 1)).rem_euclid(256)) as u8
     };
     let j_bits = out_field_bits(&after_body, layout, layout.reg_field(R_J as usize));
-    let j_nonzero = j_bits
-        .iter()
-        .fold(vs.mk_false(), |acc, b| acc.or(b)); // OR-reduce → (j != 0)
-    // rb bit k = δ_back.bit_k AND (j != 0)  (mask δ by the continue predicate).
+    let j_nonzero = j_bits.iter().fold(vs.mk_false(), |acc, b| acc.or(b)); // OR-reduce → (j != 0)
+                                                                           // rb bit k = δ_back.bit_k AND (j != 0)  (mask δ by the continue predicate).
     let rb_bits: Vec<Bdd> = (0..W)
         .map(|k| {
             if (delta_back >> k) & 1 == 1 {

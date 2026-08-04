@@ -125,11 +125,9 @@ impl CompactBalanced {
                 let remainder = delay % p;
                 for offset in 0..p {
                     let phase = ((start + offset) % p) as u8;
-                    let count =
-                        full_cycles + if offset < remainder { 1 } else { 0 };
+                    let count = full_cycles + if offset < remainder { 1 } else { 0 };
                     if count > 0 {
-                        *occ.entry((CellKind::K0, phase)).or_insert(0) +=
-                            count as usize;
+                        *occ.entry((CellKind::K0, phase)).or_insert(0) += count as usize;
                     }
                 }
             }
@@ -146,10 +144,7 @@ impl CompactBalanced {
     ///
     /// This is a real evaluation over every active cell, not a
     /// delegation shortcut.
-    pub fn simulate(
-        &self,
-        input_tokens: &[bool],
-    ) -> Result<SimResult, CompactSimError> {
+    pub fn simulate(&self, input_tokens: &[bool]) -> Result<SimResult, CompactSimError> {
         if input_tokens.len() != self.net.inputs.len() {
             return Err(CompactSimError::InputWidth {
                 want: self.net.inputs.len(),
@@ -158,8 +153,7 @@ impl CompactBalanced {
         }
 
         // high[line] = the line's logical value; None until driven.
-        let mut high: Vec<Option<bool>> =
-            vec![None; self.net.num_lines as usize];
+        let mut high: Vec<Option<bool>> = vec![None; self.net.num_lines as usize];
         for (p, &tok) in self.net.inputs.iter().zip(input_tokens) {
             high[p.line1.0 as usize] = Some(tok);
             high[p.line0.0 as usize] = Some(!tok);
@@ -170,10 +164,7 @@ impl CompactBalanced {
             let ins: Vec<bool> = cell
                 .inputs
                 .iter()
-                .map(|p| {
-                    high[p.line1.0 as usize]
-                        .expect("cell input line must be driven")
-                })
+                .map(|p| high[p.line1.0 as usize].expect("cell input line must be driven"))
                 .collect();
             let outs = cell.kind.eval(&ins);
             for (p, &v) in cell.outputs.iter().zip(&outs) {
@@ -186,10 +177,7 @@ impl CompactBalanced {
             .net
             .outputs
             .iter()
-            .map(|p| {
-                high[p.line1.0 as usize]
-                    .expect("output line must be driven")
-            })
+            .map(|p| high[p.line1.0 as usize].expect("output line must be driven"))
             .collect();
 
         Ok(SimResult {
@@ -203,7 +191,10 @@ impl CompactBalanced {
 
 /// Allocate a fresh rail pair, recording its arrival tick.
 fn alloc_pair(next_line: &mut u32, arrival_of: &mut Vec<u32>, arrival: u32) -> RailPair {
-    let pair = RailPair { line0: LineId(*next_line), line1: LineId(*next_line + 1) };
+    let pair = RailPair {
+        line0: LineId(*next_line),
+        line1: LineId(*next_line + 1),
+    };
     *next_line += 2;
     arrival_of.push(arrival);
     arrival_of.push(arrival);
@@ -248,8 +239,9 @@ pub fn balance(net: &PhasedCellNetlist) -> Result<PhasedCellNetlist, BalanceErro
     let mut arrival_of: Vec<u32> = Vec::new();
 
     // Allocate fresh primary input pairs (arrival 0).
-    let new_inputs: Vec<RailPair> =
-        (0..net.inputs.len()).map(|_| alloc_pair(&mut next_line, &mut arrival_of, 0)).collect();
+    let new_inputs: Vec<RailPair> = (0..net.inputs.len())
+        .map(|_| alloc_pair(&mut next_line, &mut arrival_of, 0))
+        .collect();
 
     // Map from original LineId → new LineId.
     let mut line_map: Vec<Option<LineId>> = vec![None; net.num_lines as usize];
@@ -270,8 +262,10 @@ pub fn balance(net: &PhasedCellNetlist) -> Result<PhasedCellNetlist, BalanceErro
             .collect();
 
         // Per-input arrival in the new netlist.
-        let input_arrivals: Vec<u32> =
-            inputs.iter().map(|p| arrival_of[p.line1.0 as usize]).collect();
+        let input_arrivals: Vec<u32> = inputs
+            .iter()
+            .map(|p| arrival_of[p.line1.0 as usize])
+            .collect();
         let latest = *input_arrivals.iter().max().expect("cell has inputs");
 
         // Buffer deficit inputs with K0 chains.
@@ -321,8 +315,10 @@ pub fn balance(net: &PhasedCellNetlist) -> Result<PhasedCellNetlist, BalanceErro
             line1: line_map[p.line1.0 as usize].expect("output line mapped"),
         })
         .collect();
-    let output_depths: Vec<u32> =
-        new_outputs.iter().map(|p| arrival_of[p.line1.0 as usize]).collect();
+    let output_depths: Vec<u32> = new_outputs
+        .iter()
+        .map(|p| arrival_of[p.line1.0 as usize])
+        .collect();
 
     Ok(PhasedCellNetlist {
         input_ty: net.input_ty.clone(),
@@ -346,14 +342,10 @@ pub fn balance(net: &PhasedCellNetlist) -> Result<PhasedCellNetlist, BalanceErro
 ///
 /// Returns [`BalanceError::CellNet`] if `net` has cycles or dangling
 /// lines (line arrivals cannot be computed).
-pub fn balance_compact(
-    net: &PhasedCellNetlist,
-) -> Result<CompactBalanced, BalanceError> {
-    let arrivals =
-        net.line_arrivals().map_err(BalanceError::CellNet)?;
+pub fn balance_compact(net: &PhasedCellNetlist) -> Result<CompactBalanced, BalanceError> {
+    let arrivals = net.line_arrivals().map_err(BalanceError::CellNet)?;
 
-    let mut cell_input_delays: Vec<Vec<u32>> =
-        Vec::with_capacity(net.cells.len());
+    let mut cell_input_delays: Vec<Vec<u32>> = Vec::with_capacity(net.cells.len());
     let mut total_k0: usize = 0;
 
     for cell in &net.cells {
@@ -362,12 +354,8 @@ pub fn balance_compact(
             .iter()
             .map(|p| arrivals[p.line1.0 as usize])
             .collect();
-        let latest =
-            *input_arrivals.iter().max().unwrap_or(&0);
-        let delays: Vec<u32> = input_arrivals
-            .iter()
-            .map(|&a| latest - a)
-            .collect();
+        let latest = *input_arrivals.iter().max().unwrap_or(&0);
+        let delays: Vec<u32> = input_arrivals.iter().map(|&a| latest - a).collect();
         total_k0 += delays.iter().sum::<u32>() as usize;
         cell_input_delays.push(delays);
     }

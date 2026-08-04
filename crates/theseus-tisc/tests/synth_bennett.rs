@@ -479,7 +479,7 @@ fn bennett_carrier_reads_noncarrier_errs() {
     });
     let res = transcribe_bennett(&cnot, &cnot, &[0, 1], &[3, 4]);
     assert!(
-        matches!(res, Err(_)),
+        res.is_err(),
         "a carrier row reading a non-carrier register must return Err (MAJOR-1), got {res:?}"
     );
 }
@@ -492,7 +492,7 @@ fn bennett_carrier_reads_noncarrier_errs() {
 fn bennett_duplicate_ancilla_errs() {
     let res = transcribe_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[3, 3]);
     assert!(
-        matches!(res, Err(_)),
+        res.is_err(),
         "duplicate ancilla operands must return Err (MAJOR-2), got {res:?}"
     );
 }
@@ -503,7 +503,7 @@ fn bennett_duplicate_ancilla_errs() {
 fn bennett_carrier_aliases_ancilla_errs() {
     let res = transcribe_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[1, 3]);
     assert!(
-        matches!(res, Err(_)),
+        res.is_err(),
         "a carrier aliasing an ancilla word must return Err (MAJOR-2), got {res:?}"
     );
 }
@@ -524,7 +524,7 @@ fn transcribe_into_duplicate_dst_errs() {
     let src_ops: Vec<u8> = (0..NUM_REGS as u8).collect();
     let res = transcribe_into(&spec_t, &dst_ops, &src_ops);
     assert!(
-        matches!(res, Err(_)),
+        res.is_err(),
         "duplicate dst_ops must return Err (MAJOR-2), got {res:?}"
     );
 }
@@ -537,7 +537,7 @@ fn bennett_reserved_ancilla_errs() {
     // carriers regs 0,1 ; ancilla operand 8 (s0, reserved) and 9 (s1, reserved).
     let res = transcribe_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[8, 9]);
     assert!(
-        matches!(res, Err(_)),
+        res.is_err(),
         "reserved-scratch ancilla (s0/s1 = 8/9) must return Err (MINOR-3), got {res:?}"
     );
 }
@@ -548,7 +548,7 @@ fn bennett_reserved_ancilla_errs() {
 fn bennett_out_of_range_ancilla_errs() {
     let res = transcribe_bennett(&swap_fwd(), &swap_fwd(), &[0, 1], &[16, 17]);
     assert!(
-        matches!(res, Err(_)),
+        res.is_err(),
         "out-of-range ancilla (≥16) must return Err not panic (MINOR-3), got {res:?}"
     );
 }
@@ -569,7 +569,7 @@ fn transcribe_into_nonidentity_dst_aliases_src_errs() {
     let src_ops: Vec<u8> = (0..NUM_REGS as u8).collect();
     let res = transcribe_into(&spec_t, &dst_ops, &src_ops);
     assert!(
-        matches!(res, Err(_)),
+        res.is_err(),
         "a non-identity row whose dst aliases a source must return Err (MINOR-4), got {res:?}"
     );
 }

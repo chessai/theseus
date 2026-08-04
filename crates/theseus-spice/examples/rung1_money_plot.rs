@@ -14,9 +14,7 @@
 //! it prints a note and exits 0, so a PDK-less CI never hangs.
 
 use theseus_spice::adiabatic::{money_plot_rung, sky130_available, DeviceRung};
-use theseus_spice::artifact::{
-    render_ascii, stamped_money_plot, to_stamped_text, Rung, Stamps,
-};
+use theseus_spice::artifact::{render_ascii, stamped_money_plot, to_stamped_text, Rung, Stamps};
 use theseus_spice::bench::ngspice_available;
 
 fn main() {
@@ -41,8 +39,8 @@ fn main() {
     // The pdk stamp carries the real sky130 PDK build hash (from the .#char
     // devShell); fall back to a labelled unknown so the artifact is still
     // stamped if the var is unset.
-    let pdk = std::env::var("THESEUS_SKY130_VERSION")
-        .unwrap_or_else(|_| "sky130A-unknown".to_string());
+    let pdk =
+        std::env::var("THESEUS_SKY130_VERSION").unwrap_or_else(|_| "sky130A-unknown".to_string());
     let stamps = Stamps {
         pdk,
         simulator: "ngspice".to_string(),

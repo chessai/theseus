@@ -54,7 +54,11 @@ fn layout_w_pc8() -> Layout {
     // Pin the invariant the whole file rests on: PC occupies exactly ONE
     // control field at w_pc=8 (guards against a future w_ctl default change
     // silently making this a 16-bit run -- review B-2.2b nit).
-    assert_eq!(l.pc_fields(), 1, "w_pc=8 layout must have exactly 1 PC field");
+    assert_eq!(
+        l.pc_fields(),
+        1,
+        "w_pc=8 layout must have exactly 1 PC field"
+    );
     l
 }
 
@@ -144,10 +148,17 @@ fn adr0034_split_add_bootstrap_wpc8() {
                 got.pc
             );
             assert!(got.pc < 256, "w_pc=8 PC must fit in 8 bits");
-            assert_eq!(got.br, u16::from(br), "BR preserved: pc={pc:#04x} br={br:#04x}");
+            assert_eq!(
+                got.br,
+                u16::from(br),
+                "BR preserved: pc={pc:#04x} br={br:#04x}"
+            );
             assert_eq!(got.scratch[0], 0, "s0 restored: pc={pc:#04x} br={br:#04x}");
             assert_eq!(got.scratch[1], 0, "s1 restored: pc={pc:#04x} br={br:#04x}");
-            assert_eq!(got.regs, s.regs, "regs untouched: pc={pc:#04x} br={br:#04x}");
+            assert_eq!(
+                got.regs, s.regs,
+                "regs untouched: pc={pc:#04x} br={br:#04x}"
+            );
             assert_eq!(got.ir, s.ir, "IR untouched: pc={pc:#04x} br={br:#04x}");
             assert_eq!(
                 &got.scratch[2..],
@@ -203,14 +214,14 @@ fn adr0034_split_add_bootstrap_wpc8() {
 /// increments drive pc_inc. r2 must be UNCHANGED (the body was skipped).
 fn forward_branch_program() -> Vec<Instr> {
     vec![
-        Instr::Addi { rd: 1, imm: 2 }, // 0
-        Instr::Swapbr { rd: 1, rs: 0 },       // 1  -> jumps to 4
+        Instr::Addi { rd: 1, imm: 2 },    // 0
+        Instr::Swapbr { rd: 1, rs: 0 },   // 1  -> jumps to 4
         Instr::Xori { rd: 2, imm: 0xFF }, // 2 (skipped)
         Instr::Xori { rd: 2, imm: 0x0F }, // 3 (skipped)
-        Instr::Swapbr { rd: 1, rs: 0 },       // 4  come-from
-        Instr::Addi { rd: 3, imm: 1 }, // 5
-        Instr::Sub { rd: 3, rs: 0 },   // 6
-        Instr::Subi { rd: 1, imm: 2 }, // 7
+        Instr::Swapbr { rd: 1, rs: 0 },   // 4  come-from
+        Instr::Addi { rd: 3, imm: 1 },    // 5
+        Instr::Sub { rd: 3, rs: 0 },      // 6
+        Instr::Subi { rd: 1, imm: 2 },    // 7
     ]
 }
 
@@ -228,12 +239,12 @@ fn forward_branch_program() -> Vec<Instr> {
 /// PC high within the 8-bit range.
 fn skip_block_program() -> Vec<Instr> {
     vec![
-        Instr::Addi { rd: 1, imm: 2 }, // 0
-        Instr::Swapbr { rd: 1, rs: 0 },       // 1 -> jumps to 4 (come-from), skipping 2,3
-        Instr::Add { rd: 2, rs: 0 },   // 2 (skipped)
-        Instr::Xor { rd: 2, rs: 3 },   // 3 (skipped)
-        Instr::Swapbr { rd: 1, rs: 0 },       // 4 come-from: clears BR
-        Instr::Subi { rd: 1, imm: 2 }, // 5
+        Instr::Addi { rd: 1, imm: 2 },  // 0
+        Instr::Swapbr { rd: 1, rs: 0 }, // 1 -> jumps to 4 (come-from), skipping 2,3
+        Instr::Add { rd: 2, rs: 0 },    // 2 (skipped)
+        Instr::Xor { rd: 2, rs: 3 },    // 3 (skipped)
+        Instr::Swapbr { rd: 1, rs: 0 }, // 4 come-from: clears BR
+        Instr::Subi { rd: 1, imm: 2 },  // 5
     ]
 }
 
@@ -256,9 +267,9 @@ fn skip_block_program() -> Vec<Instr> {
 fn backward_branch_program() -> Vec<Instr> {
     vec![
         Instr::Addi { rd: 2, imm: 0xFD }, // 0
-        Instr::Swapbr { rd: 1, rs: 0 },          // 1 top come-from
+        Instr::Swapbr { rd: 1, rs: 0 },   // 1 top come-from
         Instr::Addi { rd: 3, imm: 1 },    // 2 body (runs twice)
-        Instr::Swapbr { rd: 2, rs: 0 },          // 3 backward branch -> 1 (pass1)
+        Instr::Swapbr { rd: 2, rs: 0 },   // 3 backward branch -> 1 (pass1)
         Instr::Xori { rd: 1, imm: 0xFD }, // 4 clear migrated token
     ]
 }
@@ -280,8 +291,15 @@ fn init_regs(regs: [u8; NUM_REGS], pc: u8) -> StateVals {
 fn assert_wpc8_eq_wpc16(prog: &[Instr], init: StateVals, budget: usize, s_max: usize, label: &str) {
     let w_pc8 = layout_w_pc8();
 
-    let got8 = run_rom_on_cpu_with(&w_pc8, prog, init.clone(), budget, s_max, theseus_eval::eval)
-        .unwrap_or_else(|e| panic!("{label}: w_pc=8 run FAILED: {e:?}"));
+    let got8 = run_rom_on_cpu_with(
+        &w_pc8,
+        prog,
+        init.clone(),
+        budget,
+        s_max,
+        theseus_eval::eval,
+    )
+    .unwrap_or_else(|e| panic!("{label}: w_pc=8 run FAILED: {e:?}"));
 
     // The w_pc=16 reference: the DEFAULT-layout netlist run (run_rom_on_cpu
     // uses Layout::default()). run_rom_on_cpu_with(&Layout::default(), ...)
@@ -296,9 +314,18 @@ fn assert_wpc8_eq_wpc16(prog: &[Instr], init: StateVals, budget: usize, s_max: u
     // run_rom_on_cpu_with already enforced terminal quiescence (BR/s0/s1==0);
     // assert it explicitly for the report.
     assert_eq!(got8.br, 0, "{label}: terminal BR quiescent (w_pc=8)");
-    assert_eq!(got8.scratch[0], 0, "{label}: terminal s0 quiescent (w_pc=8)");
-    assert_eq!(got8.scratch[1], 0, "{label}: terminal s1 quiescent (w_pc=8)");
-    eprintln!("B-2.2b TEST 2 [{label}]: w_pc=8 == w_pc=16, terminal quiescent ✓ (final regs={:?})", got8.regs);
+    assert_eq!(
+        got8.scratch[0], 0,
+        "{label}: terminal s0 quiescent (w_pc=8)"
+    );
+    assert_eq!(
+        got8.scratch[1], 0,
+        "{label}: terminal s1 quiescent (w_pc=8)"
+    );
+    eprintln!(
+        "B-2.2b TEST 2 [{label}]: w_pc=8 == w_pc=16, terminal quiescent ✓ (final regs={:?})",
+        got8.regs
+    );
 }
 
 #[test]

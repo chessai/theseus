@@ -18,9 +18,7 @@ use theseus_netlist::{balance, lower_iso, CellKind};
 use theseus_spice::chardb::{rung0_measured, CharDb};
 
 use theseus_tisc::asm::{assemble, Instr};
-use theseus_tisc::compile::{
-    derive_layout, exec_instr, run_rom_on_cpu, run_rom_on_cpu_with,
-};
+use theseus_tisc::compile::{derive_layout, exec_instr, run_rom_on_cpu, run_rom_on_cpu_with};
 use theseus_tisc::decoder::{operand_field_l, select_operand_l, R_RD};
 use theseus_tisc::energy::balanced_energy;
 use theseus_tisc::types::{Layout, StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
@@ -193,19 +191,12 @@ fn reduced_run_matches_exec_and_default() {
 
         let want = exec_reference(&prog, &init);
 
-        let reduced = run_rom_on_cpu_with(
-            &layout,
-            &prog,
-            init.clone(),
-            budget,
-            0,
-            theseus_eval::eval,
-        )
-        .unwrap_or_else(|e| panic!("reduced run failed for {bytes:?}: {e}"));
+        let reduced =
+            run_rom_on_cpu_with(&layout, &prog, init.clone(), budget, 0, theseus_eval::eval)
+                .unwrap_or_else(|e| panic!("reduced run failed for {bytes:?}: {e}"));
 
-        let default =
-            run_rom_on_cpu(&prog, init.clone(), budget, 0, theseus_eval::eval)
-                .unwrap_or_else(|e| panic!("default run failed for {bytes:?}: {e}"));
+        let default = run_rom_on_cpu(&prog, init.clone(), budget, 0, theseus_eval::eval)
+            .unwrap_or_else(|e| panic!("default run failed for {bytes:?}: {e}"));
 
         // Reduced netlist == fast-sim reference (on the named registers).
         assert_eq!(
@@ -240,11 +231,7 @@ fn measure(layout: &Layout, rom: &[u32], label: &str) -> (usize, f64) {
     let step_iso = theseus_tisc::step::step_with(layout, rom);
     let net = lower_iso(&step_iso).expect("lower_iso step");
     let balanced = balance(&net).expect("balance");
-    let cells: usize = balanced
-        .cell_counts()
-        .values()
-        .copied()
-        .sum::<usize>();
+    let cells: usize = balanced.cell_counts().values().copied().sum::<usize>();
     let k0 = balanced
         .cell_counts()
         .get(&CellKind::K0)
@@ -303,10 +290,7 @@ fn register_shrink_win_measurement() {
 #[test]
 fn derive_layout_pins_num_regs_when_scratch_operand_used() {
     // Register-only r0..r3 → shrinks to num_regs = 4 (the win applies).
-    let reg_only = vec![
-        Instr::Add { rd: 0, rs: 1 },
-        Instr::Xor { rd: 2, rs: 3 },
-    ];
+    let reg_only = vec![Instr::Add { rd: 0, rs: 1 }, Instr::Xor { rd: 2, rs: 3 }];
     assert_eq!(
         derive_layout(&reg_only).num_regs,
         4,
@@ -318,7 +302,11 @@ fn derive_layout_pins_num_regs_when_scratch_operand_used() {
     let with_scratch = vec![
         Instr::Add { rd: 0, rs: 1 },
         Instr::Xor { rd: 2, rs: 3 },
-        Instr::Ccnot { rd: 0, rs: 1, rt: 10 },
+        Instr::Ccnot {
+            rd: 0,
+            rs: 1,
+            rt: 10,
+        },
     ];
     assert_eq!(
         derive_layout(&with_scratch).num_regs,
@@ -366,10 +354,7 @@ fn reduced_crossbar_preserves_s0_s1_at_num_regs_2() {
 /// default == exec), not just that the crossbar preserves s0/s1.
 #[test]
 fn num_regs_2_program_runs_correctly() {
-    let prog = vec![
-        Instr::Add { rd: 0, rs: 1 },
-        Instr::Xor { rd: 1, rs: 0 },
-    ];
+    let prog = vec![Instr::Add { rd: 0, rs: 1 }, Instr::Xor { rd: 1, rs: 0 }];
     let layout = derive_layout(&prog);
     assert_eq!(layout.num_regs, 2, "r0,r1-only program → num_regs=2");
     let budget = prog.len();
@@ -391,15 +376,9 @@ fn num_regs_2_program_runs_correctly() {
             mem: [0; MEM_WORDS],
         };
         let want = exec_reference(&prog, &init);
-        let reduced = run_rom_on_cpu_with(
-            &layout,
-            &prog,
-            init.clone(),
-            budget,
-            0,
-            theseus_eval::eval,
-        )
-        .unwrap_or_else(|e| panic!("num_regs=2 reduced run failed for {bytes:?}: {e}"));
+        let reduced =
+            run_rom_on_cpu_with(&layout, &prog, init.clone(), budget, 0, theseus_eval::eval)
+                .unwrap_or_else(|e| panic!("num_regs=2 reduced run failed for {bytes:?}: {e}"));
         let default = run_rom_on_cpu(&prog, init.clone(), budget, 0, theseus_eval::eval)
             .unwrap_or_else(|e| panic!("default run failed for {bytes:?}: {e}"));
         assert_eq!(

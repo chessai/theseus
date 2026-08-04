@@ -204,10 +204,7 @@ mod tests {
 
     #[test]
     fn round_trip_seq_id_swap() {
-        let iso = Iso::seq(
-            Iso::Id(bool_ty()),
-            Iso::SwapSum(Type::One, Type::One),
-        );
+        let iso = Iso::seq(Iso::Id(bool_ty()), Iso::SwapSum(Type::One, Type::One));
         assert_round_trip(&iso);
     }
 
@@ -456,7 +453,11 @@ mod tests {
         for x in [o.clone(), i.clone()] {
             for a in [o.clone(), i.clone()] {
                 let a2 = if x == i {
-                    if a == o { i.clone() } else { o.clone() }
+                    if a == o {
+                        i.clone()
+                    } else {
+                        o.clone()
+                    }
                 } else {
                     a.clone()
                 };
@@ -515,7 +516,11 @@ mod tests {
             Iso::unfold(l.clone(), theseus_core::adjoint(&f)),
         );
         for v in enumerate(&Type::prod(l.clone(), bool_ty())) {
-            assert_eq!(run(&iso, v.clone()).unwrap(), v, "fold;unfold† != id at {v:?}");
+            assert_eq!(
+                run(&iso, v.clone()).unwrap(),
+                v,
+                "fold;unfold† != id at {v:?}"
+            );
         }
     }
 
@@ -529,7 +534,11 @@ mod tests {
             Iso::fold(l.clone(), theseus_core::adjoint(&f)),
         );
         for v in enumerate(&Type::prod(l.clone(), bool_ty())) {
-            assert_eq!(run(&iso, v.clone()).unwrap(), v, "unfold;fold† != id at {v:?}");
+            assert_eq!(
+                run(&iso, v.clone()).unwrap(),
+                v,
+                "unfold;fold† != id at {v:?}"
+            );
         }
     }
 
@@ -638,7 +647,11 @@ mod tests {
                     expected = run(&rot3(), expected).unwrap();
                 }
                 let got = run(&iso, Value::pair(xs.clone(), c.clone())).unwrap();
-                assert_eq!(got, Value::pair(xs.clone(), expected), "length-fold at {xs:?}");
+                assert_eq!(
+                    got,
+                    Value::pair(xs.clone(), expected),
+                    "length-fold at {xs:?}"
+                );
             }
         }
         assert_round_trip(&iso);
@@ -693,10 +706,7 @@ mod tests {
                 for _ in 0..k {
                     v = Value::right(v);
                 }
-                assert!(
-                    inhabits(&v, &ty),
-                    "thermo({k}) should inhabit Flat({n})"
-                );
+                assert!(inhabits(&v, &ty), "thermo({k}) should inhabit Flat({n})");
             }
             // One past the end does NOT inhabit.
             let mut v = Value::left(Value::Unit);
@@ -726,7 +736,9 @@ mod tests {
 
         let mut fwd = BTreeMap::new();
         for v in &vals {
-            let Value::Pair(a, b) = v else { panic!("expected pair") };
+            let Value::Pair(a, b) = v else {
+                panic!("expected pair")
+            };
             let a_idx = thermo_idx(a);
             let b_idx = thermo_idx(b);
             let out_b = a_idx ^ b_idx;
@@ -761,7 +773,10 @@ mod tests {
         loop {
             match cur {
                 Value::Left(_) => return count,
-                Value::Right(rest) => { count += 1; cur = rest; }
+                Value::Right(rest) => {
+                    count += 1;
+                    cur = rest;
+                }
                 _ => return count,
             }
         }

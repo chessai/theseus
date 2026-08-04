@@ -44,13 +44,9 @@ pub fn adjoint(iso: &Iso) -> Iso {
         Iso::SwapSum(a, b) => Iso::SwapSum(b.clone(), a.clone()),
 
         // assocl⁺† = assocr⁺
-        Iso::AssocLSum(a, b, c) => {
-            Iso::AssocRSum(a.clone(), b.clone(), c.clone())
-        }
+        Iso::AssocLSum(a, b, c) => Iso::AssocRSum(a.clone(), b.clone(), c.clone()),
         // assocr⁺† = assocl⁺
-        Iso::AssocRSum(a, b, c) => {
-            Iso::AssocLSum(a.clone(), b.clone(), c.clone())
-        }
+        Iso::AssocRSum(a, b, c) => Iso::AssocLSum(a.clone(), b.clone(), c.clone()),
 
         // unite⁺† = uniti⁺
         Iso::UniteSum(a) => Iso::UnitiSum(a.clone()),
@@ -62,13 +58,9 @@ pub fn adjoint(iso: &Iso) -> Iso {
         Iso::SwapProd(a, b) => Iso::SwapProd(b.clone(), a.clone()),
 
         // assoclˣ† = assocrˣ
-        Iso::AssocLProd(a, b, c) => {
-            Iso::AssocRProd(a.clone(), b.clone(), c.clone())
-        }
+        Iso::AssocLProd(a, b, c) => Iso::AssocRProd(a.clone(), b.clone(), c.clone()),
         // assocrˣ† = assoclˣ
-        Iso::AssocRProd(a, b, c) => {
-            Iso::AssocLProd(a.clone(), b.clone(), c.clone())
-        }
+        Iso::AssocRProd(a, b, c) => Iso::AssocLProd(a.clone(), b.clone(), c.clone()),
 
         // uniteˣ† = unitiˣ
         Iso::UniteProd(a) => Iso::UnitiProd(a.clone()),
@@ -77,13 +69,9 @@ pub fn adjoint(iso: &Iso) -> Iso {
 
         // ── Distributivity ───────────────────────────────────────
         // distrib† = factor
-        Iso::Distrib(a, b, c) => {
-            Iso::Factor(a.clone(), b.clone(), c.clone())
-        }
+        Iso::Distrib(a, b, c) => Iso::Factor(a.clone(), b.clone(), c.clone()),
         // factor† = distrib
-        Iso::Factor(a, b, c) => {
-            Iso::Distrib(a.clone(), b.clone(), c.clone())
-        }
+        Iso::Factor(a, b, c) => Iso::Distrib(a.clone(), b.clone(), c.clone()),
 
         // ── Trace ────────────────────────────────────────────────
         // (trace f)† = trace (f†)
@@ -193,10 +181,7 @@ mod tests {
 
         for term in &terms {
             let double = adjoint(&adjoint(term));
-            assert_eq!(
-                &double, term,
-                "involution failed for {term:?}"
-            );
+            assert_eq!(&double, term, "involution failed for {term:?}");
         }
     }
 
@@ -316,15 +301,9 @@ mod tests {
         );
 
         // unite⁺† = uniti⁺
-        assert_eq!(
-            adjoint(&Iso::UniteSum(a.clone())),
-            Iso::UnitiSum(a.clone()),
-        );
+        assert_eq!(adjoint(&Iso::UniteSum(a.clone())), Iso::UnitiSum(a.clone()),);
         // uniti⁺† = unite⁺
-        assert_eq!(
-            adjoint(&Iso::UnitiSum(a.clone())),
-            Iso::UniteSum(a.clone()),
-        );
+        assert_eq!(adjoint(&Iso::UnitiSum(a.clone())), Iso::UniteSum(a.clone()),);
 
         // uniteˣ† = unitiˣ
         assert_eq!(

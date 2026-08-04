@@ -55,7 +55,10 @@ impl RailPair {
     /// The pair with the two token-line roles exchanged: logical NOT,
     /// zero cells.
     pub fn swapped(self) -> RailPair {
-        RailPair { line0: self.line1, line1: self.line0 }
+        RailPair {
+            line0: self.line1,
+            line1: self.line0,
+        }
     }
 }
 
@@ -245,7 +248,12 @@ pub enum CellNetError {
     /// A cell's port counts don't match its kind (INV-TOKEN structural:
     /// rail-pair count must be conserved through every cell).
     #[error("cell {cell}: {kind:?} wants {} ports, has {inputs} in / {outputs} out", .kind.arity())]
-    Arity { cell: usize, kind: CellKind, inputs: usize, outputs: usize },
+    Arity {
+        cell: usize,
+        kind: CellKind,
+        inputs: usize,
+        outputs: usize,
+    },
     /// `phase ≠ depth mod P`.
     #[error("cell {cell}: phase {phase} ≠ depth {depth} mod {PHASE_COUNT}")]
     Phase { cell: usize, depth: u32, phase: u8 },
@@ -267,18 +275,29 @@ pub enum CellNetError {
     LineConsumers { line: LineId, consumers: usize },
     /// `outputs` and `output_depths` disagree in length.
     #[error("{outputs} output ports but {output_depths} output depths")]
-    PortWidths { outputs: usize, output_depths: usize },
+    PortWidths {
+        outputs: usize,
+        output_depths: usize,
+    },
     /// A cell's arrival depths never resolve (cycle or dangling input).
     #[error("cell {cell}: arrival depths never resolve")]
     Unresolved { cell: usize },
     /// A cell's recorded `depth` isn't the arrival tick of its latest
     /// input.
     #[error("cell {cell}: depth {got}, latest input arrives at {expected}")]
-    CellDepth { cell: usize, expected: u32, got: u32 },
+    CellDepth {
+        cell: usize,
+        expected: u32,
+        got: u32,
+    },
     /// A recorded output depth isn't the arrival tick of that port's
     /// lines.
     #[error("output {port}: recorded depth {got}, lines arrive at {expected}")]
-    OutputDepth { port: usize, expected: u32, got: u32 },
+    OutputDepth {
+        port: usize,
+        expected: u32,
+        got: u32,
+    },
     /// The two lines of a consumed pair arrive on different ticks.
     #[error("pair lines arrive at ticks {line0_depth} vs {line1_depth}")]
     PairSkew { line0_depth: u32, line1_depth: u32 },
@@ -302,7 +321,10 @@ fn check_pair_arrival(arrivals: &[u32], p: &RailPair) -> Result<u32, CellNetErro
     let d0 = arrivals[p.line0.0 as usize];
     let d1 = arrivals[p.line1.0 as usize];
     if d0 != d1 {
-        return Err(CellNetError::PairSkew { line0_depth: d0, line1_depth: d1 });
+        return Err(CellNetError::PairSkew {
+            line0_depth: d0,
+            line1_depth: d1,
+        });
     }
     Ok(d1)
 }
@@ -343,7 +365,11 @@ impl PhasedCellNetlist {
         let mut arrival: Vec<Option<u32>> = vec![None; n];
         let idx = |line: LineId| -> Result<usize, CellNetError> {
             let i = line.0 as usize;
-            if i < n { Ok(i) } else { Err(CellNetError::LineRange { line }) }
+            if i < n {
+                Ok(i)
+            } else {
+                Err(CellNetError::LineRange { line })
+            }
         };
 
         for p in &self.inputs {
@@ -391,7 +417,10 @@ impl PhasedCellNetlist {
             .into_iter()
             .enumerate()
             .map(|(i, d)| {
-                d.ok_or(CellNetError::LineDrivers { line: LineId(i as u32), drivers: 0 })
+                d.ok_or(CellNetError::LineDrivers {
+                    line: LineId(i as u32),
+                    drivers: 0,
+                })
             })
             .collect()
     }
@@ -505,7 +534,11 @@ impl PhasedCellNetlist {
                 });
             }
             if cell.phase != (cell.depth % u32::from(PHASE_COUNT)) as u8 {
-                return Err(CellNetError::Phase { cell: i, depth: cell.depth, phase: cell.phase });
+                return Err(CellNetError::Phase {
+                    cell: i,
+                    depth: cell.depth,
+                    phase: cell.phase,
+                });
             }
             for p in &cell.inputs {
                 check_pair(p)?;
@@ -519,7 +552,10 @@ impl PhasedCellNetlist {
 
         for i in 0..n {
             if drivers[i] != 1 {
-                return Err(CellNetError::LineDrivers { line: LineId(i as u32), drivers: drivers[i] });
+                return Err(CellNetError::LineDrivers {
+                    line: LineId(i as u32),
+                    drivers: drivers[i],
+                });
             }
             if consumers[i] != 1 {
                 return Err(CellNetError::LineConsumers {
@@ -531,22 +567,29 @@ impl PhasedCellNetlist {
 
         // Depth discipline against graph arrival times.
         let arrival = self.line_arrivals()?;
-        let pair_arrival = |p: &RailPair| -> Result<u32, CellNetError> {
-            check_pair_arrival(&arrival, p)
-        };
+        let pair_arrival =
+            |p: &RailPair| -> Result<u32, CellNetError> { check_pair_arrival(&arrival, p) };
         for (i, cell) in self.cells.iter().enumerate() {
             let mut latest = 0u32;
             for p in &cell.inputs {
                 latest = latest.max(pair_arrival(p)?);
             }
             if cell.depth != latest {
-                return Err(CellNetError::CellDepth { cell: i, expected: latest, got: cell.depth });
+                return Err(CellNetError::CellDepth {
+                    cell: i,
+                    expected: latest,
+                    got: cell.depth,
+                });
             }
         }
         for (j, (p, &d)) in self.outputs.iter().zip(&self.output_depths).enumerate() {
             let got = pair_arrival(p)?;
             if got != d {
-                return Err(CellNetError::OutputDepth { port: j, expected: got, got: d });
+                return Err(CellNetError::OutputDepth {
+                    port: j,
+                    expected: got,
+                    got: d,
+                });
             }
         }
         Ok(())
@@ -563,8 +606,14 @@ mod tests {
 
     /// A hand-built single-K0 netlist on one bit.
     fn one_buffer() -> PhasedCellNetlist {
-        let inp = RailPair { line0: LineId(0), line1: LineId(1) };
-        let out = RailPair { line0: LineId(2), line1: LineId(3) };
+        let inp = RailPair {
+            line0: LineId(0),
+            line1: LineId(1),
+        };
+        let out = RailPair {
+            line0: LineId(2),
+            line1: LineId(3),
+        };
         PhasedCellNetlist {
             input_ty: bit(),
             output_ty: bit(),
@@ -601,8 +650,14 @@ mod tests {
     #[test]
     fn degenerate_pair_rejected() {
         let mut net = one_buffer();
-        net.cells[0].outputs[0] = RailPair { line0: LineId(2), line1: LineId(2) };
-        assert!(matches!(net.validate(), Err(CellNetError::DegeneratePair { .. })));
+        net.cells[0].outputs[0] = RailPair {
+            line0: LineId(2),
+            line1: LineId(2),
+        };
+        assert!(matches!(
+            net.validate(),
+            Err(CellNetError::DegeneratePair { .. })
+        ));
     }
 
     #[test]
@@ -630,7 +685,10 @@ mod tests {
         let mut net = one_buffer();
         net.cells[0].depth = 2;
         net.cells[0].phase = 2;
-        assert!(matches!(net.validate(), Err(CellNetError::CellDepth { .. })));
+        assert!(matches!(
+            net.validate(),
+            Err(CellNetError::CellDepth { .. })
+        ));
     }
 
     #[test]
@@ -675,9 +733,18 @@ mod tests {
         // NOTE: this net deliberately fails validate() (LineConsumers:
         // line 0 is consumed by both the cell input and the output port).
         // That is WHY checked_output_arrivals must not call validate().
-        let inp = RailPair { line0: LineId(0), line1: LineId(1) };
-        let cell_out = RailPair { line0: LineId(2), line1: LineId(3) };
-        let skewed_output = RailPair { line0: LineId(2), line1: LineId(0) };
+        let inp = RailPair {
+            line0: LineId(0),
+            line1: LineId(1),
+        };
+        let cell_out = RailPair {
+            line0: LineId(2),
+            line1: LineId(3),
+        };
+        let skewed_output = RailPair {
+            line0: LineId(2),
+            line1: LineId(0),
+        };
         let net = PhasedCellNetlist {
             input_ty: bit(),
             output_ty: bit(),
@@ -699,13 +766,22 @@ mod tests {
         // checked_output_arrivals should detect the skew.
         assert!(matches!(
             net.checked_output_arrivals(),
-            Err(CellNetError::PairSkew { line0_depth: 1, line1_depth: 0 })
+            Err(CellNetError::PairSkew {
+                line0_depth: 1,
+                line1_depth: 0
+            })
         ));
     }
 
     #[test]
     fn cell_eval_self_inverse() {
-        for kind in [CellKind::K0, CellKind::K1, CellKind::K2, CellKind::K3, CellKind::R1] {
+        for kind in [
+            CellKind::K0,
+            CellKind::K1,
+            CellKind::K2,
+            CellKind::K3,
+            CellKind::R1,
+        ] {
             let n = kind.arity();
             for x in 0..1u32 << n {
                 let bits: Vec<bool> = (0..n).map(|i| (x >> i) & 1 == 1).collect();

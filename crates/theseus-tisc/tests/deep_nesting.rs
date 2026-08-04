@@ -12,43 +12,12 @@
 //! to pass) and COMPILES + `run_on_cpu_fast == eval` now, over a NON-DEGENERATE
 //! program (both loops iterate ≥ 2×) with a shared-aux tear-down probe.
 
-use std::collections::BTreeMap;
-
-use theseus_core::prim::{enumerate_values, PrimDef};
+use theseus_core::prim::enumerate_values;
 use theseus_core::{Iso, Type};
 
-use theseus_tisc::compile::{
-    compile_with_metadata, run_on_cpu, run_on_cpu_fast, value_from_leaf_bytes_pub,
-    value_to_leaf_bytes_pub,
-};
+use theseus_tisc::compile::{compile_with_metadata, run_on_cpu, run_on_cpu_fast};
 
 // ── helpers ─────────────────────────────────────────────────────────
-
-fn prim_from_byte_fn(
-    name: &str,
-    in_ty: Type,
-    out_ty: Type,
-    fwd_bytes: impl Fn(&[u8]) -> Vec<u8>,
-) -> PrimDef {
-    let mut forward = BTreeMap::new();
-    let mut backward = BTreeMap::new();
-    for v in enumerate_values(&in_ty) {
-        let ib = value_to_leaf_bytes_pub(&v, &in_ty);
-        let ob = fwd_bytes(&ib);
-        let (out_val, _) = value_from_leaf_bytes_pub(&ob, &out_ty);
-        forward.insert(v.clone(), out_val.clone());
-        backward.insert(out_val, v);
-    }
-    PrimDef {
-        forward_name: name.into(),
-        backward_name: format!("{name}_inv"),
-        input_ty: in_ty,
-        output_ty: out_ty,
-        forward,
-        backward,
-        symbolic: None,
-    }
-}
 
 /// Whole-domain fast-oracle agreement: `run_on_cpu_fast == eval` on every input.
 fn assert_cpu_eq_eval(name: &str, iso: &Iso) -> usize {
@@ -114,8 +83,7 @@ fn tag_only_loop() -> Iso {
 #[test]
 fn tag_only_single_level_iterates() {
     let iso = tag_only_loop();
-    let lowered =
-        compile_with_metadata(&iso).expect("single-level tag-only Trace must compile");
+    let lowered = compile_with_metadata(&iso).expect("single-level tag-only Trace must compile");
     // Non-degenerate: the loop takes 2 body applications → k_exact = 2+1 safety = 3.
     assert!(
         lowered.loop_terms[0].k_max >= 2,
@@ -149,10 +117,7 @@ fn depth2_nested_trace_compiles_and_runs() {
     let inner = tag_only_loop(); // Trace(One, SwapSum) : One ↔ One, iterates 2×
 
     // outer body : Sum(One,One) ↔ Sum(One,One) = Bit ↔ Bit.
-    let outer_body = Iso::seq(
-        Iso::plus(Iso::Id(one()), inner),
-        Iso::SwapSum(one(), one()),
-    );
+    let outer_body = Iso::seq(Iso::plus(Iso::Id(one()), inner), Iso::SwapSum(one(), one()));
     let outer = Iso::trace(one(), outer_body);
 
     // It must type-check and COMPILE (was rejected before A-5b).
@@ -222,7 +187,9 @@ fn depth2_shared_aux_is_reused_not_disjoint() {
              (net-zero shared frame), got frame {inner_frame:?}"
         );
     }
-    eprintln!("A-5b shared-aux probe: inner frame {inner_frame:?} ⊆ outer aux {reusable:?} (reuse)");
+    eprintln!(
+        "A-5b shared-aux probe: inner frame {inner_frame:?} ⊆ outer aux {reusable:?} (reuse)"
+    );
 
     // Contrast: with NO reusable offered, the same occupancy REJECTS (only {6,7}
     // free = 2 < 4) -- proving the reuse (not extra free regs) is what makes it fit.
@@ -254,10 +221,7 @@ fn depth2_nested_trace_real_cpu() {
 
     // outer body : Sum(One,One) ↔ Sum(One,One) = Bit ↔ Bit -- IDENTICAL to
     // `depth2_nested_trace_compiles_and_runs` (the outer body CONTAINS a Trace).
-    let outer_body = Iso::seq(
-        Iso::plus(Iso::Id(one()), inner),
-        Iso::SwapSum(one(), one()),
-    );
+    let outer_body = Iso::seq(Iso::plus(Iso::Id(one()), inner), Iso::SwapSum(one(), one()));
     let outer = Iso::trace(one(), outer_body);
 
     // Compile + re-assert non-degeneracy at BOTH levels (same as the fast test),
@@ -328,7 +292,10 @@ fn depth3_nested_trace_compiles_or_rejects_gracefully() {
                 d2.map(|c| c.k_max),
                 d3.map(|c| c.k_max)
             );
-            assert!(d3.is_some(), "depth-3 must carry a 3-level nested loop tree");
+            assert!(
+                d3.is_some(),
+                "depth-3 must carry a 3-level nested loop tree"
+            );
         }
         Err(e) => {
             let msg = format!("{e}");

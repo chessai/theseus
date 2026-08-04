@@ -69,7 +69,9 @@ pub enum SimError {
     /// ADR-0026 C2.2 (the tick-exact balancer, a later slice, owes K0
     /// insertions). The timed sim refuses rather than letting the early
     /// token silently wait.
-    #[error("cell {cell} inputs arrive on ticks {arrivals:?} (C2.2: wrong circuit until balanced)")]
+    #[error(
+        "cell {cell} inputs arrive on ticks {arrivals:?} (C2.2: wrong circuit until balanced)"
+    )]
     Unbalanced { cell: usize, arrivals: Vec<u32> },
     /// Dynamic INV-TOKEN violation: at `tick`, this rail pair did not
     /// have exactly one line high. `None` means the line was never
@@ -89,16 +91,17 @@ pub enum SimError {
 
 /// The per-tick INV-TOKEN assertion for one rail pair: both lines driven
 /// and exactly one high.
-fn check_pair_at(
-    high: &[Option<bool>],
-    pair: RailPair,
-    tick: u32,
-) -> Result<(), SimError> {
+fn check_pair_at(high: &[Option<bool>], pair: RailPair, tick: u32) -> Result<(), SimError> {
     let line0_high = high[pair.line0.0 as usize];
     let line1_high = high[pair.line1.0 as usize];
     match (line0_high, line1_high) {
         (Some(a), Some(b)) if a != b => Ok(()),
-        _ => Err(SimError::InvToken { tick, pair, line0_high, line1_high }),
+        _ => Err(SimError::InvToken {
+            tick,
+            pair,
+            line0_high,
+            line1_high,
+        }),
     }
 }
 
@@ -111,10 +114,7 @@ fn check_pair_at(
 ///
 /// Refuses invalid ([`SimError::Net`]) and tick-imbalanced
 /// ([`SimError::Unbalanced`]) netlists up front.
-pub fn simulate(
-    net: &PhasedCellNetlist,
-    input_tokens: &[bool],
-) -> Result<SimResult, SimError> {
+pub fn simulate(net: &PhasedCellNetlist, input_tokens: &[bool]) -> Result<SimResult, SimError> {
     net.validate().map_err(SimError::Net)?;
     if input_tokens.len() != net.inputs.len() {
         return Err(SimError::InputWidth {
@@ -122,8 +122,16 @@ pub fn simulate(
             got: input_tokens.len(),
         });
     }
-    if let Some(imb) = net.tick_imbalances().map_err(SimError::Net)?.into_iter().next() {
-        return Err(SimError::Unbalanced { cell: imb.cell, arrivals: imb.arrivals });
+    if let Some(imb) = net
+        .tick_imbalances()
+        .map_err(SimError::Net)?
+        .into_iter()
+        .next()
+    {
+        return Err(SimError::Unbalanced {
+            cell: imb.cell,
+            arrivals: imb.arrivals,
+        });
     }
     let arrival = net.line_arrivals().map_err(SimError::Net)?;
 
@@ -247,10 +255,8 @@ mod tests {
     }
 
     fn ccswap_iso() -> Iso {
-        let def = prim_from_bits("ccswap", four_bits(), four_bits(), |b| {
-            CellKind::K2.eval(b)
-        })
-        .unwrap();
+        let def =
+            prim_from_bits("ccswap", four_bits(), four_bits(), |b| CellKind::K2.eval(b)).unwrap();
         Iso::Prim(Box::new(def))
     }
 
@@ -335,7 +341,11 @@ mod tests {
 
     #[test]
     fn reg3_is_a_three_tick_identity() {
-        let reg3 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(3) };
+        let reg3 = TypedNode {
+            input: bit(),
+            output: bit(),
+            kind: NodeKind::Reg(3),
+        };
         let net = lower(&reg3).unwrap();
         for tok in [true, false] {
             let res = simulate(&net, &[tok]).unwrap();
@@ -361,9 +371,16 @@ mod tests {
         let id_bit = TypedNode {
             input: bit(),
             output: bit(),
-            kind: NodeKind::Permute { monoid: crate::ir::typed::Monoid::Prod, sigma: vec![0] },
+            kind: NodeKind::Permute {
+                monoid: crate::ir::typed::Monoid::Prod,
+                sigma: vec![0],
+            },
         };
-        let reg1 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(1) };
+        let reg1 = TypedNode {
+            input: bit(),
+            output: bit(),
+            kind: NodeKind::Reg(1),
+        };
         let net = lower(&TypedNode {
             input: Type::prod(bit(), bit()),
             output: Type::prod(bit(), bit()),
@@ -383,9 +400,16 @@ mod tests {
         let id_bit = || TypedNode {
             input: bit(),
             output: bit(),
-            kind: NodeKind::Permute { monoid: crate::ir::typed::Monoid::Prod, sigma: vec![0] },
+            kind: NodeKind::Permute {
+                monoid: crate::ir::typed::Monoid::Prod,
+                sigma: vec![0],
+            },
         };
-        let reg1 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(1) };
+        let reg1 = TypedNode {
+            input: bit(),
+            output: bit(),
+            kind: NodeKind::Reg(1),
+        };
         let par = TypedNode {
             input: three_bits(),
             output: three_bits(),
@@ -434,8 +458,14 @@ mod tests {
     #[test]
     fn invalid_netlist_is_refused() {
         // A K0 whose recorded phase disagrees with depth mod P.
-        let inp = RailPair { line0: LineId(0), line1: LineId(1) };
-        let out = RailPair { line0: LineId(2), line1: LineId(3) };
+        let inp = RailPair {
+            line0: LineId(0),
+            line1: LineId(1),
+        };
+        let out = RailPair {
+            line0: LineId(2),
+            line1: LineId(3),
+        };
         let net = PhasedCellNetlist {
             input_ty: bit(),
             output_ty: bit(),
@@ -459,7 +489,10 @@ mod tests {
     // dual-rail by construction), so the check itself is unit-tested.
     #[test]
     fn inv_token_check_rejects_bad_pairs() {
-        let pair = RailPair { line0: LineId(0), line1: LineId(1) };
+        let pair = RailPair {
+            line0: LineId(0),
+            line1: LineId(1),
+        };
         // Exactly one high: fine, either polarity.
         assert_eq!(check_pair_at(&[Some(false), Some(true)], pair, 0), Ok(()));
         assert_eq!(check_pair_at(&[Some(true), Some(false)], pair, 0), Ok(()));

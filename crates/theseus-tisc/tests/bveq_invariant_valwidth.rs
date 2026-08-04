@@ -30,8 +30,8 @@
 //!   * The NEW lemma the forward-skip loop needs (the Iter analog of vart's L2
 //!     come-from) is the SKIP-BLOCK LEMMA: over the whole carrier domain AND
 //!     both control values of ctrl, one skip-block copy realizes
-//!         ctrl_bit0 == 1  ⇒  carrier := body(carrier)   (RUN)
-//!         ctrl_bit0 == 0  ⇒  carrier := carrier         (SKIP, identity)
+//!     ctrl_bit0 == 1  ⇒  carrier := body(carrier)   (RUN)
+//!     ctrl_bit0 == 0  ⇒  carrier := carrier         (SKIP, identity)
 //!     with all skip aux {rb,temp} restored to 0. Unlike vart's L2 (a single
 //!     back-jump BR-router), this lemma spans the WHOLE copy AND must handle a
 //!     DATA-DEPENDENT FORWARD PC JUMP inside it (the Swapbr over the body) -- so
@@ -69,9 +69,7 @@ use theseus_tisc::compile::{
     unmarshal_resident, value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
 };
 use theseus_tisc::step::system_step;
-use theseus_tisc::types::{
-    MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_REGS, NUM_SCRATCH, W,
-};
+use theseus_tisc::types::{MEM_WORDS, NUM_BUS_FIELDS, NUM_CPU_FIELDS, NUM_REGS, NUM_SCRATCH, W};
 
 // ══════════════════════════════════════════════════════════════════════════
 // Target program: valwidth_reduce reduce_flat(w, d) = iter(Nat_d, xor_body).
@@ -251,9 +249,17 @@ fn field_bit_var(vs: &BddVariableSet, f: usize, b: usize) -> Bdd {
     vs.mk_var(vs.variables()[b * NSYS + f])
 }
 fn const_word8(val: u8, vs: &BddVariableSet) -> SV {
-    let mut sv = SV::Bit(if (val >> (W - 1)) & 1 == 1 { vs.mk_true() } else { vs.mk_false() });
+    let mut sv = SV::Bit(if (val >> (W - 1)) & 1 == 1 {
+        vs.mk_true()
+    } else {
+        vs.mk_false()
+    });
     for b in (0..W - 1).rev() {
-        let bit = if (val >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
+        let bit = if (val >> b) & 1 == 1 {
+            vs.mk_true()
+        } else {
+            vs.mk_false()
+        };
         sv = SV::pair(SV::Bit(bit), sv);
     }
     sv
@@ -262,7 +268,11 @@ fn const_word8(val: u8, vs: &BddVariableSet) -> SV {
 fn sym_low_word8(vs: &BddVariableSet, f: usize, wbits: usize) -> SV {
     let mut sv = SV::Bit(vs.mk_false());
     for b in (0..W - 1).rev() {
-        let bit = if b < wbits { field_bit_var(vs, f, b) } else { vs.mk_false() };
+        let bit = if b < wbits {
+            field_bit_var(vs, f, b)
+        } else {
+            vs.mk_false()
+        };
         sv = SV::pair(SV::Bit(bit), sv);
     }
     sv
@@ -271,7 +281,13 @@ fn sym_low_word8(vs: &BddVariableSet, f: usize, wbits: usize) -> SV {
 /// reference the specs are written against.
 fn entry_bits(vs: &BddVariableSet, f: usize, wbits: usize) -> Vec<Bdd> {
     (0..W)
-        .map(|b| if b < wbits { field_bit_var(vs, f, b) } else { vs.mk_false() })
+        .map(|b| {
+            if b < wbits {
+                field_bit_var(vs, f, b)
+            } else {
+                vs.mk_false()
+            }
+        })
         .collect()
 }
 
@@ -294,8 +310,12 @@ fn build_system<F: Fn(usize) -> SV>(mk: F) -> SV {
 /// Extract the bit BDDs of global system field `f` from an output SV shaped
 /// `Pair(Pair(cpu,mem),bus)`.
 fn sys_field_bits(out: &SV, f: usize) -> Vec<Bdd> {
-    let SV::Pair(cpu_mem, bus) = out else { panic!("system SV: expected outer Pair") };
-    let SV::Pair(cpu, mem) = &**cpu_mem else { panic!("system SV: expected (cpu,mem) Pair") };
+    let SV::Pair(cpu_mem, bus) = out else {
+        panic!("system SV: expected outer Pair")
+    };
+    let SV::Pair(cpu, mem) = &**cpu_mem else {
+        panic!("system SV: expected (cpu,mem) Pair")
+    };
     let inner = if f < NUM_CPU_FIELDS {
         extract_field(cpu, f, NUM_CPU_FIELDS)
     } else if f < NUM_CPU_FIELDS + MEM_WORDS {
@@ -371,7 +391,9 @@ struct SystemStepEngine {
 }
 impl SystemStepEngine {
     fn new(rom: &[u32]) -> Self {
-        SystemStepEngine { step: system_step(rom) }
+        SystemStepEngine {
+            step: system_step(rom),
+        }
     }
     fn eval_step(
         &self,
@@ -569,7 +591,11 @@ fn spike_system_ring_body_tractability() {
             rom_instr_name(&rom, pc),
         );
         // RUN body is straight-line (BR=0) so PC_out must be pc+1 -- re-pin.
-        assert_eq!(pc_out, Some(next_pc), "SPIKE PC-AGREEMENT: pc={pc} PC_out != pc+1");
+        assert_eq!(
+            pc_out,
+            Some(next_pc),
+            "SPIKE PC-AGREEMENT: pc={pc} PC_out != pc+1"
+        );
         cur = repin_pc(&out, next_pc, &vs);
         // LOUD tractability tripwire.
         assert!(
@@ -677,25 +703,41 @@ fn assert_body_semantics(out: &SV, w: u8, rr: &ReduceRegs, vs: &BddVariableSet) 
     let acc_want = body_acc_spec(&acc_in, &arr0_in, &arr1_in, &idx_in[0], wb, vs);
     let acc_out = sys_field_bits(out, rr.acc);
     for b in 0..W {
-        assert!(acc_out[b] == acc_want[b], "BODY: acc' bit {b} != acc ^ arr[idx]");
+        assert!(
+            acc_out[b] == acc_want[b],
+            "BODY: acc' bit {b} != acc ^ arr[idx]"
+        );
     }
     // idx' = idx ^ 1 (bit 0 flipped; higher bits 0).
     let idx_out = sys_field_bits(out, rr.idx);
     for b in 0..W {
-        let want = if b == 0 { idx_in[0].not() } else { zero.clone() };
+        let want = if b == 0 {
+            idx_in[0].not()
+        } else {
+            zero.clone()
+        };
         assert!(idx_out[b] == want, "BODY: idx' bit {b} != idx ^ 1");
     }
     // data' = data (preserved).
     let data_out = sys_field_bits(out, rr.data);
     for b in 0..W {
-        assert!(data_out[b] == data_in[b], "BODY: data' bit {b} != data (not preserved)");
+        assert!(
+            data_out[b] == data_in[b],
+            "BODY: data' bit {b} != data (not preserved)"
+        );
     }
     // arr0', arr1' preserved.
     let arr0_out = sys_field_bits(out, mem_f(0));
     let arr1_out = sys_field_bits(out, mem_f(1));
     for b in 0..W {
-        assert!(arr0_out[b] == arr0_in[b], "BODY: arr0 bit {b} not preserved");
-        assert!(arr1_out[b] == arr1_in[b], "BODY: arr1 bit {b} not preserved");
+        assert!(
+            arr0_out[b] == arr0_in[b],
+            "BODY: arr0 bit {b} not preserved"
+        );
+        assert!(
+            arr1_out[b] == arr1_in[b],
+            "BODY: arr1 bit {b} not preserved"
+        );
     }
     // mem[2], mem[3] preserved at 0 (entered 0).
     for m in 2..MEM_WORDS {
@@ -711,7 +753,10 @@ fn assert_body_semantics(out: &SV, w: u8, rr: &ReduceRegs, vs: &BddVariableSet) 
         }
         let got = sys_field_bits(out, r);
         for b in 0..W {
-            assert!(got[b] == zero, "BODY: reg r{r} bit {b} != 0 (leak/stray write)");
+            assert!(
+                got[b] == zero,
+                "BODY: reg r{r} bit {b} != 0 (leak/stray write)"
+            );
         }
     }
     let mut other: Vec<usize> = vec![BR_F];
@@ -727,7 +772,10 @@ fn assert_body_semantics(out: &SV, w: u8, rr: &ReduceRegs, vs: &BddVariableSet) 
     for f in other {
         let got = sys_field_bits(out, f);
         for b in 0..W {
-            assert!(got[b] == zero, "BODY: field {f} bit {b} != 0 (aux/scratch/bus/IR/BR leak)");
+            assert!(
+                got[b] == zero,
+                "BODY: field {f} bit {b} != 0 (aux/scratch/bus/IR/BR leak)"
+            );
         }
     }
 }
@@ -757,9 +805,15 @@ fn body_lemma_reduce_w(w: u8) {
     // wrong: swap idx branches (arr[idx^1]).
     let wrong = body_acc_spec(&acc_in, &arr1_in, &arr0_in, &idx_in[0], wb, &vs);
     let differs = (0..W).any(|b| acc_out[b] != wrong[b]);
-    assert!(differs, "NEG-body: real acc == WRONG acc^arr[idx^1] -- teeth vacuous");
+    assert!(
+        differs,
+        "NEG-body: real acc == WRONG acc^arr[idx^1] -- teeth vacuous"
+    );
 
-    assert!(peak < 500_000, "BODY LEMMA peak {peak} -- memory ring blowup");
+    assert!(
+        peak < 500_000,
+        "BODY LEMMA peak {peak} -- memory ring blowup"
+    );
     eprintln!(
         "L1 BODY LEMMA [reduce_flat({w},2)]: system-ring body [3,9) ≡ (acc^=arr[idx]; idx^=1; \
          data/arr preserved) over the WHOLE symbolic carrier domain; all aux/scratch/bus/IR/BR/mem \
@@ -840,20 +894,20 @@ fn read_skip_block(rom_instrs: &[Instr], copy_start: usize) -> SkipBlock {
         "skip[+11] must be Subi rb, got {:?}",
         rom_instrs[copy_start + 11]
     );
-    SkipBlock { copy_start, ctrl, rb, temp, body_len_imm }
+    SkipBlock {
+        copy_start,
+        ctrl,
+        rb,
+        temp,
+        body_len_imm,
+    }
 }
 
 /// Whole-copy entry SV: PC=copy_start, ctrl register = concrete `ctrl_val` (0/1),
 /// carrier {acc,data,idx,arr0,arr1} symbolic, everything else 0 (BR=0, IR=0,
 /// scratch=0, bus=0, rb=temp=0, other regs=0, mem[2],mem[3]=0). The OTHER
 /// counter-tag regs (besides ctrl) enter 0 (they are not read inside this copy).
-fn skip_entry_sv(
-    sb: &SkipBlock,
-    ctrl_val: u8,
-    w: u8,
-    rr: &ReduceRegs,
-    vs: &BddVariableSet,
-) -> SV {
+fn skip_entry_sv(sb: &SkipBlock, ctrl_val: u8, w: u8, rr: &ReduceRegs, vs: &BddVariableSet) -> SV {
     let wb = w as usize;
     build_system(|f| {
         if f == PC_LO {
@@ -920,7 +974,10 @@ fn compose_skip_block(
         cur = repin_pc(&out, next_pc, vs);
         pc = next_pc;
     }
-    assert_eq!(pc, exit_pc, "compose_skip_block: did not land on exit PC {exit_pc}");
+    assert_eq!(
+        pc, exit_pc,
+        "compose_skip_block: did not land on exit PC {exit_pc}"
+    );
     (cur, peak, t0.elapsed().as_secs_f64(), pc_after_first_swapbr)
 }
 
@@ -950,14 +1007,27 @@ fn assert_skip_exit(
     if run {
         let acc_want = body_acc_spec(&acc_in, &arr0_in, &arr1_in, &idx_in[0], wb, vs);
         for b in 0..W {
-            assert!(acc_out[b] == acc_want[b], "SKIP-RUN: acc' bit {b} != acc^arr[idx]");
-            let want_idx = if b == 0 { idx_in[0].not() } else { zero.clone() };
+            assert!(
+                acc_out[b] == acc_want[b],
+                "SKIP-RUN: acc' bit {b} != acc^arr[idx]"
+            );
+            let want_idx = if b == 0 {
+                idx_in[0].not()
+            } else {
+                zero.clone()
+            };
             assert!(idx_out[b] == want_idx, "SKIP-RUN: idx' bit {b} != idx^1");
         }
     } else {
         for b in 0..W {
-            assert!(acc_out[b] == acc_in[b], "SKIP-SKIP: acc bit {b} != identity");
-            assert!(idx_out[b] == idx_in[b], "SKIP-SKIP: idx bit {b} != identity");
+            assert!(
+                acc_out[b] == acc_in[b],
+                "SKIP-SKIP: acc bit {b} != identity"
+            );
+            assert!(
+                idx_out[b] == idx_in[b],
+                "SKIP-SKIP: idx bit {b} != identity"
+            );
         }
     }
     // data + arr always preserved.
@@ -965,15 +1035,31 @@ fn assert_skip_exit(
     let arr0_out = sys_field_bits(out, mem_f(0));
     let arr1_out = sys_field_bits(out, mem_f(1));
     for b in 0..W {
-        assert!(data_out[b] == data_in[b], "SKIP: data bit {b} not preserved");
-        assert!(arr0_out[b] == arr0_in[b], "SKIP: arr0 bit {b} not preserved");
-        assert!(arr1_out[b] == arr1_in[b], "SKIP: arr1 bit {b} not preserved");
+        assert!(
+            data_out[b] == data_in[b],
+            "SKIP: data bit {b} not preserved"
+        );
+        assert!(
+            arr0_out[b] == arr0_in[b],
+            "SKIP: arr0 bit {b} not preserved"
+        );
+        assert!(
+            arr1_out[b] == arr1_in[b],
+            "SKIP: arr1 bit {b} not preserved"
+        );
     }
     // ctrl preserved = ctrl_val (the skip aux Cswaps cancel: mint then un-mint).
     let ctrl_out = sys_field_bits(out, sb.ctrl);
     for b in 0..W {
-        let want = if (ctrl_val >> b) & 1 == 1 { vs.mk_true() } else { zero.clone() };
-        assert!(ctrl_out[b] == want, "SKIP: ctrl bit {b} != preserved {ctrl_val}");
+        let want = if (ctrl_val >> b) & 1 == 1 {
+            vs.mk_true()
+        } else {
+            zero.clone()
+        };
+        assert!(
+            ctrl_out[b] == want,
+            "SKIP: ctrl bit {b} != preserved {ctrl_val}"
+        );
     }
     // aux rb, temp restored to 0 at exit.
     for f in [sb.rb, sb.temp] {
@@ -991,7 +1077,8 @@ fn assert_skip_exit(
         }
     }
     for r in 0..NUM_REGS {
-        if r == sb.ctrl || r == rr.acc || r == rr.data || r == rr.idx || r == sb.rb || r == sb.temp {
+        if r == sb.ctrl || r == rr.acc || r == rr.data || r == rr.idx || r == sb.rb || r == sb.temp
+        {
             continue;
         }
         let got = sys_field_bits(out, r);
@@ -1012,7 +1099,10 @@ fn assert_skip_exit(
     for f in other {
         let got = sys_field_bits(out, f);
         for b in 0..W {
-            assert!(got[b] == zero, "SKIP: field {f} bit {b} != 0 (BR/IR/scratch/bus leak)");
+            assert!(
+                got[b] == zero,
+                "SKIP: field {f} bit {b} != 0 (BR/IR/scratch/bus leak)"
+            );
         }
     }
 }
@@ -1032,21 +1122,23 @@ fn skip_block_lemma_reduce_w(w: u8) {
     let exit_pc = sb.copy_start + 12;
 
     // ── RUN case (ctrl=1) ──────────────────────────────────────────────────
-    let (out_run, peak_run, secs_run, land_run) =
-        compose_skip_block(&rom, &sb, 1, w, &rr, &vs);
+    let (out_run, peak_run, secs_run, land_run) = compose_skip_block(&rom, &sb, 1, w, &rr, &vs);
     // RUN: rb=0 at Swapbr[+2] ⇒ BR=0 ⇒ PC lands at body_start (+3).
     assert_eq!(
         land_run,
         sb.copy_start + 3,
         "SKIP-RUN forward-skip PC: Swapbr[+2] must land at body_start (+3) when ctrl=1"
     );
-    assert_eq!(read_concrete_pc(&out_run), Some(exit_pc), "SKIP-RUN exit PC != +12");
+    assert_eq!(
+        read_concrete_pc(&out_run),
+        Some(exit_pc),
+        "SKIP-RUN exit PC != +12"
+    );
     assert_body_run_reached_exit(&out_run, exit_pc);
     assert_skip_exit(&out_run, &sb, 1, true, w, &rr, &vs);
 
     // ── SKIP case (ctrl=0) ─────────────────────────────────────────────────
-    let (out_skip, peak_skip, secs_skip, land_skip) =
-        compose_skip_block(&rom, &sb, 0, w, &rr, &vs);
+    let (out_skip, peak_skip, secs_skip, land_skip) = compose_skip_block(&rom, &sb, 0, w, &rr, &vs);
     // THE KEY FORWARD-SKIP ASSERT (Iter analog of vart's GAP-A landing): the
     // datapath PC output after Swapbr[+2] MUST equal the come-from PC (+9): body
     // [+3,+8] skipped. PC += sext(BR=6)+1 = (+2)+6+1 = +9.
@@ -1054,22 +1146,35 @@ fn skip_block_lemma_reduce_w(w: u8) {
         land_skip, come_from_pc,
         "SKIP forward-skip PC: Swapbr[+2] must land on come-from (+9) when ctrl=0 (BR=body_len=6)"
     );
-    assert_eq!(read_concrete_pc(&out_skip), Some(exit_pc), "SKIP exit PC != +12");
+    assert_eq!(
+        read_concrete_pc(&out_skip),
+        Some(exit_pc),
+        "SKIP exit PC != +12"
+    );
     assert_skip_exit(&out_skip, &sb, 0, false, w, &rr, &vs);
 
     // ── TEETH ────────────────────────────────────────────────────────────
     // NEG-skip: a WRONG landing (e.g. +8, body only partially skipped) must be
     // DETECTED -- the real landing must differ from the wrong one.
     let wrong_land = sb.copy_start + 8;
-    assert_ne!(land_skip, wrong_land, "NEG-skip: real landing == wrong landing (+8) -- teeth vacuous");
+    assert_ne!(
+        land_skip, wrong_land,
+        "NEG-skip: real landing == wrong landing (+8) -- teeth vacuous"
+    );
     // NEG-run-vs-skip: the RUN carrier output must DIFFER from the SKIP output
     // (body changed acc vs identity), for at least one bit.
     let acc_run = sys_field_bits(&out_run, rr.acc);
     let acc_skip = sys_field_bits(&out_skip, rr.acc);
     let differs = (0..W).any(|b| acc_run[b] != acc_skip[b]);
-    assert!(differs, "NEG-run-vs-skip: RUN acc == SKIP acc -- the body did nothing / teeth vacuous");
+    assert!(
+        differs,
+        "NEG-run-vs-skip: RUN acc == SKIP acc -- the body did nothing / teeth vacuous"
+    );
 
-    assert!(peak_run < 500_000 && peak_skip < 500_000, "SKIP-BLOCK peak blowup");
+    assert!(
+        peak_run < 500_000 && peak_skip < 500_000,
+        "SKIP-BLOCK peak blowup"
+    );
     // The skip-block SKIP δu forward-reach, discharged closed-form vs the netlist
     // landing above: BR=body_len ⇒ PC += body_len+1, skipping exactly the 6 body
     // instrs + landing on the come-from Swapbr that then clears BR.
@@ -1095,7 +1200,11 @@ fn invariant_skip_block_lemma_reduce_w4() {
 
 /// After a RUN copy, sanity that PC reached exit (the body actually executed).
 fn assert_body_run_reached_exit(out: &SV, exit_pc: usize) {
-    assert_eq!(read_concrete_pc(out), Some(exit_pc), "RUN copy did not reach exit PC");
+    assert_eq!(
+        read_concrete_pc(out),
+        Some(exit_pc),
+        "RUN copy did not reach exit PC"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1184,7 +1293,10 @@ fn compose_full_rom(
         cur = repin_pc(&out, next_pc, vs);
         pc = next_pc;
     }
-    assert_eq!(pc, n_instrs, "compose_full_rom: did not reach ROM end {n_instrs}");
+    assert_eq!(
+        pc, n_instrs,
+        "compose_full_rom: did not reach ROM end {n_instrs}"
+    );
     (cur, peak, t0.elapsed().as_secs_f64())
 }
 
@@ -1228,31 +1340,55 @@ fn composition_lemma_reduce_d3_w(w: u8) {
         let idx_in = entry_bits(&vs, rr.idx, 1);
         let arr0_in = entry_bits(&vs, mem_f(0), wb);
         let arr1_in = entry_bits(&vs, mem_f(1), wb);
-        let (acc_want, idx0_want) = body_k_spec(&acc_in, &arr0_in, &arr1_in, &idx_in[0], k, wb, &vs);
+        let (acc_want, idx0_want) =
+            body_k_spec(&acc_in, &arr0_in, &arr1_in, &idx_in[0], k, wb, &vs);
 
         let acc_out = sys_field_bits(&out, rr.acc);
         let idx_out = sys_field_bits(&out, rr.idx);
         for b in 0..W {
-            assert!(acc_out[b] == acc_want[b], "COMPOSE k={k}: acc' bit {b} != body^{k}");
-            let want_idx = if b == 0 { idx0_want.clone() } else { zero.clone() };
-            assert!(idx_out[b] == want_idx, "COMPOSE k={k}: idx' bit {b} != idx^{k}");
+            assert!(
+                acc_out[b] == acc_want[b],
+                "COMPOSE k={k}: acc' bit {b} != body^{k}"
+            );
+            let want_idx = if b == 0 {
+                idx0_want.clone()
+            } else {
+                zero.clone()
+            };
+            assert!(
+                idx_out[b] == want_idx,
+                "COMPOSE k={k}: idx' bit {b} != idx^{k}"
+            );
         }
         // data + arr preserved; tags preserved; aux + scratch/bus/BR/IR clean.
         let data_out = sys_field_bits(&out, rr.data);
         for b in 0..W {
-            assert!(data_out[b] == data_in[b], "COMPOSE k={k}: data bit {b} not preserved");
+            assert!(
+                data_out[b] == data_in[b],
+                "COMPOSE k={k}: data bit {b} not preserved"
+            );
         }
         for (m, arr_in) in [(0usize, &arr0_in), (1, &arr1_in)] {
             let got = sys_field_bits(&out, mem_f(m));
             for b in 0..W {
-                assert!(got[b] == arr_in[b], "COMPOSE k={k}: arr{m} bit {b} not preserved");
+                assert!(
+                    got[b] == arr_in[b],
+                    "COMPOSE k={k}: arr{m} bit {b} not preserved"
+                );
             }
         }
         for t in 0..rr.n_tags {
             let got = sys_field_bits(&out, t);
             for b in 0..W {
-                let want = if (tags[t] >> b) & 1 == 1 { vs.mk_true() } else { zero.clone() };
-                assert!(got[b] == want, "COMPOSE k={k}: tag r{t} bit {b} not preserved");
+                let want = if (tags[t] >> b) & 1 == 1 {
+                    vs.mk_true()
+                } else {
+                    zero.clone()
+                };
+                assert!(
+                    got[b] == want,
+                    "COMPOSE k={k}: tag r{t} bit {b} not preserved"
+                );
             }
         }
         // FIELD-COMPLETE clean-up: BR, IR, scratch, bus, aux rb/temp, mem[2,3]=0.
@@ -1272,7 +1408,10 @@ fn composition_lemma_reduce_d3_w(w: u8) {
         for f in clean {
             let got = sys_field_bits(&out, f);
             for b in 0..W {
-                assert!(got[b] == zero, "COMPOSE k={k}: field {f} bit {b} != 0 (leak)");
+                assert!(
+                    got[b] == zero,
+                    "COMPOSE k={k}: field {f} bit {b} != 0 (leak)"
+                );
             }
         }
 
@@ -1280,7 +1419,11 @@ fn composition_lemma_reduce_d3_w(w: u8) {
         // the k-count is load-bearing (not vacuous). Compare acc_want vs body^{k+1}.
         let (acc_next, _) = body_k_spec(&acc_in, &arr0_in, &arr1_in, &idx_in[0], k + 1, wb, &vs);
         let differs = (0..wb).any(|b| acc_want[b] != acc_next[b]);
-        assert!(differs, "COMPOSE teeth: body^{k} == body^{} -- trip count vacuous", k + 1);
+        assert!(
+            differs,
+            "COMPOSE teeth: body^{k} == body^{} -- trip count vacuous",
+            k + 1
+        );
 
         eprintln!("  COMPOSE tags={tags:?} k={k}: full ROM ≡ body^{k}, peak {peak}, {secs:.3}s");
     }
@@ -1322,30 +1465,40 @@ fn invariant_marshal_encodes_leading_ones() {
     // The tag encoding is width-independent, but we pin it at BOTH w=2 and w=4
     // (the w=4 composition lemma's reachable-combos case-split rests on it too).
     for w in [2u8, 4u8] {
-    for d in [2usize, 3] {
-        let ty = carrier_ty(w, d);
-        for k in 0..d {
-            let input = make_reduce_input_w(w, k, 1, 2, (k % 2) as u8, 3, 1, d);
-            let st = marshal_resident(&input, &ty, 2);
-            for i in 0..d {
-                let want = if i < k { 1u8 } else { 0u8 };
-                assert_eq!(
+        for d in [2usize, 3] {
+            let ty = carrier_ty(w, d);
+            for k in 0..d {
+                let input = make_reduce_input_w(w, k, 1, 2, (k % 2) as u8, 3, 1, d);
+                let st = marshal_resident(&input, &ty, 2);
+                for i in 0..d {
+                    let want = if i < k { 1u8 } else { 0u8 };
+                    assert_eq!(
                     st.regs[i], want,
                     "MARSHAL-ENCODING w={w} d={d} k={k}: tag reg r{i} = {} (expected leading-ones \
                      prefix {want}); the COMPOSITION lemma's reachable-combos case-split is \
                      INVALID if this premise breaks",
                     st.regs[i]
                 );
+                }
             }
+            // TEETH: the k-leading-ones prefix is DISTINCT across k (so the assert is
+            // load-bearing, not a constant). Distinct k ⇒ distinct tag prefix.
+            let ty2 = carrier_ty(w, d);
+            let p0 = marshal_resident(&make_reduce_input_w(w, 0, 1, 2, 0, 3, 1, d), &ty2, 2).regs
+                [0..d]
+                .to_vec();
+            let p1 = marshal_resident(&make_reduce_input_w(w, 1, 1, 2, 1, 3, 1, d), &ty2, 2).regs
+                [0..d]
+                .to_vec();
+            assert_ne!(
+                p0, p1,
+                "MARSHAL-ENCODING w={w} d={d}: k=0 and k=1 tag prefixes collapse -- teeth vacuous"
+            );
+            eprintln!(
+                "  marshal-encoding w={w} d={d}: regs[0..{d}] == k-leading-ones for k=0..{}",
+                d - 1
+            );
         }
-        // TEETH: the k-leading-ones prefix is DISTINCT across k (so the assert is
-        // load-bearing, not a constant). Distinct k ⇒ distinct tag prefix.
-        let ty2 = carrier_ty(w, d);
-        let p0 = marshal_resident(&make_reduce_input_w(w, 0, 1, 2, 0, 3, 1, d), &ty2, 2).regs[0..d].to_vec();
-        let p1 = marshal_resident(&make_reduce_input_w(w, 1, 1, 2, 1, 3, 1, d), &ty2, 2).regs[0..d].to_vec();
-        assert_ne!(p0, p1, "MARSHAL-ENCODING w={w} d={d}: k=0 and k=1 tag prefixes collapse -- teeth vacuous");
-        eprintln!("  marshal-encoding w={w} d={d}: regs[0..{d}] == k-leading-ones for k=0..{}", d - 1);
-    }
     }
     eprintln!(
         "MARSHAL-ENCODING ANCHOR: Nat_d marshals as leading-ones in r0..r_{{d-1}} -- the \
@@ -1361,34 +1514,44 @@ fn invariant_marshal_encodes_leading_ones() {
 #[test]
 fn invariant_reality_anchor_reduce() {
     for w in [2u8, 4u8] {
-    for d in [2usize, 3] {
-        let iso = reduce_flat(w, d);
-        let ty = carrier_ty(w, d);
-        let lowered = compile_with_metadata_resident(&iso, 2).expect("compile");
-        let rom = assemble(&lowered.instrs).expect("assemble");
-        let budget = lowered.wcet();
-        for k in 0..d {
-            // Vary acc/idx/arr per k so each input is nontrivial. At w=4 use wider
-            // byte values (still ≤ 2^w-1) so the extra carrier bits are exercised.
-            let (acc, data, arr0, arr1) = if w >= 4 { (5u8, 10, 12, 6) } else { (1u8, 2, 3, 1) };
-            let input = make_reduce_input_w(w, k, acc, data, (k % 2) as u8, arr0, arr1, d);
-            let state = marshal_resident(&input, &ty, 2);
-            let final_state = run_rom_fast(&rom, state, budget);
-            let rom_out = unmarshal_resident(&final_state, &ty, 2);
-            let mut fuel = 100_000_000u64;
-            let eval_out = theseus_eval::eval(&iso, input.clone(), &mut fuel).expect("eval");
-            assert_eq!(rom_out, eval_out, "ANCHOR w={w} d={d} k={k}: run_rom_fast != eval");
-            // TEETH: a DIFFERENT input (k+1 body apps, or different arr) must give a
-            // DIFFERENT eval output when k>0 (so the anchor equality is nonvacuous).
-            if k > 0 {
-                let other = make_reduce_input_w(w, k, 0, data, (k % 2) as u8, arr0, arr1, d); // acc=0
-                let mut f2 = 100_000_000u64;
-                let ev2 = theseus_eval::eval(&iso, other, &mut f2).expect("eval2");
-                assert_ne!(eval_out, ev2, "ANCHOR teeth w={w} d={d} k={k}: distinct inputs collapse");
+        for d in [2usize, 3] {
+            let iso = reduce_flat(w, d);
+            let ty = carrier_ty(w, d);
+            let lowered = compile_with_metadata_resident(&iso, 2).expect("compile");
+            let rom = assemble(&lowered.instrs).expect("assemble");
+            let budget = lowered.wcet();
+            for k in 0..d {
+                // Vary acc/idx/arr per k so each input is nontrivial. At w=4 use wider
+                // byte values (still ≤ 2^w-1) so the extra carrier bits are exercised.
+                let (acc, data, arr0, arr1) = if w >= 4 {
+                    (5u8, 10, 12, 6)
+                } else {
+                    (1u8, 2, 3, 1)
+                };
+                let input = make_reduce_input_w(w, k, acc, data, (k % 2) as u8, arr0, arr1, d);
+                let state = marshal_resident(&input, &ty, 2);
+                let final_state = run_rom_fast(&rom, state, budget);
+                let rom_out = unmarshal_resident(&final_state, &ty, 2);
+                let mut fuel = 100_000_000u64;
+                let eval_out = theseus_eval::eval(&iso, input.clone(), &mut fuel).expect("eval");
+                assert_eq!(
+                    rom_out, eval_out,
+                    "ANCHOR w={w} d={d} k={k}: run_rom_fast != eval"
+                );
+                // TEETH: a DIFFERENT input (k+1 body apps, or different arr) must give a
+                // DIFFERENT eval output when k>0 (so the anchor equality is nonvacuous).
+                if k > 0 {
+                    let other = make_reduce_input_w(w, k, 0, data, (k % 2) as u8, arr0, arr1, d); // acc=0
+                    let mut f2 = 100_000_000u64;
+                    let ev2 = theseus_eval::eval(&iso, other, &mut f2).expect("eval2");
+                    assert_ne!(
+                        eval_out, ev2,
+                        "ANCHOR teeth w={w} d={d} k={k}: distinct inputs collapse"
+                    );
+                }
+                eprintln!("  anchor w={w} d={d} k={k}: run_rom_fast == eval");
             }
-            eprintln!("  anchor w={w} d={d} k={k}: run_rom_fast == eval");
         }
-    }
     }
     eprintln!(
         "L3 REALITY ANCHOR [reduce]: run_rom_fast == eval for w∈{{2,4}}, d∈{{2,3}}, k=0..d-1. \

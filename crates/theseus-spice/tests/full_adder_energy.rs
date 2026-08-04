@@ -74,8 +74,7 @@ fn extend_with_ancilla(data_bits: &[bool], ancilla_values: &[bool]) -> Vec<bool>
 fn compile_fa5() -> (Iso, PhasedCellNetlist, Vec<bool>) {
     let src = full_adder_source();
     let iso = elaborate(&src, "fa5");
-    let (net, ancilla_values) =
-        lower_iso_with_ancillas(&iso).expect("fa5 lowering succeeds");
+    let (net, ancilla_values) = lower_iso_with_ancillas(&iso).expect("fa5 lowering succeeds");
     let balanced = balance(&net).expect("balance succeeds");
     // balance() maps primary inputs 1:1 in order, so the ancilla init
     // vector still lines up with balanced.inputs[n_data..].
@@ -92,7 +91,11 @@ fn energy_report_has_k0_and_r1() {
 
     let report = compiled_energy(&balanced, &db, t_ramp).expect("energy annotation succeeds");
 
-    assert!(report.total_j > 0.0, "total_j must be positive, got {}", report.total_j);
+    assert!(
+        report.total_j > 0.0,
+        "total_j must be positive, got {}",
+        report.total_j
+    );
     assert!(
         report.by_kind.contains_key("cswap-k0"),
         "breakdown must contain cswap-k0; got keys: {:?}",
@@ -164,5 +167,8 @@ fn energy_is_deterministic() {
     let (_iso2, balanced2, _anc2) = compile_fa5();
     let report2 = compiled_energy(&balanced2, &db, t_ramp).expect("run 2");
 
-    assert_eq!(report1, report2, "energy reports must be identical across two runs");
+    assert_eq!(
+        report1, report2,
+        "energy reports must be identical across two runs"
+    );
 }

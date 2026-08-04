@@ -162,7 +162,10 @@ fn byte_cswap_def(n: u8) -> PrimDef {
 /// `Prod( Prod(a0,b0), Prod(a1,b1) )` -- each inner pair is one byte lane.
 fn interleaved2_ty(n: u8) -> Type {
     let f = Type::Flat(n);
-    Type::prod(Type::prod(f.clone(), f.clone()), Type::prod(f.clone(), f.clone()))
+    Type::prod(
+        Type::prod(f.clone(), f.clone()),
+        Type::prod(f.clone(), f.clone()),
+    )
 }
 
 /// A 2-byte-wide bitwise op as Times(byteOp, byteOp) over the interleaved layout.
@@ -207,10 +210,17 @@ fn compositional_wide_xor_shape_pin_flat8() {
     // byte lanes emits the SAME two per-lane Xors as the small widths.
     let iso = wide2_times(|| byte_xor_def(8));
     let lowered = compile_with_metadata(&iso).expect("compile Flat(8) wide Xor");
-    assert_eq!(lowered.instrs.len(), 2, "Flat(8) wide Xor must be 2 Xors, got {:?}", lowered.instrs);
+    assert_eq!(
+        lowered.instrs.len(),
+        2,
+        "Flat(8) wide Xor must be 2 Xors, got {:?}",
+        lowered.instrs
+    );
     match (&lowered.instrs[0], &lowered.instrs[1]) {
         (Instr::Xor { rd: 1, rs: 0 }, Instr::Xor { rd: 3, rs: 2 }) => {
-            eprintln!("PIN: Flat(8) wide Xor → [Xor{{1,0}}, Xor{{3,2}}] (same shape as Flat(2)/Flat(4))");
+            eprintln!(
+                "PIN: Flat(8) wide Xor → [Xor{{1,0}}, Xor{{3,2}}] (same shape as Flat(2)/Flat(4))"
+            );
         }
         other => panic!("expected [Xor{{1,0}}, Xor{{3,2}}] at Flat(8), got {other:?}"),
     }
@@ -306,7 +316,18 @@ fn compositional_wide_ccnot_shape_pin() {
             lowered.instrs
         );
         match (&lowered.instrs[0], &lowered.instrs[1]) {
-            (Instr::Ccnot { rd: d0, rs: s0, rt: t0 }, Instr::Ccnot { rd: d1, rs: s1, rt: t1 }) => {
+            (
+                Instr::Ccnot {
+                    rd: d0,
+                    rs: s0,
+                    rt: t0,
+                },
+                Instr::Ccnot {
+                    rd: d1,
+                    rs: s1,
+                    rt: t1,
+                },
+            ) => {
                 // lane 0 leaves (0,1,2); lane 1 leaves (3,4,5). Target-first.
                 assert_eq!((*d0, *s0, *t0), (0, 1, 2), "lane 0 Ccnot (Flat({n}))");
                 assert_eq!((*d1, *s1, *t1), (3, 4, 5), "lane 1 Ccnot (Flat({n}))");
@@ -327,7 +348,11 @@ fn compositional_wide_ccnot_fast_small() {
     for v in &domain {
         let mut fuel = 1_000_000u64;
         let ev = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval");
-        assert_eq!(run_on_cpu_fast(&iso, v).expect("fast"), ev, "wide Ccnot fast≠eval {v:?}");
+        assert_eq!(
+            run_on_cpu_fast(&iso, v).expect("fast"),
+            ev,
+            "wide Ccnot fast≠eval {v:?}"
+        );
     }
     eprintln!("wide Ccnot: fast==eval whole-domain (4096) at Flat(2)");
 }
@@ -345,7 +370,18 @@ fn compositional_wide_cswap_shape_pin() {
             lowered.instrs
         );
         match (&lowered.instrs[0], &lowered.instrs[1]) {
-            (Instr::Cswap { rd: d0, rs: s0, rt: t0 }, Instr::Cswap { rd: d1, rs: s1, rt: t1 }) => {
+            (
+                Instr::Cswap {
+                    rd: d0,
+                    rs: s0,
+                    rt: t0,
+                },
+                Instr::Cswap {
+                    rd: d1,
+                    rs: s1,
+                    rt: t1,
+                },
+            ) => {
                 assert_eq!((*d0, *s0, *t0), (0, 1, 2), "lane 0 Cswap (Flat({n}))");
                 assert_eq!((*d1, *s1, *t1), (3, 4, 5), "lane 1 Cswap (Flat({n}))");
             }
@@ -365,7 +401,11 @@ fn compositional_wide_cswap_fast_small() {
     for v in &domain {
         let mut fuel = 1_000_000u64;
         let ev = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval");
-        assert_eq!(run_on_cpu_fast(&iso, v).expect("fast"), ev, "wide Cswap fast≠eval {v:?}");
+        assert_eq!(
+            run_on_cpu_fast(&iso, v).expect("fast"),
+            ev,
+            "wide Cswap fast≠eval {v:?}"
+        );
     }
     eprintln!("wide Cswap: fast==eval whole-domain (4096) at Flat(2)");
 }
@@ -452,16 +492,23 @@ fn mono_wide_xor_not_per_leaf() {
         lowered.instrs.len()
     );
     let n_mono = lowered.instrs.len();
-    match run_on_cpu_fast(&iso, &Value::pair(
-        Value::pair(thermo(0), thermo(0)),
-        Value::pair(thermo(0), thermo(0)),
-    )) {
+    match run_on_cpu_fast(
+        &iso,
+        &Value::pair(
+            Value::pair(thermo(0), thermo(0)),
+            Value::pair(thermo(0), thermo(0)),
+        ),
+    ) {
         Err(CompileError::Deferred(msg)) if msg.contains("PC") => {
-            eprintln!("FINDING: monolithic 4-leaf wide Xor → {n_mono}-instr general body; \
-                       exceeds 8-bit PC at assemble: {msg}");
+            eprintln!(
+                "FINDING: monolithic 4-leaf wide Xor → {n_mono}-instr general body; \
+                       exceeds 8-bit PC at assemble: {msg}"
+            );
         }
         Err(e) => eprintln!("FINDING: monolithic 4-leaf wide Xor ({n_mono} instrs) → {e:?}"),
-        Ok(_) => eprintln!("FINDING: monolithic 4-leaf wide Xor ({n_mono} instrs) ran (large body, not per-leaf)"),
+        Ok(_) => eprintln!(
+            "FINDING: monolithic 4-leaf wide Xor ({n_mono} instrs) ran (large body, not per-leaf)"
+        ),
     }
 }
 
@@ -557,6 +604,11 @@ fn harness_wide_xor_via_helper() {
         vec![0x0F, 0xF0, 0x81, 0x18],
     ];
     let n_instrs = assert_wide_eval(&iso, &ty, &rows);
-    assert_eq!(n_instrs, 2, "2-lane byte Xor harness must emit 2 Xors, got {n_instrs}");
-    eprintln!("A-7.1 harness: build_wide_lane_iso(2, byteXor) → 2 Xors, fast==eval on 3 Flat(8) rows");
+    assert_eq!(
+        n_instrs, 2,
+        "2-lane byte Xor harness must emit 2 Xors, got {n_instrs}"
+    );
+    eprintln!(
+        "A-7.1 harness: build_wide_lane_iso(2, byteXor) → 2 Xors, fast==eval on 3 Flat(8) rows"
+    );
 }

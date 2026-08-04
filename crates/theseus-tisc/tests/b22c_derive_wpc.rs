@@ -26,9 +26,17 @@ fn derive_w_pc_address_space_bound() {
     assert_eq!(derive_w_pc(0, 0, 0), 8, "empty program floors at 8");
     assert_eq!(derive_w_pc(10, 0, 10), 8);
     assert_eq!(derive_w_pc(200, 55, 24), 8, "B+S=255 <= 256, rom small → 8");
-    assert_eq!(derive_w_pc(250, 6, 24), 8, "B+S=256 == 256 fits w_pc=8 (1<<8=256) → 8");
+    assert_eq!(
+        derive_w_pc(250, 6, 24),
+        8,
+        "B+S=256 == 256 fits w_pc=8 (1<<8=256) → 8"
+    );
     // B+S = 257 needs 9 bits → 16. THIS IS THE ADDRESS-SPACE OFF-BY-ONE.
-    assert_eq!(derive_w_pc(251, 6, 24), 16, "B+S=257 > 256 → must widen to 16");
+    assert_eq!(
+        derive_w_pc(251, 6, 24),
+        16,
+        "B+S=257 > 256 → must widen to 16"
+    );
     assert_eq!(derive_w_pc(300, 0, 24), 16);
     assert_eq!(derive_w_pc(65000, 0, 24), 16, "huge B stays 16");
 }
@@ -36,9 +44,17 @@ fn derive_w_pc_address_space_bound() {
 #[test]
 fn derive_w_pc_fetch_injectivity_bound() {
     // rom_len <= 1<<(w_pc-1). At w_pc=8 that is rom_len <= 128.
-    assert_eq!(derive_w_pc(10, 0, 128), 8, "rom_len=128 == 1<<7 fits w_pc=8 → 8");
+    assert_eq!(
+        derive_w_pc(10, 0, 128),
+        8,
+        "rom_len=128 == 1<<7 fits w_pc=8 → 8"
+    );
     // rom_len = 129 needs 1<<(w-1) >= 129 → w-1>=8 → w=9 → 16. THE FETCH OFF-BY-ONE.
-    assert_eq!(derive_w_pc(10, 0, 129), 16, "rom_len=129 > 128 → must widen to 16");
+    assert_eq!(
+        derive_w_pc(10, 0, 129),
+        16,
+        "rom_len=129 > 128 → must widen to 16"
+    );
     assert_eq!(derive_w_pc(10, 0, 200), 16);
 }
 
@@ -174,13 +190,18 @@ mod heavy {
         let lowered = compile_with_metadata(&iso).expect("compile xor kernel");
         let layout = derive_full_layout_from_lowered(&iso, &lowered);
         assert_eq!(
-            layout.w_pc, 8,
+            layout.w_pc,
+            8,
             "small program (B={} S={} rom_len={}) must derive w_pc=8",
             lowered.wcet(),
             lowered.s_max(),
             lowered.instrs.len()
         );
-        assert_eq!(layout.pc_fields(), 1, "w_pc=8 → exactly one PC field (no PC_hi)");
+        assert_eq!(
+            layout.pc_fields(),
+            1,
+            "w_pc=8 → exactly one PC field (no PC_hi)"
+        );
 
         // run_on_cpu (which now routes through derive_full_layout_from_lowered)
         // must agree with eval over the WHOLE Flat(8)×Flat(8) domain? that is
@@ -219,8 +240,15 @@ mod heavy {
             b + s
         );
         let layout = derive_full_layout_from_lowered(&iso, &lowered);
-        assert_eq!(layout.w_pc, 16, "large program must stay w_pc=16 (byte-identical path)");
-        assert_eq!(layout.pc_fields(), 2, "w_pc=16 → two PC fields (PC_hi present)");
+        assert_eq!(
+            layout.w_pc, 16,
+            "large program must stay w_pc=16 (byte-identical path)"
+        );
+        assert_eq!(
+            layout.pc_fields(),
+            2,
+            "w_pc=16 → two PC fields (PC_hi present)"
+        );
 
         // Runs correct: k=130 even ⇒ net xor applied 130 times ⇒ identity on b.
         // Flat(4) type (matches the chain): nibble keys. FEW pairs on purpose --
@@ -235,12 +263,16 @@ mod heavy {
         for &a in &key {
             for &b_in in &key {
                 let (v, _) = value_from_leaf_bytes_pub(&vec![a, b_in], &ty);
-                let cpu_out = run_on_cpu(&iso, &v, theseus_eval::eval)
-                    .unwrap_or_else(|e| panic!("run_on_cpu(w_pc=16 large) failed ({a},{b_in}): {e}"));
+                let cpu_out = run_on_cpu(&iso, &v, theseus_eval::eval).unwrap_or_else(|e| {
+                    panic!("run_on_cpu(w_pc=16 large) failed ({a},{b_in}): {e}")
+                });
                 let mut fuel = 100_000_000u64;
                 let eval_out = theseus_eval::eval(&iso, v.clone(), &mut fuel)
                     .unwrap_or_else(|e| panic!("eval failed ({a},{b_in}): {e:?}"));
-                assert_eq!(cpu_out, eval_out, "large-program run != eval on ({a},{b_in})");
+                assert_eq!(
+                    cpu_out, eval_out,
+                    "large-program run != eval on ({a},{b_in})"
+                );
                 checked += 1;
             }
         }
@@ -261,10 +293,20 @@ mod heavy {
         let lowered = compile_with_metadata(&iso).expect("compile");
         let (b, s, rl) = (lowered.wcet(), lowered.s_max(), lowered.instrs.len());
         eprintln!("boundary chain(128) [rom_len==128 fetch edge]: B={b} S_max={s} rom_len={rl}");
-        assert_eq!(rl, 128, "chain(128) must give rom_len==128 (the exact fetch edge)");
+        assert_eq!(
+            rl, 128,
+            "chain(128) must give rom_len==128 (the exact fetch edge)"
+        );
         let layout = derive_full_layout_from_lowered(&iso, &lowered);
-        assert_eq!(layout.w_pc, 8, "rom_len==128 (== 1<<7) must derive w_pc=8, the sharp edge");
-        eprintln!("  → derive_w_pc={} (direct={})", layout.w_pc, derive_w_pc(b, s, rl));
+        assert_eq!(
+            layout.w_pc, 8,
+            "rom_len==128 (== 1<<7) must derive w_pc=8, the sharp edge"
+        );
+        eprintln!(
+            "  → derive_w_pc={} (direct={})",
+            layout.w_pc,
+            derive_w_pc(b, s, rl)
+        );
         // Whatever w_pc is derived, it MUST run -- that is the crux: a mis-narrowed
         // w_pc would Deferred-fail here or panic the fetch assert.
         // Flat(4) type (matches the chain): nibble operands.
@@ -279,7 +321,11 @@ mod heavy {
         // And confirm the guard arithmetic directly: if w_pc=8 was chosen, B+S<=256
         // AND rom_len<=128; if 16, at least one edge was exceeded.
         if layout.w_pc == 8 {
-            assert!(b + s <= 256 && rl <= 128, "w_pc=8 chosen but B+S={} rl={rl}", b + s);
+            assert!(
+                b + s <= 256 && rl <= 128,
+                "w_pc=8 chosen but B+S={} rl={rl}",
+                b + s
+            );
         }
         eprintln!("boundary chain(120) ran clean at w_pc={} ✓", layout.w_pc);
     }
@@ -318,6 +364,9 @@ mod heavy {
         );
 
         assert!(c8 < c16, "w_pc=8 must have fewer cells: {c8} vs {c16}");
-        assert!(sj8 < sj16, "w_pc=8 step_j must be lower: {sj8:.6e} vs {sj16:.6e}");
+        assert!(
+            sj8 < sj16,
+            "w_pc=8 step_j must be lower: {sj8:.6e} vs {sj16:.6e}"
+        );
     }
 }

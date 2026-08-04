@@ -28,8 +28,8 @@ use theseus_spice::chardb::rung0_measured;
 
 use theseus_tisc::asm::assemble;
 use theseus_tisc::compile::{
-    compile_with_metadata, derive_full_layout, derive_full_layout_from_lowered, marshal, run_on_cpu,
-    value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
+    compile_with_metadata, derive_full_layout, derive_full_layout_from_lowered, marshal,
+    run_on_cpu, value_from_leaf_bytes_pub, value_to_leaf_bytes_pub,
 };
 use theseus_tisc::energy::{balanced_energy, rom_program_energy, rom_program_energy_auto};
 use theseus_tisc::types::Layout;
@@ -273,7 +273,10 @@ fn flat4_marshal_stays_in_nibble() {
     let ty = Type::prod(Type::Flat(4), Type::Flat(4));
     let (v, _) = value_from_leaf_bytes_pub(&vec![0xF, 0xF], &ty);
     let st = marshal(&v, &in_ty);
-    assert!(st.regs[0] <= 0xF && st.regs[1] <= 0xF, "Flat(4) nibbles marshal < 16");
+    assert!(
+        st.regs[0] <= 0xF && st.regs[1] <= 0xF,
+        "Flat(4) nibbles marshal < 16"
+    );
     let _ = (max_flat_width(&iso),); // keep import used across cfgs
 }
 

@@ -271,9 +271,21 @@ fn b13_shared_bracket_ccnot_cswap_real_cpu() {
     let prog = [
         Instr::Addi { rd: 0, imm: 0x0F },
         Instr::Xor { rd: 1, rs: 0 },
-        Instr::Ccnot { rd: 2, rs: 0, rt: 1 },
-        Instr::Cswap { rd: 3, rs: 4, rt: 5 },
-        Instr::Ccnot { rd: 6, rs: 4, rt: 5 },
+        Instr::Ccnot {
+            rd: 2,
+            rs: 0,
+            rt: 1,
+        },
+        Instr::Cswap {
+            rd: 3,
+            rs: 4,
+            rt: 5,
+        },
+        Instr::Ccnot {
+            rd: 6,
+            rs: 4,
+            rt: 5,
+        },
         Instr::Sub { rd: 7, rs: 0 },
     ];
     let budget = prog.len();
@@ -336,7 +348,10 @@ fn b13_shared_bracket_ccnot_cswap_real_cpu() {
         assert_eq!(real.scratch[0], 0, "case {ci}: s0 must terminate at 0");
         assert_eq!(real.scratch[1], 0, "case {ci}: s1 must terminate at 0");
         assert_eq!(real.br, 0, "case {ci}: BR must terminate at 0");
-        eprintln!("B1.3 real-CPU case {ci}: system_step == reference ✓ (regs={:?})", real.regs);
+        eprintln!(
+            "B1.3 real-CPU case {ci}: system_step == reference ✓ (regs={:?})",
+            real.regs
+        );
     }
 }
 
@@ -1127,10 +1142,10 @@ fn mdw_t2b_park_liveness_skip_tightness() {
     // (a) stable for 252 extra steps (whole dead zone)
     // (b) at extra step 253 (total 257 = PC wraps to 1), corruption occurs.
     let instrs = vec![
-        Instr::Addi { rd: 0, imm: 1 }, // r0 += 1
-        Instr::Swapbr { rd: 1, rs: 0 },       // open skip
-        Instr::Addi { rd: 0, imm: 1 }, // skip body: r0 += 1
-        Instr::Swapbr { rd: 1, rs: 0 },       // close skip
+        Instr::Addi { rd: 0, imm: 1 },  // r0 += 1
+        Instr::Swapbr { rd: 1, rs: 0 }, // open skip
+        Instr::Addi { rd: 0, imm: 1 },  // skip body: r0 += 1
+        Instr::Swapbr { rd: 1, rs: 0 }, // close skip
     ];
     let rom = assemble(&instrs).unwrap();
     let rom_len = rom.len();
@@ -1365,15 +1380,24 @@ fn mdw_b2_cpu_only_nonzero_mem_routes_system_step_inert() {
     for (i, m) in sentinels.iter_mut().enumerate() {
         *m = 0xA0 + i as u8;
     }
-    let sys_run = run_rom_on_cpu(&instrs, mk(sentinels), instrs.len(), s_max, theseus_eval::eval)
-        .expect("CPU-only system_step path (nonzero mem)");
+    let sys_run = run_rom_on_cpu(
+        &instrs,
+        mk(sentinels),
+        instrs.len(),
+        s_max,
+        theseus_eval::eval,
+    )
+    .expect("CPU-only system_step path (nonzero mem)");
     // (a) system_step left mem INERT for the CPU-only program.
     assert_eq!(
         sys_run.mem, sentinels,
         "system_step path corrupted mem for a CPU-only (no-Mexch) program"
     );
     // (b) The two carriers agree on the whole CpuState.
-    assert_eq!(sys_run.regs, step_run.regs, "step vs system_step regs differ");
+    assert_eq!(
+        sys_run.regs, step_run.regs,
+        "step vs system_step regs differ"
+    );
     assert_eq!(sys_run.pc, step_run.pc, "step vs system_step pc differ");
     assert_eq!(sys_run.br, step_run.br, "step vs system_step br differ");
     assert_eq!(
@@ -1396,7 +1420,11 @@ fn mdw_b2_cpu_only_nonzero_mem_routes_system_step_inert() {
 #[test]
 fn scratch_operand_ccnot_runs_on_real_ring() {
     // Ccnot rd=r0, rs=r1, rt=s2 (operand idx 10): r0 ^= r1 & s2.
-    let instrs = vec![Instr::Ccnot { rd: 0, rs: 1, rt: 10 }];
+    let instrs = vec![Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 10,
+    }];
     let s_max = max_skip_distance(&instrs);
     // r1=0xFF, s2=0xAA → r0 (0x00) ^= 0xFF & 0xAA = 0xAA. Distinct sentinels
     // elsewhere so a routing error (reading r2 instead of s2, say) is visible.
@@ -1416,7 +1444,10 @@ fn scratch_operand_ccnot_runs_on_real_ring() {
         );
         assert_eq!(got.regs[1], 0xFF, "{ring}: rs (r1) preserved");
         assert_eq!(got.scratch[2], 0xAA, "{ring}: scratch operand s2 preserved");
-        assert_eq!(got.regs[2], 0x3C, "{ring}: r2 (the WRONG operand) untouched");
+        assert_eq!(
+            got.regs[2], 0x3C,
+            "{ring}: r2 (the WRONG operand) untouched"
+        );
         assert_eq!(got.scratch[0], 0, "{ring}: s0 restored");
         assert_eq!(got.scratch[1], 0, "{ring}: s1 restored");
         assert_eq!(got.br, 0, "{ring}: BR restored (Ccnot rides rt through BR)");
@@ -1497,7 +1528,10 @@ fn scratch_operand_swapbr_runs_on_real_ring() {
             "{ring}: come-from must RESTORE the token into s2 (= δ); a datapath \
              gap swapping BR against the wrong word would leave s2 = 0"
         );
-        assert_eq!(got.scratch[3], 0xDE, "{ring}: s3 (the WRONG operand) untouched");
+        assert_eq!(
+            got.scratch[3], 0xDE,
+            "{ring}: s3 (the WRONG operand) untouched"
+        );
         assert_eq!(got.scratch[4], 0xAD, "{ring}: s4 untouched");
         assert_eq!(got.br, 0, "{ring}: BR restored to 0 (come-from cleared)");
         assert_eq!(got.scratch[0], 0, "{ring}: s0 restored");
@@ -1519,8 +1553,14 @@ fn scratch_operand_swapbr_runs_on_real_ring() {
     check(&fast, "run_rom_fast");
 
     // Real ring #1 -- CPU-only `step(rom)` (mem-quiescent).
-    let step_run = run_rom_on_cpu(&instrs, mk([0; MEM_WORDS]), budget, s_max, theseus_eval::eval)
-        .expect("scratch-rd SWAPBR on step ring");
+    let step_run = run_rom_on_cpu(
+        &instrs,
+        mk([0; MEM_WORDS]),
+        budget,
+        s_max,
+        theseus_eval::eval,
+    )
+    .expect("scratch-rd SWAPBR on step ring");
     check(&step_run, "step");
 
     // Real ring #2 -- `system_step` (forced by nonzero init.mem), which must
@@ -1530,11 +1570,17 @@ fn scratch_operand_swapbr_runs_on_real_ring() {
     let sys = run_rom_on_cpu(&instrs, mk(memnz), budget, s_max, theseus_eval::eval)
         .expect("scratch-rd SWAPBR on system_step ring");
     check(&sys, "system_step");
-    assert_eq!(sys.mem, memnz, "system_step: mem inert for a CPU-only program");
+    assert_eq!(
+        sys.mem, memnz,
+        "system_step: mem inert for a CPU-only program"
+    );
 
     // The two real rings agree on the whole CpuState.
     assert_eq!(sys.regs, step_run.regs, "step vs system_step regs differ");
-    assert_eq!(sys.scratch, step_run.scratch, "step vs system_step scratch differ");
+    assert_eq!(
+        sys.scratch, step_run.scratch,
+        "step vs system_step scratch differ"
+    );
     assert_eq!(sys.br, step_run.br, "step vs system_step br differ");
 }
 
@@ -2052,7 +2098,7 @@ fn times_trace_nondegenerate_body_runs() {
     // input = Right, the aliasing-sensitive case).
     let bit = Type::sum(Type::One, Type::One);
     let flip = Iso::SwapSum(Type::One, Type::One); // Bit ↔ Bit flip (non-self-cancelling)
-    // probe1: Times(Trace(Bit, Plus(Id, flip)), flip) -- trace factor ≡ flip.
+                                                   // probe1: Times(Trace(Bit, Plus(Id, flip)), flip) -- trace factor ≡ flip.
     let left1 = Iso::trace(bit.clone(), Iso::plus(Iso::Id(bit.clone()), flip.clone()));
     let iso1 = Iso::times(left1, flip.clone());
     assert!(compile(&iso1).is_ok(), "probe1 must compile");

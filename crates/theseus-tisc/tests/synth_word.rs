@@ -257,8 +257,8 @@ fn wselect_symbolic_both_branches() {
     // (identity rows) and guard/then/else are untouched (identity rows). dst is
     // allowed to change (it is the output). We check the non-dst rows equal
     // identity -- this proves mask/one net-zero for ANY init and sources preserved.
-    let preserved = spec(|r, b| v(r, b)); // full identity
-                                          // Compare each preserved row: guard(1), then(2), else(3), mask(4), one(5).
+    let preserved = spec(v); // full identity
+                             // Compare each preserved row: guard(1), then(2), else(3), mask(4), one(5).
     for r in [guard, then_w, else_w, mask, one] {
         let single_got = RegTransfer {
             regs: (0..NUM_REGS)

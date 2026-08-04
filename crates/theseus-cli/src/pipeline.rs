@@ -35,11 +35,7 @@ pub fn elaborate(src: &str) -> Result<ElaboratedProgram, ElabError> {
     }
     let env = theseus_check::env::resolve(&program);
     let isos = elaborate_program(&program, &env);
-    Ok(ElaboratedProgram {
-        env,
-        isos,
-        program,
-    })
+    Ok(ElaboratedProgram { env, isos, program })
 }
 
 /// Errors from the elaboration pipeline.

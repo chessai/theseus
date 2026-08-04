@@ -264,7 +264,10 @@ fn fold_depth_one_spine_is_identity() {
 fn sym_fold_lowers_as_unfold_of_adjoint() {
     // (fold l f)† = unfold l (f†) -- the mutually adjoint pairing, run
     // through the lowering.
-    assert_lowering_agrees(&Iso::sym(Iso::fold(Type::list_spine_ty(bit(), 3), cx_swap())));
+    assert_lowering_agrees(&Iso::sym(Iso::fold(
+        Type::list_spine_ty(bit(), 3),
+        cx_swap(),
+    )));
 }
 
 #[test]
@@ -317,8 +320,14 @@ fn report_cell_counts() {
     for (name, iso) in [
         ("iter N4 not", Iso::iter(Type::numeral_ty(4), not_iso())),
         ("iter N4 rot3", Iso::iter(Type::numeral_ty(4), rot3())),
-        ("fold L3(Bit) cx", Iso::fold(Type::list_spine_ty(bit(), 3), cx())),
-        ("unfold L4(Bit) cx;swap", Iso::unfold(Type::list_spine_ty(bit(), 4), cx_swap())),
+        (
+            "fold L3(Bit) cx",
+            Iso::fold(Type::list_spine_ty(bit(), 3), cx()),
+        ),
+        (
+            "unfold L4(Bit) cx;swap",
+            Iso::unfold(Type::list_spine_ty(bit(), 4), cx_swap()),
+        ),
     ] {
         let net = theseus_netlist::lower_iso(&iso).expect("lowers");
         let max_kind = net.cells.iter().map(|c| c.kind).max();

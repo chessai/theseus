@@ -331,7 +331,9 @@ fn prepare(name: &str, iso: &Iso) -> Lowered {
     let counts = net.cell_counts();
     let max_kind = counts.keys().max().copied().unwrap_or(CellKind::K0);
     assert!(
-        counts.keys().all(|&k| k <= CellKind::K3 || k == CellKind::R1),
+        counts
+            .keys()
+            .all(|&k| k <= CellKind::K3 || k == CellKind::R1),
         "{name}: cell kind outside the K0-K3 + R1 vocabulary: {counts:?}"
     );
     eprintln!(
@@ -340,7 +342,11 @@ fn prepare(name: &str, iso: &Iso) -> Lowered {
     );
 
     let balanced = balance(&net).unwrap_or_else(|e| panic!("{name}: balance failed: {e:?}"));
-    assert_eq!(balanced.validate(), Ok(()), "{name}: balanced netlist validates");
+    assert_eq!(
+        balanced.validate(),
+        Ok(()),
+        "{name}: balanced netlist validates"
+    );
     assert!(
         balanced.tick_imbalances().unwrap().is_empty(),
         "{name}: balanced netlist has no tick imbalances"
@@ -348,7 +354,14 @@ fn prepare(name: &str, iso: &Iso) -> Lowered {
     eprintln!("{name}: balanced cell counts {:?}", balanced.cell_counts());
 
     let n_data_out = rail_width(&out_ty).unwrap();
-    Lowered { net, balanced, ancillas, in_ty, out_ty, n_data_out }
+    Lowered {
+        net,
+        balanced,
+        ancillas,
+        in_ty,
+        out_ty,
+        n_data_out,
+    }
 }
 
 /// One operand case: core eval semantics vs the Rust reference, plus
@@ -378,8 +391,11 @@ fn check_case(name: &str, iso: &Iso, low: &Lowered, operands: &[u8], expected: &
         "{name}: untimed netlist disagrees with core eval on {operands:?}"
     );
 
-    let sim = simulate(&low.balanced, &extend_with_ancilla(&data_bits, &low.ancillas))
-        .unwrap_or_else(|e| panic!("{name}: timed sim failed on {operands:?}: {e:?}"));
+    let sim = simulate(
+        &low.balanced,
+        &extend_with_ancilla(&data_bits, &low.ancillas),
+    )
+    .unwrap_or_else(|e| panic!("{name}: timed sim failed on {operands:?}: {e:?}"));
     assert_eq!(
         &sim.outputs[..low.n_data_out],
         &expected_bits[..],
@@ -426,7 +442,9 @@ fn cswap_lowering_and_oracle() {
             }
         }
     }
-    eprintln!("cswap: oracle passed on {cases} operand cases (semantics + faithfulness + self-inverse)");
+    eprintln!(
+        "cswap: oracle passed on {cases} operand cases (semantics + faithfulness + self-inverse)"
+    );
 }
 
 #[test]

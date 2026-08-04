@@ -77,10 +77,9 @@ fn collect_with_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
 
 /// Parse a `.thse` source file into a [`Program`], panicking with context.
 pub fn load_program(path: &Path) -> Program {
-    let src = fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-    theseus_syntax::parse(&src)
-        .unwrap_or_else(|e| panic!("parsing {}: {e:?}", path.display()))
+    let src =
+        fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+    theseus_syntax::parse(&src).unwrap_or_else(|e| panic!("parsing {}: {e:?}", path.display()))
 }
 
 /// Parse a `.diag` sidecar into expected diagnostic blocks.
@@ -256,7 +255,10 @@ fn parse_side(s: &str) -> Side {
 fn parse_clauses(s: &str) -> Vec<usize> {
     s.split(|c: char| c == ',' || c.is_whitespace())
         .filter(|t| !t.is_empty())
-        .map(|t| t.parse().unwrap_or_else(|_| panic!("bad clause index: {t}")))
+        .map(|t| {
+            t.parse()
+                .unwrap_or_else(|_| panic!("bad clause index: {t}"))
+        })
         .collect()
 }
 

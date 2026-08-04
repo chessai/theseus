@@ -170,7 +170,7 @@ fn word_bennett_swap_teeth_wrong_bwd() {
             .map(|r| match r {
                 0 => (0..BITS).map(|b| v(1, b)).collect(),
                 1 => (0..BITS).map(|b| v(0, b)).collect(),
-                2 | 3 | 4 => vec![BvExpr::Const(false); BITS],
+                2..=4 => vec![BvExpr::Const(false); BITS],
                 _ => (0..BITS).map(|b| v(r, b)).collect(),
             })
             .collect(),

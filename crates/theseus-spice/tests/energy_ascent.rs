@@ -10,9 +10,7 @@
 use std::collections::BTreeMap;
 
 use theseus_core::{Iso, Type};
-use theseus_netlist::{
-    lower, lower_iso, prim_from_bits, simulate, CellKind, NodeKind, TypedNode,
-};
+use theseus_netlist::{lower, lower_iso, prim_from_bits, simulate, CellKind, NodeKind, TypedNode};
 use theseus_spice::annotate::{compiled_energy, KindEnergy};
 use theseus_spice::chardb::{self, CellChar, CharDb, CharPoint, QueryError};
 use theseus_spice::energy::EnergyFit;
@@ -72,10 +70,21 @@ fn const_cell(key: &str, e: f64) -> (String, CellChar) {
         CellChar {
             key: key.to_string(),
             points: vec![
-                CharPoint { t_ramp: 1e-8, energy: e },
-                CharPoint { t_ramp: 1e-5, energy: e },
+                CharPoint {
+                    t_ramp: 1e-8,
+                    energy: e,
+                },
+                CharPoint {
+                    t_ramp: 1e-5,
+                    energy: e,
+                },
             ],
-            fit: EnergyFit { k_adia: 0.0, k_leak: 0.0, k_res: e, r_squared: 1.0 },
+            fit: EnergyFit {
+                k_adia: 0.0,
+                k_leak: 0.0,
+                k_res: e,
+                r_squared: 1.0,
+            },
         },
     )
 }
@@ -98,11 +107,19 @@ fn composite_energy_is_3_ek0_plus_1_ek1() {
         BTreeMap::from([
             (
                 "cswap-k0".to_string(),
-                KindEnergy { count: 3, per_cell_j: e_k0, subtotal_j: 3.0 * e_k0 }
+                KindEnergy {
+                    count: 3,
+                    per_cell_j: e_k0,
+                    subtotal_j: 3.0 * e_k0
+                }
             ),
             (
                 "cswap-k1".to_string(),
-                KindEnergy { count: 1, per_cell_j: e_k1, subtotal_j: e_k1 }
+                KindEnergy {
+                    count: 1,
+                    per_cell_j: e_k1,
+                    subtotal_j: e_k1
+                }
             ),
         ])
     );
@@ -120,7 +137,9 @@ fn annotation_inherits_the_interpolation_contract() {
         Err(QueryError::OutOfRange { .. })
     ));
     // A DB missing a placed kind: hard error.
-    let db_k0_only = CharDb { cells: BTreeMap::from([const_cell("cswap-k0", 2e-15)]) };
+    let db_k0_only = CharDb {
+        cells: BTreeMap::from([const_cell("cswap-k0", 2e-15)]),
+    };
     assert_eq!(
         compiled_energy(&net, &db_k0_only, 1e-7),
         Err(QueryError::NoSuchCell("cswap-k1".to_string()))
@@ -133,12 +152,25 @@ fn fixture_energy_tracks_the_fitted_model_not_the_raw_points() {
     let cell = CellChar {
         key: "cswap-k1".to_string(),
         points: vec![
-            CharPoint { t_ramp: 1e-8, energy: 1e-13 },
-            CharPoint { t_ramp: 1e-6, energy: 1e-15 },
+            CharPoint {
+                t_ramp: 1e-8,
+                energy: 1e-13,
+            },
+            CharPoint {
+                t_ramp: 1e-6,
+                energy: 1e-15,
+            },
         ],
-        fit: EnergyFit { k_adia: 1e-21, k_leak: 0.0, k_res: 0.0, r_squared: 1.0 },
+        fit: EnergyFit {
+            k_adia: 1e-21,
+            k_leak: 0.0,
+            k_res: 0.0,
+            r_squared: 1.0,
+        },
     };
-    let db = CharDb { cells: BTreeMap::from([("cswap-k1".to_string(), cell)]) };
+    let db = CharDb {
+        cells: BTreeMap::from([("cswap-k1".to_string(), cell)]),
+    };
     let net = lower_iso(&fredkin_iso()).unwrap();
     let e1 = compiled_energy(&net, &db, 1e-7).unwrap().total_j;
     let e2 = compiled_energy(&net, &db, 2e-7).unwrap().total_j;

@@ -114,11 +114,17 @@ fn depth_annotation_pretty_round_trips() {
     let program = theseus_syntax::parse(src).unwrap();
     let pretty = theseus_syntax::pretty_program(&program);
     // The pretty output should contain @6 annotations.
-    assert!(pretty.contains("Nat@6"), "pretty output should preserve @6: {pretty}");
+    assert!(
+        pretty.contains("Nat@6"),
+        "pretty output should preserve @6: {pretty}"
+    );
     let reparsed = theseus_syntax::parse(&pretty).unwrap();
     let norm_orig = theseus_syntax::normalize_program(&program);
     let norm_re = theseus_syntax::normalize_program(&reparsed);
-    assert_eq!(norm_orig, norm_re, "parse-pretty-parse round-trip should hold");
+    assert_eq!(
+        norm_orig, norm_re,
+        "parse-pretty-parse round-trip should hold"
+    );
 }
 
 #[test]

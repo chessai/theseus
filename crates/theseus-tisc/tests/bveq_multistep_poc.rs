@@ -82,7 +82,9 @@ fn const_word8(val: u8, vs: &BddVariableSet) -> SV {
     sv
 }
 fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
-    let bits: Vec<SV> = (0..W).map(|b| SV::Bit(field_bit_var(vs, nf, f, b))).collect();
+    let bits: Vec<SV> = (0..W)
+        .map(|b| SV::Bit(field_bit_var(vs, nf, f, b)))
+        .collect();
     let mut sv = bits[W - 1].clone();
     for b in (0..W - 1).rev() {
         sv = SV::pair(bits[b].clone(), sv);
@@ -102,7 +104,10 @@ fn build_state<F: Fn(usize) -> SV>(layout: &Layout, mk: F) -> SV {
     }
     // Sanity: it must structurally match state_ty_with(layout). HARD assert (a
     // carrier-shape misalignment must fault even under --release).
-    assert!(matches_type(&sv, layout), "build_state: SV shape != state_ty_with(layout)");
+    assert!(
+        matches_type(&sv, layout),
+        "build_state: SV shape != state_ty_with(layout)"
+    );
     sv
 }
 
@@ -272,7 +277,10 @@ fn restrict_regs_br(
     for r in 0..layout.num_regs {
         let val = s.regs[r];
         for b in 0..W {
-            asg.push((field_var(vs, nf, layout.reg_field(r), b), (val >> b) & 1 == 1));
+            asg.push((
+                field_var(vs, nf, layout.reg_field(r), b),
+                (val >> b) & 1 == 1,
+            ));
         }
     }
     // BR (8-bit low field).
@@ -381,7 +389,10 @@ fn multistep_straightline_wpc8() {
     ];
     let rom = assemble(&prog).expect("assemble straight-line rom");
     let (out, vs, samples) = compose_straightline(&layout, &rom, prog.len());
-    print_curve("straight-line 4-instr [w_pc=8, PC concrete, regs symbolic]", &samples);
+    print_curve(
+        "straight-line 4-instr [w_pc=8, PC concrete, regs symbolic]",
+        &samples,
+    );
 
     // ── Verify final register BDDs == composed instruction semantics ──
     let nf = n_fields(&layout);
@@ -426,8 +437,8 @@ fn multistep_straightline_long_wpc8() {
     let mut prog = Vec::new();
     for k in 0..16u8 {
         let rd = 1 + (k % 3); // rd ∈ {1,2,3}
-        // rs must differ from rd (assembler rejects aliased operands). Pick from
-        // {0, 4, 5} so rd != rs always.
+                              // rs must differ from rd (assembler rejects aliased operands). Pick from
+                              // {0, 4, 5} so rd != rs always.
         let rs = [0u8, 4, 5][(k % 3) as usize];
         prog.push(match k % 3 {
             0 => Instr::Xor { rd, rs },
@@ -472,7 +483,10 @@ fn multistep_straightline_pcfree_wpc8() {
     let vs = BddVariableSet::new_anonymous(n_vars(&layout));
     let sv0 = straightline_sv(&layout, &vs, 0);
     let (out, samples) = compose_steps(&layout, &rom, sv0, prog.len());
-    print_curve("straight-line 4-instr [w_pc=8, PC FREE (not re-pinned)]", &samples);
+    print_curve(
+        "straight-line 4-instr [w_pc=8, PC FREE (not re-pinned)]",
+        &samples,
+    );
 
     // PC must be concrete = prog.len() after the run (BR=0 → PC+1 each step).
     let out_pc = out_pc_bits(&out, &layout);
@@ -626,7 +640,10 @@ fn multistep_vart_halve_growth() {
          Path forward = inductive-invariant method, not full unrolling.",
         rom.len()
     );
-    assert!(budget > 0 && !rom.is_empty(), "rom compiles; the bomb itself is not run");
+    assert!(
+        budget > 0 && !rom.is_empty(),
+        "rom compiles; the bomb itself is not run"
+    );
     let _ = measure_loop_growth; // retained for the future small-surrogate demo
 }
 
@@ -784,10 +801,7 @@ fn multistep_negative_control_wpc8() {
         w_pc: 8,
         ..Layout::default()
     };
-    let prog = [
-        Instr::Xor { rd: 1, rs: 0 },
-        Instr::Add { rd: 2, rs: 1 },
-    ];
+    let prog = [Instr::Xor { rd: 1, rs: 0 }, Instr::Add { rd: 2, rs: 1 }];
     let rom = assemble(&prog).expect("assemble");
     let (out, vs, _samples) = compose_straightline(&layout, &rom, prog.len());
     let nf = n_fields(&layout);
@@ -798,7 +812,10 @@ fn multistep_negative_control_wpc8() {
     let true_r2 = ripple_sum(&r(2), &r1x, &vs);
     let got_r2 = out_field_bits(&out, &layout, layout.reg_field(2));
     for b in 0..W {
-        assert!(got_r2[b] == true_r2[b], "sanity: composed r2 must match true spec");
+        assert!(
+            got_r2[b] == true_r2[b],
+            "sanity: composed r2 must match true spec"
+        );
     }
 
     // WRONG-1: swap the op order (add BEFORE the xor) → r2 = r2 + r1 (old r1).
@@ -811,10 +828,7 @@ fn multistep_negative_control_wpc8() {
 
     // WRONG-2: a DIFFERENT ROM (Add instead of Xor at step 0) must produce a
     // DIFFERENT composed output -- proves the composition tracks the ROM.
-    let prog2 = [
-        Instr::Add { rd: 1, rs: 0 },
-        Instr::Add { rd: 2, rs: 1 },
-    ];
+    let prog2 = [Instr::Add { rd: 1, rs: 0 }, Instr::Add { rd: 2, rs: 1 }];
     let rom2 = assemble(&prog2).expect("assemble");
     let (out2, _vs2, _s2) = compose_straightline(&layout, &rom2, prog2.len());
     let got2_r2 = out_field_bits(&out2, &layout, layout.reg_field(2));

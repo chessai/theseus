@@ -186,6 +186,7 @@ fn gcd2_bdd_node_counts_report() {
 ///     freed early);
 ///   * max BDD LEVEL WIDTH (antichain) = the classic lower bound on the pebbling
 ///     width a level-recycler could hope to reach.
+///
 /// This sizes widen-STATE for A-6.4 and is honest about whether recycling helps.
 #[test]
 fn gcd2_bdd_cut_width_report() {
@@ -420,8 +421,8 @@ fn gcd2_bdd_per_bit_exec_verify_fittable() {
                         regvals[leaf_reg as usize] = s[i];
                     }
                     let mut st = zero_state();
-                    for rr in 0..4usize {
-                        st.operand_set(rr as u8, regvals[rr]);
+                    for (rr, &val) in regvals.iter().enumerate().take(4) {
+                        st.operand_set(rr as u8, val);
                     }
                     // dst/temp/nodes start 0 (assert).
                     assert_eq!(st.operand_get(dst), 0);

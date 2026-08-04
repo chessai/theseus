@@ -174,6 +174,8 @@ fn bdd_bennett_symbolic_dryrun(
 }
 
 /// Net-zero exec check over a list of carrier samples. Returns the gate count.
+// Test fixture: exercises the full net-zero exec signature end to end.
+#[allow(clippy::too_many_arguments)]
 fn bdd_bennett_exec_netzero(
     fwd: &RegTransfer,
     bwd: &RegTransfer,

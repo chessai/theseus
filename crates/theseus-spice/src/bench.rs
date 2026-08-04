@@ -33,10 +33,7 @@ pub(crate) fn run_ngspice_raw(netlist: &str) -> io::Result<String> {
 
     fs::write(&path, netlist)?;
 
-    let output = Command::new(ngspice_bin())
-        .arg("-b")
-        .arg(&path)
-        .output()?;
+    let output = Command::new(ngspice_bin()).arg("-b").arg(&path).output()?;
 
     // Clean up temp file regardless of outcome.
     let _ = fs::remove_file(&path);
@@ -50,8 +47,7 @@ pub(crate) fn run_ngspice_raw(netlist: &str) -> io::Result<String> {
         )));
     }
 
-    String::from_utf8(output.stdout)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    String::from_utf8(output.stdout).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 /// Parse a `.meas` result from ngspice stdout.
@@ -260,11 +256,7 @@ pub struct SweepPoint {
 /// For each (ramp, load) pair the placeholders are substituted (scientific
 /// notation) and the netlist is run via [`run_energy`]. Deterministic order:
 /// ramps outer, loads inner.
-pub fn sweep_grid(
-    netlist_template: &str,
-    meas_name: &str,
-    axes: &SweepAxes,
-) -> Vec<SweepPoint> {
+pub fn sweep_grid(netlist_template: &str, meas_name: &str, axes: &SweepAxes) -> Vec<SweepPoint> {
     let mut points = Vec::with_capacity(axes.ramps.len() * axes.loads.len());
     for &ramp in &axes.ramps {
         for &load in &axes.loads {
@@ -377,15 +369,15 @@ esource              =  3.14159e-12
     fn rc_ramp_matches_closed_form() {
         require_ngspice!();
 
-        let r: f64 = 1e3;  // 1 kΩ
+        let r: f64 = 1e3; // 1 kΩ
         let c: f64 = 1e-12; // 1 pF
-        let v: f64 = 1.0;   // 1 V
+        let v: f64 = 1.0; // 1 V
         let rc = r * c; // 1 ns
 
         // Sweep T from 100·RC to 100_000·RC (3 decades), ≥5 points/decade.
         // Use 6 points/decade → 18+ points total.
         let mut periods: Vec<f64> = Vec::new();
-        let t_min = 100.0 * rc;  // 100 ns
+        let t_min = 100.0 * rc; // 100 ns
         let t_max = 100_000.0 * rc; // 100 µs
         let decades = (t_max / t_min).log10();
         let points_per_decade = 6;
@@ -409,7 +401,10 @@ esource              =  3.14159e-12
             assert!(
                 rel_err < 0.05,
                 "Gate 1 FAIL at T={:.3e}: measured={:.6e}, analytic={:.6e}, rel_err={:.2}%",
-                t, e_source, e_analytic, rel_err * 100.0,
+                t,
+                e_source,
+                e_analytic,
+                rel_err * 100.0,
             );
 
             results.push((t, e_source));
@@ -434,7 +429,7 @@ esource              =  3.14159e-12
         require_ngspice!();
 
         let c = 1e-12; // 1 pF
-        let v = 1.0;   // 1 V
+        let v = 1.0; // 1 V
         let period = 1e-6; // 1 µs (arbitrary, well above any transient)
 
         let netlist = ideal_source_cap_netlist(c, v, period);
@@ -469,9 +464,15 @@ esource              =  3.14159e-12
         assert!(
             rel_err < 0.01,
             "DC probe FAIL: vcap={:.6e}, expected={:.6e}, rel_err={:.4}%",
-            vcap, v, rel_err * 100.0,
+            vcap,
+            v,
+            rel_err * 100.0,
         );
-        eprintln!("DC probe PASS: vcap = {:.6e} V (rel_err={:.4}%)", vcap, rel_err * 100.0);
+        eprintln!(
+            "DC probe PASS: vcap = {:.6e} V (rel_err={:.4}%)",
+            vcap,
+            rel_err * 100.0
+        );
     }
 
     // ----- Multi-axis sweep: ramp × load -----
@@ -480,8 +481,8 @@ esource              =  3.14159e-12
     fn multi_axis_ramp_load_sweep() {
         require_ngspice!();
 
-        let r: f64 = 1e3;  // 1 kΩ
-        let v: f64 = 1.0;   // 1 V
+        let r: f64 = 1e3; // 1 kΩ
+        let v: f64 = 1.0; // 1 V
         let loads = vec![0.5e-12, 1e-12, 2e-12]; // 0.5 pF, 1 pF, 2 pF
         let rc_max = r * 2e-12; // 2 ns (largest load)
 
@@ -537,14 +538,12 @@ meas tran esource INTEG V(pwr) FROM=0 TO={{PERIOD}}
         // (a) Check slope of energy vs period for each load ≈ -1 ± 0.1.
         let slopes = slopes_by_load(&points);
         for &(load, slope) in &slopes {
-            eprintln!(
-                "  load={:.3e} F  slope={:.4}",
-                load, slope,
-            );
+            eprintln!("  load={:.3e} F  slope={:.4}", load, slope,);
             assert!(
                 (slope - (-1.0)).abs() < 0.1,
                 "multi-axis slope FAIL: load={:.3e}, slope={:.4} (expected -1 ± 0.1)",
-                load, slope,
+                load,
+                slope,
             );
         }
 

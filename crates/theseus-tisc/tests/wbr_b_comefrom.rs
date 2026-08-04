@@ -40,7 +40,11 @@ fn layout_w_br16() -> Layout {
         w_br: 16,
         ..Layout::default()
     };
-    assert_eq!(l.br_fields(), 2, "w_br=16 layout must have exactly 2 BR fields");
+    assert_eq!(
+        l.br_fields(),
+        2,
+        "w_br=16 layout must have exactly 2 BR fields"
+    );
     assert_eq!(l.w_pc, 16, "w_pc stays 16 (pure-add come-from)");
     l
 }
@@ -117,7 +121,10 @@ fn adr0034_split_add_wbr16_sampled() {
             assert_eq!(got.scratch[0], 0, "s0 restored: pc={pc:#06x} br={br:#06x}");
             assert_eq!(got.scratch[1], 0, "s1 restored: pc={pc:#06x} br={br:#06x}");
             // No stray write outside PC/BR/s0/s1: regs, IR, rest of scratch identical.
-            assert_eq!(got.regs, s.regs, "regs untouched: pc={pc:#06x} br={br:#06x}");
+            assert_eq!(
+                got.regs, s.regs,
+                "regs untouched: pc={pc:#06x} br={br:#06x}"
+            );
             assert_eq!(got.ir, s.ir, "IR untouched: pc={pc:#06x} br={br:#06x}");
             assert_eq!(&got.scratch[2..], &s.scratch[2..], "scratch[2..] untouched");
 
@@ -133,7 +140,10 @@ fn adr0034_split_add_wbr16_sampled() {
             let s = wbr16_state(pc, br);
             let fwd = eval_wbr16(&layout, &iso, &s);
             let rec = eval_wbr16(&layout, &back, &fwd);
-            assert_eq!(rec, s, "w_br=16 adjoint must recover input: pc={pc:#06x} br={br:#06x}");
+            assert_eq!(
+                rec, s,
+                "w_br=16 adjoint must recover input: pc={pc:#06x} br={br:#06x}"
+            );
         }
     }
 
@@ -251,7 +261,11 @@ fn pc_update_w_br_boundaries() {
     // w_br=16: pure add (no sext).
     assert_eq!(pc_update_w_br(0, 0x8000, 16), 0x8001, "w_br=16 pure add");
     // PC += 0xFFFF + 1 = PC + 0x10000 ≡ PC. (BR=0xFFFF is −1; +1 cancels it.)
-    assert_eq!(pc_update_w_br(100, 0xFFFF, 16), 100, "w_br=16: PC + (-1) + 1 = PC");
+    assert_eq!(
+        pc_update_w_br(100, 0xFFFF, 16),
+        100,
+        "w_br=16: PC + (-1) + 1 = PC"
+    );
     // come-from: PC += δu + 1 with δu = 65536 − iter_len lands at PC − iter_len + 1.
     for il in [1u16, 128, 137, 32768] {
         let du = 65536u32.wrapping_sub(il as u32) as u16;
@@ -262,8 +276,16 @@ fn pc_update_w_br_boundaries() {
         );
     }
     // w_br=8: sext from bit 7 (byte-identical to the shipped pc_update).
-    assert_eq!(pc_update_w_br(10, 0xFF, 8), 10, "w_br=8: sext(0xFF)=-1, +1 = +0");
-    assert_eq!(pc_update_w_br(10, 0x80, 8), 10u16.wrapping_sub(127), "w_br=8: sext(0x80)=-128 +1");
+    assert_eq!(
+        pc_update_w_br(10, 0xFF, 8),
+        10,
+        "w_br=8: sext(0xFF)=-1, +1 = +0"
+    );
+    assert_eq!(
+        pc_update_w_br(10, 0x80, 8),
+        10u16.wrapping_sub(127),
+        "w_br=8: sext(0x80)=-128 +1"
+    );
     assert_eq!(pc_update_w_br(0, 0x7F, 8), 0x80, "w_br=8: +127 +1");
 }
 
@@ -438,9 +460,14 @@ fn wbr_b_real_cpu() {
         eprintln!("real-cpu (w_br=16): v0={v0} (expected T={t}) running ...");
 
         let state = marshal(&v, &in_ty);
-        let final_state =
-            run_rom_on_cpu(&lowered.instrs, state, budget, s_max_val, theseus_eval::eval)
-                .expect("real-cpu run (wide come-from)");
+        let final_state = run_rom_on_cpu(
+            &lowered.instrs,
+            state,
+            budget,
+            s_max_val,
+            theseus_eval::eval,
+        )
+        .expect("real-cpu run (wide come-from)");
 
         let cpu_out = unmarshal(&final_state, &out_ty);
         let mut fuel = 5_000_000u64;
@@ -455,7 +482,10 @@ fn wbr_b_real_cpu() {
             "scratch must be all-zero at exit (aux/temp_hi leak check): {:?}",
             final_state.scratch
         );
-        assert_eq!(final_state.br, 0, "BR must be zero at loop exit (both bytes)");
+        assert_eq!(
+            final_state.br, 0,
+            "BR must be zero at loop exit (both bytes)"
+        );
     }
     eprintln!("W_BR-b TEST 4: real system_step == eval on wide vart_halve K=4 sample, terminal quiescent ✓");
 }
@@ -575,6 +605,9 @@ fn wbr16_wide_decoders_are_endos_on_the_netlist() {
     for op in [Op::Swapbr, Op::Ccnot, Op::Cswap, Op::Xchg] {
         let (x, y) = type_of(&instruction_l(&layout, op))
             .unwrap_or_else(|e| panic!("wide {op:?} decoder must type-check, got {e:?}"));
-        assert_eq!(x, y, "wide {op:?} decoder must be an endomorphism on the netlist");
+        assert_eq!(
+            x, y,
+            "wide {op:?} decoder must be an endomorphism on the netlist"
+        );
     }
 }

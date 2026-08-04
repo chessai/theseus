@@ -144,10 +144,15 @@ impl Layout {
     /// Number of Word-sized fields in CpuState:
     /// regs + PC_lo + BR_lo + 4 IR bytes + scratch + (PC_fields-1)
     /// + (BR_fields-1). At the default layout (w_pc=16→pc_fields=2, w_br=8→
-    /// br_fields=1) this is 8+1+1+4+8+1+0 = **23** (there is NO BR_hi field at
-    /// the default w_br=8). It becomes 24 only at w_br=16 (the appended BR_hi).
+    ///   br_fields=1) this is 8+1+1+4+8+1+0 = **23** (there is NO BR_hi field at
+    ///   the default w_br=8). It becomes 24 only at w_br=16 (the appended BR_hi).
     pub const fn num_cpu_fields(&self) -> usize {
-        self.num_regs + 1 + 1 + 4 + self.num_scratch + (self.pc_fields() - 1)
+        self.num_regs
+            + 1
+            + 1
+            + 4
+            + self.num_scratch
+            + (self.pc_fields() - 1)
             + (self.br_fields() - 1)
     }
 
@@ -266,7 +271,9 @@ impl Layout {
     /// (`num_cpu_fields()` entries), used to drive the width-aware field
     /// routers. At the default layout this is `[8; 23]`.
     pub fn cpu_field_widths(&self) -> Vec<usize> {
-        (0..self.num_cpu_fields()).map(|i| self.field_width(i)).collect()
+        (0..self.num_cpu_fields())
+            .map(|i| self.field_width(i))
+            .collect()
     }
 }
 
@@ -618,10 +625,14 @@ impl StateVals {
             push_u8_bits(&mut all_bits, r);
         }
         push_u8_bits(&mut all_bits, self.pc as u8); // PC_lo
-        // MINOR-3: HARD assert (not debug_assert) -- the default carrier has one
-        // 8-bit BR field, so a >8-bit BR must fail LOUDLY (in release too) rather
-        // than silently truncate once W_BR-b lets wide BR values into the model.
-        assert_eq!(self.br >> 8, 0, "encode: default carrier has one 8-bit BR field");
+                                                    // MINOR-3: HARD assert (not debug_assert) -- the default carrier has one
+                                                    // 8-bit BR field, so a >8-bit BR must fail LOUDLY (in release too) rather
+                                                    // than silently truncate once W_BR-b lets wide BR values into the model.
+        assert_eq!(
+            self.br >> 8,
+            0,
+            "encode: default carrier has one 8-bit BR field"
+        );
         push_u8_bits(&mut all_bits, self.br as u8); // BR (8-bit)
         push_ir_bits(&mut all_bits, self.ir); // IR_b0..IR_b3 (32-bit)
         for &s in &self.scratch {
@@ -644,18 +655,27 @@ impl StateVals {
     /// PC_hi. `w_data` is 8 in B-2.1b so each word is a full byte.
     pub fn encode_with(&self, layout: &Layout) -> Value {
         assert!(layout.w_data <= W, "encode_with: w_data must be ≤ 8");
-        assert_eq!(layout.w_ctl, W, "encode_with: w_ctl is the fixed 8-bit control region");
+        assert_eq!(
+            layout.w_ctl, W,
+            "encode_with: w_ctl is the fixed 8-bit control region"
+        );
         // Dropped (un-named) registers/scratch must be zero -- the reduced
         // state cannot represent them, and the compiler only shrinks past
         // registers it proved un-named.
         for (i, &r) in self.regs.iter().enumerate() {
             if i >= layout.num_regs {
-                assert_eq!(r, 0, "encode_with: dropped reg r{i} must be 0, got {r:#04x}");
+                assert_eq!(
+                    r, 0,
+                    "encode_with: dropped reg r{i} must be 0, got {r:#04x}"
+                );
             }
         }
         for (i, &s) in self.scratch.iter().enumerate() {
             if i >= layout.num_scratch {
-                assert_eq!(s, 0, "encode_with: dropped scratch s{i} must be 0, got {s:#04x}");
+                assert_eq!(
+                    s, 0,
+                    "encode_with: dropped scratch s{i} must be 0, got {s:#04x}"
+                );
             }
         }
         // At a reduced `w_data`, a DATA word (register / s2..) may only carry
@@ -664,12 +684,20 @@ impl StateVals {
         if wd < W {
             let mask: u8 = ((1u16 << wd) - 1) as u8;
             for (i, &r) in self.regs.iter().take(layout.num_regs).enumerate() {
-                assert_eq!(r & !mask, 0, "encode_with: reg r{i}={r:#04x} exceeds w_data={wd}");
+                assert_eq!(
+                    r & !mask,
+                    0,
+                    "encode_with: reg r{i}={r:#04x} exceeds w_data={wd}"
+                );
             }
             // s0/s1 are CONTROL (8-bit); s2.. are DATA (w_data).
             for (i, &s) in self.scratch.iter().take(layout.num_scratch).enumerate() {
                 if i >= 2 {
-                    assert_eq!(s & !mask, 0, "encode_with: scratch s{i}={s:#04x} exceeds w_data={wd}");
+                    assert_eq!(
+                        s & !mask,
+                        0,
+                        "encode_with: scratch s{i}={s:#04x} exceeds w_data={wd}"
+                    );
                 }
             }
         }
@@ -731,15 +759,16 @@ impl StateVals {
     /// counts read back as zero (they were never plumbed). Memory is zero.
     pub fn decode_with(layout: &Layout, val: &Value) -> Self {
         assert!(layout.w_data <= W, "decode_with: w_data must be ≤ 8");
-        assert_eq!(layout.w_ctl, W, "decode_with: w_ctl is the fixed 8-bit control region");
+        assert_eq!(
+            layout.w_ctl, W,
+            "decode_with: w_ctl is the fixed 8-bit control region"
+        );
         let ty = state_ty_with(layout);
         let all_bits = bits_of(val, &ty).expect("StateVals::decode_with");
         assert_eq!(all_bits.len(), layout.state_bits());
 
         // Bit offset of a CPU field = Σ field_width(<idx) (mixed-width carrier).
-        let field_off = |idx: usize| -> usize {
-            (0..idx).map(|j| layout.field_width(j)).sum()
-        };
+        let field_off = |idx: usize| -> usize { (0..idx).map(|j| layout.field_width(j)).sum() };
         let wd = layout.w_data;
 
         let mut regs = [0u8; NUM_REGS];
@@ -869,9 +898,13 @@ pub fn encode_composite(s: &StateVals) -> Value {
         push_u8_bits(&mut cpu_bits, r);
     }
     push_u8_bits(&mut cpu_bits, s.pc as u8); // PC_lo
-    // MINOR-3: HARD assert -- loud failure (release too) on a >8-bit BR reaching
-    // the single-field composite carrier, rather than a silent `as u8` truncation.
-    assert_eq!(s.br >> 8, 0, "encode_composite: default carrier has one 8-bit BR field");
+                                             // MINOR-3: HARD assert -- loud failure (release too) on a >8-bit BR reaching
+                                             // the single-field composite carrier, rather than a silent `as u8` truncation.
+    assert_eq!(
+        s.br >> 8,
+        0,
+        "encode_composite: default carrier has one 8-bit BR field"
+    );
     push_u8_bits(&mut cpu_bits, s.br as u8); // BR (8-bit)
     push_ir_bits(&mut cpu_bits, s.ir);
     for &sc in &s.scratch {
@@ -1005,7 +1038,6 @@ fn read_pc_bits(bits: &[bool]) -> u16 {
     let hi = read_u8_bits(bits, PC_HI_FIELD * W);
     u16::from(lo) | (u16::from(hi) << 8)
 }
-
 
 fn read_u8_bits(bits: &[bool], offset: usize) -> u8 {
     let mut val = 0u8;

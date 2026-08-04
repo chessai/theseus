@@ -91,9 +91,10 @@ fn parses_clause_body_isos() {
 #[test]
 fn parses_where_block() {
     // `where` attaches nested isos to a single isodecl (grammar.md).
-    let prog =
-        parse("iso twice : Bit <-> Bit\n= n ; n\nwhere\n  iso n : Bit <-> Bit\n  | O <-> I\n  | I <-> O")
-            .unwrap();
+    let prog = parse(
+        "iso twice : Bit <-> Bit\n= n ; n\nwhere\n  iso n : Bit <-> Bit\n  | O <-> I\n  | I <-> O",
+    )
+    .unwrap();
     let out = pretty_program(&prog);
     assert!(out.contains("where"), "got: {out}");
     assert!(out.contains("iso n :"), "got: {out}");
@@ -119,15 +120,17 @@ fn parses_label_pattern() {
 fn malformed_clause_arrow_is_a_parse_error() {
     // The exact shape of conformance/diagnostics/0007-parse.thse: a `<-` where
     // a clause `<->` is required must be a T0001 parse error, not a panic.
-    let err =
-        parse("type Bit = O | I\niso bad : Bit <-> Bit\n| O <- I").expect_err("`<-` must not parse");
+    let err = parse("type Bit = O | I\niso bad : Bit <-> Bit\n| O <- I")
+        .expect_err("`<-` must not parse");
     assert_eq!(err.code, "T0001");
 }
 
 #[test]
 fn tuple_types_are_products() {
     // `(A, B)` is product sugar; nesting is right-associative and round-trips.
-    let prog = parse("iso f : (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)\n| (a, (b, c)) <-> ((a, b), c)").unwrap();
+    let prog =
+        parse("iso f : (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)\n| (a, (b, c)) <-> ((a, b), c)")
+            .unwrap();
     let out = pretty_program(&prog);
     let reparsed = parse(&out).expect("pretty output re-parses");
     assert_eq!(

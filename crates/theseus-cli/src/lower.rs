@@ -62,8 +62,7 @@ pub fn surface_to_cells(src: &str, iso_name: &str) -> Result<LoweredIso, LowerEr
         None => return Err(LowerError::UnknownIso(iso_name.to_string())),
     };
 
-    let (net, ancillas) =
-        lower_iso_with_ancillas(&iso).map_err(LowerError::Lower)?;
+    let (net, ancillas) = lower_iso_with_ancillas(&iso).map_err(LowerError::Lower)?;
 
     Ok(LoweredIso { iso, net, ancillas })
 }
@@ -107,8 +106,8 @@ pub fn oracle_check(iso: &Iso, lowered: &LoweredIso) -> Result<usize, String> {
 
     let mut checked = 0usize;
     for v in enumerate_values(&in_ty) {
-        let mut full_input = bits_of(&v, &in_ty)
-            .map_err(|e| format!("cannot encode {v:?} as bits: {e:?}"))?;
+        let mut full_input =
+            bits_of(&v, &in_ty).map_err(|e| format!("cannot encode {v:?} as bits: {e:?}"))?;
         full_input.extend_from_slice(&lowered.ancillas);
 
         let got_full = eval_cells(&lowered.net, &full_input);

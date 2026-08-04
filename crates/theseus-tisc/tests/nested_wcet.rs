@@ -17,8 +17,8 @@
 //! Invariant under test: **`B_fold ≥ true_B`** (never under-count). This is the
 //! park total-bijection soundness property.
 
-use theseus_tisc::compile::{compile_with_metadata, CostTree, Lowered};
 use theseus_core::{Iso, Type};
+use theseus_tisc::compile::{compile_with_metadata, CostTree, Lowered};
 
 // ─────────────────────────────────────────────────────────────────────
 // BLOCKER-2 pinned counterexample: outer k=4 / inner k=100 / iter=12.
@@ -77,9 +77,9 @@ fn blocker2_nested_wcet_is_multiplied_not_flat() {
     // The load-bearing soundness assertion: the folded extra is ON THE ORDER
     // of the true nested step count (≈ 4800), NOT the flat ≈ 88.
     let true_b_lower_bound = 4 * 100 * 12; // 4800 -- dynamic inner-body executions
-    // extra() omits the single ROM pass already in instrs.len(); adding the one
-    // ROM pass of the inner body (12) recovers ≥ true_b for the inner work:
-    //   extra + inner_rom_pass = 4788 + 12 = 4800 = true_b.
+                                           // extra() omits the single ROM pass already in instrs.len(); adding the one
+                                           // ROM pass of the inner body (12) recovers ≥ true_b for the inner work:
+                                           //   extra + inner_rom_pass = 4788 + 12 = 4800 = true_b.
     assert!(
         extra + node.inner[0].iter_len >= true_b_lower_bound,
         "B_fold must be ≥ true_B ≈ {true_b_lower_bound}, got extra={extra}"

@@ -159,7 +159,10 @@ fn add_xor_kernel_run_on_cpu_eq_eval_at_w_data_4() {
             &want[..],
             "w_data=4 kernel run_on_cpu != 4-bit eval for init {init4:?}"
         );
-        eprintln!("kernel init {init4:?}: run_on_cpu==eval regs[0..4]={:?} ✓", &got.regs[..4]);
+        eprintln!(
+            "kernel init {init4:?}: run_on_cpu==eval regs[0..4]={:?} ✓",
+            &got.regs[..4]
+        );
     }
 }
 
@@ -189,7 +192,11 @@ fn pred_base_is_w_data_plus_w_ctl_not_2_w_data() {
     let pred0 = poc.field_width(poc.reg_field(0)) + poc.field_width(poc.scratch_field(0));
     assert_eq!(tgt0, 0);
     assert_eq!(opd0, poc.w_data, "operand base = w_data");
-    assert_eq!(pred0, poc.w_data + poc.w_ctl, "predicate base = w_data + w_ctl");
+    assert_eq!(
+        pred0,
+        poc.w_data + poc.w_ctl,
+        "predicate base = w_data + w_ctl"
+    );
     assert_ne!(
         pred0,
         2 * poc.w_data,
@@ -198,7 +205,11 @@ fn pred_base_is_w_data_plus_w_ctl_not_2_w_data() {
     );
     // At the default layout the two coincide (byte-identity).
     let d = Layout::default();
-    assert_eq!(d.w_data + d.w_ctl, 2 * d.w_data, "coincide at w_data=w_ctl=8");
+    assert_eq!(
+        d.w_data + d.w_ctl,
+        2 * d.w_data,
+        "coincide at w_data=w_ctl=8"
+    );
     eprintln!(
         "pred base: w_data({})+w_ctl({})={} ≠ 2·w_data={} (mixed-width fix pinned) ✓",
         poc.w_data,
@@ -259,7 +270,11 @@ fn scratch_operand_ccnot_at_w_data_4() {
     // Ccnot r0, r1, s2  -- rt is a SCRATCH operand (s2 = idx 10), a w_data word
     // in the mixed-width state. The crossbar must route s2 into the operand
     // path and the 3-operand Ccnot core must compute r0 ^= r1 & s2 at 4 bits.
-    let prog = vec![Instr::Ccnot { rd: 0, rs: 1, rt: 10 }];
+    let prog = vec![Instr::Ccnot {
+        rd: 0,
+        rs: 1,
+        rt: 10,
+    }];
     let layout = scratch_op_layout();
     // Spread of (r0, r1, s2) including edge nibbles.
     let cases: &[(u8, u8, u8)] = &[
@@ -283,7 +298,13 @@ fn scratch_operand_ccnot_at_w_data_4() {
             got.regs[0]
         );
         assert_eq!(got.regs[1], r1, "scratch-op Ccnot: r1 preserved");
-        assert_eq!(got.scratch[2], s2, "scratch-op Ccnot: s2 (scratch operand) preserved");
-        eprintln!("scratch-op Ccnot: r0={r0} r1={r1} s2={s2} → r0={} == r0^(r1&s2) ✓", got.regs[0]);
+        assert_eq!(
+            got.scratch[2], s2,
+            "scratch-op Ccnot: s2 (scratch operand) preserved"
+        );
+        eprintln!(
+            "scratch-op Ccnot: r0={r0} r1={r1} s2={s2} → r0={} == r0^(r1&s2) ✓",
+            got.regs[0]
+        );
     }
 }

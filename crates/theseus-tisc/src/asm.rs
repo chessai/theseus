@@ -240,6 +240,7 @@ impl Instr {
 /// (A-0, MAJOR-4). Legal operands are:
 ///   - `0..8`   → r0..r7 (general registers), and
 ///   - `10..16` → s2..s7 (scratch operands).
+///
 /// Rejected:
 ///   - `8`/`9`  → s0/s1, the decoder-reserved operand/predicate buffers
 ///     (routing them into the datapath mid-instruction corrupts decode);

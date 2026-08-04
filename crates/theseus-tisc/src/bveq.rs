@@ -361,7 +361,10 @@ pub enum BveqError {
     NonDistinctOperands { instr: Instr },
     /// BvExpr Var node references an out-of-range (operand, bit).
     /// Guards against silent aliasing -- Var(20,0) no longer maps onto Var(4,2).
-    #[error("BvExpr Var out of range: operand={operand} (max {num_operands}), bit={bit} (max {})", BITS)]
+    #[error(
+        "BvExpr Var out of range: operand={operand} (max {num_operands}), bit={bit} (max {})",
+        BITS
+    )]
     VarOutOfRange {
         operand: usize,
         bit: usize,

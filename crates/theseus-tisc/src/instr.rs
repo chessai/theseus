@@ -509,11 +509,8 @@ pub fn swapbr_with(layout: &Layout, rd: usize) -> Iso {
     let reg = layout.reg_field(rd);
     let mut iso: Option<Iso> = None;
     for k in 0..layout.br_fields() {
-        let step = crate::addressing::at_fields_n(
-            swap_words_iso(),
-            &[reg, layout.br_word_field(k)],
-            n,
-        );
+        let step =
+            crate::addressing::at_fields_n(swap_words_iso(), &[reg, layout.br_word_field(k)], n);
         iso = Some(match iso {
             None => step,
             Some(prev) => Iso::seq(prev, step),

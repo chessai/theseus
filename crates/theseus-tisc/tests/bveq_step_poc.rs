@@ -197,7 +197,9 @@ fn is_word8(ty: &Type) -> bool {
 
 /// A symbolic Word8 SV for field `f` (right-nested 8 Bits, LSB-first).
 fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
-    let bits: Vec<SV> = (0..W).map(|b| SV::Bit(field_bit_var(vs, nf, f, b))).collect();
+    let bits: Vec<SV> = (0..W)
+        .map(|b| SV::Bit(field_bit_var(vs, nf, f, b)))
+        .collect();
     // Right-nested product, matching flat(8) = Bit x (Bit x (...)).
     let mut sv = bits[W - 1].clone();
     for b in (0..W - 1).rev() {
@@ -242,7 +244,13 @@ fn spec_pc_out(pc: &[Bdd], br: &[Bdd], w_pc: usize, vs: &BddVariableSet) -> Vec<
     assert_eq!(pc.len(), w_pc);
     assert_eq!(br.len(), W);
     let sext: Vec<Bdd> = (0..w_pc)
-        .map(|i| if i < W { br[i].clone() } else { br[W - 1].clone() })
+        .map(|i| {
+            if i < W {
+                br[i].clone()
+            } else {
+                br[W - 1].clone()
+            }
+        })
         .collect();
     let pc_plus_br = ripple_sum(pc, &sext, vs);
     ripple_plus_one(&pc_plus_br, vs)
@@ -284,8 +292,12 @@ fn walk_pc_update(layout: &Layout) -> (SV, BddVariableSet, f64) {
     let sv_in = symbolic_state_sv(layout, &vs);
     let t0 = Instant::now();
     let mut ctx = WalkCtx::new();
-    let out = eval_bdd(&iso, sv_in, &vs, &mut ctx)
-        .unwrap_or_else(|e| panic!("eval_bdd FAILED on pc_add_br;pc_inc @ w_pc={}: {e}", layout.w_pc));
+    let out = eval_bdd(&iso, sv_in, &vs, &mut ctx).unwrap_or_else(|e| {
+        panic!(
+            "eval_bdd FAILED on pc_add_br;pc_inc @ w_pc={}: {e}",
+            layout.w_pc
+        )
+    });
     let elapsed = t0.elapsed().as_secs_f64();
     (out, vs, elapsed)
 }
@@ -440,7 +452,11 @@ fn prove_pc_inc(layout: &Layout) -> f64 {
     // pc_inc carry scratch and must be restored to its symbolic input).
     let touched_pc = [
         layout.pc_field(),
-        if layout.pc_fields() >= 2 { layout.pc_hi_field() } else { usize::MAX },
+        if layout.pc_fields() >= 2 {
+            layout.pc_hi_field()
+        } else {
+            usize::MAX
+        },
     ];
     for f in 0..nf {
         if touched_pc.contains(&f) {
@@ -468,7 +484,10 @@ fn prove_pc_inc(layout: &Layout) -> f64 {
 
 #[test]
 fn bveq_pc_inc_wpc8() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     assert_eq!(layout.pc_fields(), 1, "w_pc=8 must have exactly 1 PC field");
     let secs = prove_pc_inc(&layout);
     eprintln!(
@@ -581,7 +600,11 @@ fn concrete_bootstrap(layout: &Layout, pcs: &[u16], brs: &[u8]) {
 
             // PC' == (PC + sext(BR) + 1) mod 2^w_pc, computed by the shipped
             // `pc_update` helper (masked to w_pc for the w_pc=8 layout).
-            let mask: u16 = if layout.w_pc >= 16 { u16::MAX } else { (1u16 << layout.w_pc) - 1 };
+            let mask: u16 = if layout.w_pc >= 16 {
+                u16::MAX
+            } else {
+                (1u16 << layout.w_pc) - 1
+            };
             let expected_pc = pc_update(pc & mask, br) & mask;
             assert_eq!(
                 got.pc, expected_pc,
@@ -589,28 +612,64 @@ fn concrete_bootstrap(layout: &Layout, pcs: &[u16], brs: &[u8]) {
                 layout.w_pc
             );
             // BR preserved (read-only control); s0/s1 restored to 0.
-            assert_eq!(got.br, u16::from(br), "w_pc={}: BR preserved (pc={pc:#06x} br={br:#04x})", layout.w_pc);
-            assert_eq!(got.scratch[0], 0, "w_pc={}: s0 restored (pc={pc:#06x} br={br:#04x})", layout.w_pc);
-            assert_eq!(got.scratch[1], 0, "w_pc={}: s1 restored (pc={pc:#06x} br={br:#04x})", layout.w_pc);
+            assert_eq!(
+                got.br,
+                u16::from(br),
+                "w_pc={}: BR preserved (pc={pc:#06x} br={br:#04x})",
+                layout.w_pc
+            );
+            assert_eq!(
+                got.scratch[0], 0,
+                "w_pc={}: s0 restored (pc={pc:#06x} br={br:#04x})",
+                layout.w_pc
+            );
+            assert_eq!(
+                got.scratch[1], 0,
+                "w_pc={}: s1 restored (pc={pc:#06x} br={br:#04x})",
+                layout.w_pc
+            );
             // No stray write outside PC/BR/s0/s1: regs, IR, scratch[2..] identical.
-            assert_eq!(got.regs, s.regs, "w_pc={}: regs untouched (pc={pc:#06x} br={br:#04x})", layout.w_pc);
-            assert_eq!(got.ir, s.ir, "w_pc={}: IR untouched (pc={pc:#06x} br={br:#04x})", layout.w_pc);
-            assert_eq!(&got.scratch[2..], &s.scratch[2..], "w_pc={}: scratch tail untouched", layout.w_pc);
+            assert_eq!(
+                got.regs, s.regs,
+                "w_pc={}: regs untouched (pc={pc:#06x} br={br:#04x})",
+                layout.w_pc
+            );
+            assert_eq!(
+                got.ir, s.ir,
+                "w_pc={}: IR untouched (pc={pc:#06x} br={br:#04x})",
+                layout.w_pc
+            );
+            assert_eq!(
+                &got.scratch[2..],
+                &s.scratch[2..],
+                "w_pc={}: scratch tail untouched",
+                layout.w_pc
+            );
 
             // ADJOINT: sym(pc_add_br;pc_inc) subtracts (PC - sext(BR) - 1) and
             // recovers the exact input -- the reversibility half of ADR-0034.
             let rec = eval_boot(layout, &back, &got);
-            assert_eq!(rec, s, "w_pc={}: adjoint must recover input (pc={pc:#06x} br={br:#04x})", layout.w_pc);
+            assert_eq!(
+                rec, s,
+                "w_pc={}: adjoint must recover input (pc={pc:#06x} br={br:#04x})",
+                layout.w_pc
+            );
         }
     }
 }
 
 #[test]
 fn bveq_pc_update_bootstrap_wpc8() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     assert_eq!(layout.pc_fields(), 1, "w_pc=8 must have exactly 1 PC field");
     // Carry / sign boundaries on the 8-bit PC and BR.
-    let pcs: Vec<u16> = [0u8, 1, 0x7F, 0x80, 0xFE, 0xFF].iter().map(|&x| u16::from(x)).collect();
+    let pcs: Vec<u16> = [0u8, 1, 0x7F, 0x80, 0xFE, 0xFF]
+        .iter()
+        .map(|&x| u16::from(x))
+        .collect();
     let brs = [0u8, 1, 7, 8, 0x7F, 0x80, 0xF6, 0xFF];
     concrete_bootstrap(&layout, &pcs, &brs);
     eprintln!(
@@ -663,7 +722,13 @@ fn negative_controls(layout: &Layout) {
 
     // WRONG-1: drop the `+1` (PC' = PC + sext(BR)).
     let sext: Vec<Bdd> = (0..w_pc)
-        .map(|i| if i < W { br_in[i].clone() } else { br_in[W - 1].clone() })
+        .map(|i| {
+            if i < W {
+                br_in[i].clone()
+            } else {
+                br_in[W - 1].clone()
+            }
+        })
         .collect();
     let no_plus_one = ripple_sum(&pc_in, &sext, &vs);
     let differs1 = (0..w_pc).any(|i| out_pc[i] != no_plus_one[i]);
@@ -676,7 +741,13 @@ fn negative_controls(layout: &Layout) {
     // (Only distinguishable when w_pc > 8; at w_pc=8 sext(BR)==BR==zext(BR).)
     if w_pc > W {
         let zext: Vec<Bdd> = (0..w_pc)
-            .map(|i| if i < W { br_in[i].clone() } else { vs.mk_false() })
+            .map(|i| {
+                if i < W {
+                    br_in[i].clone()
+                } else {
+                    vs.mk_false()
+                }
+            })
             .collect();
         let zext_spec = ripple_plus_one(&ripple_sum(&pc_in, &zext, &vs), &vs);
         let differs2 = (0..w_pc).any(|i| out_pc[i] != zext_spec[i]);
@@ -691,13 +762,16 @@ fn negative_controls(layout: &Layout) {
     // this collapses to the correct spec, so only meaningful at w_pc>8.
     if w_pc > W {
         let sext: Vec<Bdd> = (0..w_pc)
-            .map(|i| if i < W { br_in[i].clone() } else { br_in[W - 1].clone() })
+            .map(|i| {
+                if i < W {
+                    br_in[i].clone()
+                } else {
+                    br_in[W - 1].clone()
+                }
+            })
             .collect();
         // Correct low byte (PC + sext(BR) + 1) then HIGH byte with carry reset.
-        let lo = ripple_plus_one(
-            &ripple_sum(&pc_in[0..W], &sext[0..W], &vs),
-            &vs,
-        );
+        let lo = ripple_plus_one(&ripple_sum(&pc_in[0..W], &sext[0..W], &vs), &vs);
         let hi = ripple_sum(&pc_in[W..w_pc], &sext[W..w_pc], &vs); // no carry-in
         let mut carryless = lo;
         carryless.extend(hi);

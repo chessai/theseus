@@ -201,7 +201,11 @@ impl Repl {
         match eval(&active.iso, current, &mut fuel) {
             Ok(next) => {
                 let new_idx = active.history.len(); // index after push
-                let render_ty = if new_idx % 2 == 0 { &active.lhs_ty } else { &active.rhs_ty };
+                let render_ty = if new_idx % 2 == 0 {
+                    &active.lhs_ty
+                } else {
+                    &active.rhs_ty
+                };
                 let rendered = value::render(&next, render_ty, &self.ep.env);
                 active.history.push(next);
                 let _ = writeln!(out, "{rendered}");
@@ -244,7 +248,11 @@ impl Repl {
         } else {
             // Plain iso: even-indexed entries are lhs_ty, odd are rhs_ty.
             let idx = active.history.len() - 1;
-            let render_ty = if idx % 2 == 0 { &active.lhs_ty } else { &active.rhs_ty };
+            let render_ty = if idx % 2 == 0 {
+                &active.lhs_ty
+            } else {
+                &active.rhs_ty
+            };
             let rendered = value::render(current, render_ty, &self.ep.env);
             let _ = writeln!(out, "{rendered}");
         }
@@ -289,10 +297,7 @@ iso swp : (Bit, Bit) <-> (Bit, Bit)
 
     #[test]
     fn step_then_unstep_returns_to_start() {
-        let lines = run_repl(
-            NOT_PROGRAM,
-            ":load notb O\n:step\n:unstep\n:quit\n",
-        );
+        let lines = run_repl(NOT_PROGRAM, ":load notb O\n:step\n:unstep\n:quit\n");
         // :load prints "loaded: O"
         assert_eq!(lines[0], "loaded: O");
         // :step prints "I" (not(O) = I)
@@ -309,31 +314,25 @@ iso swp : (Bit, Bit) <-> (Bit, Bit)
             ":load notb O\n:step\n:step\n:unstep\n:unstep\n:quit\n",
         );
         assert_eq!(lines[0], "loaded: O");
-        assert_eq!(lines[1], "I");   // step 1: O -> I
-        assert_eq!(lines[2], "O");   // step 2: I -> O
-        assert_eq!(lines[3], "I");   // unstep 1: back to I
-        assert_eq!(lines[4], "O");   // unstep 2: back to O (start)
+        assert_eq!(lines[1], "I"); // step 1: O -> I
+        assert_eq!(lines[2], "O"); // step 2: I -> O
+        assert_eq!(lines[3], "I"); // unstep 1: back to I
+        assert_eq!(lines[4], "O"); // unstep 2: back to O (start)
     }
 
     #[test]
     fn unstep_at_start_is_noop() {
-        let lines = run_repl(
-            NOT_PROGRAM,
-            ":load notb O\n:unstep\n:quit\n",
-        );
+        let lines = run_repl(NOT_PROGRAM, ":load notb O\n:unstep\n:quit\n");
         assert_eq!(lines[0], "loaded: O");
         assert_eq!(lines[1], "already at start");
     }
 
     #[test]
     fn swap_pair_step_unstep() {
-        let lines = run_repl(
-            SWAP_PROGRAM,
-            ":load swp (O, I)\n:step\n:unstep\n:quit\n",
-        );
+        let lines = run_repl(SWAP_PROGRAM, ":load swp (O, I)\n:step\n:unstep\n:quit\n");
         assert_eq!(lines[0], "loaded: (O, I)");
-        assert_eq!(lines[1], "(I, O)");  // step: swap
-        assert_eq!(lines[2], "(O, I)");  // unstep: back to start
+        assert_eq!(lines[1], "(I, O)"); // step: swap
+        assert_eq!(lines[2], "(O, I)"); // unstep: back to start
     }
 
     #[test]
@@ -397,7 +396,7 @@ iso spin : Bit <-> Bit
         assert_eq!(lines[0], "loaded: O");
         // 5 steps total, proving per-body-application stepping (not whole-loop)
         assert_eq!(lines.len(), 6); // loaded + 5 steps
-        // Steps 1-4 are intermediate label states
+                                    // Steps 1-4 are intermediate label states
         for (i, line) in lines.iter().enumerate().take(5).skip(1) {
             assert!(
                 line.starts_with("label:"),
@@ -426,7 +425,10 @@ iso spin : Bit <-> Bit
         assert!(lines[2].starts_with("label:"));
         // Unstep 1: back to step-1 state (label)
         assert!(lines[3].starts_with("label:"));
-        assert_eq!(lines[3], lines[1], "unstep should return to prior label state");
+        assert_eq!(
+            lines[3], lines[1],
+            "unstep should return to prior label state"
+        );
         // Unstep 2: back to initial plain value
         assert_eq!(lines[4], "O");
     }
@@ -465,7 +467,8 @@ iso spin : Bit <-> Bit
         for i in 0..label_states.len() {
             for j in (i + 1)..label_states.len() {
                 assert_ne!(
-                    label_states[i], label_states[j],
+                    label_states[i],
+                    label_states[j],
                     "label states at step {} and {} should differ",
                     i + 1,
                     j + 1
@@ -491,7 +494,11 @@ iso spin : Bit <-> Bit
             assert!(line.starts_with("label:"), "expected label, got: {line}");
         }
         // Step 5: exit
-        assert!(lines[5].starts_with("exit:"), "expected exit, got: {}", lines[5]);
+        assert!(
+            lines[5].starts_with("exit:"),
+            "expected exit, got: {}",
+            lines[5]
+        );
         // Steps 6-7: loop complete (no panic, no new state)
         assert_eq!(lines[6], "loop complete");
         assert_eq!(lines[7], "loop complete");
@@ -525,7 +532,7 @@ iso assoc : (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)
         let script = ":load assoc (O, (I, O))\n:step\n:unstep\n:quit\n";
         let lines = run_repl(REASSOC_PROGRAM, script);
         assert_eq!(lines[0], "loaded: (O, (I, O))");
-        assert_eq!(lines[1], "((O, I), O)");   // rhs_ty
-        assert_eq!(lines[2], "(O, (I, O))");   // back to lhs_ty
+        assert_eq!(lines[1], "((O, I), O)"); // rhs_ty
+        assert_eq!(lines[2], "(O, (I, O))"); // back to lhs_ty
     }
 }

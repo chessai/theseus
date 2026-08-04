@@ -124,12 +124,10 @@ fn elab_expr(
                 // Position type inference for `id` as combinator body (ADR-0038):
                 // infer the body's expected type from the combinator kind and the
                 // iso's declared signature.
-                Expr::Id(_) => {
-                    match infer_combinator_id_body(kind, &core_ty, iso_lhs, env) {
-                        Some(iso) => iso,
-                        None => elab_expr(body, env, isos, None)?,
-                    }
-                }
+                Expr::Id(_) => match infer_combinator_id_body(kind, &core_ty, iso_lhs, env) {
+                    Some(iso) => iso,
+                    None => elab_expr(body, env, isos, None)?,
+                },
                 _ => elab_expr(body, env, isos, None)?,
             };
             let iso = match kind {
@@ -326,7 +324,12 @@ fn compute_bijection(
 
 /// Pattern-match a core `Value` against a surface `Pattern`, returning variable
 /// bindings on success. The surface type `ty` is threaded to resolve `Nat` literals.
-fn match_bind(value: &Value, pattern: &Pattern, ty: &SurfType, env: &Env) -> Option<BTreeMap<String, Value>> {
+fn match_bind(
+    value: &Value,
+    pattern: &Pattern,
+    ty: &SurfType,
+    env: &Env,
+) -> Option<BTreeMap<String, Value>> {
     let mut bindings = BTreeMap::new();
     if match_bind_inner(value, pattern, ty, env, &mut bindings) {
         Some(bindings)
@@ -517,11 +520,7 @@ fn synthesize(sigma: &BTreeMap<Value, Value>, ty: &CoreType) -> Option<Iso> {
 
 /// Sum decomposition: if σ preserves injection tags, decompose as `Plus(f, g)`.
 /// If σ swaps all tags, decompose as `Plus(f, g) ; SwapSum`.
-fn synthesize_sum(
-    sigma: &BTreeMap<Value, Value>,
-    a: &CoreType,
-    b: &CoreType,
-) -> Option<Iso> {
+fn synthesize_sum(sigma: &BTreeMap<Value, Value>, a: &CoreType, b: &CoreType) -> Option<Iso> {
     // Straight: Left→Left, Right→Right.
     let mut left_sigma = BTreeMap::new();
     let mut right_sigma = BTreeMap::new();
@@ -583,11 +582,7 @@ fn synthesize_sum(
 
 /// Product decomposition: try independent factorization, then controlled
 /// decomposition when the first factor is a sum.
-fn synthesize_prod(
-    sigma: &BTreeMap<Value, Value>,
-    a: &CoreType,
-    b: &CoreType,
-) -> Option<Iso> {
+fn synthesize_prod(sigma: &BTreeMap<Value, Value>, a: &CoreType, b: &CoreType) -> Option<Iso> {
     if let Some(iso) = synthesize_prod_factor(sigma, a, b) {
         return Some(iso);
     }
@@ -711,7 +706,8 @@ fn elab_clauses_label(
         let mut matched = false;
         for c in cs {
             if let Some(bindings) = match_bind_extended(v, &c.lhs, lhs_ty, labels, env) {
-                let Some(output) = instantiate_extended(&c.rhs, &bindings, rhs_ty, labels, env) else {
+                let Some(output) = instantiate_extended(&c.rhs, &bindings, rhs_ty, labels, env)
+                else {
                     // Matched LHS but RHS instantiation failed (e.g. unbound
                     // variable). Abort immediately -- do not fall through to
                     // later clauses, matching compute_bijection's behaviour.
@@ -1057,10 +1053,7 @@ mod tests {
 
         // Carrier: lower((Bit, (Bit, Bit))) = Prod(Sum(1,1), Prod(Sum(1,1), Sum(1,1)))
         let bit = CoreType::sum(CoreType::One, CoreType::One);
-        let expected_u = CoreType::prod(
-            bit.clone(),
-            CoreType::prod(bit.clone(), bit.clone()),
-        );
+        let expected_u = CoreType::prod(bit.clone(), CoreType::prod(bit.clone(), bit.clone()));
 
         match iso {
             Iso::Trace(u, phi) => {
@@ -1112,15 +1105,9 @@ mod tests {
 
         // Clause 5: $go (b, (I, I)) <-> b
         // Left(cv(O, I, I)) → Right(O)
-        assert_eq!(
-            run(phi, Value::left(cv(o(), i(), i()))),
-            Value::right(o())
-        );
+        assert_eq!(run(phi, Value::left(cv(o(), i(), i()))), Value::right(o()));
         // Left(cv(I, I, I)) → Right(I)
-        assert_eq!(
-            run(phi, Value::left(cv(i(), i(), i()))),
-            Value::right(i())
-        );
+        assert_eq!(run(phi, Value::left(cv(i(), i(), i()))), Value::right(i()));
     }
 
     #[test]
@@ -1194,7 +1181,10 @@ mod tests {
         sorted_out.sort();
         let mut sorted_dom = domain.clone();
         sorted_dom.sort();
-        assert_eq!(sorted_out, sorted_dom, "forward image must be the whole domain");
+        assert_eq!(
+            sorted_out, sorted_dom,
+            "forward image must be the whole domain"
+        );
     }
 
     fn nat_ty() -> SurfType {
@@ -1266,7 +1256,9 @@ mod tests {
         assert_roundtrip_whole_domain(&env, &f, &dom_ty);
         // Semantic pin: ⟦iter n f⟧⟨k, x⟩ = ⟨k, fᵏ(x)⟩ -- the k-fold body
         // application, checked against the Iter node's own body.
-        let Iso::Iter(_, body) = &f else { unreachable!() };
+        let Iso::Iter(_, body) = &f else {
+            unreachable!()
+        };
         for k in 0..4usize {
             for x in [o(), i()] {
                 let mut counter = Value::left(Value::Unit);
@@ -1366,7 +1358,8 @@ mod tests {
         // $go's payload type is Bit, but clause 1's RHS `$go (b, b)` produces
         // a (Bit, Bit) payload -- Φ maps boundary values into ill-typed carrier
         // entries. The admit() guard must catch this.
-        let src = "type Bit = O | I\niso bad : Bit <-> Bit\n  | b <-> $go (b, b)\n  | $go p <-> p\n";
+        let src =
+            "type Bit = O | I\niso bad : Bit <-> Bit\n  | b <-> $go (b, b)\n  | $go p <-> p\n";
         let prog = theseus_syntax::parse(src).expect("parses");
         let env = crate::env::resolve(&prog);
         let map = elaborate_program(&prog, &env);

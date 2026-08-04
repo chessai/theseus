@@ -55,9 +55,12 @@ fn prim_from_fn(
 }
 
 fn cnot_prim() -> PrimDef {
-    prim_from_fn("cnot", Type::prod(bit(), bit()), Type::prod(bit(), bit()), |b| {
-        vec![b[0], b[0] ^ b[1]]
-    })
+    prim_from_fn(
+        "cnot",
+        Type::prod(bit(), bit()),
+        Type::prod(bit(), bit()),
+        |b| vec![b[0], b[0] ^ b[1]],
+    )
 }
 
 fn three_bits() -> Type {
@@ -151,7 +154,11 @@ fn plain_dirty_max(iso: &Iso) -> (usize, usize) {
         bits.extend_from_slice(&inits);
         let out = eval_cells(&net, &bits);
         let y_bits = bits_of(&eval_oracle(iso, &v), &out_ty).unwrap();
-        assert_eq!(&out[..w_out], &y_bits[..], "plain lowering broke the oracle on {v:?}");
+        assert_eq!(
+            &out[..w_out],
+            &y_bits[..],
+            "plain lowering broke the oracle on {v:?}"
+        );
         let dirty = out[w_out..]
             .iter()
             .zip(&inits)
@@ -192,7 +199,11 @@ fn assert_bennett_contract(iso: &Iso) -> usize {
     let w = rail_width(&out_ty).unwrap();
     assert_eq!(w, rail_width(&in_ty).unwrap(), "iso shape");
     let n_f = inits.len();
-    assert_eq!(winits.len(), n_f + 2 * w, "wrap adds one (1,0) pair per data bit");
+    assert_eq!(
+        winits.len(),
+        n_f + 2 * w,
+        "wrap adds one (1,0) pair per data bit"
+    );
     assert_eq!(wnet.outputs.len(), w + n_f + 2 * w, "wrapped port count");
 
     let mut max_dirty = 0usize;
@@ -218,7 +229,11 @@ fn assert_bennett_contract(iso: &Iso) -> usize {
         // 3. Boundary slots: exactly (y_j, x_j) against inits (1, 0).
         for j in 0..w {
             assert_eq!(out[w + n_f + 2 * j], y_bits[j], "spare slot {j} on {v:?}");
-            assert_eq!(out[w + n_f + 2 * j + 1], x_bits[j], "input slot {j} on {v:?}");
+            assert_eq!(
+                out[w + n_f + 2 * j + 1],
+                x_bits[j],
+                "input slot {j} on {v:?}"
+            );
         }
 
         // 4. Dirty count is the predicted boundary residue.
@@ -227,8 +242,8 @@ fn assert_bennett_contract(iso: &Iso) -> usize {
             .zip(&winits)
             .filter(|(got, want)| got != want)
             .count();
-        let predicted = y_bits.iter().filter(|&&y| !y).count()
-            + x_bits.iter().filter(|&&x| x).count();
+        let predicted =
+            y_bits.iter().filter(|&&y| !y).count() + x_bits.iter().filter(|&&x| x).count();
         assert_eq!(dirty, predicted, "dirty != boundary residue on {v:?}");
         max_dirty = max_dirty.max(dirty);
     }
@@ -269,7 +284,10 @@ fn r1_cccnot_lowering_is_ancilla_clean() {
     // scratch pairs restored to 0 on all 16 inputs.
     let iso = Iso::Prim(Box::new(cccnot_prim()));
     let n_anc = assert_garbage_free(&iso);
-    assert_eq!(n_anc, 2, "cccnot uses exactly two (clean) chain scratch pairs");
+    assert_eq!(
+        n_anc, 2,
+        "cccnot uses exactly two (clean) chain scratch pairs"
+    );
 }
 
 #[test]
@@ -316,7 +334,11 @@ fn bennett_cnot_forward_ancillas_clean() {
     // state where the single mcnot left 2 dirty pairs and this test
     // demonstrated that floor).
     let (n_anc, plain) = plain_dirty_max(&iso);
-    assert_eq!((n_anc, plain), (0, 0), "plain cnot lowering is garbage-free");
+    assert_eq!(
+        (n_anc, plain),
+        (0, 0),
+        "plain cnot lowering is garbage-free"
+    );
     // Wrapped: forward ancillas (vacuously) clean; residue ≤ 2w = 4.
     let dirty = assert_bennett_contract(&iso);
     assert!(dirty <= 4);
@@ -356,7 +378,10 @@ fn bennett_residue_is_composition_independent() {
         let (_, plain) = plain_dirty_max(&tr());
         plain
     };
-    assert!(one_instance_dirty > 0, "trace tag-dup still leaves K-only dirt");
+    assert!(
+        one_instance_dirty > 0,
+        "trace tag-dup still leaves K-only dirt"
+    );
     let iso = Iso::seq(tr(), Iso::seq(tr(), Iso::seq(tr(), tr())));
     let (n_anc, plain) = plain_dirty_max(&iso);
     assert!(
@@ -395,7 +420,10 @@ fn bennett_trace_bit_carrier_cleans_tag_dups() {
     // controlled applications and tag-duplication garbage.
     let iso = Iso::trace(bit(), Iso::SwapSum(bit(), bit()));
     let (n_anc, plain) = plain_dirty_max(&iso);
-    assert!(n_anc > 2, "trace unroll allocates many ancillas (n_anc = {n_anc})");
+    assert!(
+        n_anc > 2,
+        "trace unroll allocates many ancillas (n_anc = {n_anc})"
+    );
     let dirty = assert_bennett_contract(&iso);
     assert!(dirty <= 2, "residue ≤ 2w = 2, got {dirty}");
     assert!(plain >= dirty);
@@ -480,7 +508,10 @@ fn ancilla_origins_attribute_constructs() {
     for o in &origins.inputs {
         *per.entry(o).or_insert(0) += 1;
     }
-    assert!(per.contains_key("trace"), "trace allocs attributed: {per:?}");
+    assert!(
+        per.contains_key("trace"),
+        "trace allocs attributed: {per:?}"
+    );
     assert!(
         !per.contains_key("cond_not"),
         "cond-NOTs no longer allocate ancillas: {per:?}"

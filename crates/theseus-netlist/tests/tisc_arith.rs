@@ -206,8 +206,8 @@ fn at_leaf(n: usize, k: usize, iso1: Iso) -> Iso {
 /// 2-wire CNOT prim `(c, t) -> (c, t ^ c)`.
 fn cnot_prim() -> Iso {
     let t2 = flat(2);
-    let def = prim_from_bits("cnot_ar", t2.clone(), t2, |b| vec![b[0], b[1] ^ b[0]])
-        .expect("cnot prim");
+    let def =
+        prim_from_bits("cnot_ar", t2.clone(), t2, |b| vec![b[0], b[1] ^ b[0]]).expect("cnot prim");
     Iso::Prim(Box::new(def))
 }
 
@@ -277,7 +277,11 @@ fn gate_at(n: usize, wires: &[usize], prim: Iso) -> Iso {
         }
     }
     let route = seq_all(n, swaps);
-    let headed = if w == 2 { head2(n, prim) } else { head3(n, prim) };
+    let headed = if w == 2 {
+        head2(n, prim)
+    } else {
+        head3(n, prim)
+    };
     Iso::seq(Iso::seq(route.clone(), headed), Iso::sym(route))
 }
 
@@ -304,24 +308,45 @@ fn tk_add_gates() -> Vec<Gate> {
     }
     // P2: prefix chain a_{i+1} ^= a_i, descending.
     for i in (1..W - 1).rev() {
-        g.push(Gate::Cnot { c: a(i), t: a(i + 1) });
+        g.push(Gate::Cnot {
+            c: a(i),
+            t: a(i + 1),
+        });
     }
     // P3: carry ripple: a_{i+1} ^= a_i & b_i  ->  a_j wire = a_j ^ c_j.
     for i in 0..W - 1 {
-        g.push(Gate::Tof { c1: a(i), c2: b(i), t: a(i + 1) });
+        g.push(Gate::Tof {
+            c1: a(i),
+            c2: b(i),
+            t: a(i + 1),
+        });
     }
     // P4: top sum: b_7 ^= (a_7 ^ c_7)  ->  b_7 = s_7 (b_7 never got a_7).
-    g.push(Gate::Cnot { c: a(W - 1), t: b(W - 1) });
+    g.push(Gate::Cnot {
+        c: a(W - 1),
+        t: b(W - 1),
+    });
     // P5: strip c_7 off the a_7 wire (reverse of P3's last Toffoli).
-    g.push(Gate::Tof { c1: a(W - 2), c2: b(W - 2), t: a(W - 1) });
+    g.push(Gate::Tof {
+        c1: a(W - 2),
+        c2: b(W - 2),
+        t: a(W - 1),
+    });
     // P6: descending: fold c_i into b_i, then strip c_i off a_i.
     for i in (1..W - 1).rev() {
         g.push(Gate::Cnot { c: a(i), t: b(i) });
-        g.push(Gate::Tof { c1: a(i - 1), c2: b(i - 1), t: a(i) });
+        g.push(Gate::Tof {
+            c1: a(i - 1),
+            c2: b(i - 1),
+            t: a(i),
+        });
     }
     // P7: undo the P2 prefix chain, ascending.
     for i in 1..W - 1 {
-        g.push(Gate::Cnot { c: a(i), t: a(i + 1) });
+        g.push(Gate::Cnot {
+            c: a(i),
+            t: a(i + 1),
+        });
     }
     // P8: final sums b_i ^= a_i (i = 0..=6).
     for i in 0..W - 1 {
@@ -460,7 +485,9 @@ fn prepare(name: &str, iso: &Iso) -> Lowered {
     let counts = net.cell_counts();
     let max_kind = counts.keys().max().copied().unwrap_or(CellKind::K0);
     assert!(
-        counts.keys().all(|&k| k <= CellKind::K3 || k == CellKind::R1),
+        counts
+            .keys()
+            .all(|&k| k <= CellKind::K3 || k == CellKind::R1),
         "{name}: cell kind outside the K0-K3 + R1 vocabulary: {counts:?}"
     );
     eprintln!(
@@ -469,7 +496,11 @@ fn prepare(name: &str, iso: &Iso) -> Lowered {
     );
 
     let balanced = balance(&net).unwrap_or_else(|e| panic!("{name}: balance failed: {e:?}"));
-    assert_eq!(balanced.validate(), Ok(()), "{name}: balanced netlist validates");
+    assert_eq!(
+        balanced.validate(),
+        Ok(()),
+        "{name}: balanced netlist validates"
+    );
     assert!(
         balanced.tick_imbalances().unwrap().is_empty(),
         "{name}: balanced netlist has no tick imbalances"
@@ -514,8 +545,11 @@ fn check_case(name: &str, iso: &Iso, low: &Lowered, operands: &[u8], expected: &
         "{name}: untimed netlist disagrees with core eval on {operands:?}"
     );
 
-    let sim = simulate(&low.balanced, &extend_with_ancilla(&data_bits, &low.ancillas))
-        .unwrap_or_else(|e| panic!("{name}: timed sim failed on {operands:?}: {e:?}"));
+    let sim = simulate(
+        &low.balanced,
+        &extend_with_ancilla(&data_bits, &low.ancillas),
+    )
+    .unwrap_or_else(|e| panic!("{name}: timed sim failed on {operands:?}: {e:?}"));
     assert_eq!(
         &sim.outputs[..low.n_data_out],
         &expected_bits[..],

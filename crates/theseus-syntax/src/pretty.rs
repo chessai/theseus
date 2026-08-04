@@ -453,9 +453,11 @@ fn normalize_type(t: &Type) -> Type {
             Box::new(normalize_type(r)),
             ZERO,
         ),
-        Type::Sum(l, r, _) => {
-            Type::Sum(Box::new(normalize_type(l)), Box::new(normalize_type(r)), ZERO)
-        }
+        Type::Sum(l, r, _) => Type::Sum(
+            Box::new(normalize_type(l)),
+            Box::new(normalize_type(r)),
+            ZERO,
+        ),
     }
 }
 

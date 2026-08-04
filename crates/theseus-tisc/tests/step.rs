@@ -76,7 +76,11 @@ fn ref_instr(word: u32, s: &mut StateVals) {
                 }
             }
             0b0111 => std::mem::swap(&mut s.regs[rd], &mut s.scratch[rt]),
-            0b1000 => { let t = s.regs[rd]; s.regs[rd] = s.br as u8; s.br = u16::from(t); },
+            0b1000 => {
+                let t = s.regs[rd];
+                s.regs[rd] = s.br as u8;
+                s.br = u16::from(t);
+            }
             0b1001 if rt < MEM_WORDS => std::mem::swap(&mut s.regs[rd], &mut s.mem[rt]),
             _ => {} // reserved
         }
@@ -218,7 +222,11 @@ fn fetch_a15_boundary_no_aliasing() {
     // filters idle words, so this builds exactly ONE entry at a=15 (cheap to
     // eval) while exercising the full-a-15 predicate + high-zero gate.
     assert_eq!(MAX_FETCH_ROM_LEN, 32768);
-    assert_eq!(fetch_addr_bits(MAX_FETCH_ROM_LEN), 15, "boundary must be a=15");
+    assert_eq!(
+        fetch_addr_bits(MAX_FETCH_ROM_LEN),
+        15,
+        "boundary must be a=15"
+    );
     let top = MAX_FETCH_ROM_LEN - 1; // 0x7FFF
     let word = 0x0EADBEEFu32; // legal 32-bit IR pattern (top nibble 0)
     let mut rom = vec![0u32; MAX_FETCH_ROM_LEN];

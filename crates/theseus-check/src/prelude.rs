@@ -33,11 +33,7 @@ pub fn with_prelude(program: &Program) -> Program {
         theseus_syntax::parse(PRELUDE_SRC).expect("stdlib/prelude.thse must parse");
 
     // Collect names declared by the user program.
-    let user_names: HashSet<&str> = program
-        .decls
-        .iter()
-        .filter_map(decl_name)
-        .collect();
+    let user_names: HashSet<&str> = program.decls.iter().filter_map(decl_name).collect();
 
     // Keep only prelude decls whose name is NOT already declared by the user.
     let mut merged_decls: Vec<Decl> = prelude_program

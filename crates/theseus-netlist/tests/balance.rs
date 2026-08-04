@@ -25,14 +25,20 @@ fn three_bits() -> Type {
 }
 
 fn fredkin_prim() -> theseus_core::PrimDef {
-    prim_from_bits("fredkin", three_bits(), three_bits(), |b| CellKind::K1.eval(b)).unwrap()
+    prim_from_bits("fredkin", three_bits(), three_bits(), |b| {
+        CellKind::K1.eval(b)
+    })
+    .unwrap()
 }
 
 fn id_bit() -> TypedNode {
     TypedNode {
         input: bit(),
         output: bit(),
-        kind: NodeKind::Permute { monoid: Monoid::Prod, sigma: vec![0] },
+        kind: NodeKind::Permute {
+            monoid: Monoid::Prod,
+            sigma: vec![0],
+        },
     }
 }
 
@@ -61,7 +67,11 @@ fn assert_balanced_agrees_with_core(iso: &Iso, balanced: &PhasedCellNetlist) {
 /// data bits pass through (arrive at tick 0). The Fredkin cell sees
 /// arrivals [1, 0, 0] -- a tick imbalance the balancer must repair.
 fn reconvergent_fixture() -> (TypedNode, Iso) {
-    let reg1 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(1) };
+    let reg1 = TypedNode {
+        input: bit(),
+        output: bit(),
+        kind: NodeKind::Reg(1),
+    };
     let par = TypedNode {
         input: three_bits(),
         output: three_bits(),
@@ -118,7 +128,11 @@ fn reconvergent_balance_validates() {
     let (typed_net, _) = reconvergent_fixture();
     let original = lower(&typed_net).unwrap();
     let balanced = balance(&original).unwrap();
-    assert_eq!(balanced.validate(), Ok(()), "balanced netlist must validate");
+    assert_eq!(
+        balanced.validate(),
+        Ok(()),
+        "balanced netlist must validate"
+    );
 }
 
 #[test]
@@ -143,9 +157,21 @@ fn reconvergent_balance_exact_k0_count() {
     );
 
     // Exact inserted count = 2.
-    let original_k0 = original.cells.iter().filter(|c| c.kind == CellKind::K0).count();
-    let balanced_k0 = balanced.cells.iter().filter(|c| c.kind == CellKind::K0).count();
-    assert_eq!(balanced_k0 - original_k0, 2, "exactly 2 K0 buffers inserted");
+    let original_k0 = original
+        .cells
+        .iter()
+        .filter(|c| c.kind == CellKind::K0)
+        .count();
+    let balanced_k0 = balanced
+        .cells
+        .iter()
+        .filter(|c| c.kind == CellKind::K0)
+        .count();
+    assert_eq!(
+        balanced_k0 - original_k0,
+        2,
+        "exactly 2 K0 buffers inserted"
+    );
 }
 
 #[test]
@@ -210,7 +236,11 @@ fn reconvergent_balance_is_idempotent() {
 /// its output feeds the second Fredkin (already balanced since all
 /// its inputs come from the first Fredkin's outputs at tick 3).
 fn multi_cell_fixture() -> (TypedNode, Iso) {
-    let reg2 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(2) };
+    let reg2 = TypedNode {
+        input: bit(),
+        output: bit(),
+        kind: NodeKind::Reg(2),
+    };
     let par = TypedNode {
         input: three_bits(),
         output: three_bits(),
@@ -313,7 +343,11 @@ fn wiring_only_netlist_is_unchanged() {
 fn reg_chain_no_reconvergence_no_buffers() {
     // Reg(3) on one bit: 3 K0 cells in series, no reconvergence,
     // no imbalance (each K0 has exactly one input).
-    let reg3 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(3) };
+    let reg3 = TypedNode {
+        input: bit(),
+        output: bit(),
+        kind: NodeKind::Reg(3),
+    };
     let original = lower(&reg3).unwrap();
     assert!(original.tick_imbalances().unwrap().is_empty());
 
@@ -327,7 +361,11 @@ fn balance_preserves_output_skew() {
     // Reg(1) × id: outputs arrive at [1, 0]. The balancer does NOT
     // fix output skew (that's a different pass). It only balances
     // cell inputs.
-    let reg1 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(1) };
+    let reg1 = TypedNode {
+        input: bit(),
+        output: bit(),
+        kind: NodeKind::Reg(1),
+    };
     let net = lower(&TypedNode {
         input: Type::prod(bit(), bit()),
         output: Type::prod(bit(), bit()),

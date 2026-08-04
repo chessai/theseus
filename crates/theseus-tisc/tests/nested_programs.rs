@@ -80,7 +80,8 @@ fn assert_cpu_eq_eval(name: &str, iso: &Iso) -> usize {
 }
 
 fn compile_ok(name: &str, iso: &Iso) -> theseus_tisc::compile::Lowered {
-    compile_with_metadata(iso).unwrap_or_else(|e| panic!("{name}: expected COMPILE, got reject: {e}"))
+    compile_with_metadata(iso)
+        .unwrap_or_else(|e| panic!("{name}: expected COMPILE, got reject: {e}"))
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -232,7 +233,7 @@ fn r2_trace_under_times_compiles_and_runs() {
     // bit_flip's live register untouched -- the sibling must still flip correctly.
     let body = Iso::plus(Iso::Id(bit()), bit_flip()); // : Sum(Bit,Bit) ↔ Sum(Bit,Bit)
     let left = Iso::trace(bit(), body); // : Bit ↔ Bit, ≡ flip (non-degenerate)
-    // Right sibling: bit_flip : Bit ↔ Bit.
+                                        // Right sibling: bit_flip : Bit ↔ Bit.
     let iso = Iso::times(left, bit_flip());
 
     let _ = compile_ok("R2 Times(Trace, flip)", &iso);

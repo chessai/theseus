@@ -45,8 +45,7 @@ pub fn enumerate_values(ty: &Type) -> Vec<Value> {
         Type::Zero => vec![],
         Type::One => vec![Value::Unit],
         Type::Sum(a, b) => {
-            let mut vals: Vec<Value> =
-                enumerate_values(a).into_iter().map(Value::left).collect();
+            let mut vals: Vec<Value> = enumerate_values(a).into_iter().map(Value::left).collect();
             vals.extend(enumerate_values(b).into_iter().map(Value::right));
             vals
         }
@@ -346,8 +345,7 @@ pub fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Result<Vec<u8>, String> {
 /// `Flat(n)` type. Use [`try_value_from_leaf_bytes`] for a non-panicking
 /// version that returns a `Result`.
 pub fn value_from_leaf_bytes(bytes: &[u8], ty: &Type) -> Value {
-    try_value_from_leaf_bytes(bytes, ty)
-        .expect("value_from_leaf_bytes: out-of-range byte")
+    try_value_from_leaf_bytes(bytes, ty).expect("value_from_leaf_bytes: out-of-range byte")
 }
 
 /// Non-panicking version of [`value_from_leaf_bytes`]: returns `Err` if a
@@ -513,9 +511,7 @@ fn validate_expr_var_indices(
                 ));
             }
             if *bit >= max_bit {
-                return Err(format!(
-                    "Var bit index {bit} >= width {max_bit}"
-                ));
+                return Err(format!("Var bit index {bit} >= width {max_bit}"));
             }
             Ok(())
         }

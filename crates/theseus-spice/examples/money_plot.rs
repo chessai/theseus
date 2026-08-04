@@ -23,9 +23,8 @@ fn main() {
     let periods: Vec<f64> = vec![1e-8, 3.16e-8, 1e-7, 3.16e-7, 1e-6, 3.16e-6, 1e-5];
 
     let curves = money_plot(&periods);
-    let records =
-        stamped_money_plot(&curves, Rung::Rung0IdealModels, default_stamps())
-            .expect("INV-STAMP violation in stamped_money_plot");
+    let records = stamped_money_plot(&curves, Rung::Rung0IdealModels, default_stamps())
+        .expect("INV-STAMP violation in stamped_money_plot");
 
     // Stamped RON text artifact.
     let text = to_stamped_text(&records);

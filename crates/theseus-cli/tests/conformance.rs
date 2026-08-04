@@ -54,7 +54,12 @@ fn parse_expect_surface(text: &str) -> ExpectFixture {
             rows.push((lhs.trim().to_string(), rhs.trim().to_string()));
         }
     }
-    ExpectFixture { iso_name, rows, fuel_bound, steps }
+    ExpectFixture {
+        iso_name,
+        rows,
+        fuel_bound,
+        steps,
+    }
 }
 
 // ── Program fixtures (the main conformance test) ─────────────────────────
@@ -107,9 +112,9 @@ fn conformance_programs() {
         let env = resolve(&prog);
         let elab_map = elaborate_program(&prog, &env);
 
-        let iso_result = elab_map.get(iso_name).unwrap_or_else(|| {
-            panic!("[{stem}] iso `{iso_name}` not in elaboration map")
-        });
+        let iso_result = elab_map
+            .get(iso_name)
+            .unwrap_or_else(|| panic!("[{stem}] iso `{iso_name}` not in elaboration map"));
 
         let iso = match iso_result {
             Ok(iso) => iso.clone(),
@@ -125,9 +130,9 @@ fn conformance_programs() {
         };
 
         // Get the iso signature for type-guided value conversion.
-        let sig = env.iso(iso_name).unwrap_or_else(|| {
-            panic!("[{stem}] iso `{iso_name}` not in env")
-        });
+        let sig = env
+            .iso(iso_name)
+            .unwrap_or_else(|| panic!("[{stem}] iso `{iso_name}` not in env"));
 
         // Guard: a delimiter drift (e.g. `|->` mistyped) makes rows empty --
         // the per-row loops would iterate zero times, a vacuous pass.
@@ -151,7 +156,8 @@ fn conformance_programs() {
             let fwd_result = eval(&iso, lhs_val.clone(), &mut fuel)
                 .unwrap_or_else(|e| panic!("[{stem}] forward eval error on `{lhs_str}`: {e:?}"));
             assert_eq!(
-                fwd_result, rhs_val,
+                fwd_result,
+                rhs_val,
                 "[{stem}] forward mismatch: {lhs_str} |-> expected {rhs_str}, got {}",
                 value::render(&fwd_result, &sig.rhs, &env)
             );
@@ -162,7 +168,8 @@ fn conformance_programs() {
             let bwd_result = eval(&sym_iso, rhs_val.clone(), &mut fuel)
                 .unwrap_or_else(|e| panic!("[{stem}] backward eval error on `{rhs_str}`: {e:?}"));
             assert_eq!(
-                bwd_result, lhs_val,
+                bwd_result,
+                lhs_val,
                 "[{stem}] backward mismatch: {rhs_str} |-> expected {lhs_str}, got {}",
                 value::render(&bwd_result, &sig.lhs, &env)
             );
@@ -260,7 +267,11 @@ fn conformance_programs() {
         .filter_map(|p| {
             let s = p.file_stem()?.to_str()?;
             let expect_path = p.with_extension("expect");
-            if expect_path.exists() { Some(s) } else { None }
+            if expect_path.exists() {
+                Some(s)
+            } else {
+                None
+            }
         })
         .collect();
     for must in MUST_GRADE {

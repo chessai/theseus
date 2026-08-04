@@ -57,7 +57,11 @@ impl fmt::Display for EnergyReport {
                 k.count, k.per_cell_j, k.subtotal_j
             )?;
         }
-        writeln!(f, "  total dissipated energy per op: {:.4e} J", self.total_j)?;
+        writeln!(
+            f,
+            "  total dissipated energy per op: {:.4e} J",
+            self.total_j
+        )?;
         write!(
             f,
             "  [claims boundary (ADR-0028 C3.3): logic dissipation under ideal \
@@ -89,9 +93,20 @@ pub fn compiled_energy(
         let per_cell_j = char_db.query(key, t_ramp)?;
         let subtotal_j = per_cell_j * count as f64;
         total_j += subtotal_j;
-        by_kind.insert(key.to_string(), KindEnergy { count, per_cell_j, subtotal_j });
+        by_kind.insert(
+            key.to_string(),
+            KindEnergy {
+                count,
+                per_cell_j,
+                subtotal_j,
+            },
+        );
     }
-    Ok(EnergyReport { t_ramp, total_j, by_kind })
+    Ok(EnergyReport {
+        t_ramp,
+        total_j,
+        by_kind,
+    })
 }
 
 #[cfg(test)]
@@ -115,10 +130,21 @@ mod tests {
             CellChar {
                 key: key.to_string(),
                 points: vec![
-                    CharPoint { t_ramp: t_min, energy: e },
-                    CharPoint { t_ramp: t_max, energy: e },
+                    CharPoint {
+                        t_ramp: t_min,
+                        energy: e,
+                    },
+                    CharPoint {
+                        t_ramp: t_max,
+                        energy: e,
+                    },
                 ],
-                fit: EnergyFit { k_adia: 0.0, k_leak: 0.0, k_res: e, r_squared: 1.0 },
+                fit: EnergyFit {
+                    k_adia: 0.0,
+                    k_leak: 0.0,
+                    k_res: e,
+                    r_squared: 1.0,
+                },
             },
         )
     }
@@ -135,8 +161,14 @@ mod tests {
     /// A hand-built single-K0 netlist on one bit (mirrors the cell-IR
     /// test fixture).
     fn one_buffer() -> PhasedCellNetlist {
-        let inp = RailPair { line0: LineId(0), line1: LineId(1) };
-        let out = RailPair { line0: LineId(2), line1: LineId(3) };
+        let inp = RailPair {
+            line0: LineId(0),
+            line1: LineId(1),
+        };
+        let out = RailPair {
+            line0: LineId(2),
+            line1: LineId(3),
+        };
         PhasedCellNetlist {
             input_ty: bit(),
             output_ty: bit(),
@@ -162,14 +194,21 @@ mod tests {
         assert_eq!(r.by_kind.len(), 1);
         assert_eq!(
             r.by_kind["cswap-k0"],
-            KindEnergy { count: 1, per_cell_j: 2.0e-15, subtotal_j: 2.0e-15 }
+            KindEnergy {
+                count: 1,
+                per_cell_j: 2.0e-15,
+                subtotal_j: 2.0e-15
+            }
         );
     }
 
     #[test]
     fn zero_cell_netlist_is_free() {
         // Pure wiring: identity on one bit, no cells.
-        let inp = RailPair { line0: LineId(0), line1: LineId(1) };
+        let inp = RailPair {
+            line0: LineId(0),
+            line1: LineId(1),
+        };
         let net = PhasedCellNetlist {
             input_ty: bit(),
             output_ty: bit(),
@@ -196,7 +235,9 @@ mod tests {
 
     #[test]
     fn missing_kind_is_a_hard_error() {
-        let db = CharDb { cells: BTreeMap::new() };
+        let db = CharDb {
+            cells: BTreeMap::new(),
+        };
         assert_eq!(
             compiled_energy(&one_buffer(), &db, 1e-7),
             Err(QueryError::NoSuchCell("cswap-k0".to_string()))
@@ -209,12 +250,25 @@ mod tests {
         let cell = CellChar {
             key: "cswap-k0".to_string(),
             points: vec![
-                CharPoint { t_ramp: 1e-8, energy: 1e-13 },
-                CharPoint { t_ramp: 1e-6, energy: 1e-15 },
+                CharPoint {
+                    t_ramp: 1e-8,
+                    energy: 1e-13,
+                },
+                CharPoint {
+                    t_ramp: 1e-6,
+                    energy: 1e-15,
+                },
             ],
-            fit: EnergyFit { k_adia: 1e-21, k_leak: 0.0, k_res: 0.0, r_squared: 1.0 },
+            fit: EnergyFit {
+                k_adia: 1e-21,
+                k_leak: 0.0,
+                k_res: 0.0,
+                r_squared: 1.0,
+            },
         };
-        let db = CharDb { cells: BTreeMap::from([("cswap-k0".to_string(), cell)]) };
+        let db = CharDb {
+            cells: BTreeMap::from([("cswap-k0".to_string(), cell)]),
+        };
         let r = compiled_energy(&one_buffer(), &db, 1e-7).unwrap();
         assert!((r.total_j - 1e-14).abs() < 1e-20, "got {}", r.total_j);
     }

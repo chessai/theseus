@@ -8,8 +8,7 @@
 
 use theseus_core::{Iso, Type};
 use theseus_netlist::{
-    lower, lower_iso, prim_from_bits, simulate, CellKind, NodeKind, PhasedCellNetlist,
-    TypedNode,
+    lower, lower_iso, prim_from_bits, simulate, CellKind, NodeKind, PhasedCellNetlist, TypedNode,
 };
 use theseus_spice::annotate::compiled_energy;
 use theseus_spice::chardb::{self, CharDb};
@@ -62,12 +61,22 @@ fn main() {
 
     // 1. A Fredkin gate: one K1 cell.
     let fredkin = lower_iso(&fredkin_iso()).expect("fredkin lowers");
-    show("fredkin (c,a,b), c=1 swaps", &fredkin, &[true, true, false], &db, t_ramp);
+    show(
+        "fredkin (c,a,b), c=1 swaps",
+        &fredkin,
+        &[true, true, false],
+        &db,
+        t_ramp,
+    );
 
     // 2. A Reg(3) buffer on one bit: three K0 stages (holding costs
     //    motion -- storage has per-tick energy, C2.1).
-    let reg3 = lower(&TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(3) })
-        .expect("reg3 lowers");
+    let reg3 = lower(&TypedNode {
+        input: bit(),
+        output: bit(),
+        kind: NodeKind::Reg(3),
+    })
+    .expect("reg3 lowers");
     show("reg(3) buffer on one bit", &reg3, &[true], &db, t_ramp);
 
     // 3. A composite: (Reg(1) on 3 bits) ; fredkin -- mixed breakdown.
@@ -75,7 +84,11 @@ fn main() {
         input: three_bits(),
         output: three_bits(),
         kind: NodeKind::Seq(vec![
-            TypedNode { input: three_bits(), output: three_bits(), kind: NodeKind::Reg(1) },
+            TypedNode {
+                input: three_bits(),
+                output: three_bits(),
+                kind: NodeKind::Reg(1),
+            },
             TypedNode {
                 input: three_bits(),
                 output: three_bits(),
@@ -89,5 +102,11 @@ fn main() {
         ]),
     })
     .expect("composite lowers");
-    show("(reg1 x 3 bits) ; fredkin", &composite, &[true, false, true], &db, t_ramp);
+    show(
+        "(reg1 x 3 bits) ; fredkin",
+        &composite,
+        &[true, false, true],
+        &db,
+        t_ramp,
+    );
 }

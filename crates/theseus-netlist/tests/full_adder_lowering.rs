@@ -73,7 +73,9 @@ fn elaborate(src: &str, iso_name: &str) -> Iso {
 /// Type: (Bit,Bit,Bit,Bit,Bit) <-> (Bit,Bit,Bit,Bit,Bit)
 /// Semantics: (a,b,cin,s,c) <-> (a,b,cin, s XOR (a XOR b XOR cin), c XOR maj(a,b,cin))
 fn full_adder_source() -> String {
-    let mut src = String::from("type Bit = O | I\n\niso fa5 : (Bit, Bit, Bit, Bit, Bit) <-> (Bit, Bit, Bit, Bit, Bit)\n");
+    let mut src = String::from(
+        "type Bit = O | I\n\niso fa5 : (Bit, Bit, Bit, Bit, Bit) <-> (Bit, Bit, Bit, Bit, Bit)\n",
+    );
 
     for v in 0u32..32 {
         let a = v & 1 == 1;
@@ -90,11 +92,19 @@ fn full_adder_source() -> String {
         let bit_str = |val: bool| if val { "I" } else { "O" };
         let lhs = format!(
             "({}, {}, {}, {}, {})",
-            bit_str(a), bit_str(b), bit_str(cin), bit_str(s), bit_str(c)
+            bit_str(a),
+            bit_str(b),
+            bit_str(cin),
+            bit_str(s),
+            bit_str(c)
         );
         let rhs = format!(
             "({}, {}, {}, {}, {})",
-            bit_str(a), bit_str(b), bit_str(cin), bit_str(s_out), bit_str(c_out)
+            bit_str(a),
+            bit_str(b),
+            bit_str(cin),
+            bit_str(s_out),
+            bit_str(c_out)
         );
 
         src.push_str(&format!("| {lhs} <-> {rhs}\n"));
@@ -154,7 +164,8 @@ fn full_adder_5wire_lowers_garbage_free_without_k3() {
             .unwrap_or_else(|e| panic!("core eval failed on {v:?}: {e:?}"));
         let expected_bits = bits_of(&expected, &out_ty).unwrap();
         assert_eq!(
-            got, &expected_bits[..],
+            got,
+            &expected_bits[..],
             "untimed netlist disagrees with core eval on {v:?}"
         );
 
@@ -172,7 +183,8 @@ fn full_adder_5wire_lowers_garbage_free_without_k3() {
             .unwrap_or_else(|e| panic!("timed sim failed on {v:?}: {e:?}"));
         let sim_data = &sim_result.outputs[..n_data_out];
         assert_eq!(
-            sim_data, &expected_bits[..],
+            sim_data,
+            &expected_bits[..],
             "timed sim disagrees with core eval on {v:?}"
         );
     }

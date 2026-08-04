@@ -25,21 +25,31 @@ fn three_bits() -> Type {
 }
 
 fn fredkin_prim() -> theseus_core::PrimDef {
-    prim_from_bits("fredkin", three_bits(), three_bits(), |b| CellKind::K1.eval(b)).unwrap()
+    prim_from_bits("fredkin", three_bits(), three_bits(), |b| {
+        CellKind::K1.eval(b)
+    })
+    .unwrap()
 }
 
 fn id_bit() -> TypedNode {
     TypedNode {
         input: bit(),
         output: bit(),
-        kind: NodeKind::Permute { monoid: Monoid::Prod, sigma: vec![0] },
+        kind: NodeKind::Permute {
+            monoid: Monoid::Prod,
+            sigma: vec![0],
+        },
     }
 }
 
 // ── Helper: build (Reg(n) × id × id) ; fredkin ────────────────────────
 
 fn reconvergent_with_skew(n: u32) -> (TypedNode, Iso) {
-    let reg = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(n as usize) };
+    let reg = TypedNode {
+        input: bit(),
+        output: bit(),
+        kind: NodeKind::Reg(n as usize),
+    };
     let par = TypedNode {
         input: three_bits(),
         output: three_bits(),
@@ -77,9 +87,16 @@ fn compact_matches_materialized_reconvergent_skew_1() {
 
     // K0 buffer count: materialized balance inserts 2 K0 buffers
     // (deficit on ports 1 and 2 of the Fredkin = 1 each).
-    let materialized_k0_delta =
-        balanced.cells.iter().filter(|c| c.kind == CellKind::K0).count()
-            - original.cells.iter().filter(|c| c.kind == CellKind::K0).count();
+    let materialized_k0_delta = balanced
+        .cells
+        .iter()
+        .filter(|c| c.kind == CellKind::K0)
+        .count()
+        - original
+            .cells
+            .iter()
+            .filter(|c| c.kind == CellKind::K0)
+            .count();
     assert_eq!(compact.k0_buffer_count(), materialized_k0_delta);
 
     // Cell counts match.
@@ -110,9 +127,16 @@ fn compact_matches_materialized_reconvergent_skew_2() {
     let balanced = balance(&original).unwrap();
     let compact = balance_compact(&original).unwrap();
 
-    let materialized_k0_delta =
-        balanced.cells.iter().filter(|c| c.kind == CellKind::K0).count()
-            - original.cells.iter().filter(|c| c.kind == CellKind::K0).count();
+    let materialized_k0_delta = balanced
+        .cells
+        .iter()
+        .filter(|c| c.kind == CellKind::K0)
+        .count()
+        - original
+            .cells
+            .iter()
+            .filter(|c| c.kind == CellKind::K0)
+            .count();
     assert_eq!(compact.k0_buffer_count(), materialized_k0_delta);
     assert_eq!(compact.cell_counts(), balanced.cell_counts());
     assert!(compact.is_tick_exact());
@@ -171,7 +195,11 @@ fn compact_wiring_only() {
 
 #[test]
 fn compact_reg_chain_no_buffers() {
-    let reg3 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(3) };
+    let reg3 = TypedNode {
+        input: bit(),
+        output: bit(),
+        kind: NodeKind::Reg(3),
+    };
     let original = lower(&reg3).unwrap();
     assert!(original.tick_imbalances().unwrap().is_empty());
 
@@ -193,7 +221,11 @@ fn compact_reg_chain_no_buffers() {
 
 #[test]
 fn compact_matches_materialized_multi_cell() {
-    let reg2 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(2) };
+    let reg2 = TypedNode {
+        input: bit(),
+        output: bit(),
+        kind: NodeKind::Reg(2),
+    };
     let par = TypedNode {
         input: three_bits(),
         output: three_bits(),
@@ -220,9 +252,16 @@ fn compact_matches_materialized_multi_cell() {
     let balanced = balance(&original).unwrap();
     let compact = balance_compact(&original).unwrap();
 
-    let materialized_k0_delta =
-        balanced.cells.iter().filter(|c| c.kind == CellKind::K0).count()
-            - original.cells.iter().filter(|c| c.kind == CellKind::K0).count();
+    let materialized_k0_delta = balanced
+        .cells
+        .iter()
+        .filter(|c| c.kind == CellKind::K0)
+        .count()
+        - original
+            .cells
+            .iter()
+            .filter(|c| c.kind == CellKind::K0)
+            .count();
     assert_eq!(compact.k0_buffer_count(), materialized_k0_delta);
     assert_eq!(compact.cell_counts(), balanced.cell_counts());
     assert!(compact.is_tick_exact());
@@ -301,9 +340,18 @@ fn build_large_reconvergent(depth: u32, width: usize) -> PhasedCellNetlist {
     for w in 0..width {
         let base = (w as u32) * lines_per_block;
         // 3 input pairs: control (line base+0,1), a (base+2,3), b (base+4,5)
-        let ctrl_in = RailPair { line0: LineId(base), line1: LineId(base + 1) };
-        let a_in = RailPair { line0: LineId(base + 2), line1: LineId(base + 3) };
-        let b_in = RailPair { line0: LineId(base + 4), line1: LineId(base + 5) };
+        let ctrl_in = RailPair {
+            line0: LineId(base),
+            line1: LineId(base + 1),
+        };
+        let a_in = RailPair {
+            line0: LineId(base + 2),
+            line1: LineId(base + 3),
+        };
+        let b_in = RailPair {
+            line0: LineId(base + 4),
+            line1: LineId(base + 5),
+        };
         inputs.push(ctrl_in);
         inputs.push(a_in);
         inputs.push(b_in);
@@ -312,7 +360,10 @@ fn build_large_reconvergent(depth: u32, width: usize) -> PhasedCellNetlist {
         let mut cur_pair = ctrl_in;
         for d in 0..depth {
             let out_base = base + 6 + d * 2;
-            let out_pair = RailPair { line0: LineId(out_base), line1: LineId(out_base + 1) };
+            let out_pair = RailPair {
+                line0: LineId(out_base),
+                line1: LineId(out_base + 1),
+            };
             cells.push(Cell {
                 kind: CellKind::K0,
                 depth: d,
@@ -328,9 +379,18 @@ fn build_large_reconvergent(depth: u32, width: usize) -> PhasedCellNetlist {
         // Balanced: would insert `depth` K0 on each of a, b.
         let k1_out_base = base + 6 + depth * 2;
         let k1_outs = [
-            RailPair { line0: LineId(k1_out_base), line1: LineId(k1_out_base + 1) },
-            RailPair { line0: LineId(k1_out_base + 2), line1: LineId(k1_out_base + 3) },
-            RailPair { line0: LineId(k1_out_base + 4), line1: LineId(k1_out_base + 5) },
+            RailPair {
+                line0: LineId(k1_out_base),
+                line1: LineId(k1_out_base + 1),
+            },
+            RailPair {
+                line0: LineId(k1_out_base + 2),
+                line1: LineId(k1_out_base + 3),
+            },
+            RailPair {
+                line0: LineId(k1_out_base + 4),
+                line1: LineId(k1_out_base + 5),
+            },
         ];
         cells.push(Cell {
             kind: CellKind::K1,
@@ -449,9 +509,12 @@ fn compact_synthesized_adder() {
     let compact = balance_compact(&net).expect("compact balances");
 
     // K0 counts match.
-    let materialized_k0_delta =
-        balanced.cells.iter().filter(|c| c.kind == CellKind::K0).count()
-            - net.cells.iter().filter(|c| c.kind == CellKind::K0).count();
+    let materialized_k0_delta = balanced
+        .cells
+        .iter()
+        .filter(|c| c.kind == CellKind::K0)
+        .count()
+        - net.cells.iter().filter(|c| c.kind == CellKind::K0).count();
     assert_eq!(compact.k0_buffer_count(), materialized_k0_delta);
     assert_eq!(compact.cell_counts(), balanced.cell_counts());
     assert!(compact.is_tick_exact());

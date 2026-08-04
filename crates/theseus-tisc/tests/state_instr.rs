@@ -331,7 +331,9 @@ fn swapbr_state_iso() {
     for s in &samples() {
         check_case("SWAPBR(r3)", &iso, &low, s);
         check_semantics("SWAPBR(r3)", &iso, s, |st| {
-            { let t = st.regs[rd]; st.regs[rd] = st.br as u8; st.br = u16::from(t); }
+            let t = st.regs[rd];
+            st.regs[rd] = st.br as u8;
+            st.br = u16::from(t);
         });
     }
 

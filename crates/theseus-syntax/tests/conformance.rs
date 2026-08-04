@@ -77,7 +77,10 @@ fn ac1_every_conformance_program_parses_except_0007() {
             parsed += 1;
         }
     }
-    assert_eq!(failed, 1, "exactly one conformance program must fail (0007)");
+    assert_eq!(
+        failed, 1,
+        "exactly one conformance program must fail (0007)"
+    );
     assert!(parsed >= 1, "at least one conformance program must parse");
     eprintln!("AC1: {parsed} parsed, {failed} expected-failure");
 }
@@ -146,12 +149,9 @@ fn strip(e: &Expr) -> Expr {
         Expr::Adjoint(inner, _) => Expr::Adjoint(Box::new(strip(inner)), ZERO),
         Expr::Bin(op, l, r, _) => Expr::Bin(*op, Box::new(strip(l)), Box::new(strip(r)), ZERO),
         Expr::Tuple(l, r, _) => Expr::Tuple(Box::new(strip(l)), Box::new(strip(r)), ZERO),
-        Expr::Combinator(kind, ty, body, _) => Expr::Combinator(
-            *kind,
-            Box::new(strip_type(ty)),
-            Box::new(strip(body)),
-            ZERO,
-        ),
+        Expr::Combinator(kind, ty, body, _) => {
+            Expr::Combinator(*kind, Box::new(strip_type(ty)), Box::new(strip(body)), ZERO)
+        }
     }
 }
 
@@ -169,9 +169,7 @@ fn strip_type(t: &Type) -> Type {
         Type::Empty(_) => Type::Empty(ZERO),
         Type::Unit(_) => Type::Unit(ZERO),
         Type::Paren(inner, _) => strip_type(inner),
-        Type::Prod(l, r, _) => {
-            Type::Prod(Box::new(strip_type(l)), Box::new(strip_type(r)), ZERO)
-        }
+        Type::Prod(l, r, _) => Type::Prod(Box::new(strip_type(l)), Box::new(strip_type(r)), ZERO),
         Type::Sum(l, r, _) => Type::Sum(Box::new(strip_type(l)), Box::new(strip_type(r)), ZERO),
     }
 }
@@ -257,7 +255,10 @@ fn ac2_dagger_lexes_as_tilde() {
     let prog = parse("iso f : A <-> A = \u{2020}f").unwrap();
     let printed = pretty_program(&prog);
     assert!(printed.contains('~'), "canonical form uses ~");
-    assert!(!printed.contains('\u{2020}'), "canonical form never emits †");
+    assert!(
+        !printed.contains('\u{2020}'),
+        "canonical form never emits †"
+    );
 }
 
 // -------- ADR-0038: v0.2 combinator forms --------

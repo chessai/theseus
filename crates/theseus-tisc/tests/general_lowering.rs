@@ -101,8 +101,9 @@ fn small_prim_lowers_via_general_fallthrough() {
     let def = small_prim_def();
     // Canonical 2-leaf register layout: leaf 0 → r0, leaf 1 → r1.
     let ctx = Ctx::new_canonical(2);
-    let body = recognize_prim(&def, &ctx)
-        .expect("small non-arm prim must lower via the general BDD fall-through (not Unrecognized)");
+    let body = recognize_prim(&def, &ctx).expect(
+        "small non-arm prim must lower via the general BDD fall-through (not Unrecognized)",
+    );
     assert!(
         !body.is_empty(),
         "the general synth must emit a non-empty reversible body"
@@ -126,8 +127,7 @@ fn small_prim_run_on_cpu_fast_eq_eval() {
     let mut checked = 0usize;
     for v in enumerate_values(&ty) {
         let mut fuel = 1_000_000u64;
-        let eval_out =
-            theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval of small prim");
+        let eval_out = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval of small prim");
         let cpu_out = run_on_cpu_fast(&iso, &v).expect("run_on_cpu_fast of small prim");
         assert_eq!(
             cpu_out, eval_out,
@@ -369,7 +369,10 @@ fn loose_sum_3cycle_lowers_not_falsely_rejected() {
          (review MAJOR-1: was falsely rejected as 'backward table not the inverse')",
     );
     assert!(!body.is_empty());
-    eprintln!("MAJOR-1 fixed: loose Sum 1+Flat(2) 3-cycle lowered ({} instrs)", body.len());
+    eprintln!(
+        "MAJOR-1 fixed: loose Sum 1+Flat(2) 3-cycle lowered ({} instrs)",
+        body.len()
+    );
 }
 
 #[test]
@@ -381,7 +384,10 @@ fn loose_sum_3cycle_run_on_cpu_fast_eq_eval() {
         let mut fuel = 1_000_000u64;
         let eval_out = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval loose-sum");
         let cpu_out = run_on_cpu_fast(&iso, &v).expect("run_on_cpu_fast loose-sum");
-        assert_eq!(cpu_out, eval_out, "loose-sum run_on_cpu_fast != eval on {v:?}");
+        assert_eq!(
+            cpu_out, eval_out,
+            "loose-sum run_on_cpu_fast != eval on {v:?}"
+        );
         checked += 1;
     }
     assert_eq!(checked, 5, "1+Flat(2) has 5 inhabitants");
@@ -433,7 +439,10 @@ fn unequal_branch_sum_lowers_no_panic() {
     match res {
         Ok(body) => {
             assert!(!body.is_empty());
-            eprintln!("MAJOR-2a fixed: Flat(1)+Flat(2) 6-cycle lowered ({} instrs), no panic", body.len());
+            eprintln!(
+                "MAJOR-2a fixed: Flat(1)+Flat(2) 6-cycle lowered ({} instrs), no panic",
+                body.len()
+            );
         }
         Err(e) => {
             eprintln!("MAJOR-2a fixed: Flat(1)+Flat(2) returned clean error (no panic): {e:?}");
@@ -463,7 +472,10 @@ fn unequal_branch_sum_run_on_cpu_fast_eq_eval() {
         let eval_out = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval unequal-sum");
         match run_on_cpu_fast(&iso, &v) {
             Ok(cpu_out) => {
-                assert_eq!(cpu_out, eval_out, "unequal-sum run_on_cpu_fast != eval on {v:?}");
+                assert_eq!(
+                    cpu_out, eval_out,
+                    "unequal-sum run_on_cpu_fast != eval on {v:?}"
+                );
                 checked += 1;
             }
             Err(theseus_tisc::compile::CompileError::Deferred(msg)) if msg.contains("PC") => {
@@ -518,7 +530,10 @@ fn in_out_width_mismatch_lowers_no_panic() {
          'byte 4 out of range for Flat(2)')",
     );
     assert!(!body.is_empty());
-    eprintln!("MAJOR-2b fixed: in/out width-mismatch bijection lowered ({} instrs), no panic", body.len());
+    eprintln!(
+        "MAJOR-2b fixed: in/out width-mismatch bijection lowered ({} instrs), no panic",
+        body.len()
+    );
 }
 
 #[test]
@@ -530,7 +545,10 @@ fn in_out_width_mismatch_run_on_cpu_fast_eq_eval() {
         let mut fuel = 1_000_000u64;
         let eval_out = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval mismatch");
         let cpu_out = run_on_cpu_fast(&iso, &v).expect("run_on_cpu_fast mismatch");
-        assert_eq!(cpu_out, eval_out, "mismatch run_on_cpu_fast != eval on {v:?}");
+        assert_eq!(
+            cpu_out, eval_out,
+            "mismatch run_on_cpu_fast != eval on {v:?}"
+        );
         checked += 1;
     }
     assert_eq!(checked, 16);

@@ -68,7 +68,11 @@ fn reference(s: &StateVals) -> StateVals {
                 }
             }
             0b0111 => std::mem::swap(&mut out.regs[rd], &mut out.scratch[rt]),
-            0b1000 => { let t = out.regs[rd]; out.regs[rd] = out.br as u8; out.br = u16::from(t); },
+            0b1000 => {
+                let t = out.regs[rd];
+                out.regs[rd] = out.br as u8;
+                out.br = u16::from(t);
+            }
             // 0b1001 = MEXCH, 0b1010 = MEXCHR: reserved at CpuState level (identity).
             0b1011 => {
                 // CCNOT: r[rd] ^= r[rs] & r[rt] (byte-parallel)
@@ -745,7 +749,11 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
          got={got1:?}\n exp={exp1:?}"
     );
     // Belt-and-suspenders: the reference model agrees (imm = ir & 0xFF).
-    assert_eq!(got1, reference(&s1), "iformat-steer/addi: != reference model");
+    assert_eq!(
+        got1,
+        reference(&s1),
+        "iformat-steer/addi: != reference model"
+    );
 
     // Case 2: Xori rd=r3, imm low = 0x6C, different steer pattern
     // bits 15..19 = 0b10101 (0x15<<15) to exercise the xor path with a
@@ -760,7 +768,11 @@ fn b12_iformat_nonzero_immediate_steer_inert() {
         "I-format Xori with nonzero rs-steer bits (0b10101<<15): only r3 ^= 0x6C; \
          everything else bit-identical\n got={got2:?}\n exp={exp2:?}"
     );
-    assert_eq!(got2, reference(&s2), "iformat-steer/xori: != reference model");
+    assert_eq!(
+        got2,
+        reference(&s2),
+        "iformat-steer/xori: != reference model"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -909,7 +921,10 @@ fn b13_rt_field_inert_for_reg_imm() {
     // R-format Add rd=r2, rs=r4, with nonzero rt-field = 0x1F. Add's rt→B is
     // gated off; BR must be untouched.
     let ir_r: u32 = (1 << 31) | (0b0000 << 25) | (2 << 20) | (4 << 15) | (0x1F << 10);
-    let s2 = StateVals { ir: ir_r, ..s.clone() };
+    let s2 = StateVals {
+        ir: ir_r,
+        ..s.clone()
+    };
     let got2 = eval_state("rt-inert/add", dec, &s2);
     let mut exp2 = s2.clone();
     exp2.regs[2] = exp2.regs[2].wrapping_add(exp2.regs[4]);
@@ -917,7 +932,10 @@ fn b13_rt_field_inert_for_reg_imm() {
         got2, exp2,
         "Add with nonzero rt-field must leave BR/other regs untouched (rt→B gated off)"
     );
-    assert_eq!(got2.br, 0x99, "BR must be untouched by an Add with nonzero rt-field");
+    assert_eq!(
+        got2.br, 0x99,
+        "BR must be untouched by an Add with nonzero rt-field"
+    );
 }
 
 /// MINOR-4 pin: op4/op5 (the two HIGH opcode bits) are DON'T-CARE at the

@@ -81,13 +81,22 @@ fn line_level_swap_conserves_tokens_and_matches_value_eval() {
             for &(l0, l1) in &pairs_out {
                 assert_ne!(l0, l1, "pair not 1-hot after {kind:?}");
             }
-            let high_in: usize = pairs_in.iter().map(|&(a, b)| usize::from(a) + usize::from(b)).sum();
-            let high_out: usize =
-                pairs_out.iter().map(|&(a, b)| usize::from(a) + usize::from(b)).sum();
+            let high_in: usize = pairs_in
+                .iter()
+                .map(|&(a, b)| usize::from(a) + usize::from(b))
+                .sum();
+            let high_out: usize = pairs_out
+                .iter()
+                .map(|&(a, b)| usize::from(a) + usize::from(b))
+                .sum();
             assert_eq!(high_in, high_out, "token count changed");
             // Decode == value-level eval.
             let decoded: Vec<bool> = pairs_out.iter().map(|&(_, l1)| l1).collect();
-            assert_eq!(decoded, kind.eval(&vals), "{kind:?} line/value mismatch on {vals:?}");
+            assert_eq!(
+                decoded,
+                kind.eval(&vals),
+                "{kind:?} line/value mismatch on {vals:?}"
+            );
         }
     }
 }
@@ -116,7 +125,11 @@ fn role_swap_breaks_the_value_permutation_premise() {
             let p_in = bits.iter().filter(|&&b| b).count() % 2;
             let p_out = kind.eval(&bits).iter().filter(|&&b| b).count() % 2;
             let and = bits[..k].iter().all(|&c| c);
-            assert_eq!(p_in != p_out, and, "{kind:?} parity deviation ≠ AND on {bits:?}");
+            assert_eq!(
+                p_in != p_out,
+                and,
+                "{kind:?} parity deviation ≠ AND on {bits:?}"
+            );
         }
     }
 }
@@ -156,5 +169,9 @@ fn toffoli_via_k1_sandwich_is_ancilla_clean() {
     }
     // Non-constant parity deviation + constant ancillas: the parity
     // obstruction is void, not merely relocated.
-    assert_eq!(deviations.len(), 2, "Toffoli's parity deviation is non-constant");
+    assert_eq!(
+        deviations.len(),
+        2,
+        "Toffoli's parity deviation is non-constant"
+    );
 }

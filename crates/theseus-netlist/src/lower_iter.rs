@@ -187,7 +187,10 @@ impl Builder {
             // the B4.2 mcNOT emitter).
             let zero = self.alloc_ancilla(false);
             let one = self.alloc_ancilla(true);
-            let outs = self.emit(CellKind::K2, &[ctrls[i - 1], tags[i].rail_swapped(), zero, one]);
+            let outs = self.emit(
+                CellKind::K2,
+                &[ctrls[i - 1], tags[i].rail_swapped(), zero, one],
+            );
             ctrls[i - 1] = outs[0]; // fresh handle, same c_i value
             tags[i] = outs[1].rail_swapped(); // live tag_i restored
             ctrls.push(outs[2]); // c_{i+1}

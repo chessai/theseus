@@ -101,7 +101,10 @@ pub fn characterize_tg_matrix(
     loads_f: &[f64],
     periods: &[f64],
 ) -> io::Result<TgMatrixResult> {
-    assert!(periods.len() >= 5, "matrix sweep needs >= 5 periods (gate-5 fit minimum)");
+    assert!(
+        periods.len() >= 5,
+        "matrix sweep needs >= 5 periods (gate-5 fit minimum)"
+    );
     assert!(
         periods.windows(2).all(|w| w[0] < w[1]),
         "periods must be strictly ascending"
@@ -143,12 +146,18 @@ pub fn characterize_tg_matrix(
             entry
                 .points
                 .iter()
-                .map(|p| CharPoint { t_ramp: p.period_s, energy: p.etot.abs() })
+                .map(|p| CharPoint {
+                    t_ramp: p.period_s,
+                    energy: p.etot.abs(),
+                })
                 .collect(),
         ));
         entries.push(entry);
     }
-    Ok(TgMatrixResult { db: rebuild(&raw), entries })
+    Ok(TgMatrixResult {
+        db: rebuild(&raw),
+        entries,
+    })
 }
 
 #[cfg(test)]
@@ -162,7 +171,10 @@ mod tests {
     /// Key format is deterministic and readable.
     #[test]
     fn matrix_key_format() {
-        let v = Sky130Variant { vt: Sky130Vt::Lvt, body: BodyConfig::DeepNWell };
+        let v = Sky130Variant {
+            vt: Sky130Vt::Lvt,
+            body: BodyConfig::DeepNWell,
+        };
         assert_eq!(tg_matrix_key(v, 250e-15), "adiabatic-tg@lvt-dnw+c250.0f");
         assert_eq!(
             tg_matrix_key(Sky130Variant::default(), TG_LOAD_MIN_F),
@@ -220,9 +232,16 @@ mod tests {
         assert_eq!(m.entries.len(), 18);
         assert_eq!(m.db.cells.len(), 18);
         for e in &m.entries {
-            let cell = m.db.cells.get(&e.key).unwrap_or_else(|| panic!("{} missing", e.key));
+            let cell =
+                m.db.cells
+                    .get(&e.key)
+                    .unwrap_or_else(|| panic!("{} missing", e.key));
             assert_eq!(cell.points.len(), periods.len());
-            assert!(cell.fit.r_squared.is_finite(), "{}: fit did not converge", e.key);
+            assert!(
+                cell.fit.r_squared.is_finite(),
+                "{}: fit did not converge",
+                e.key
+            );
             eprintln!(
                 "{}: E({t_ref:.0e})={:.4e} J  k_adia={:.3e}  R²={:.5}  admitted={}",
                 e.key,
@@ -255,7 +274,11 @@ mod tests {
                 .abs()
         };
         let evdd = |vt, body, load: f64| -> f64 {
-            m.entry(Sky130Variant { vt, body }, load).unwrap().at(t_ref).unwrap().evdd
+            m.entry(Sky130Variant { vt, body }, load)
+                .unwrap()
+                .at(t_ref)
+                .unwrap()
+                .evdd
         };
 
         // (b) Load monotonicity at every (Vt, body).
@@ -288,8 +311,10 @@ mod tests {
         // (d) Body-effect cost (std, hvt): DNW source-tied body beats
         // body-to-rail. (lvt: recorded only -- see doc comment.)
         for vt in [Sky130Vt::Std, Sky130Vt::Hvt] {
-            let (b2r, dnw) =
-                (etot(vt, BodyConfig::BodyToRail, mid), etot(vt, BodyConfig::DeepNWell, mid));
+            let (b2r, dnw) = (
+                etot(vt, BodyConfig::BodyToRail, mid),
+                etot(vt, BodyConfig::DeepNWell, mid),
+            );
             eprintln!(
                 "body effect, {}: b2r={b2r:.4e} J, dnw={dnw:.4e} J ({:+.1}%)",
                 vt.key(),
@@ -303,8 +328,10 @@ mod tests {
         }
         {
             let vt = Sky130Vt::Lvt;
-            let (b2r, dnw) =
-                (etot(vt, BodyConfig::BodyToRail, mid), etot(vt, BodyConfig::DeepNWell, mid));
+            let (b2r, dnw) = (
+                etot(vt, BodyConfig::BodyToRail, mid),
+                etot(vt, BodyConfig::DeepNWell, mid),
+            );
             eprintln!(
                 "body effect, lvt (recorded, not asserted): b2r={b2r:.4e} J, dnw={dnw:.4e} J ({:+.1}%)",
                 100.0 * (dnw - b2r) / b2r
@@ -337,7 +364,11 @@ mod tests {
                 ("reverse", &e.admission.reverse_drive),
                 ("scaling", &e.admission.scaling),
             ] {
-                assert!(!r.detail.is_empty(), "{}: gate {gate} has no evidence", e.key);
+                assert!(
+                    !r.detail.is_empty(),
+                    "{}: gate {gate} has no evidence",
+                    e.key
+                );
             }
         }
         let canonical = m

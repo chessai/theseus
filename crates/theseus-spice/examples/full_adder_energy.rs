@@ -116,7 +116,10 @@ fn main() {
         "\nsample: input {:?} -> netlist output {:?}, core eval {:?}  [match={}]",
         data_bits.iter().map(|&b| u8::from(b)).collect::<Vec<_>>(),
         out_bits.iter().map(|&b| u8::from(b)).collect::<Vec<_>>(),
-        expected_bits.iter().map(|&b| u8::from(b)).collect::<Vec<_>>(),
+        expected_bits
+            .iter()
+            .map(|&b| u8::from(b))
+            .collect::<Vec<_>>(),
         out_bits == &expected_bits[..],
     );
 

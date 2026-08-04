@@ -1877,9 +1877,7 @@ fn general_synthesize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, Compi
             out_widths.len()
         )));
     }
-    let widths: Vec<u8> = (0..n)
-        .map(|i| in_widths[i].max(out_widths[i]))
-        .collect();
+    let widths: Vec<u8> = (0..n).map(|i| in_widths[i].max(out_widths[i])).collect();
     let total_bits: usize = widths.iter().map(|&w| w as usize).sum();
     // `table_to_regtransfer` enumerates 2^total_bits rows. Cap defensively (it
     // asserts ≤ 24 internally); a wide prim is a provisioning problem, not a
@@ -2009,12 +2007,13 @@ fn general_synthesize_prim(def: &PrimDef, ctx: &Ctx) -> Result<Vec<Instr>, Compi
         temp,
         nodes: &nodes,
     };
-    let body = transcribe_bdd_bennett(&fwd, &bwd, &carrier_ops, &ancilla, helpers).map_err(|e| {
-        CompileError::EmissionVerificationFailed(format!(
-            "general synth '{}': transcribe_bdd_bennett: {e}",
-            def.forward_name
-        ))
-    })?;
+    let body =
+        transcribe_bdd_bennett(&fwd, &bwd, &carrier_ops, &ancilla, helpers).map_err(|e| {
+            CompileError::EmissionVerificationFailed(format!(
+                "general synth '{}': transcribe_bdd_bennett: {e}",
+                def.forward_name
+            ))
+        })?;
 
     // ── Step 5: VERIFY before returning. Fail-closed. ──
     // Working words that MUST be net-zero after the body: ancilla, temp, nodes.
@@ -2121,6 +2120,9 @@ fn anf_helper_bank(free: &[u8]) -> Option<(u8, Vec<u8>)> {
 /// Complete for the small prims the general path fits: it enumerates the whole
 /// table, so a wrong emission is caught on some input. `widths` bound the
 /// meaningful output bits per carrier (Flat(w) zero-extension).
+// Index i is load-bearing: it addresses carrier_ops, in/out_bytes, and widths in
+// lockstep, so a range loop keeps the verifier arithmetic obvious.
+#[allow(clippy::needless_range_loop)]
 fn verify_general_body_exec(
     body: &[Instr],
     def: &PrimDef,
@@ -3879,8 +3881,8 @@ fn lower_trace(
     // possible, else zero-init padding spilled to the LOWEST free scratch slot
     // (ascending -- byte-identical to the old `SCRATCH_SPILL_BASE + spill_count`
     // positional spill for the canonical case).
-    let mut free_scratch = (SCRATCH_SPILL_BASE..NUM_SCRATCH as u8)
-        .filter(|s| body_occ.is_free(Location::Scratch(*s)));
+    let mut free_scratch =
+        (SCRATCH_SPILL_BASE..NUM_SCRATCH as u8).filter(|s| body_occ.is_free(Location::Scratch(*s)));
     for _ in 0..n_extra {
         if let Some(r) = ancilla_iter.next() {
             body_homes.push(Location::Reg(r));
@@ -3977,8 +3979,7 @@ fn lower_trace(
     // and exits it at 0 (net-zero, time-disjoint -- design §2.2). We UNION with the
     // incoming `ctx.reusable_aux` so a deeper Trace can reuse any ancestor's frame:
     // aux cost is O(1) in depth, depth bounded by CARRIER registers (design §2.3).
-    let level_frame_mask: u8 =
-        (1 << rc) | (1 << rb) | (1 << temp) | (1 << ctrl);
+    let level_frame_mask: u8 = (1 << rc) | (1 << rb) | (1 << temp) | (1 << ctrl);
     let body_ctx = Ctx {
         homes: body_homes,
         occ: body_occ,
@@ -4039,10 +4040,14 @@ fn lower_trace(
     // 128 → 32768 (per design; kept as a policy invariant).
     let iter_len_narrow = body_len + LOOP_OVERHEAD; // LOOP_OVERHEAD = 10
     let wide = iter_len_narrow > (1 << (W_BR - 1)); // > 128 ⇒ needs w_br=16
-    // LOOP_OVERHEAD 10→14 AND spine 4→6 at w_br=16. δu is minted from
-    // the ACTUAL emitted iter_len (minting from the narrow overhead would
-    // land at Ltop+4 with no SWAPBR → every wide loop walks off on iteration 1).
-    let loop_overhead = if wide { LOOP_OVERHEAD_WIDE } else { LOOP_OVERHEAD };
+                                                    // LOOP_OVERHEAD 10→14 AND spine 4→6 at w_br=16. δu is minted from
+                                                    // the ACTUAL emitted iter_len (minting from the narrow overhead would
+                                                    // land at Ltop+4 with no SWAPBR → every wide loop walks off on iteration 1).
+    let loop_overhead = if wide {
+        LOOP_OVERHEAD_WIDE
+    } else {
+        LOOP_OVERHEAD
+    };
     let iter_len = body_len + loop_overhead;
 
     // ── Trajectory-derived exact k_max ────────────────────────────────
@@ -4151,7 +4156,11 @@ fn lower_trace(
     // bit 15 set" honest). At w_br=8 (narrow) the sext DOES bind: δu = 256−iter_len
     // must have bit 7 set ⇒ iter_len ≤ 128. `wide` was chosen above so the
     // NARROW cap only applies to narrow loops; a wide loop is capped at 32768.
-    let cap = if wide { 1 << (W_BR16 - 1) } else { 1 << (W_BR - 1) };
+    let cap = if wide {
+        1 << (W_BR16 - 1)
+    } else {
+        1 << (W_BR - 1)
+    };
     if iter_len > cap {
         return Err(CompileError::Deferred(format!(
             "Trace iter_len {} exceeds the come-from back-jump reach {} \
@@ -4179,8 +4188,7 @@ fn lower_trace(
                 n_input + 1
             )));
         }
-        let mut free_hi = (0..NUM_REGS as u8)
-            .filter(|r| post_frame_occ.is_free(Location::Reg(*r)));
+        let mut free_hi = (0..NUM_REGS as u8).filter(|r| post_frame_occ.is_free(Location::Reg(*r)));
         match free_hi.next() {
             Some(r) => r,
             None => {
@@ -4207,31 +4215,63 @@ fn lower_trace(
 
         instrs = vec![
             // Prologue (2):
-            Instr::Xori { rd: tag_reg, imm: 1 }, // inject Right
-            Instr::Addi { rd: temp, imm: delta_u }, // mint token
+            Instr::Xori {
+                rd: tag_reg,
+                imm: 1,
+            }, // inject Right
+            Instr::Addi {
+                rd: temp,
+                imm: delta_u,
+            }, // mint token
             // Ltop: SWAPBR rc
             Instr::Swapbr { rd: rc, rs: 0 },
             // Join-dispatch: CSWAP ctrl, rc, temp
-            Instr::Cswap { rd: ctrl, rs: rc, rt: temp },
+            Instr::Cswap {
+                rd: ctrl,
+                rs: rc,
+                rt: temp,
+            },
             // Burn token: SUBI temp, δu
-            Instr::Subi { rd: temp, imm: delta_u },
+            Instr::Subi {
+                rd: temp,
+                imm: delta_u,
+            },
             // Uncompute ctrl from tag (top)
-            Instr::Xor { rd: ctrl, rs: tag_reg },
+            Instr::Xor {
+                rd: ctrl,
+                rs: tag_reg,
+            },
             Instr::Xori { rd: ctrl, imm: 1 },
         ];
         instrs.extend_from_slice(&body_instrs);
         // Compute ctrl from tag (bottom): ctrl := ¬tag
-        instrs.push(Instr::Xor { rd: ctrl, rs: tag_reg });
+        instrs.push(Instr::Xor {
+            rd: ctrl,
+            rs: tag_reg,
+        });
         instrs.push(Instr::Xori { rd: ctrl, imm: 1 });
         // Mint token: ADDI temp, δu
-        instrs.push(Instr::Addi { rd: temp, imm: delta_u });
+        instrs.push(Instr::Addi {
+            rd: temp,
+            imm: delta_u,
+        });
         // Route: CSWAP ctrl, temp, rb  (continue: rb=δu · exit: temp=δu)
-        instrs.push(Instr::Cswap { rd: ctrl, rs: temp, rt: rb });
+        instrs.push(Instr::Cswap {
+            rd: ctrl,
+            rs: temp,
+            rt: rb,
+        });
         // Lend: SWAPBR rb
         instrs.push(Instr::Swapbr { rd: rb, rs: 0 });
         // Epilogue (2):
-        instrs.push(Instr::Subi { rd: temp, imm: delta_u }); // burn (exit path)
-        instrs.push(Instr::Xori { rd: tag_reg, imm: 1 }); // strip Right
+        instrs.push(Instr::Subi {
+            rd: temp,
+            imm: delta_u,
+        }); // burn (exit path)
+        instrs.push(Instr::Xori {
+            rd: tag_reg,
+            imm: 1,
+        }); // strip Right
     } else {
         // ── w_br=16 wide bracket (REVISION-2 emission spec) ──────────────
         // δu = 65536 − iter_len (16-bit two's-complement; bit 15 set since
@@ -4261,41 +4301,93 @@ fn lower_trace(
 
         instrs = vec![
             // Prologue (3): inject Right + mint BOTH token bytes.
-            Instr::Xori { rd: tag_reg, imm: 1 },
-            Instr::Addi { rd: temp, imm: du_lo },
-            Instr::Addi { rd: temp_hi, imm: du_hi },
+            Instr::Xori {
+                rd: tag_reg,
+                imm: 1,
+            },
+            Instr::Addi {
+                rd: temp,
+                imm: du_lo,
+            },
+            Instr::Addi {
+                rd: temp_hi,
+                imm: du_hi,
+            },
             // ── Ltop / re-entry (7) ──
             // SWAPBR(rc,rb): swap(rc,BR₀); swap(rb,BR₁). On re-entry BR=(δu_lo,
             // δu_hi) → rc=δu_lo, rb=δu_hi, BR=0.
             Instr::Swapbr { rd: rc, rs: rb },
             // CSWAP ctrl,rc,temp   (temp=δu_lo)
-            Instr::Cswap { rd: ctrl, rs: rc, rt: temp },
+            Instr::Cswap {
+                rd: ctrl,
+                rs: rc,
+                rt: temp,
+            },
             // CSWAP ctrl,rb,temp_hi (temp_hi=δu_hi)
-            Instr::Cswap { rd: ctrl, rs: rb, rt: temp_hi },
+            Instr::Cswap {
+                rd: ctrl,
+                rs: rb,
+                rt: temp_hi,
+            },
             // Burn BOTH token bytes.
-            Instr::Subi { rd: temp, imm: du_lo },
-            Instr::Subi { rd: temp_hi, imm: du_hi },
+            Instr::Subi {
+                rd: temp,
+                imm: du_lo,
+            },
+            Instr::Subi {
+                rd: temp_hi,
+                imm: du_hi,
+            },
             // Uncompute ctrl from tag (top).
-            Instr::Xor { rd: ctrl, rs: tag_reg },
+            Instr::Xor {
+                rd: ctrl,
+                rs: tag_reg,
+            },
             Instr::Xori { rd: ctrl, imm: 1 },
         ];
         instrs.extend_from_slice(&body_instrs);
         // ── Lend / continue (7) ──
         // Compute ctrl := ¬tag (bottom).
-        instrs.push(Instr::Xor { rd: ctrl, rs: tag_reg });
+        instrs.push(Instr::Xor {
+            rd: ctrl,
+            rs: tag_reg,
+        });
         instrs.push(Instr::Xori { rd: ctrl, imm: 1 });
         // Mint BOTH token bytes.
-        instrs.push(Instr::Addi { rd: temp, imm: du_lo });
-        instrs.push(Instr::Addi { rd: temp_hi, imm: du_hi });
+        instrs.push(Instr::Addi {
+            rd: temp,
+            imm: du_lo,
+        });
+        instrs.push(Instr::Addi {
+            rd: temp_hi,
+            imm: du_hi,
+        });
         // Route: CSWAP ctrl,temp,rb (rb=δu_lo); CSWAP ctrl,temp_hi,rc (rc=δu_hi).
-        instrs.push(Instr::Cswap { rd: ctrl, rs: temp, rt: rb });
-        instrs.push(Instr::Cswap { rd: ctrl, rs: temp_hi, rt: rc });
+        instrs.push(Instr::Cswap {
+            rd: ctrl,
+            rs: temp,
+            rt: rb,
+        });
+        instrs.push(Instr::Cswap {
+            rd: ctrl,
+            rs: temp_hi,
+            rt: rc,
+        });
         // Lend SWAPBR(rb,rc): swap(rb,BR₀); swap(rc,BR₁) → BR=(δu_lo,δu_hi).
         instrs.push(Instr::Swapbr { rd: rb, rs: rc });
         // Epilogue (3): burn BOTH token bytes (exit path) + strip Right.
-        instrs.push(Instr::Subi { rd: temp, imm: du_lo });
-        instrs.push(Instr::Subi { rd: temp_hi, imm: du_hi });
-        instrs.push(Instr::Xori { rd: tag_reg, imm: 1 });
+        instrs.push(Instr::Subi {
+            rd: temp,
+            imm: du_lo,
+        });
+        instrs.push(Instr::Subi {
+            rd: temp_hi,
+            imm: du_hi,
+        });
+        instrs.push(Instr::Xori {
+            rd: tag_reg,
+            imm: 1,
+        });
 
         // This program's layout must run at w_br=16 (the decoder emits
         // the two-transposition SWAPBR; the sims sign-extend from 16). Bubble up.
@@ -4813,7 +4905,10 @@ pub fn run_rom_on_cpu<E: std::fmt::Debug>(
     let mem_quiescent = init.mem.iter().all(|&m| m == 0);
     let final_state = if is_cpu_only(instrs) && mem_quiescent && rom_wide {
         // Wide (w_br=16) CPU-only run: default layout except w_br widened to 16.
-        let layout = Layout { w_br: W_BR16, ..Layout::default() };
+        let layout = Layout {
+            w_br: W_BR16,
+            ..Layout::default()
+        };
         let step_iso = crate::step::step_with(&layout, &rom);
         let mut cur = init.encode_with(&layout);
         for _ in 0..budget {
@@ -5353,9 +5448,9 @@ mod tests {
                     "expected a forward-skip reach message, got: {msg}"
                 );
             }
-            other => panic!(
-                "skip-block body 130 must be rejected GRACEFULLY (Deferred), got {other:?}"
-            ),
+            other => {
+                panic!("skip-block body 130 must be rejected GRACEFULLY (Deferred), got {other:?}")
+            }
         }
         // The boundary: body 128 is the first rejected length; 127 is the last OK.
         assert!(

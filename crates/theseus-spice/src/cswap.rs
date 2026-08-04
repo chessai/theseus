@@ -206,10 +206,22 @@ impl CellTopo {
         match self {
             // Every control and both data high -- the swap path is exercised
             // (at k ≥ 1) and the a-output 1-line pulses.
-            CellTopo::K(_) => CswapToken { c1: true, c2: true, c3: true, a: true, b: true },
+            CellTopo::K(_) => CswapToken {
+                c1: true,
+                c2: true,
+                c3: true,
+                a: true,
+                b: true,
+            },
             // c = 1, t = 0: the exchange branch (c₁-line ∧ t0) conducts, the
             // target output 1-line pulses (t′ = 1), and the control passes.
-            CellTopo::R1 => CswapToken { c1: true, c2: false, c3: false, a: false, b: false },
+            CellTopo::R1 => CswapToken {
+                c1: true,
+                c2: false,
+                c3: false,
+                a: false,
+                b: false,
+            },
         }
     }
 
@@ -266,10 +278,34 @@ pub fn cswap_truth_tokens(k: usize) -> Vec<CswapToken> {
         .map(|j| {
             let bit = |i: usize| (j >> (n - 1 - i)) & 1 == 1;
             match k {
-                0 => CswapToken { c1: false, c2: false, c3: false, a: bit(0), b: false },
-                1 => CswapToken { c1: bit(0), c2: false, c3: false, a: bit(1), b: bit(2) },
-                2 => CswapToken { c1: bit(0), c2: bit(1), c3: false, a: bit(2), b: bit(3) },
-                3 => CswapToken { c1: bit(0), c2: bit(1), c3: bit(2), a: bit(3), b: bit(4) },
+                0 => CswapToken {
+                    c1: false,
+                    c2: false,
+                    c3: false,
+                    a: bit(0),
+                    b: false,
+                },
+                1 => CswapToken {
+                    c1: bit(0),
+                    c2: false,
+                    c3: false,
+                    a: bit(1),
+                    b: bit(2),
+                },
+                2 => CswapToken {
+                    c1: bit(0),
+                    c2: bit(1),
+                    c3: false,
+                    a: bit(2),
+                    b: bit(3),
+                },
+                3 => CswapToken {
+                    c1: bit(0),
+                    c2: bit(1),
+                    c3: bit(2),
+                    a: bit(3),
+                    b: bit(4),
+                },
                 _ => unreachable!(),
             }
         })
@@ -288,8 +324,14 @@ fn cswap_branches(k: usize, out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
     match (k, out_sig) {
         (0, "a") => vec![vec![("a", pol)]],
         (1, "c") => vec![vec![("c", pol)]],
-        (1, "a") => vec![vec![("c", true), ("b", pol)], vec![("c", false), ("a", pol)]],
-        (1, "b") => vec![vec![("c", true), ("a", pol)], vec![("c", false), ("b", pol)]],
+        (1, "a") => vec![
+            vec![("c", true), ("b", pol)],
+            vec![("c", false), ("a", pol)],
+        ],
+        (1, "b") => vec![
+            vec![("c", true), ("a", pol)],
+            vec![("c", false), ("b", pol)],
+        ],
         (2, "c1") => vec![vec![("c1", pol)]],
         (2, "c2") => vec![vec![("c2", pol)]],
         (2, "a") => vec![
@@ -337,7 +379,10 @@ fn cswap_branches(k: usize, out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
 fn r1_branches(out_sig: &str, pol: bool) -> Vec<Vec<Lit>> {
     match out_sig {
         "c" => vec![vec![("c", pol)]],
-        "t" => vec![vec![("c", true), ("t", !pol)], vec![("c", false), ("t", pol)]],
+        "t" => vec![
+            vec![("c", true), ("t", !pol)],
+            vec![("c", false), ("t", pol)],
+        ],
         other => panic!("no R1 branch table for {other:?}"),
     }
 }
@@ -367,7 +412,12 @@ fn token_line_pwl(
     for (j, &on) in pulses.iter().enumerate() {
         if on {
             let t0 = j as f64 * period_s + off;
-            let (t1, t2, t3, t4) = (t0 - eps, t0 + q - eps, t0 + 2.0 * q + eps, t0 + 3.0 * q + eps);
+            let (t1, t2, t3, t4) = (
+                t0 - eps,
+                t0 + q - eps,
+                t0 + 2.0 * q + eps,
+                t0 + 3.0 * q + eps,
+            );
             p.push_str(&format!(
                 " {t1:.9e} 0 {t2:.9e} {vdd:.4} {t3:.9e} {vdd:.4} {t4:.9e} 0"
             ));
@@ -473,7 +523,8 @@ pub fn cell_netlist(
         for pol in [true, false] {
             let base = line(sig, pol);
             let pulses: Vec<bool> = bits.iter().map(|&v| v == pol).collect();
-            let (p, m) = token_line_pwl(&pulses, period_s, 3.0 * q, 0.01 + 0.002 * eps_i as f64, vdd);
+            let (p, m) =
+                token_line_pwl(&pulses, period_s, 3.0 * q, 0.01 + 0.002 * eps_i as f64, vdd);
             eps_i += 1;
             l.push(format!("V{base}p {base}p 0 PWL({p})"));
             l.push(format!("V{base}m {base}m 0 PWL({m})"));
@@ -487,7 +538,8 @@ pub fn cell_netlist(
         for pol in [true, false] {
             let base = format!("r{}", line(sig, pol));
             let pulses: Vec<bool> = bits.iter().map(|&v| v == pol).collect();
-            let (p, m) = token_line_pwl(&pulses, period_s, 5.0 * q, 0.01 + 0.002 * eps_i as f64, vdd);
+            let (p, m) =
+                token_line_pwl(&pulses, period_s, 5.0 * q, 0.01 + 0.002 * eps_i as f64, vdd);
             eps_i += 1;
             l.push(format!("V{base}p {base}p 0 PWL({p})"));
             l.push(format!("V{base}m {base}m 0 PWL({m})"));
@@ -504,8 +556,26 @@ pub fn cell_netlist(
     // leakage (~nA class) sets a ~7e-10 W static floor that closes the
     // adiabatic window above T ≈ 6e-7 s (measured; see the slope tests).
     let tg = |l: &mut Vec<String>, name: &str, x: &str, gate: &str, y: &str| {
-        l.push(rung.fet(&format!("{name}n"), FetKind::Nmos, x, &format!("{gate}p"), y, "0", 4.0, TG_L_UM));
-        l.push(rung.fet(&format!("{name}p"), FetKind::Pmos, x, &format!("{gate}m"), y, "vdd", 8.0, TG_L_UM));
+        l.push(rung.fet(
+            &format!("{name}n"),
+            FetKind::Nmos,
+            x,
+            &format!("{gate}p"),
+            y,
+            "0",
+            4.0,
+            TG_L_UM,
+        ));
+        l.push(rung.fet(
+            &format!("{name}p"),
+            FetKind::Pmos,
+            x,
+            &format!("{gate}m"),
+            y,
+            "vdd",
+            8.0,
+            TG_L_UM,
+        ));
     };
 
     // The TG networks: per output signal, per polarity line, per wire.
@@ -524,8 +594,10 @@ pub fn cell_netlist(
                     // connects the parked internal node of a NON-conducting
                     // branch to the active wire at tick 1 -- a measured
                     // ~2.4 fJ/node charge-sharing dump on a≠b tokens.)
-                    let rev: Vec<String> =
-                        br.iter().map(|&(ls, lp)| format!("r{}", line(ls, lp))).collect();
+                    let rev: Vec<String> = br
+                        .iter()
+                        .map(|&(ls, lp)| format!("r{}", line(ls, lp)))
+                        .collect();
                     let mut prev = clk.to_string();
                     for (si, &(ls, lp)) in br.iter().enumerate() {
                         let next = if si + 1 == br.len() {
@@ -538,8 +610,20 @@ pub fn cell_netlist(
                             l.push(format!(".ic V({n})={park:.4}"));
                             n
                         };
-                        tg(&mut l, &format!("f{wire}b{bi}s{si}"), &prev, &line(ls, lp), &next);
-                        tg(&mut l, &format!("r{wire}b{bi}s{si}"), &prev, &rev[si], &next);
+                        tg(
+                            &mut l,
+                            &format!("f{wire}b{bi}s{si}"),
+                            &prev,
+                            &line(ls, lp),
+                            &next,
+                        );
+                        tg(
+                            &mut l,
+                            &format!("r{wire}b{bi}s{si}"),
+                            &prev,
+                            &rev[si],
+                            &next,
+                        );
                         prev = next;
                     }
                 }
@@ -566,7 +650,12 @@ pub fn cell_netlist(
     }
     let ins: Vec<&String> = groups.iter().filter(|g| g.starts_with("pwi")).collect();
     let aks: Vec<&String> = groups.iter().filter(|g| g.starts_with("pwr")).collect();
-    let sum = |gs: &[&String]| gs.iter().map(|g| format!("V({g})")).collect::<Vec<_>>().join("+");
+    let sum = |gs: &[&String]| {
+        gs.iter()
+            .map(|g| format!("V({g})"))
+            .collect::<Vec<_>>()
+            .join("+")
+    };
     l.push(format!("Bin pint 0 V = {}", sum(&ins)));
     l.push(format!("Bak pakt 0 V = {}", sum(&aks)));
     l.push("Btot ptot 0 V = V(pp0)+V(pp2)+V(ppv)+V(pint)+V(pakt)".into());
@@ -593,7 +682,11 @@ pub fn cell_netlist(
                 for pol in [true, false] {
                     let base = format!("o{}", line(sig, pol));
                     let active = out.get(sig) == pol;
-                    let (fr, fm) = if active { ("MIN", "MAX") } else { ("MAX", "MIN") };
+                    let (fr, fm) = if active {
+                        ("MIN", "MAX")
+                    } else {
+                        ("MAX", "MIN")
+                    };
                     l.push(format!(
                         "meas tran v{j}{base}p {fr} V({base}p) FROM={w0:.9e} TO={w1:.9e}"
                     ));
@@ -720,7 +813,9 @@ pub fn run_cell_functional(
         }
     }
     let n_cycles = (tokens.len() as f64 + 1.5).floor() as usize;
-    let ecyc = (0..n_cycles).map(|i| (i, get(&format!("ecyc{i}")))).collect();
+    let ecyc = (0..n_cycles)
+        .map(|i| (i, get(&format!("ecyc{i}"))))
+        .collect();
     Ok((readings, ecyc))
 }
 
@@ -751,11 +846,21 @@ pub fn cswap_energy_netlist(k: usize, rung: DeviceRung, period_s: f64) -> String
 
 /// [`cswap_energy_netlist`] for any [`CellTopo`].
 pub fn cell_energy_netlist(topo: CellTopo, rung: DeviceRung, period_s: f64) -> String {
-    cell_netlist(topo, rung, period_s, &[topo.energy_token(); WARMUP_CYCLES + 3], false)
+    cell_netlist(
+        topo,
+        rung,
+        period_s,
+        &[topo.energy_token(); WARMUP_CYCLES + 3],
+        false,
+    )
 }
 
 /// Run one energy point.
-pub fn cswap_energy_point(k: usize, rung: DeviceRung, period_s: f64) -> io::Result<CswapEnergyPoint> {
+pub fn cswap_energy_point(
+    k: usize,
+    rung: DeviceRung,
+    period_s: f64,
+) -> io::Result<CswapEnergyPoint> {
     cell_energy_point(CellTopo::K(k), rung, period_s)
 }
 
@@ -826,7 +931,12 @@ mod tests {
                 let t = r.token;
                 eprintln!(
                     "{label} {rung:?} token {}: c1={} c2={} c3={} a={} b={} -> {:?}",
-                    r.token_idx, t.c1 as u8, t.c2 as u8, t.c3 as u8, t.a as u8, t.b as u8,
+                    r.token_idx,
+                    t.c1 as u8,
+                    t.c2 as u8,
+                    t.c3 as u8,
+                    t.a as u8,
+                    t.b as u8,
                     topo.out(t)
                 );
             }
@@ -839,14 +949,20 @@ mod tests {
                     r.rail_v > 0.9 * vdd && r.mirror_v < 0.1 * vdd,
                     "{label} {rung:?} token {} line {}: active line not full-level \
                      (rail min {:.4} V, mirror max {:.4} V, VDD {vdd})",
-                    r.token_idx, r.line, r.rail_v, r.mirror_v
+                    r.token_idx,
+                    r.line,
+                    r.rail_v,
+                    r.mirror_v
                 );
             } else {
                 assert!(
                     r.rail_v < 0.1 * vdd && r.mirror_v > 0.9 * vdd,
                     "{label} {rung:?} token {} line {}: inactive line disturbed \
                      (rail max {:.4} V, mirror min {:.4} V, VDD {vdd})",
-                    r.token_idx, r.line, r.rail_v, r.mirror_v
+                    r.token_idx,
+                    r.line,
+                    r.rail_v,
+                    r.mirror_v
                 );
             }
         }
@@ -913,7 +1029,13 @@ mod tests {
     fn r1_out_is_cnot_and_self_inverse() {
         for c in [false, true] {
             for t in [false, true] {
-                let tok = CswapToken { c1: c, c2: false, c3: false, a: t, b: false };
+                let tok = CswapToken {
+                    c1: c,
+                    c2: false,
+                    c3: false,
+                    a: t,
+                    b: false,
+                };
                 let out = r1_out(tok);
                 assert_eq!(out.c1, c, "control must pass through");
                 assert_eq!(out.a, t ^ c, "target must be t XOR c");
@@ -939,7 +1061,10 @@ mod tests {
             );
             assert!(p.etot > 0.0, "energy must be positive: {p:?}");
             assert!(p.vmax > 0.9, "cell must do work (vmax {:.3} V)", p.vmax);
-            assert!(p.ein.abs() < 1e-17 && p.eack.abs() < 1e-17, "boundary sources must be ~0: {p:?}");
+            assert!(
+                p.ein.abs() < 1e-17 && p.eack.abs() < 1e-17,
+                "boundary sources must be ~0: {p:?}"
+            );
         }
         let slope = curve_slope(&curve);
         eprintln!("R1 rung0 slope = {slope:.4}");
@@ -967,7 +1092,10 @@ mod tests {
             assert!(p.vmax > 0.9, "cell must do work (vmax {:.3} V)", p.vmax);
             // Gate-only boundary sources deliver ~0 at rung 0 (no gate caps)
             // -- verified, not assumed.
-            assert!(p.ein.abs() < 1e-17 && p.eack.abs() < 1e-17, "boundary sources must be ~0: {p:?}");
+            assert!(
+                p.ein.abs() < 1e-17 && p.eack.abs() < 1e-17,
+                "boundary sources must be ~0: {p:?}"
+            );
         }
         let slope = curve_slope(&curve);
         eprintln!("k1 rung0 slope = {slope:.4}");
@@ -993,7 +1121,10 @@ mod tests {
             );
             assert!(p.etot > 0.0, "energy must be positive: {p:?}");
             assert!(p.vmax > 0.9, "cell must do work (vmax {:.3} V)", p.vmax);
-            assert!(p.ein.abs() < 1e-17 && p.eack.abs() < 1e-17, "boundary sources must be ~0: {p:?}");
+            assert!(
+                p.ein.abs() < 1e-17 && p.eack.abs() < 1e-17,
+                "boundary sources must be ~0: {p:?}"
+            );
         }
         let slope = curve_slope(&curve);
         eprintln!("k3 rung0 slope = {slope:.4}");

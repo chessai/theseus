@@ -38,10 +38,7 @@ fn elaborate(src: &str, iso_name: &str) -> Iso {
 #[test]
 fn derive_cpu_only_drops_mem() {
     // A pure-register program: mem_words must collapse to 0.
-    let prog = vec![
-        Instr::Xor { rd: 0, rs: 1 },
-        Instr::Addi { rd: 2, imm: 5 },
-    ];
+    let prog = vec![Instr::Xor { rd: 0, rs: 1 }, Instr::Addi { rd: 2, imm: 5 }];
     assert!(is_cpu_only(&prog));
     let l = derive_layout(&prog);
     assert_eq!(l.mem_words, 0, "CPU-only program must derive mem_words = 0");
@@ -59,7 +56,11 @@ fn derive_mem_program_keeps_bank() {
     let prog = vec![Instr::Xor { rd: 0, rs: 1 }, Instr::Mexch { rd: 0, addr: 0 }];
     assert!(!is_cpu_only(&prog));
     let l = derive_layout(&prog);
-    assert_eq!(l.mem_words, Layout::default().mem_words, "mem program keeps bank");
+    assert_eq!(
+        l.mem_words,
+        Layout::default().mem_words,
+        "mem program keeps bank"
+    );
 }
 
 #[test]
@@ -67,34 +68,19 @@ fn derive_reg_rounding_and_clamp() {
     // 0 regs named (empty) → num_regs 1.
     assert_eq!(derive_layout(&[]).num_regs, 1);
     // max reg 0 → next_pow2(1) = 1.
-    assert_eq!(
-        derive_layout(&[Instr::Addi { rd: 0, imm: 1 }]).num_regs,
-        1
-    );
+    assert_eq!(derive_layout(&[Instr::Addi { rd: 0, imm: 1 }]).num_regs, 1);
     // max reg 3 → next_pow2(4) = 4.
-    assert_eq!(
-        derive_layout(&[Instr::Add { rd: 3, rs: 0 }]).num_regs,
-        4
-    );
+    assert_eq!(derive_layout(&[Instr::Add { rd: 3, rs: 0 }]).num_regs, 4);
     // max reg 4 → next_pow2(5) = 8 (clamped at 8).
-    assert_eq!(
-        derive_layout(&[Instr::Add { rd: 4, rs: 0 }]).num_regs,
-        8
-    );
+    assert_eq!(derive_layout(&[Instr::Add { rd: 4, rs: 0 }]).num_regs, 8);
     // max reg 7 → 8.
-    assert_eq!(
-        derive_layout(&[Instr::Add { rd: 7, rs: 0 }]).num_regs,
-        8
-    );
+    assert_eq!(derive_layout(&[Instr::Add { rd: 7, rs: 0 }]).num_regs, 8);
     // Scratch operand (idx 10 = s2) is an ABSOLUTE index (num_regs + s); its
     // decode is tied to the default register-file boundary, so its presence
     // PINS num_regs = 8 rather than misrouting at a reduced num_regs -- even
     // though only r0 is named as a register (B-2.1b derive_layout scratch
     // safety; review F1).
-    assert_eq!(
-        derive_layout(&[Instr::Add { rd: 0, rs: 10 }]).num_regs,
-        8
-    );
+    assert_eq!(derive_layout(&[Instr::Add { rd: 0, rs: 10 }]).num_regs, 8);
 }
 
 // ── 2. FIRST non-default-layout lowering probe (0a completeness) ─────
@@ -106,8 +92,8 @@ fn derive_reg_rounding_and_clamp() {
 
 #[test]
 fn reduced_layout_state_ty_is_well_formed() {
-    use theseus_netlist::bits_of;
     use theseus_core::enumerate::cardinality_u64;
+    use theseus_netlist::bits_of;
 
     let reduced = Layout {
         num_regs: 4,
@@ -212,8 +198,12 @@ fn measure_mem_drop_cell_delta() {
     let sys_cells = sys_net.cells.len();
 
     // Balanced counts (the actual energy driver): cells + K0 balance buffers.
-    let step_bal = balance(&step_net).map(|b| b.cells.len()).unwrap_or(step_cells);
-    let sys_bal = balance(&sys_net).map(|b| b.cells.len()).unwrap_or(sys_cells);
+    let step_bal = balance(&step_net)
+        .map(|b| b.cells.len())
+        .unwrap_or(step_cells);
+    let sys_bal = balance(&sys_net)
+        .map(|b| b.cells.len())
+        .unwrap_or(sys_cells);
 
     eprintln!(
         "MEM-DROP MEASUREMENT (cnot ROM, CPU-only):\n  \
@@ -225,5 +215,8 @@ fn measure_mem_drop_cell_delta() {
         sys_bal.saturating_sub(step_bal),
         100.0 * (sys_bal.saturating_sub(step_bal)) as f64 / sys_bal.max(1) as f64,
     );
-    assert!(step_cells < sys_cells, "CPU-only step must be smaller than system_step");
+    assert!(
+        step_cells < sys_cells,
+        "CPU-only step must be smaller than system_step"
+    );
 }

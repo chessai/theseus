@@ -50,15 +50,19 @@ fn nested_two_levels_get_disjoint_frames() {
     let (outer_frame, after_outer) =
         alloc_aux_frame_for_test(&outer_homes, &[]).expect("outer frame");
     // Carrier occupies {0}, so the outer frame is the 4 lowest free = {1,2,3,4}.
-    assert_eq!(outer_frame, [1, 2, 3, 4], "outer frame = lowest 4 free regs");
+    assert_eq!(
+        outer_frame,
+        [1, 2, 3, 4],
+        "outer frame = lowest 4 free regs"
+    );
 
     // Inner level: shares no carrier reg with the outer here (inner tag-only @0
     // is already outer-live). Thread the outer's WHOLE live set as also_occupied.
     let outer_live = set_regs(after_outer); // {0,1,2,3,4}
-    // Inner carrier reuses reg 0 (tag) -- already in outer_live -- so the inner
-    // frame draws from the remaining free {5,6,7}: only 3 free < 4 → rejects,
-    // proving no aliasing. The DISJOINTNESS property is asserted structurally:
-    // whatever the inner CAN draw is confined to regs NOT in outer_live.
+                                            // Inner carrier reuses reg 0 (tag) -- already in outer_live -- so the inner
+                                            // frame draws from the remaining free {5,6,7}: only 3 free < 4 → rejects,
+                                            // proving no aliasing. The DISJOINTNESS property is asserted structurally:
+                                            // whatever the inner CAN draw is confined to regs NOT in outer_live.
     let res = alloc_aux_frame_for_test(&[0u8], &outer_live);
     match res {
         Ok((inner_frame, _)) => {
@@ -128,7 +132,11 @@ fn times_trace_g_frame_avoids_sibling_live_regs() {
          (the exact F-1 corruption)"
     );
     // With {0,1} carrier + {2,3} sibling live, the frame draws {4,5,6,7}.
-    assert_eq!(frame, [4, 5, 6, 7], "frame is the 4 free regs above sibling");
+    assert_eq!(
+        frame,
+        [4, 5, 6, 7],
+        "frame is the 4 free regs above sibling"
+    );
 }
 
 #[test]
@@ -142,8 +150,7 @@ fn times_trace_g_old_positional_would_have_aliased() {
         !disjoint(&old_positional, &sibling_live),
         "sanity: the old positional frame DID alias the sibling (the bug)"
     );
-    let (frame, _) =
-        alloc_aux_frame_for_test(&[0u8, 1], &sibling_live).expect("occ-aware frame");
+    let (frame, _) = alloc_aux_frame_for_test(&[0u8, 1], &sibling_live).expect("occ-aware frame");
     assert!(
         disjoint(&frame, &sibling_live),
         "occ-aware frame closes the aliasing the positional rule opened"
@@ -203,8 +210,7 @@ fn times_trace_tag_does_not_alias_sibling_end_to_end() {
 #[test]
 fn outer_delta_u_temp_disjoint_from_inner_frame() {
     // Outer tag-only carrier @{0}; frame [rc,rb,temp,ctrl] = {1,2,3,4}.
-    let (outer_frame, after_outer) =
-        alloc_aux_frame_for_test(&[0u8], &[]).expect("outer frame");
+    let (outer_frame, after_outer) = alloc_aux_frame_for_test(&[0u8], &[]).expect("outer frame");
     let outer_temp = outer_frame[2]; // δu lives here for the whole outer loop.
     let outer_live = set_regs(after_outer);
     // (1) The outer temp is occ-marked, so it is threaded into the inner body's
@@ -268,7 +274,10 @@ fn single_level_trace_rom_byte_identical() {
     let rom_len = lowered.instrs.len();
     let wcet = lowered.wcet();
     // Pin the exact values (from exact_kmax f1: k_exact=2, iter_len=10, spine=4).
-    assert_eq!(rom_len, 14, "single-level Trace ROM length pinned (spine 4 + iter 10)");
+    assert_eq!(
+        rom_len, 14,
+        "single-level Trace ROM length pinned (spine 4 + iter 10)"
+    );
     assert_eq!(wcet, 24, "single-level Trace WCET pinned (4 + 2*10)");
     // Determinism: recompiling gives byte-identical instructions.
     let lowered2 = compile_with_metadata(&build_walk_trace()).unwrap();
@@ -283,7 +292,8 @@ fn single_level_trace_rom_byte_identical() {
     let carrier_regs = [0u8, 1];
     let (frame, _) = alloc_aux_frame_for_test(&carrier_regs, &[]).unwrap();
     assert_eq!(
-        frame, [2, 3, 4, 5],
+        frame,
+        [2, 3, 4, 5],
         "canonical single-level frame == max_carrier_reg+1 (byte-identical)"
     );
 }

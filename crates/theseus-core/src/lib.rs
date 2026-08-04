@@ -11,17 +11,20 @@
 //!   belong to the canonicalizer, not here (ADR-0016). Fixed-order rewrite
 //!   pipeline in v0.1; equality saturation is a v0.3+ candidate (ADR-0010).
 
-pub mod ty;
-pub mod prim;
-pub mod bvexpr;
-pub mod iso;
-pub mod typing;
 pub mod adjoint;
-pub mod rewrite;
+pub mod bvexpr;
 pub mod enumerate;
+pub mod iso;
+pub mod prim;
+pub mod rewrite;
+pub mod ty;
+pub mod typing;
 
 pub use adjoint::adjoint;
 pub use iso::Iso;
-pub use prim::{admit, count_leaves, enumerate_values, try_value_from_leaf_bytes, PrimDef, PrimSpec, SpecTransfer, Value};
+pub use prim::{
+    admit, count_leaves, enumerate_values, try_value_from_leaf_bytes, PrimDef, PrimSpec,
+    SpecTransfer, Value,
+};
 pub use ty::Type;
 pub use typing::{is_numeral_ty, list_spine_elem_ty, max_flat_width, type_of, TypeError};

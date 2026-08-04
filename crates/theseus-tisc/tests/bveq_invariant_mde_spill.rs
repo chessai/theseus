@@ -90,7 +90,9 @@ fn const_word8(val: u8, vs: &BddVariableSet) -> SV {
     sv
 }
 fn symbolic_word8(vs: &BddVariableSet, nf: usize, f: usize) -> SV {
-    let bits: Vec<SV> = (0..W).map(|b| SV::Bit(field_bit_var(vs, nf, f, b))).collect();
+    let bits: Vec<SV> = (0..W)
+        .map(|b| SV::Bit(field_bit_var(vs, nf, f, b)))
+        .collect();
     let mut sv = bits[W - 1].clone();
     for b in (0..W - 1).rev() {
         sv = SV::pair(bits[b].clone(), sv);
@@ -228,7 +230,13 @@ impl StepEngine {
             let f = self.layout.ir_byte_field(k);
             let cur_byte = extract_word8_bdds(extract_field(&out, f, self.nf));
             let xored: Vec<Bdd> = (0..W)
-                .map(|b| if (byte >> b) & 1 == 1 { cur_byte[b].not() } else { cur_byte[b].clone() })
+                .map(|b| {
+                    if (byte >> b) & 1 == 1 {
+                        cur_byte[b].not()
+                    } else {
+                        cur_byte[b].clone()
+                    }
+                })
                 .collect();
             let mut sv_byte = SV::Bit(xored[W - 1].clone());
             for b in (0..W - 1).rev() {
@@ -292,7 +300,11 @@ struct LoopGeom {
 fn compile_loop_geom(iso: &Iso) -> LoopGeom {
     let lowered = compile_with_metadata(iso).expect("Trace must lower");
     let rom = assemble(&lowered.instrs).expect("assemble ROM");
-    assert_eq!(lowered.loop_terms.len(), 1, "expect a single top-level loop");
+    assert_eq!(
+        lowered.loop_terms.len(),
+        1,
+        "expect a single top-level loop"
+    );
     let iter_len = lowered.loop_terms[0].iter_len;
     let body_len = iter_len - LOOP_OVERHEAD;
     let body_start = BODY_START;
@@ -388,7 +400,11 @@ fn build_walk_body() -> (Iso, Type, Type) {
         mde_walk_bytes(&mut bytes);
         let out_val = unmarshal(&state_with_regs(&bytes), &carrier);
         let out_re = marshal(&out_val, &carrier);
-        assert_eq!(&out_re.regs[..5], &bytes[..], "walk not closed on canonical encodings");
+        assert_eq!(
+            &out_re.regs[..5],
+            &bytes[..],
+            "walk not closed on canonical encodings"
+        );
         forward.insert(v.clone(), out_val.clone());
         assert!(
             backward.insert(out_val, v.clone()).is_none(),
@@ -449,14 +465,20 @@ fn concrete_step_body_full(
 #[test]
 #[ignore = "diagnostic: prints the mde_spill body carrier layout (regs+scratch)"]
 fn diag_mde_carrier_layout() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let (body, u_ty, carrier) = build_walk_body();
     eprintln!("carrier type: {carrier:?}");
     eprintln!("u_ty (input): {u_ty:?}");
     // marshal a few carrier values and show the 5 leaf bytes.
     for v in enumerate_values(&carrier).into_iter().take(6) {
         let sv = marshal(&v, &carrier);
-        eprintln!("  val {v:?} -> regs[..6]={:?} (5 leaf bytes = regs[..5])", &sv.regs[..6]);
+        eprintln!(
+            "  val {v:?} -> regs[..6]={:?} (5 leaf bytes = regs[..5])",
+            &sv.regs[..6]
+        );
     }
     let iso = Iso::trace(u_ty, body);
     let geom = compile_loop_geom(&iso);
@@ -491,7 +513,14 @@ fn diag_mde_carrier_layout() {
                 CarrierHome::Scratch(s) => scratch[*s] = leaves[j],
             }
         }
-        let out = concrete_step_body_full(&layout, &geom.rom, geom.body_start, geom.body_len, regs, scratch);
+        let out = concrete_step_body_full(
+            &layout,
+            &geom.rom,
+            geom.body_start,
+            geom.body_len,
+            regs,
+            scratch,
+        );
         let mut want = leaves;
         mde_walk_bytes(&mut want);
         home.iter().enumerate().all(|(j, cf)| {
@@ -503,7 +532,10 @@ fn diag_mde_carrier_layout() {
         })
     });
     eprintln!("  pinned home map {home:?} reproduces mde_walk over WHOLE carrier: {all_ok}");
-    assert!(all_ok, "pinned carrier home map does not reproduce the walk");
+    assert!(
+        all_ok,
+        "pinned carrier home map does not reproduce the walk"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -591,7 +623,7 @@ fn mde_walk_spec(leaves_in: &[Vec<Bdd>; 5], vs: &BddVariableSet) -> [Vec<Bdd>; 5
     b[2] = xor_bytes(&b[2], &b[3]); // b[2]^=b[3]
     b[3] = xor_bytes(&b[3], &b[4]); // b[3]^=b[4]
     b[0] = xor_const1(&b[0], vs); // b[0]^=1
-    // predicate = b[0] & 1  (bit 0 of b[0]).
+                                  // predicate = b[0] & 1  (bit 0 of b[0]).
     let p = b[0][0].clone();
     let (n1, n2) = cond_swap(&p, &b[1], &b[2]);
     b[1] = n1;
@@ -606,9 +638,14 @@ fn mde_walk_spec(leaves_in: &[Vec<Bdd>; 5], vs: &BddVariableSet) -> [Vec<Bdd>; 5
     b[3] = xor_bytes(&b[3], &b[4]); // b[3]^=b[4]
     b[2] = xor_bytes(&b[2], &b[3]); // b[2]^=b[3]
     b[1] = xor_bytes(&b[1], &b[2]); // b[1]^=b[2]
-    [b[0].clone(), b[1].clone(), b[2].clone(), b[3].clone(), b[4].clone()]
+    [
+        b[0].clone(),
+        b[1].clone(),
+        b[2].clone(),
+        b[3].clone(),
+        b[4].clone(),
+    ]
 }
-
 
 // ══════════════════════════════════════════════════════════════════════════
 // L1 -- BODY LEMMA (with the spilled leaf as CARRIER).
@@ -679,7 +716,12 @@ fn compose_body(
             }
         });
         let (peak, sum) = sv_bdd_sizes(&cur);
-        samples.push(BodyStep { step: i + 1, peak, sum, secs: t0.elapsed().as_secs_f64() });
+        samples.push(BodyStep {
+            step: i + 1,
+            peak,
+            sum,
+            secs: t0.elapsed().as_secs_f64(),
+        });
     }
     (cur, samples)
 }
@@ -695,10 +737,14 @@ fn prove_body_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     let vs = BddVariableSet::new_anonymous(n_vars(layout));
     let nf = n_fields(layout);
     let (out, samples) = compose_body(layout, &geom.rom, &vs, geom.body_start, geom.body_len);
-    print_curve("mde_spill BODY (mde_walk) [full ROM, PC concrete]", &samples);
+    print_curve(
+        "mde_spill BODY (mde_walk) [full ROM, PC concrete]",
+        &samples,
+    );
 
     // Body-entry carrier leaf bit-vectors (the same vars the entry SV used).
-    let leaves_in: [Vec<Bdd>; 5] = std::array::from_fn(|leaf| entry_leaf_bits(&vs, nf, layout, leaf));
+    let leaves_in: [Vec<Bdd>; 5] =
+        std::array::from_fn(|leaf| entry_leaf_bits(&vs, nf, layout, leaf));
     let want = mde_walk_spec(&leaves_in, &vs);
 
     // The 5 carrier leaf outputs must equal mde_walk_spec over the WHOLE domain,
@@ -746,7 +792,10 @@ fn prove_body_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
 fn invariant_body_lemma_mde_spill() {
     // w_pc=8: the body span never executes a Swapbr (BR stays 0), PC ∈ [7,21] fits
     // 8 bits. Faithful to the body (validated vs the w_pc=8 concrete step in diag).
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let (body, u_ty, _carrier) = build_walk_body();
     let iso = Iso::trace(u_ty, body);
     let geom = compile_loop_geom(&iso);
@@ -761,7 +810,10 @@ fn invariant_body_lemma_mde_spill() {
          MAX peak {} BDD nodes, {:.3}s.",
         geom.body_len, peak, secs
     );
-    assert!(peak < 50_000, "BODY LEMMA peak {peak} -- expected tractable (< 50k)");
+    assert!(
+        peak < 50_000,
+        "BODY LEMMA peak {peak} -- expected tractable (< 50k)"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -810,8 +862,18 @@ fn read_come_from(geom: &LoopGeom) -> ComeFrom {
                 ref o => panic!("Lend must be SWAPBR rb, got {o:?}"),
             }
             // The come-from tag register must be the carrier tag (Reg(TAG_REG)).
-            assert_eq!(tag, TAG_REG, "come-from reads tag from r{tag}, expected r{TAG_REG}");
-            ComeFrom { ctrl, tag, temp, rb, delta_u, route_start }
+            assert_eq!(
+                tag, TAG_REG,
+                "come-from reads tag from r{tag}, expected r{TAG_REG}"
+            );
+            ComeFrom {
+                ctrl,
+                tag,
+                temp,
+                rb,
+                delta_u,
+                route_start,
+            }
         }
         ref o => panic!("route[3] must be CSWAP ctrl,temp,rb, got {o:?}"),
     }
@@ -845,7 +907,12 @@ fn come_from_entry_sv(layout: &Layout, cf: &ComeFrom, vs: &BddVariableSet) -> SV
     })
 }
 
-fn compose_come_from(layout: &Layout, geom: &LoopGeom, cf: &ComeFrom, vs: &BddVariableSet) -> (SV, usize) {
+fn compose_come_from(
+    layout: &Layout,
+    geom: &LoopGeom,
+    cf: &ComeFrom,
+    vs: &BddVariableSet,
+) -> (SV, usize) {
     let engine = StepEngine::new(layout, &geom.rom);
     let mut ctx = WalkCtx::new();
     let mut cur = come_from_entry_sv(layout, cf, vs);
@@ -901,13 +968,23 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
 
     // BR = δu·[tag==0].
     for b in 0..W {
-        let du_bit = if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
+        let du_bit = if (cf.delta_u >> b) & 1 == 1 {
+            vs.mk_true()
+        } else {
+            vs.mk_false()
+        };
         let want = not_tag.and(&du_bit);
-        assert!(br_out[b] == want, "COME-FROM: BR out bit {b} != δu·[tag==0]");
+        assert!(
+            br_out[b] == want,
+            "COME-FROM: BR out bit {b} != δu·[tag==0]"
+        );
     }
 
     // GAP-A: Lend PC landing vs the w_pc=16 netlist -- the sole BR≠0 PC-adder pass.
-    assert_eq!(layout.w_pc, 16, "GAP-A PC-landing assert requires w_pc=16 adder");
+    assert_eq!(
+        layout.w_pc, 16,
+        "GAP-A PC-landing assert requires w_pc=16 adder"
+    );
     let lend_plus_1 = geom.lend_pc + 1;
     let pc_lo_out = out_field_bits(&out, layout, layout.pc_field());
     let pc_hi_out = out_field_bits(&out, layout, layout.pc_hi_field());
@@ -921,8 +998,14 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
             let eb = if e { vs.mk_true() } else { vs.mk_false() };
             tag_in[0].and(&eb).or(&not_tag.and(&cb))
         };
-        assert!(pc_lo_out[b] == mk(ltop_lo, end_lo), "GAP-A: PC-lo bit {b} != ite(tag0, lend+1, LTOP)");
-        assert!(pc_hi_out[b] == mk(ltop_hi, end_hi), "GAP-A: PC-hi bit {b} != ite(tag0, lend+1, LTOP)");
+        assert!(
+            pc_lo_out[b] == mk(ltop_lo, end_lo),
+            "GAP-A: PC-lo bit {b} != ite(tag0, lend+1, LTOP)"
+        );
+        assert!(
+            pc_hi_out[b] == mk(ltop_hi, end_hi),
+            "GAP-A: PC-hi bit {b} != ite(tag0, lend+1, LTOP)"
+        );
     }
 
     // AUX-EXIT: ctrl=tag^1, temp=δu·[tag0==1], rb=0.
@@ -930,10 +1013,24 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     let temp_out = out_field_bits(&out, layout, layout.reg_field(cf.temp));
     let rb_out = out_field_bits(&out, layout, layout.reg_field(cf.rb));
     for b in 0..W {
-        let want_ctrl = if b == 0 { not_tag.clone() } else { tag_in[b].clone() };
-        assert!(ctrl_out[b] == want_ctrl, "COME-FROM AUX-EXIT: ctrl bit {b} != tag^1");
-        let du_bit = if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
-        assert!(temp_out[b] == tag_in[0].and(&du_bit), "COME-FROM AUX-EXIT: temp bit {b} != δu·[tag0==1]");
+        let want_ctrl = if b == 0 {
+            not_tag.clone()
+        } else {
+            tag_in[b].clone()
+        };
+        assert!(
+            ctrl_out[b] == want_ctrl,
+            "COME-FROM AUX-EXIT: ctrl bit {b} != tag^1"
+        );
+        let du_bit = if (cf.delta_u >> b) & 1 == 1 {
+            vs.mk_true()
+        } else {
+            vs.mk_false()
+        };
+        assert!(
+            temp_out[b] == tag_in[0].and(&du_bit),
+            "COME-FROM AUX-EXIT: temp bit {b} != δu·[tag0==1]"
+        );
         assert!(rb_out[b] == zero, "COME-FROM AUX-EXIT: rb bit {b} != 0");
     }
     // s0/s1 + IR back to 0.
@@ -947,7 +1044,10 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     ] {
         let got = out_field_bits(&out, layout, f);
         for b in 0..W {
-            assert!(got[b] == zero, "COME-FROM AUX-EXIT: field {f} bit {b} != 0 (scratch/IR leak)");
+            assert!(
+                got[b] == zero,
+                "COME-FROM AUX-EXIT: field {f} bit {b} != 0 (scratch/IR leak)"
+            );
         }
     }
 
@@ -962,7 +1062,11 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
             assert!(
                 got[b] == inp[b],
                 "COME-FROM: scratch s{s} bit {b} not identity (come-from disturbed the {} scratch)",
-                if s == SPILL_SCRATCH { "SPILLED-CARRIER" } else { "transient" }
+                if s == SPILL_SCRATCH {
+                    "SPILLED-CARRIER"
+                } else {
+                    "transient"
+                }
             );
         }
     }
@@ -972,8 +1076,15 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
     let delta_u = cf.delta_u as usize;
     assert_eq!(delta_u, 256 - iter_len, "δu must be 256 − iter_len");
     let w_pc = layout.w_pc;
-    let mask: usize = if w_pc >= usize::BITS as usize { usize::MAX } else { (1usize << w_pc) - 1 };
-    let sext = { let s = cf.delta_u as i8 as i64; (s & (mask as i64)) as usize };
+    let mask: usize = if w_pc >= usize::BITS as usize {
+        usize::MAX
+    } else {
+        (1usize << w_pc) - 1
+    };
+    let sext = {
+        let s = cf.delta_u as i8 as i64;
+        (s & (mask as i64)) as usize
+    };
     let landed = (geom.lend_pc.wrapping_add(sext).wrapping_add(1)) & mask;
     assert_eq!(landed, LTOP, "back-jump δu must land on Ltop");
 
@@ -986,7 +1097,10 @@ fn prove_come_from_lemma(layout: &Layout, geom: &LoopGeom) -> (usize, f64) {
         let got = out_field_bits(&out, layout, layout.reg_field(r));
         let inp = field_bits(&vs, nf, layout.reg_field(r));
         for b in 0..W {
-            assert!(got[b] == inp[b], "COME-FROM: data reg r{r} bit {b} disturbed");
+            assert!(
+                got[b] == inp[b],
+                "COME-FROM: data reg r{r} bit {b} disturbed"
+            );
         }
     }
 
@@ -1010,7 +1124,10 @@ fn invariant_come_from_lemma_mde_spill() {
          lands on Ltop; carrier (incl. SPILLED Scratch(2)) undisturbed. Peak {} nodes, {:.3}s.",
         cf.delta_u, peak, secs
     );
-    assert!(peak < 50_000, "COME-FROM LEMMA peak {peak} -- expected tractable");
+    assert!(
+        peak < 50_000,
+        "COME-FROM LEMMA peak {peak} -- expected tractable"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -1093,7 +1210,12 @@ fn re_entry_base_sv(layout: &Layout, geom: &LoopGeom, cf: &ComeFrom, vs: &BddVar
     })
 }
 
-fn compose_re_entry_from(layout: &Layout, geom: &LoopGeom, vs: &BddVariableSet, entry: SV) -> (SV, usize) {
+fn compose_re_entry_from(
+    layout: &Layout,
+    geom: &LoopGeom,
+    vs: &BddVariableSet,
+    entry: SV,
+) -> (SV, usize) {
     let engine = StepEngine::new(layout, &geom.rom);
     let mut ctx = WalkCtx::new();
     let mut cur = entry;
@@ -1131,7 +1253,14 @@ fn compose_re_entry_from(layout: &Layout, geom: &LoopGeom, vs: &BddVariableSet, 
 /// Shared L0 exit checks: aux all 0, PC=BODY_START, carrier identity (incl.
 /// Scratch(2) spilled carrier), s0/s1=0, s2..s7 identity, IR=0. `tag_want` is
 /// the expected tag byte (0 for the step leg, 1 for the base leg).
-fn check_l0_exit(layout: &Layout, geom: &LoopGeom, cf: &ComeFrom, vs: &BddVariableSet, out: &SV, tag_want: u8) {
+fn check_l0_exit(
+    layout: &Layout,
+    geom: &LoopGeom,
+    cf: &ComeFrom,
+    vs: &BddVariableSet,
+    out: &SV,
+    tag_want: u8,
+) {
     let nf = n_fields(layout);
     let rc = read_rc(geom);
     let zero = vs.mk_false();
@@ -1145,11 +1274,18 @@ fn check_l0_exit(layout: &Layout, geom: &LoopGeom, cf: &ComeFrom, vs: &BddVariab
     ] {
         let got = out_field_bits(out, layout, f);
         for b in 0..W {
-            assert!(got[b] == zero, "RE-ENTRY: aux field {f} bit {b} != 0 (L1 entry invariant broken)");
+            assert!(
+                got[b] == zero,
+                "RE-ENTRY: aux field {f} bit {b} != 0 (L1 entry invariant broken)"
+            );
         }
     }
 
-    assert_eq!(read_concrete_pc(out, layout), Some(BODY_START), "RE-ENTRY: exit PC != BODY_START");
+    assert_eq!(
+        read_concrete_pc(out, layout),
+        Some(BODY_START),
+        "RE-ENTRY: exit PC != BODY_START"
+    );
 
     // Register carrier + other data regs. tag = tag_want; payload identity.
     for r in 0..layout.num_regs {
@@ -1159,13 +1295,20 @@ fn check_l0_exit(layout: &Layout, geom: &LoopGeom, cf: &ComeFrom, vs: &BddVariab
         let got = out_field_bits(out, layout, layout.reg_field(r));
         if r == TAG_REG {
             for b in 0..W {
-                let want = if (tag_want >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
+                let want = if (tag_want >> b) & 1 == 1 {
+                    vs.mk_true()
+                } else {
+                    vs.mk_false()
+                };
                 assert!(got[b] == want, "RE-ENTRY: tag reg bit {b} != {tag_want}");
             }
         } else {
             let inp = field_bits(vs, nf, layout.reg_field(r));
             for b in 0..W {
-                assert!(got[b] == inp[b], "RE-ENTRY: data reg r{r} bit {b} disturbed by the glue");
+                assert!(
+                    got[b] == inp[b],
+                    "RE-ENTRY: data reg r{r} bit {b} disturbed by the glue"
+                );
             }
         }
     }
@@ -1186,7 +1329,11 @@ fn check_l0_exit(layout: &Layout, geom: &LoopGeom, cf: &ComeFrom, vs: &BddVariab
             assert!(
                 got[b] == inp[b],
                 "RE-ENTRY: scratch s{s} bit {b} not identity (glue disturbed the {} scratch)",
-                if s == SPILL_SCRATCH { "SPILLED-CARRIER" } else { "transient" }
+                if s == SPILL_SCRATCH {
+                    "SPILLED-CARRIER"
+                } else {
+                    "transient"
+                }
             );
         }
     }
@@ -1202,17 +1349,24 @@ fn check_l0_exit(layout: &Layout, geom: &LoopGeom, cf: &ComeFrom, vs: &BddVariab
 
 #[test]
 fn invariant_re_entry_lemma_mde_spill() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let (body, u_ty, _carrier) = build_walk_body();
     let iso = Iso::trace(u_ty, body);
     let geom = compile_loop_geom(&iso);
     let cf = read_come_from(&geom);
     let vs = BddVariableSet::new_anonymous(n_vars(&layout));
     let t0 = Instant::now();
-    let (out, peak) = compose_re_entry_from(&layout, &geom, &vs, re_entry_sv(&layout, &geom, &cf, &vs));
+    let (out, peak) =
+        compose_re_entry_from(&layout, &geom, &vs, re_entry_sv(&layout, &geom, &cf, &vs));
     let secs = t0.elapsed().as_secs_f64();
     check_l0_exit(&layout, &geom, &cf, &vs, &out, 0);
-    assert!(peak < 50_000, "RE-ENTRY LEMMA peak {peak} -- expected tractable");
+    assert!(
+        peak < 50_000,
+        "RE-ENTRY LEMMA peak {peak} -- expected tractable"
+    );
     eprintln!(
         "L0 RE-ENTRY LEMMA [mde_spill]: glue [{LTOP},{BODY_START}) welds L2-continue-exit → L1-entry \
          {{ctrl=temp=rb=rc=BR=0}} over the WHOLE carrier; PC→BODY_START; carrier identity incl. \
@@ -1222,17 +1376,28 @@ fn invariant_re_entry_lemma_mde_spill() {
 
 #[test]
 fn invariant_re_entry_base_lemma_mde_spill() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let (body, u_ty, _carrier) = build_walk_body();
     let iso = Iso::trace(u_ty, body);
     let geom = compile_loop_geom(&iso);
     let cf = read_come_from(&geom);
     let vs = BddVariableSet::new_anonymous(n_vars(&layout));
     let t0 = Instant::now();
-    let (out, peak) = compose_re_entry_from(&layout, &geom, &vs, re_entry_base_sv(&layout, &geom, &cf, &vs));
+    let (out, peak) = compose_re_entry_from(
+        &layout,
+        &geom,
+        &vs,
+        re_entry_base_sv(&layout, &geom, &cf, &vs),
+    );
     let secs = t0.elapsed().as_secs_f64();
     check_l0_exit(&layout, &geom, &cf, &vs, &out, 1);
-    assert!(peak < 50_000, "RE-ENTRY BASE peak {peak} -- expected tractable");
+    assert!(
+        peak < 50_000,
+        "RE-ENTRY BASE peak {peak} -- expected tractable"
+    );
     eprintln!(
         "L0-BASE RE-ENTRY LEMMA [mde_spill]: glue lands the FIRST-traversal precondition \
          {{BR=0,ctrl=0,temp=δu,tag=1}} in L1's entry invariant (aux 0, PC→BODY_START, carrier \
@@ -1367,9 +1532,14 @@ fn invariant_induction_bootstrap_quiescence_mde_spill() {
 
     for v in enumerate_values(&bit) {
         let state = marshal(&v, &in_ty);
-        let final_state =
-            run_rom_on_cpu(&lowered.instrs, state, budget, s_max_val, theseus_eval::eval)
-                .expect("real-cpu run");
+        let final_state = run_rom_on_cpu(
+            &lowered.instrs,
+            state,
+            budget,
+            s_max_val,
+            theseus_eval::eval,
+        )
+        .expect("real-cpu run");
         let cpu_out = unmarshal(&final_state, &out_ty);
         let mut fuel = 1_000_000_000u64;
         let ev = theseus_eval::eval(&iso, v.clone(), &mut fuel).expect("eval");
@@ -1378,7 +1548,10 @@ fn invariant_induction_bootstrap_quiescence_mde_spill() {
             final_state.scratch, [0u8; NUM_SCRATCH],
             "BOOTSTRAP: scratch must be all-zero at exit (spill page-out leak check) on {v:?}"
         );
-        assert_eq!(final_state.br, 0, "BOOTSTRAP: BR must be 0 at loop exit on {v:?}");
+        assert_eq!(
+            final_state.br, 0,
+            "BOOTSTRAP: BR must be 0 at loop exit on {v:?}"
+        );
         eprintln!("  bootstrap {v:?}: run_rom_on_cpu == eval, scratch clean, BR=0");
     }
     eprintln!(
@@ -1396,7 +1569,10 @@ fn invariant_induction_bootstrap_quiescence_mde_spill() {
 /// a wrong spec (drop the final b[1]^=b[2] mixing step). Teeth on L1's body check.
 #[test]
 fn invariant_negative_control_body_mde_spill() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let (body, u_ty, _carrier) = build_walk_body();
     let iso = Iso::trace(u_ty, body);
     let geom = compile_loop_geom(&iso);
@@ -1404,13 +1580,17 @@ fn invariant_negative_control_body_mde_spill() {
     let nf = n_fields(&layout);
     let (out, _s) = compose_body(&layout, &geom.rom, &vs, geom.body_start, geom.body_len);
 
-    let leaves_in: [Vec<Bdd>; 5] = std::array::from_fn(|leaf| entry_leaf_bits(&vs, nf, &layout, leaf));
+    let leaves_in: [Vec<Bdd>; 5] =
+        std::array::from_fn(|leaf| entry_leaf_bits(&vs, nf, &layout, leaf));
     let want = mde_walk_spec(&leaves_in, &vs);
 
     // TRUE spec matches (leaf 1 = Reg(0)).
     let out_l1 = out_field_bits(&out, &layout, carrier_field(&layout, 1));
     for b in 0..W {
-        assert!(out_l1[b] == want[1][b], "sanity: real body must match mde_walk_spec on leaf 1");
+        assert!(
+            out_l1[b] == want[1][b],
+            "sanity: real body must match mde_walk_spec on leaf 1"
+        );
     }
 
     // WRONG spec: mde_walk WITHOUT the final b[1]^=b[2] mix -- leaf 1 differs.
@@ -1422,15 +1602,24 @@ fn invariant_negative_control_body_mde_spill() {
     wb[3] = xor_bytes(&wb[3], &wb[4]);
     wb[0] = xor_const1(&wb[0], &vs);
     let p = wb[0][0].clone();
-    let (n1, n2) = cond_swap(&p, &wb[1], &wb[2]); wb[1] = n1; wb[2] = n2;
-    let (n2b, n3) = cond_swap(&p, &wb[2], &wb[3]); wb[2] = n2b; wb[3] = n3;
-    let (n3b, n4) = cond_swap(&p, &wb[3], &wb[4]); wb[3] = n3b; wb[4] = n4;
+    let (n1, n2) = cond_swap(&p, &wb[1], &wb[2]);
+    wb[1] = n1;
+    wb[2] = n2;
+    let (n2b, n3) = cond_swap(&p, &wb[2], &wb[3]);
+    wb[2] = n2b;
+    wb[3] = n3;
+    let (n3b, n4) = cond_swap(&p, &wb[3], &wb[4]);
+    wb[3] = n3b;
+    wb[4] = n4;
     wb[0] = xor_const1(&wb[0], &vs);
     wb[3] = xor_bytes(&wb[3], &wb[4]);
     wb[2] = xor_bytes(&wb[2], &wb[3]);
     // (omit the final b[1]^=b[2])
     let differs = (0..W).any(|b| out_l1[b] != wb[1][b]);
-    assert!(differs, "NEG-1 body: real body must DIFFER from the mixing-dropped spec (teeth)");
+    assert!(
+        differs,
+        "NEG-1 body: real body must DIFFER from the mixing-dropped spec (teeth)"
+    );
     eprintln!("NEG-1 body [mde_spill]: real body ≡ mde_walk, ≠ mixing-dropped spec -- teeth.");
 }
 
@@ -1442,7 +1631,10 @@ fn invariant_negative_control_body_mde_spill() {
 /// treatment (asserting = mde_walk_spec[4], not 0) is genuinely required.
 #[test]
 fn invariant_negative_control_spill_is_carrier() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let (body, u_ty, _carrier) = build_walk_body();
     let iso = Iso::trace(u_ty, body);
     let geom = compile_loop_geom(&iso);
@@ -1464,10 +1656,14 @@ fn invariant_negative_control_spill_is_carrier() {
     );
 
     // And it DOES equal mde_walk_spec's leaf-4 output (the carrier claim).
-    let leaves_in: [Vec<Bdd>; 5] = std::array::from_fn(|leaf| entry_leaf_bits(&vs, nf, &layout, leaf));
+    let leaves_in: [Vec<Bdd>; 5] =
+        std::array::from_fn(|leaf| entry_leaf_bits(&vs, nf, &layout, leaf));
     let want = mde_walk_spec(&leaves_in, &vs);
     for b in 0..W {
-        assert!(out_spill[b] == want[SPILL_LEAF][b], "sanity: spilled leaf ≡ mde_walk_spec[4]");
+        assert!(
+            out_spill[b] == want[SPILL_LEAF][b],
+            "sanity: spilled leaf ≡ mde_walk_spec[4]"
+        );
     }
     eprintln!(
         "NEG-SPILL [mde_spill]: Scratch(2) at body exit ≡ mde_walk_spec[leaf 4] and is NOT \
@@ -1479,7 +1675,10 @@ fn invariant_negative_control_spill_is_carrier() {
 /// NEG-3 (mutated ROM): flip one body instr ⇒ L1 body ≠ mde_walk_spec.
 #[test]
 fn invariant_negative_control_mutated_rom_mde_spill() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let (body, u_ty, _carrier) = build_walk_body();
     let iso = Iso::trace(u_ty, body);
     let geom = compile_loop_geom(&iso);
@@ -1490,14 +1689,20 @@ fn invariant_negative_control_mutated_rom_mde_spill() {
     let mutate_at = geom.body_start + 1;
     mutated[mutate_at] = Instr::Xori { rd: 0, imm: 1 };
     let mutated_rom = assemble(&mutated).expect("assemble mutated ROM");
-    let n_diff = geom.rom.iter().zip(mutated_rom.iter()).filter(|(a, b)| a != b).count();
+    let n_diff = geom
+        .rom
+        .iter()
+        .zip(mutated_rom.iter())
+        .filter(|(a, b)| a != b)
+        .count();
     assert_eq!(n_diff, 1, "mutation must flip exactly one ROM word");
 
     let vs = BddVariableSet::new_anonymous(n_vars(&layout));
     let nf = n_fields(&layout);
     let (out, _s) = compose_body(&layout, &mutated_rom, &vs, geom.body_start, geom.body_len);
 
-    let leaves_in: [Vec<Bdd>; 5] = std::array::from_fn(|leaf| entry_leaf_bits(&vs, nf, &layout, leaf));
+    let leaves_in: [Vec<Bdd>; 5] =
+        std::array::from_fn(|leaf| entry_leaf_bits(&vs, nf, &layout, leaf));
     let want = mde_walk_spec(&leaves_in, &vs);
     let matches_all = (0..5).all(|leaf| {
         let got = out_field_bits(&out, &layout, carrier_field(&layout, leaf));
@@ -1507,7 +1712,9 @@ fn invariant_negative_control_mutated_rom_mde_spill() {
         !matches_all,
         "NEG-3 mutated ROM: a body with one flipped instr STILL matched mde_walk -- L1 has no teeth"
     );
-    eprintln!("NEG-3 mutated ROM [mde_spill]: one flipped body instr ⇒ body ≠ mde_walk -- L1 has teeth.");
+    eprintln!(
+        "NEG-3 mutated ROM [mde_spill]: one flipped body instr ⇒ body ≠ mde_walk -- L1 has teeth."
+    );
 }
 
 /// NEG-2 (come-from): real BR ≠ inverted-predicate and ≠ unconditional-loop specs.
@@ -1527,20 +1734,43 @@ fn invariant_negative_control_come_from_mde_spill() {
 
     let wrong_a: Vec<Bdd> = (0..W)
         .map(|b| {
-            let du = if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
+            let du = if (cf.delta_u >> b) & 1 == 1 {
+                vs.mk_true()
+            } else {
+                vs.mk_false()
+            };
             tag_in[0].and(&du)
         })
         .collect();
-    assert!((0..W).any(|b| br_out[b] != wrong_a[b]), "NEG-2: BR must DIFFER from inverted-predicate (teeth)");
+    assert!(
+        (0..W).any(|b| br_out[b] != wrong_a[b]),
+        "NEG-2: BR must DIFFER from inverted-predicate (teeth)"
+    );
 
     let wrong_b: Vec<Bdd> = (0..W)
-        .map(|b| if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() })
+        .map(|b| {
+            if (cf.delta_u >> b) & 1 == 1 {
+                vs.mk_true()
+            } else {
+                vs.mk_false()
+            }
+        })
         .collect();
-    assert!((0..W).any(|b| br_out[b] != wrong_b[b]), "NEG-2: BR must DIFFER from unconditional-loop (teeth)");
+    assert!(
+        (0..W).any(|b| br_out[b] != wrong_b[b]),
+        "NEG-2: BR must DIFFER from unconditional-loop (teeth)"
+    );
 
     for b in 0..W {
-        let du = if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
-        assert!(br_out[b] == not_tag.and(&du), "sanity: true δu·[tag==0] must match");
+        let du = if (cf.delta_u >> b) & 1 == 1 {
+            vs.mk_true()
+        } else {
+            vs.mk_false()
+        };
+        assert!(
+            br_out[b] == not_tag.and(&du),
+            "sanity: true δu·[tag==0] must match"
+        );
     }
     eprintln!("NEG-2 come-from [mde_spill]: real BR ≡ δu·[tag==0], ≠ {{inverted, unconditional}} -- teeth.");
 }
@@ -1553,7 +1783,10 @@ fn invariant_negative_control_come_from_mde_spill() {
 /// the tractable w_pc=8 continue-leg composition.
 #[test]
 fn invariant_negative_control_re_entry_mde_spill() {
-    let layout = Layout { w_pc: 8, ..Layout::default() };
+    let layout = Layout {
+        w_pc: 8,
+        ..Layout::default()
+    };
     let (body, u_ty, _carrier) = build_walk_body();
     let iso = Iso::trace(u_ty, body);
     let geom = compile_loop_geom(&iso);
@@ -1571,18 +1804,26 @@ fn invariant_negative_control_re_entry_mde_spill() {
         Some(BODY_START + 1),
         "NEG-4 L0: real glue exit PC matched a WRONG landing (BODY_START+1) -- no teeth"
     );
-    assert_eq!(got_pc, Some(BODY_START), "sanity: real glue lands on BODY_START");
+    assert_eq!(
+        got_pc,
+        Some(BODY_START),
+        "sanity: real glue lands on BODY_START"
+    );
 
     // (b) WRONG aux: the real ctrl at exit must NOT be 1 (it must be 0 = L1's
     // entry invariant). A glue that left ctrl=1 would break re-entry silently.
     let ctrl_out = out_field_bits(&out, &layout, layout.reg_field(cf.ctrl));
-    let wrong_ctrl_is_one = (0..W).all(|b| ctrl_out[b] == if b == 0 { one.clone() } else { zero.clone() });
+    let wrong_ctrl_is_one =
+        (0..W).all(|b| ctrl_out[b] == if b == 0 { one.clone() } else { zero.clone() });
     assert!(
         !wrong_ctrl_is_one,
         "NEG-4 L0: real glue exit ctrl matched the WRONG value 1 -- L0 welding has no teeth"
     );
     for b in 0..W {
-        assert!(ctrl_out[b] == zero, "sanity: real glue exit ctrl == 0 (L1 entry invariant)");
+        assert!(
+            ctrl_out[b] == zero,
+            "sanity: real glue exit ctrl == 0 (L1 entry invariant)"
+        );
     }
     eprintln!("NEG-4 L0 re-entry [mde_spill]: real glue lands ctrl=0 @BODY_START, ≠ {{wrong PC, ctrl=1}} -- teeth.");
 }
@@ -1626,10 +1867,24 @@ fn invariant_negative_control_aux_exit_mde_spill() {
 
     // sanity: the TRUE specs DO match (ties teeth to the right targets).
     for b in 0..W {
-        let want_ctrl = if b == 0 { not_tag.clone() } else { tag_in[b].clone() };
-        assert!(ctrl_out[b] == want_ctrl, "sanity: true ctrl = tag^1 must match");
-        let du_bit = if (cf.delta_u >> b) & 1 == 1 { vs.mk_true() } else { vs.mk_false() };
-        assert!(temp_out[b] == tag_in[0].and(&du_bit), "sanity: true temp = δu·[tag0==1] must match");
+        let want_ctrl = if b == 0 {
+            not_tag.clone()
+        } else {
+            tag_in[b].clone()
+        };
+        assert!(
+            ctrl_out[b] == want_ctrl,
+            "sanity: true ctrl = tag^1 must match"
+        );
+        let du_bit = if (cf.delta_u >> b) & 1 == 1 {
+            vs.mk_true()
+        } else {
+            vs.mk_false()
+        };
+        assert!(
+            temp_out[b] == tag_in[0].and(&du_bit),
+            "sanity: true temp = δu·[tag0==1] must match"
+        );
     }
     eprintln!("NEG-5 aux-exit [mde_spill]: real ctrl≡tag^1, temp≡δu·[tag0==1], ≠ {{ctrl=tag, temp=0}} -- teeth.");
 }

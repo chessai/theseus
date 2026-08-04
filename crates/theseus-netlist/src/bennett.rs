@@ -140,7 +140,10 @@ struct Wrap {
 
 impl Wrap {
     fn fresh_input_pair(&mut self) -> RailPair {
-        let pair = RailPair { line0: LineId(self.next_line), line1: LineId(self.next_line + 1) };
+        let pair = RailPair {
+            line0: LineId(self.next_line),
+            line1: LineId(self.next_line + 1),
+        };
         self.next_line += 2;
         self.arr.push(0);
         self.arr.push(0);
@@ -153,11 +156,17 @@ impl Wrap {
 
     fn emit(&mut self, kind: CellKind, ins: &[RailPair]) -> Vec<RailPair> {
         debug_assert_eq!(ins.len(), kind.arity());
-        let depth = ins.iter().map(|&p| self.arrival(p)).max().expect("cell has inputs");
+        let depth = ins
+            .iter()
+            .map(|&p| self.arrival(p))
+            .max()
+            .expect("cell has inputs");
         let mut outs = Vec::with_capacity(ins.len());
         for _ in ins {
-            let pair =
-                RailPair { line0: LineId(self.next_line), line1: LineId(self.next_line + 1) };
+            let pair = RailPair {
+                line0: LineId(self.next_line),
+                line1: LineId(self.next_line + 1),
+            };
             self.next_line += 2;
             self.arr.push(depth + 1);
             self.arr.push(depth + 1);
@@ -218,7 +227,11 @@ pub fn bennett_wrap(
     }
 
     let arrivals = net.line_arrivals().map_err(BennettError::Body)?;
-    let mut wrap = Wrap { next_line: net.num_lines, arr: arrivals, cells: net.cells.clone() };
+    let mut wrap = Wrap {
+        next_line: net.num_lines,
+        arr: arrivals,
+        cells: net.cells.clone(),
+    };
 
     // Mirror map: forward pair (as referenced) → the pair carrying the
     // same value on the uncompute side.

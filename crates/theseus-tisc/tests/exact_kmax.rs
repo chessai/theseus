@@ -104,7 +104,10 @@ fn f1_large_u_fast_exit_compiles() {
     let lowered = compile_with_metadata(&iso)
         .expect("Flat(5) Id-body Trace must compile under exact-k_max (k_exact=2, WCET=24)");
     let (k_max, iter_len) = (lowered.loop_terms[0].k_max, lowered.loop_terms[0].iter_len);
-    assert!(lowered.loop_terms[0].inner.is_empty(), "single-level: no nesting");
+    assert!(
+        lowered.loop_terms[0].inner.is_empty(),
+        "single-level: no nesting"
+    );
     assert_eq!(k_max, 2, "k_exact = max(T=1) + 1 = 2");
     assert_eq!(
         iter_len, 10,

@@ -26,7 +26,6 @@
 //! and the differential oracle is iterating the body's function R
 //! times.
 
-
 use crate::ir::cell::{
     Cell, CellKind, CellNetError, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT,
 };
@@ -116,10 +115,15 @@ impl RingNetlist {
         let depths = &body.output_depths;
         let d = depths.first().copied().unwrap_or(0);
         if depths.iter().any(|&x| x != d) {
-            return Err(RingError::OutputSkew { depths: depths.clone() });
+            return Err(RingError::OutputSkew {
+                depths: depths.clone(),
+            });
         }
         if d == 0 || d % u32::from(PHASE_COUNT) != 0 {
-            return Err(RingError::PhaseClosure { depth: d, phase_count: PHASE_COUNT });
+            return Err(RingError::PhaseClosure {
+                depth: d,
+                phase_count: PHASE_COUNT,
+            });
         }
         Ok(RingNetlist { body, depth: d })
     }
@@ -160,7 +164,10 @@ mod tests {
     /// One K1 Fredkin on ports [c, a, b], outputs at depth 1 -- the
     /// tiniest nontrivial step body.
     fn fredkin_body() -> PhasedCellNetlist {
-        let pair = |i: u32| RailPair { line0: LineId(2 * i), line1: LineId(2 * i + 1) };
+        let pair = |i: u32| RailPair {
+            line0: LineId(2 * i),
+            line1: LineId(2 * i + 1),
+        };
         let ins: Vec<RailPair> = (0..3).map(pair).collect();
         let outs: Vec<RailPair> = (3..6).map(pair).collect();
         PhasedCellNetlist {
@@ -169,7 +176,13 @@ mod tests {
             inputs: ins.clone(),
             outputs: outs.clone(),
             output_depths: vec![1, 1, 1],
-            cells: vec![Cell { kind: CellKind::K1, depth: 0, phase: 0, inputs: ins, outputs: outs }],
+            cells: vec![Cell {
+                kind: CellKind::K1,
+                depth: 0,
+                phase: 0,
+                inputs: ins,
+                outputs: outs,
+            }],
             num_lines: 12,
         }
     }
@@ -190,7 +203,11 @@ mod tests {
         // Flushed to D = 4 with exactly 3 K0 stages per port.
         assert_eq!(padded.output_depths, vec![4, 4, 4]);
         assert_eq!(
-            padded.cells.iter().filter(|c| c.kind == CellKind::K0).count(),
+            padded
+                .cells
+                .iter()
+                .filter(|c| c.kind == CellKind::K0)
+                .count(),
             9
         );
         let ring = RingNetlist::new(padded).unwrap();

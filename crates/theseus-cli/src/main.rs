@@ -192,8 +192,6 @@ fn cmd_lower(file: &str, iso_name: &str) {
             }
         }
     } else {
-        println!(
-            "oracle: skipped (domain has {domain_size} values, threshold is 4096)"
-        );
+        println!("oracle: skipped (domain has {domain_size} values, threshold is 4096)");
     }
 }

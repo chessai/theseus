@@ -331,8 +331,10 @@ impl Sky130Variant {
             BodyConfig::DeepNWell => "out",
         };
         let mut cards = vec![
-            self.vt.fet(n_name, FetKind::Nmos, "pc", "ing", "out", n_bulk, 4.0, 0.15),
-            self.vt.fet(p_name, FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15),
+            self.vt
+                .fet(n_name, FetKind::Nmos, "pc", "ing", "out", n_bulk, 4.0, 0.15),
+            self.vt
+                .fet(p_name, FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15),
         ];
         if self.body == BodyConfig::DeepNWell {
             cards.push(dnw_parasitic_stack("out", "vdd", "0"));
@@ -367,11 +369,7 @@ pub fn tg_load_axis() -> [f64; 3] {
 /// cards swapped per [`Sky130Variant::tg_cards`] and the load parameterized.
 /// With `variant = Sky130Variant::default()` and `c_load_f = 1e-12` this is
 /// electrically identical to the existing cell (asserted by test).
-pub fn adiabatic_tg_netlist_sky130(
-    period_s: f64,
-    variant: Sky130Variant,
-    c_load_f: f64,
-) -> String {
+pub fn adiabatic_tg_netlist_sky130(period_s: f64, variant: Sky130Variant, c_load_f: f64) -> String {
     let rung = DeviceRung::Rung1Sky130;
     let q = period_s / 4.0;
     let h = period_s / 2.0;
@@ -1184,9 +1182,7 @@ fn build_two_lal_sr(period_s: f64, n_stages: usize, bits: &[bool], bit_meas: boo
     lines.push("Bpv pwrv 0 V = -V(vdd)*I(Vdd)".into());
     lines.push("Bpin pwrin 0 V = -V(int)*I(Vint)-V(inc)*I(Vinc)".into());
     lines.push("Bpak pwrak 0 V = -V(ackt)*I(Vackt)-V(ackc)*I(Vackc)".into());
-    lines.push(
-        "Btot ptot 0 V = V(pwr0)+V(pwr1)+V(pwr2)+V(pwr3)+V(pwrv)+V(pwrin)+V(pwrak)".into(),
-    );
+    lines.push("Btot ptot 0 V = V(pwr0)+V(pwr1)+V(pwr2)+V(pwr3)+V(pwrv)+V(pwrin)+V(pwrak)".into());
 
     // Control block.
     lines.push(".control".into());
@@ -1331,7 +1327,10 @@ mod tests {
             return;
         }
         let e = run_energy(&adiabatic_tg_netlist(1e-7), "esrc");
-        assert!(e > 1e-16, "cell should dissipate a measurable amount, got {e:e}");
+        assert!(
+            e > 1e-16,
+            "cell should dissipate a measurable amount, got {e:e}"
+        );
     }
 
     /// The CMOS control is FLAT: ~CV² per cycle regardless of period (slope ≈ 0),
@@ -1505,7 +1504,11 @@ mod tests {
         eprintln!("rung1 sky130 CMOS curve: {:?}", curve.points);
         // Energy must be positive at every point.
         for &(_, e) in &curve.points {
-            assert!(e > 0.0, "rung1 CMOS energy must be positive: {:?}", curve.points);
+            assert!(
+                e > 0.0,
+                "rung1 CMOS energy must be positive: {:?}",
+                curve.points
+            );
         }
         let slope = curve.slope();
         eprintln!("rung1 sky130 CMOS slope = {slope:.4}");
@@ -1553,7 +1556,11 @@ mod tests {
         let curve = pfal_curve_rung(&periods, DeviceRung::Rung1Sky130);
         eprintln!("rung1 sky130 PFAL curve: {:?}", curve.points);
         for &(_, e) in &curve.points {
-            assert!(e > 0.0, "rung1 PFAL energy must be positive: {:?}", curve.points);
+            assert!(
+                e > 0.0,
+                "rung1 PFAL energy must be positive: {:?}",
+                curve.points
+            );
         }
         // (a) Fast-end (first 3 points) is quasi-adiabatic: falls, slope < −0.5
         // (measured ≈ −0.82; NOT asserted to be a clean −1, these are real
@@ -1626,7 +1633,10 @@ mod tests {
         assert_eq!(Sky130Vt::Hvt.nmos_model(), "sky130_fd_pr__nfet_01v8");
         // lvt PMOS below its binning minimum is clamped up to L=0.35.
         let card = Sky130Vt::Lvt.fet("2", FetKind::Pmos, "pc", "inb", "out", "vdd", 8.0, 0.15);
-        assert!(card.ends_with("W=8 L=0.35"), "lvt PMOS L not clamped: {card}");
+        assert!(
+            card.ends_with("W=8 L=0.35"),
+            "lvt PMOS L not clamped: {card}"
+        );
         // NMOS and non-lvt PMOS keep the requested L.
         let n = Sky130Vt::Lvt.fet("1", FetKind::Nmos, "pc", "ing", "out", "0", 4.0, 0.15);
         assert!(n.ends_with("W=4 L=0.15"), "{n}");
@@ -1638,7 +1648,10 @@ mod tests {
     /// the two PDK parasitic isolation diodes; the grid is the full 3 × 2.
     #[test]
     fn dnw_variant_cards_and_grid() {
-        let v = Sky130Variant { vt: Sky130Vt::Std, body: BodyConfig::DeepNWell };
+        let v = Sky130Variant {
+            vt: Sky130Vt::Std,
+            body: BodyConfig::DeepNWell,
+        };
         let cards = v.tg_cards("1", "2");
         assert_eq!(cards.len(), 3);
         assert!(
@@ -1694,10 +1707,7 @@ mod tests {
         for k in [0, n_stages - 1] {
             let meas_name = format!("vo{k}max");
             let v = run_energy(&nl, &meas_name);
-            assert!(
-                v > 0.9,
-                "stage {k} rail must reach >0.9 V, got {v:.4} V"
-            );
+            assert!(v > 0.9, "stage {k} rail must reach >0.9 V, got {v:.4} V");
         }
 
         // (b) Log-log slope of energy vs period.

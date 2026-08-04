@@ -19,7 +19,10 @@ pub struct EnergyFit {
 ///
 /// Panics if `points` has fewer than 3 elements (under-determined).
 pub fn fit(points: &[(f64, f64)]) -> EnergyFit {
-    assert!(points.len() >= 3, "need at least 3 points for 3-parameter fit");
+    assert!(
+        points.len() >= 3,
+        "need at least 3 points for 3-parameter fit"
+    );
 
     // Basis functions: x0 = 1/t, x1 = t, x2 = 1.
     // Normal equations: A^T A c = A^T y  where A_ij = basis_j(t_i).
@@ -36,7 +39,7 @@ pub fn fit(points: &[(f64, f64)]) -> EnergyFit {
         let inv_t = 1.0 / t;
         // A^T A accumulation
         s00 += inv_t * inv_t;
-        s01 += inv_t * t;  // = 1
+        s01 += inv_t * t; // = 1
         s02 += inv_t;
         s11 += t * t;
         s12 += t;
@@ -51,21 +54,23 @@ pub fn fit(points: &[(f64, f64)]) -> EnergyFit {
     }
 
     // Solve 3×3 via Cramer's rule.
-    let det = s00 * (s11 * s22 - s12 * s12)
-            - s01 * (s01 * s22 - s12 * s02)
-            + s02 * (s01 * s12 - s11 * s02);
+    let det = s00 * (s11 * s22 - s12 * s12) - s01 * (s01 * s22 - s12 * s02)
+        + s02 * (s01 * s12 - s11 * s02);
 
     let k_adia = ((s11 * s22 - s12 * s12) * r0
-                + (s02 * s12 - s01 * s22) * r1
-                + (s01 * s12 - s02 * s11) * r2) / det;
+        + (s02 * s12 - s01 * s22) * r1
+        + (s01 * s12 - s02 * s11) * r2)
+        / det;
 
     let k_leak = ((s02 * s12 - s01 * s22) * r0
-                + (s00 * s22 - s02 * s02) * r1
-                + (s01 * s02 - s00 * s12) * r2) / det;
+        + (s00 * s22 - s02 * s02) * r1
+        + (s01 * s02 - s00 * s12) * r2)
+        / det;
 
-    let k_res  = ((s01 * s12 - s02 * s11) * r0
-                + (s01 * s02 - s00 * s12) * r1
-                + (s00 * s11 - s01 * s01) * r2) / det;
+    let k_res = ((s01 * s12 - s02 * s11) * r0
+        + (s01 * s02 - s00 * s12) * r1
+        + (s00 * s11 - s01 * s01) * r2)
+        / det;
 
     // R² = 1 - SS_res / SS_tot
     let n = points.len() as f64;
@@ -77,9 +82,18 @@ pub fn fit(points: &[(f64, f64)]) -> EnergyFit {
         let residual = e - predicted;
         ss_res += residual * residual;
     }
-    let r_squared = if ss_tot.abs() < f64::EPSILON { 1.0 } else { 1.0 - ss_res / ss_tot };
+    let r_squared = if ss_tot.abs() < f64::EPSILON {
+        1.0
+    } else {
+        1.0 - ss_res / ss_tot
+    };
 
-    EnergyFit { k_adia, k_leak, k_res, r_squared }
+    EnergyFit {
+        k_adia,
+        k_leak,
+        k_res,
+        r_squared,
+    }
 }
 
 impl EnergyFit {

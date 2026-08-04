@@ -12,7 +12,6 @@ use crate::ty::Type;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Iso {
     // ── Composition ──────────────────────────────────────────────
-
     /// `id : a ↔ a`
     Id(Type),
     /// `sym f : b ↔ a`  (when `f : a ↔ b`)
@@ -25,7 +24,6 @@ pub enum Iso {
     Times(Box<Iso>, Box<Iso>),
 
     // ── Structural: sum monoid (+, 0) ────────────────────────────
-
     /// `swap⁺ : a + b ↔ b + a`
     SwapSum(Type, Type),
     /// `assocl⁺ : a + (b + c) ↔ (a + b) + c`
@@ -38,7 +36,6 @@ pub enum Iso {
     UnitiSum(Type),
 
     // ── Structural: product monoid (×, 1) ────────────────────────
-
     /// `swapˣ : a × b ↔ b × a`
     SwapProd(Type, Type),
     /// `assoclˣ : a × (b × c) ↔ (a × b) × c`
@@ -51,20 +48,17 @@ pub enum Iso {
     UnitiProd(Type),
 
     // ── Distributivity ───────────────────────────────────────────
-
     /// `distrib : a × (b + c) ↔ (a × b) + (a × c)`
     Distrib(Type, Type, Type),
     /// `factor : (a × b) + (a × c) ↔ a × (b + c)`
     Factor(Type, Type, Type),
 
     // ── Trace ────────────────────────────────────────────────────
-
     /// `trace f : a ↔ b`  (when `f : u + a ↔ u + b`).
     /// The [`Type`] parameter is the trace carrier `u`.
     Trace(Type, Box<Iso>),
 
     // ── Iter (bounded iteration, ADR-0009/ADR-0036) ─────────────
-
     /// `iter n f : n × a ↔ n × a`  (when `f : a ↔ a` and `n` is a
     /// numeral type `1 + (1 + (... + 0))`).
     ///
@@ -80,7 +74,6 @@ pub enum Iso {
     Iter(Type, Box<Iso>),
 
     // ── Fold/Unfold (structural recursion, ADR-0009/ADR-0037) ───
-
     /// `fold l f : l × c ↔ l × c`  (when `f : b × c ↔ b × c` and `l` is
     /// a list-spine type `1 + (b × (1 + (b × (... + 0))))` -- the shape
     /// ADR-0035 bounded unrolling produces for `List b`).
@@ -102,7 +95,6 @@ pub enum Iso {
     Unfold(Type, Box<Iso>),
 
     // ── Prim ─────────────────────────────────────────────────────
-
     /// `prim p : A ↔ B`  (registry-resolved, ADR-0013).
     Prim(Box<PrimDef>),
 }

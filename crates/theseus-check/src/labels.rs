@@ -26,10 +26,7 @@ pub struct Clash {
 /// Returns `(labels, clashes)` where `labels` is the ordered list of
 /// `(label_name, carrier_type)` in first-occurrence order, and `clashes`
 /// are carrier-unification failures.
-pub fn infer_iso_labels(
-    id: &IsoDecl,
-    env: &Env,
-) -> (Vec<(String, SurfType)>, Vec<Clash>) {
+pub fn infer_iso_labels(id: &IsoDecl, env: &Env) -> (Vec<(String, SurfType)>, Vec<Clash>) {
     let mut label_order: Vec<String> = Vec::new();
     let mut label_carriers: HashMap<String, SurfType> = HashMap::new();
     let mut clashes: Vec<Clash> = Vec::new();
@@ -186,20 +183,65 @@ fn collect_labels(
 
             // Recurse into args for nested labels.
             for arg in args {
-                collect_labels(arg, var_types, env, side, label_order, label_carriers, clashes, first_occurrence);
+                collect_labels(
+                    arg,
+                    var_types,
+                    env,
+                    side,
+                    label_order,
+                    label_carriers,
+                    clashes,
+                    first_occurrence,
+                );
             }
         }
         Pattern::Ctor(_, args, _) => {
             for arg in args {
-                collect_labels(arg, var_types, env, side, label_order, label_carriers, clashes, first_occurrence);
+                collect_labels(
+                    arg,
+                    var_types,
+                    env,
+                    side,
+                    label_order,
+                    label_carriers,
+                    clashes,
+                    first_occurrence,
+                );
             }
         }
         Pattern::Tuple(a, b, _) => {
-            collect_labels(a, var_types, env, side, label_order, label_carriers, clashes, first_occurrence);
-            collect_labels(b, var_types, env, side, label_order, label_carriers, clashes, first_occurrence);
+            collect_labels(
+                a,
+                var_types,
+                env,
+                side,
+                label_order,
+                label_carriers,
+                clashes,
+                first_occurrence,
+            );
+            collect_labels(
+                b,
+                var_types,
+                env,
+                side,
+                label_order,
+                label_carriers,
+                clashes,
+                first_occurrence,
+            );
         }
         Pattern::Paren(inner, _) => {
-            collect_labels(inner, var_types, env, side, label_order, label_carriers, clashes, first_occurrence);
+            collect_labels(
+                inner,
+                var_types,
+                env,
+                side,
+                label_order,
+                label_carriers,
+                clashes,
+                first_occurrence,
+            );
         }
         Pattern::Var(_) | Pattern::Nat(..) => {}
     }

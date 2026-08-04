@@ -13,7 +13,7 @@
 
 use theseus_core::prim::Value;
 use theseus_core::type_of;
-use theseus_netlist::{balance, bits_of, rail_width, simulate, lower::lower_iso_with_ancillas};
+use theseus_netlist::{balance, bits_of, lower::lower_iso_with_ancillas, rail_width, simulate};
 use theseus_spice::annotate::compiled_energy;
 use theseus_spice::chardb;
 
@@ -71,7 +71,13 @@ fn main() {
     let mut wires = vec![false; n];
     wires[pos("x0")] = true; // r1 = fib(1) = 1
     wires[pos("y0")] = true; // r2 = fib(2) = 1
-    let mk = |b: bool| if b { Value::right(Value::Unit) } else { Value::left(Value::Unit) };
+    let mk = |b: bool| {
+        if b {
+            Value::right(Value::Unit)
+        } else {
+            Value::left(Value::Unit)
+        }
+    };
     let mut it = wires.iter().rev();
     let mut v = mk(*it.next().unwrap());
     for &b in it {
@@ -102,7 +108,10 @@ fn main() {
     );
     assert_eq!(vals, vec![1, 1, 2, 3, 5]);
 
-    let k3 = counts.get(&theseus_netlist::CellKind::K3).copied().unwrap_or(0);
+    let k3 = counts
+        .get(&theseus_netlist::CellKind::K3)
+        .copied()
+        .unwrap_or(0);
     println!(
         "\nHEADLINE: reversible Fibonacci fib(1..=5) compiles to {} cells (max kind K3, {k3} K3s), \
          total energy = {:.4e} J/op @ t_ramp = {:.0e} s",

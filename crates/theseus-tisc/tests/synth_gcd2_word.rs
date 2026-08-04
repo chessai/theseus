@@ -27,12 +27,12 @@
 
 use theseus_tisc::bveq::{BvExpr, RegTransfer};
 use theseus_tisc::compile::exec_instr;
+#[cfg(feature = "measurement")]
+use theseus_tisc::synth::transcribe_word_bennett_peak_measure;
 use theseus_tisc::synth::{
     emit_weqzero, emit_weqzero_width, emit_wlt, emit_wlt_width, table_to_regtransfer,
     transcribe_word_bennett_peak, weqzero_ntemp, wlt_ntemp, WForward, WValue,
 };
-#[cfg(feature = "measurement")]
-use theseus_tisc::synth::transcribe_word_bennett_peak_measure;
 use theseus_tisc::types::{StateVals, MEM_WORDS, NUM_REGS, NUM_SCRATCH};
 
 // ── The pinned GCD rule (copied verbatim from `synth_gcd2.rs` -- test DATA, not a
@@ -432,6 +432,8 @@ fn p_yr() -> WValue {
 /// peak is per-correction (≈ base-temp + correction-temp + one guard chain), NOT
 /// depth-linear in the number of arms. This is the compactness key for the operand
 /// budget vs the deep nested-Select tree (which holds both branches at every level).
+// Test fixture: models a per-byte forward transfer with one input per gcd operand.
+#[allow(clippy::too_many_arguments)]
 fn fwd_byte(
     base: WValue,
     va1: WValue,
@@ -621,11 +623,11 @@ fn a2_inv_h() -> WValue {
 fn width_aware_macros_gate_and_temp_counts() {
     // EqZero: full-8-bit vs width-3 (h) vs width-2 (a).
     let mut full = Vec::new();
-    emit_weqzero(0, 1, &vec![10, 11, 12, 13, 14, 15, 4, 5, 6], &mut full).unwrap();
+    emit_weqzero(0, 1, &[10, 11, 12, 13, 14, 15, 4, 5, 6], &mut full).unwrap();
     let mut w3 = Vec::new();
-    emit_weqzero_width(0, 1, 3, &vec![10, 11, 12, 13], &mut w3).unwrap();
+    emit_weqzero_width(0, 1, 3, &[10, 11, 12, 13], &mut w3).unwrap();
     let mut w2 = Vec::new();
-    emit_weqzero_width(0, 1, 2, &vec![10, 11, 12], &mut w2).unwrap();
+    emit_weqzero_width(0, 1, 2, &[10, 11, 12], &mut w2).unwrap();
     eprintln!("=== A-6 W.2 width-aware macro sizes ===");
     eprintln!(
         "WEqZero gates: full8={} (9 temps), w3={} ({} temps), w2={} ({} temps)",
@@ -641,9 +643,9 @@ fn width_aware_macros_gate_and_temp_counts() {
 
     // WLt: full-8-bit vs width-2.
     let mut fl = Vec::new();
-    emit_wlt(0, 1, 2, &vec![10, 11, 12, 13, 14, 15, 4, 5, 6], &mut fl).unwrap();
+    emit_wlt(0, 1, 2, &[10, 11, 12, 13, 14, 15, 4, 5, 6], &mut fl).unwrap();
     let mut l2 = Vec::new();
-    emit_wlt_width(0, 1, 2, 2, &vec![10, 11, 12], &mut l2).unwrap();
+    emit_wlt_width(0, 1, 2, 2, &[10, 11, 12], &mut l2).unwrap();
     eprintln!(
         "WLt gates:    full8={} (9 temps), w2={} ({} temps)",
         fl.len(),
@@ -657,7 +659,7 @@ fn width_aware_macros_gate_and_temp_counts() {
     // WEqZero width-3 over h∈0..8: dst.bit0 = (h==0).
     for hv in 0u8..8 {
         let mut body = Vec::new();
-        emit_weqzero_width(0, 1, 3, &vec![10, 11, 12, 13], &mut body).unwrap();
+        emit_weqzero_width(0, 1, 3, &[10, 11, 12, 13], &mut body).unwrap();
         let mut st = zero_state();
         st.operand_set(1, hv);
         for &ins in &body {
@@ -673,7 +675,7 @@ fn width_aware_macros_gate_and_temp_counts() {
     for av in 0u8..4 {
         for bv in 0u8..4 {
             let mut body = Vec::new();
-            emit_wlt_width(0, 1, 2, 2, &vec![10, 11, 12], &mut body).unwrap();
+            emit_wlt_width(0, 1, 2, 2, &[10, 11, 12], &mut body).unwrap();
             let mut st = zero_state();
             st.operand_set(1, av);
             st.operand_set(2, bv);

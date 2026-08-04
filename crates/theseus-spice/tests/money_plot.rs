@@ -4,9 +4,7 @@
 //! (c) byte-determinism across two generations, (d) slope invariants.
 
 use theseus_spice::adiabatic::money_plot;
-use theseus_spice::artifact::{
-    default_stamps, stamped_money_plot, to_stamped_text, Rung,
-};
+use theseus_spice::artifact::{default_stamps, stamped_money_plot, to_stamped_text, Rung};
 use theseus_spice::bench::{log_log_slope, ngspice_available};
 
 /// Fixed period axis matching the example binary.
@@ -20,9 +18,7 @@ fn wide_periods() -> Vec<f64> {
 }
 
 /// Generate stamped records for the three-family money plot.
-fn generate_records(
-    periods: &[f64],
-) -> Vec<theseus_spice::artifact::MoneyPlotRecord> {
+fn generate_records(periods: &[f64]) -> Vec<theseus_spice::artifact::MoneyPlotRecord> {
     let curves = money_plot(periods);
     stamped_money_plot(&curves, Rung::Rung0IdealModels, default_stamps())
         .expect("INV-STAMP violation")
@@ -40,10 +36,7 @@ fn money_plot_artifact_contract() {
 
     // (a) All three DUT names present.
     for dut in ["adiabatic-tg", "pfal", "cmos-static"] {
-        assert!(
-            text.contains(dut),
-            "stamped text missing DUT name '{dut}'"
-        );
+        assert!(text.contains(dut), "stamped text missing DUT name '{dut}'");
     }
 
     // (b) Mandatory stamp keys present.

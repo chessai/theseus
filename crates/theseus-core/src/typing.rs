@@ -10,8 +10,13 @@ use crate::ty::Type;
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TypeError {
     /// In `f ; g`, the output type of `f` doesn't match the input type of `g`.
-    #[error("seq: output {left_output} of the left iso does not match input {right_input} of the right")]
-    SeqMismatch { left_output: Type, right_input: Type },
+    #[error(
+        "seq: output {left_output} of the left iso does not match input {right_input} of the right"
+    )]
+    SeqMismatch {
+        left_output: Type,
+        right_input: Type,
+    },
     /// In `trace(u, f)`, `f`'s domain is not a sum type.
     #[error("trace: body domain {0} is not a sum type")]
     TraceInputNotSum(Type),
@@ -106,7 +111,10 @@ fn fold_type_of(l: &Type, f: &Iso) -> Result<(Type, Type), TypeError> {
     };
     let (a, b) = type_of(f)?;
     if a != b {
-        return Err(TypeError::FoldBodyNotEndo { input: a, output: b });
+        return Err(TypeError::FoldBodyNotEndo {
+            input: a,
+            output: b,
+        });
     }
     let (body_elem, acc) = match &a {
         Type::Prod(x, c) => (x.as_ref(), c.as_ref().clone()),
@@ -255,7 +263,10 @@ pub fn type_of(iso: &Iso) -> Result<(Type, Type), TypeError> {
             }
             let (a, b) = type_of(f)?;
             if a != b {
-                return Err(TypeError::IterBodyNotEndo { input: a, output: b });
+                return Err(TypeError::IterBodyNotEndo {
+                    input: a,
+                    output: b,
+                });
             }
             let side = Type::prod(n.clone(), a);
             Ok((side.clone(), side))
@@ -421,10 +432,10 @@ mod tests {
         assert_eq!(max_flat_width(&Iso::iter(Type::numeral_ty(3), inner())), 4);
         // Trace whose CARRIER itself is the wide word.
         assert_eq!(
-            max_flat_width(&Iso::trace(Type::Flat(4), Iso::Id(Type::sum(
+            max_flat_width(&Iso::trace(
                 Type::Flat(4),
-                Type::One
-            )))),
+                Iso::Id(Type::sum(Type::Flat(4), Type::One))
+            )),
             4
         );
     }
@@ -477,9 +488,11 @@ mod tests {
         let a = one();
         let b = one();
         let c = bool_ty();
-        let (input, output) =
-            type_of(&Iso::Distrib(a.clone(), b.clone(), c.clone())).unwrap();
-        assert_eq!(input, Type::prod(a.clone(), Type::sum(b.clone(), c.clone())));
+        let (input, output) = type_of(&Iso::Distrib(a.clone(), b.clone(), c.clone())).unwrap();
+        assert_eq!(
+            input,
+            Type::prod(a.clone(), Type::sum(b.clone(), c.clone()))
+        );
         assert_eq!(
             output,
             Type::sum(Type::prod(a.clone(), b), Type::prod(a, c))
@@ -551,11 +564,13 @@ mod tests {
         let a = one();
         let b = one();
         let c = bool_ty();
-        let (input, output) =
-            type_of(&Iso::Factor(a.clone(), b.clone(), c.clone())).unwrap();
+        let (input, output) = type_of(&Iso::Factor(a.clone(), b.clone(), c.clone())).unwrap();
         assert_eq!(
             input,
-            Type::sum(Type::prod(a.clone(), b.clone()), Type::prod(a.clone(), c.clone()))
+            Type::sum(
+                Type::prod(a.clone(), b.clone()),
+                Type::prod(a.clone(), c.clone())
+            )
         );
         assert_eq!(output, Type::prod(a, Type::sum(b, c)));
     }
@@ -671,7 +686,10 @@ mod tests {
         // Non-uniform element types along the spine: rejected.
         let mixed = Type::sum(
             Type::One,
-            Type::prod(bool_ty(), Type::sum(Type::One, Type::prod(Type::One, Type::Zero))),
+            Type::prod(
+                bool_ty(),
+                Type::sum(Type::One, Type::prod(Type::One, Type::Zero)),
+            ),
         );
         assert_eq!(list_spine_elem_ty(&mixed), None);
     }

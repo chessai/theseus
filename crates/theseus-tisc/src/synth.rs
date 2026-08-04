@@ -1027,16 +1027,16 @@ pub fn transcribe_into_general(
 /// its OWN bit `c_k` (ANF monomials mix bit positions). Realization over the
 /// 2-input-Ccnot ISA, net-zero:
 ///   - `Const(true)`  → `Xori { dst, 1<<b }`.
-///   - degree 1       → align src bit `c0` to bit `b` (rotate, paired-undone),
-///                      load `mask = 1<<b`, `Ccnot dst, src_aligned, mask`
-///                      (dst bit b ^= src bit c0), unload mask, un-rotate.
-///   - degree d ≥ 2   → align all factors to bit `b`; AND-tree:
-///                        `Ccnot temp0, f0, f1`         (temp0 = f0∧f1)
-///                        `Ccnot temp1, temp0, f2`      (temp1 = f0∧f1∧f2) ...
-///                      then `mask = 1<<b`, `Ccnot dst, temp_last, mask`
-///                      (dst bit b ^= product bit b only), unload mask, and run
-///                      the AND-tree in REVERSE to clear every temp, then
-///                      un-rotate the sources. Net-zero by construction.
+///   - degree 1 → align src bit `c0` to bit `b` (rotate, paired-undone),
+///     load `mask = 1<<b`, `Ccnot dst, src_aligned, mask`
+///     (dst bit b ^= src bit c0), unload mask, un-rotate.
+///   - degree d ≥ 2 → align all factors to bit `b`; AND-tree:
+///     `Ccnot temp0, f0, f1` (temp0 = f0∧f1),
+///     `Ccnot temp1, temp0, f2` (temp1 = f0∧f1∧f2), ...;
+///     then `mask = 1<<b`, `Ccnot dst, temp_last, mask`
+///     (dst bit b ^= product bit b only), unload mask, and run
+///     the AND-tree in REVERSE to clear every temp, then
+///     un-rotate the sources. Net-zero by construction.
 ///
 /// The `mask` isolates bit `b` because the byte-parallel Ccnot AND-tree leaves
 /// garbage in temp's OTHER bits; ANDing with `1<<b` selects only bit `b` when
@@ -1322,6 +1322,10 @@ pub fn transcribe_bennett_general(
 /// The result is ANF -- length is whatever the ANF is (not minimised); A-6.4 /
 /// widen-PC funds the resulting body size. Callers verify with the symbolic
 /// oracle (all-register operands) and/or the exec/net-zero path.
+// Loop indices here double as bit-shift amounts and packed-assignment keys (x, bit,
+// k address truth/out_bytes/var_pairs in lockstep with `>> k`/`>> bit` arithmetic),
+// so the explicit range loops keep the truth-table construction unambiguous.
+#[allow(clippy::needless_range_loop)]
 pub fn table_to_regtransfer(
     map: impl Fn(&[u8]) -> Vec<u8>,
     carrier_regs: &[u8],
@@ -1439,6 +1443,9 @@ fn mobius_transform(f: &[bool]) -> Vec<bool> {
 /// 1 iff monomial `∧_{k ∈ S} var_pairs[k]` is present. The result is the XOR of
 /// all present monomials; the empty monomial (`S = 0`) is `Const(true)`. If no
 /// coefficient is set the function is the constant `Const(false)`.
+// Index k is the subset-mask bit position: it is both the shift `s >> k` and the
+// var_pairs index, so the range loop mirrors the ANF monomial construction.
+#[allow(clippy::needless_range_loop)]
 fn anf_to_bvexpr(coeffs: &[bool], var_pairs: &[(usize, usize)], n_in: usize) -> BvExpr {
     let mut terms: Vec<BvExpr> = Vec::new();
     for (s, &present) in coeffs.iter().enumerate() {
@@ -1544,7 +1551,7 @@ fn peel_self_xor(e: &BvExpr, r: usize, b: usize) -> Option<BvExpr> {
             rest.push((*t).clone());
         }
     }
-    if self_count % 2 == 0 {
+    if self_count.is_multiple_of(2) {
         // No net self-term ⇒ not in-place (value doesn't XOR onto its own old).
         return None;
     }

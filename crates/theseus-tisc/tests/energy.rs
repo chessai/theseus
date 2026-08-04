@@ -619,7 +619,11 @@ fn poc_b11_shared_alu_measure() {
     );
     eprintln!(
         "B1.1 Q1 shrink bar (~1.3× on Group-A portion): {}",
-        if ga_ratio >= 1.3 { "CLEARED" } else { "NOT CLEARED" }
+        if ga_ratio >= 1.3 {
+            "CLEARED"
+        } else {
+            "NOT CLEARED"
+        }
     );
 
     // (2) fib step_j via the me_a3 path (same ROM/trace/input).
@@ -919,8 +923,14 @@ fn poc_b21c_data_word_measure() {
         (c8 - c4) as f64 / c8 as f64 * 100.0,
         (c8 - c4r4) as f64 / c8 as f64 * 100.0
     );
-    assert!(c4 < c8, "reduced w_data must shrink decode_execute ({c4} >= {c8})");
-    assert!(c4r4 < c4, "reduced num_regs shrinks it further ({c4r4} >= {c4})");
+    assert!(
+        c4 < c8,
+        "reduced w_data must shrink decode_execute ({c4} >= {c8})"
+    );
+    assert!(
+        c4r4 < c4,
+        "reduced num_regs shrinks it further ({c4r4} >= {c4})"
+    );
 }
 
 // ── me_a5: range (negative) ─────────────────────────────────────────

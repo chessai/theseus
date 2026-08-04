@@ -752,7 +752,11 @@ fn assert_weld_fields_clean(map: &VarMap, out: &SV, expect_pc: usize) {
     // PC (lo AND hi) == expect_pc, as concrete constants (whole domain).
     let assert_pc_byte = |field: usize, want: u8, name: &str| {
         for (b, bit) in out_cpu_bits(out, field).iter().enumerate() {
-            let want_bit = if (want >> b) & 1 == 1 { vs.mk_true() } else { zero.clone() };
+            let want_bit = if (want >> b) & 1 == 1 {
+                vs.mk_true()
+            } else {
+                zero.clone()
+            };
             assert_eq!(
                 *bit, want_bit,
                 "MEXCHR WELD: PC {name} bit {b} != {want} (datapath PC output wrong)"

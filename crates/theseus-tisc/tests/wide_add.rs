@@ -118,8 +118,8 @@ fn symbolic_input_sv(k: usize, vs: &BddVariableSet) -> SV {
     // same interleaving `VarMap` uses to keep ADD/SUB linear). Sequential
     // ordering blows the BDD up exponentially at m=32.
     let flat: Vec<Bdd> = (0..m)
-        .map(|i| tgt_var(&vs, i))
-        .chain((0..m).map(|i| opd_var(&vs, i)))
+        .map(|i| tgt_var(vs, i))
+        .chain((0..m).map(|i| opd_var(vs, i)))
         .collect();
     let mut it = flat.into_iter();
     sv_from_type(&in_ty, &mut it)
@@ -385,13 +385,25 @@ fn wide_word_ty_and_byte_order_pin() {
     assert_eq!(bout, 0x0001, "operand (little-endian) preserved");
     // Cross-check the individual byte lanes explicitly so the pin names the
     // convention, not just the aggregate value: sum byte0 = 0x00, byte1 = 0x01.
-    assert_eq!(sum & 0xFF, 0x00, "sum byte0 (LSB lane) = 0x00 after carry-out");
-    assert_eq!((sum >> 8) & 0xFF, 0x01, "sum byte1 (MSB lane) = 0x01 carry-in");
+    assert_eq!(
+        sum & 0xFF,
+        0x00,
+        "sum byte0 (LSB lane) = 0x00 after carry-out"
+    );
+    assert_eq!(
+        (sum >> 8) & 0xFF,
+        0x01,
+        "sum byte1 (MSB lane) = 0x01 carry-in"
+    );
     // And the input bit order: 0x0201 must have byte0 = 0x01 (LSB) in the low
     // 8 wires (asymmetric so a swap would read 0x0102). Add 0 keeps it, and the
     // per-lane split below rejects the swapped reading.
     let (idv, _) = eval_wide_add(2, 0x0201, 0x0000);
-    assert_eq!(idv & 0xFF, 0x01, "input byte0 (LSB) = 0x01, not 0x02 (swapped)");
+    assert_eq!(
+        idv & 0xFF,
+        0x01,
+        "input byte0 (LSB) = 0x01, not 0x02 (swapped)"
+    );
     assert_eq!((idv >> 8) & 0xFF, 0x02, "input byte1 (MSB) = 0x02");
     eprintln!(
         "pin: wide_word_ty(1)=Word8, (2)=(Word8,Word8); little-endian byte order \

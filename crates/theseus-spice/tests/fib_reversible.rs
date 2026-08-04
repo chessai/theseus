@@ -158,7 +158,11 @@ fn two_bit_ripple_adder_exhaustive() {
     for v in &values {
         oracle_one(&iso, &net, &ancilla_values, &in_ty, &out_ty, v);
     }
-    eprintln!("add2 oracle: {}/{} inputs match", values.len(), values.len());
+    eprintln!(
+        "add2 oracle: {}/{} inputs match",
+        values.len(),
+        values.len()
+    );
 
     // Ancilla-zero slice: adder really computes x + y.
     let w = prog.width;
@@ -331,7 +335,11 @@ fn fib5_minwidth_exhaustive_oracle() {
     for v in &values {
         oracle_one(&iso, &net, &ancilla_values, &in_ty, &out_ty, v);
     }
-    eprintln!("fib5 oracle: {}/{} inputs match", values.len(), values.len());
+    eprintln!(
+        "fib5 oracle: {}/{} inputs match",
+        values.len(),
+        values.len()
+    );
 
     // Fibonacci semantics on the zero-ancilla slice: x=1, y=1.
     let n = prog.initial_layout.len();

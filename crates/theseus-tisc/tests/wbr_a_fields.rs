@@ -141,8 +141,8 @@ fn w_br16_encode_decode_roundtrip_16bit_br() {
             r[0] = 0x2A;
             r
         },
-        pc: 0x0137,      // 16-bit PC (default w_pc=16)
-        br: 0xBEEF,      // 16-bit BR -- the high byte must survive the round-trip
+        pc: 0x0137, // 16-bit PC (default w_pc=16)
+        br: 0xBEEF, // 16-bit BR -- the high byte must survive the round-trip
         ir: 0xDEAD_BEEF,
         scratch: [0; NUM_SCRATCH],
         mem: [0; MEM_WORDS],
@@ -150,7 +150,10 @@ fn w_br16_encode_decode_roundtrip_16bit_br() {
     let val = sv.encode_with(&layout);
     let back = StateVals::decode_with(&layout, &val);
     assert_eq!(back.br, 0xBEEF, "full 16-bit BR round-trips at w_br=16");
-    assert_eq!(back.pc, sv.pc, "PC round-trips (undisturbed by the BR widening)");
+    assert_eq!(
+        back.pc, sv.pc,
+        "PC round-trips (undisturbed by the BR widening)"
+    );
     assert_eq!(back.regs[0], sv.regs[0], "r0 round-trips");
     assert_eq!(back.ir, sv.ir, "IR round-trips");
 }

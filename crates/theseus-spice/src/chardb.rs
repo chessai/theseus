@@ -46,7 +46,12 @@ pub enum QueryError {
 impl fmt::Display for QueryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            QueryError::OutOfRange { key, t_ramp, min, max } => {
+            QueryError::OutOfRange {
+                key,
+                t_ramp,
+                min,
+                max,
+            } => {
                 write!(
                     f,
                     "t_ramp {t_ramp} out of range [{min}, {max}] for cell {key:?}"
@@ -157,8 +162,7 @@ pub fn build_char_db(rung: DeviceRung, periods: &[f64]) -> CharDb {
 ///
 /// Regenerate via `cargo run --example characterize_rung0 > data/rung0-chardb.ron`.
 pub fn rung0_measured() -> CharDb {
-    CharDb::from_ron(include_str!("../data/rung0-chardb.ron"))
-        .expect("golden rung0 char DB parses")
+    CharDb::from_ron(include_str!("../data/rung0-chardb.ron")).expect("golden rung0 char DB parses")
 }
 
 impl CharDb {
@@ -206,8 +210,14 @@ mod tests {
     use crate::bench::ngspice_available;
 
     /// The six admitted reversible cells, in the DB's deterministic key order.
-    const CELLS: [&str; 6] =
-        ["adiabatic-tg", "cswap-k0", "cswap-k1", "cswap-k2", "cswap-k3", "cswap-r1"];
+    const CELLS: [&str; 6] = [
+        "adiabatic-tg",
+        "cswap-k0",
+        "cswap-k1",
+        "cswap-k2",
+        "cswap-k3",
+        "cswap-r1",
+    ];
 
     /// A fast rung-0 period axis: 4 points spanning ~3 decades (>=3 for the fit).
     fn rung0_periods() -> Vec<f64> {

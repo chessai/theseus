@@ -4,9 +4,7 @@
 //! Verification norm: the differential oracle vs `theseus_eval` /
 //! `CellKind::eval`; this is theseus, NOT maestro's rules.
 
-use theseus_netlist::{
-    Cell, CellKind, LineId, PhasedCellNetlist, RailPair, RoleSwapKind,
-};
+use theseus_netlist::{Cell, CellKind, LineId, PhasedCellNetlist, RailPair, RoleSwapKind};
 
 use theseus_core::Type;
 
@@ -67,10 +65,22 @@ fn cellkind_r1_char_db_key() {
 
 /// A hand-built single-R1 netlist on two bits: (c, t) → (c, t ⊕ c).
 fn one_r1() -> PhasedCellNetlist {
-    let c_in = RailPair { line0: LineId(0), line1: LineId(1) };
-    let t_in = RailPair { line0: LineId(2), line1: LineId(3) };
-    let c_out = RailPair { line0: LineId(4), line1: LineId(5) };
-    let t_out = RailPair { line0: LineId(6), line1: LineId(7) };
+    let c_in = RailPair {
+        line0: LineId(0),
+        line1: LineId(1),
+    };
+    let t_in = RailPair {
+        line0: LineId(2),
+        line1: LineId(3),
+    };
+    let c_out = RailPair {
+        line0: LineId(4),
+        line1: LineId(5),
+    };
+    let t_out = RailPair {
+        line0: LineId(6),
+        line1: LineId(7),
+    };
     PhasedCellNetlist {
         input_ty: two_bits(),
         output_ty: two_bits(),
@@ -93,10 +103,7 @@ fn r1_netlist_validates() {
     let net = one_r1();
     assert_eq!(net.validate(), Ok(()));
     assert_eq!(net.depth(), 1);
-    assert_eq!(
-        net.line_arrivals().unwrap(),
-        vec![0, 0, 0, 0, 1, 1, 1, 1]
-    );
+    assert_eq!(net.line_arrivals().unwrap(), vec![0, 0, 0, 0, 1, 1, 1, 1]);
     assert!(net.tick_imbalances().unwrap().is_empty());
 }
 

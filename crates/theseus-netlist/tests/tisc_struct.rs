@@ -9,9 +9,7 @@
 //! theseus_eval::eval, and eval matches the reference semantics.
 
 use theseus_core::{type_of, Iso, Type, Value};
-use theseus_netlist::{
-    bits_of, prim_from_bits, rail_width, CellKind, PhasedCellNetlist, RailPair,
-};
+use theseus_netlist::{bits_of, prim_from_bits, rail_width, CellKind, PhasedCellNetlist, RailPair};
 
 // ── Type helpers ─────────────────────────────────────────────────────
 
@@ -362,7 +360,9 @@ fn word8_pair_samples() -> Vec<(u8, u8)> {
         (0xCA, 0xFE),
     ];
     // Add a few more distinct values
-    for a in [0u8, 1, 2, 3, 7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 200, 254, 255] {
+    for a in [
+        0u8, 1, 2, 3, 7, 8, 15, 16, 31, 32, 63, 64, 127, 128, 200, 254, 255,
+    ] {
         for b in [0u8, 1, 127, 128, 255] {
             samples.push((a, b));
         }
@@ -409,11 +409,7 @@ fn swapbr_swap_words() {
         let input = encode_pair(pc, br);
         let result = assert_faithful("SWAPBR", &iso, &net, &input, &in_ty, &out_ty);
         let (rpc, rbr) = decode_pair(&result);
-        assert_eq!(
-            (rpc, rbr),
-            (br, pc),
-            "SWAPBR({pc:#x}, {br:#x}) wrong"
-        );
+        assert_eq!((rpc, rbr), (br, pc), "SWAPBR({pc:#x}, {br:#x}) wrong");
     }
 }
 
@@ -427,11 +423,7 @@ fn xchg_swap_words() {
         let input = encode_pair(rd, sx);
         let result = assert_faithful("XCHG", &iso, &net, &input, &in_ty, &out_ty);
         let (rrd, rsx) = decode_pair(&result);
-        assert_eq!(
-            (rrd, rsx),
-            (sx, rd),
-            "XCHG({rd:#x}, {sx:#x}) wrong"
-        );
+        assert_eq!((rrd, rsx), (sx, rd), "XCHG({rd:#x}, {sx:#x}) wrong");
         // Self-inverse
         let mut fuel = 100_000u64;
         let twice = theseus_eval::eval(&iso, result, &mut fuel).unwrap();
@@ -463,7 +455,12 @@ fn xori_all_imm_values() {
                 &out_ty,
             );
             let got = decode_u8(&result);
-            assert_eq!(got, rd ^ imm, "XORI({rd:#04x}, {imm:#04x}) = {got:#04x}, expected {:#04x}", rd ^ imm);
+            assert_eq!(
+                got,
+                rd ^ imm,
+                "XORI({rd:#04x}, {imm:#04x}) = {got:#04x}, expected {:#04x}",
+                rd ^ imm
+            );
         }
 
         // Self-inverse
@@ -472,7 +469,10 @@ fn xori_all_imm_values() {
             let mut fuel = 100_000u64;
             let once = theseus_eval::eval(&iso, input.clone(), &mut fuel).unwrap();
             let twice = theseus_eval::eval(&iso, once, &mut fuel).unwrap();
-            assert_eq!(twice, input, "XORI(imm={imm:#x}) not self-inverse for {rd:#x}");
+            assert_eq!(
+                twice, input,
+                "XORI(imm={imm:#x}) not self-inverse for {rd:#x}"
+            );
         }
     }
 }
@@ -502,7 +502,10 @@ fn rotli_all_shifts() {
             );
             let got = decode_u8(&result);
             let expected = rd.rotate_left(k);
-            assert_eq!(got, expected, "ROTLI({rd:#04x}, {k}) = {got:#04x}, expected {expected:#04x}");
+            assert_eq!(
+                got, expected,
+                "ROTLI({rd:#04x}, {k}) = {got:#04x}, expected {expected:#04x}"
+            );
         }
     }
 }
@@ -528,7 +531,10 @@ fn rotri_all_shifts() {
             );
             let got = decode_u8(&result);
             let expected = rd.rotate_right(k);
-            assert_eq!(got, expected, "ROTRI({rd:#04x}, {k}) = {got:#04x}, expected {expected:#04x}");
+            assert_eq!(
+                got, expected,
+                "ROTRI({rd:#04x}, {k}) = {got:#04x}, expected {expected:#04x}"
+            );
         }
     }
 }
@@ -576,7 +582,10 @@ fn xor_rd_rs_semantics() {
             "XOR rd: ({rd:#04x} ^ {rs:#04x}) = {got_rd:#04x}, expected {:#04x}",
             rd ^ rs
         );
-        assert_eq!(got_rs, rs, "XOR rs: rs={rs:#04x} should be preserved, got {got_rs:#04x}");
+        assert_eq!(
+            got_rs, rs,
+            "XOR rs: rs={rs:#04x} should be preserved, got {got_rs:#04x}"
+        );
     }
 }
 

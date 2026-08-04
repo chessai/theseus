@@ -318,7 +318,10 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
             Ok(TypedNode {
                 input: side.clone(),
                 output: side,
-                kind: NodeKind::IterLoop { counter: n.clone(), body: Box::new(body) },
+                kind: NodeKind::IterLoop {
+                    counter: n.clone(),
+                    body: Box::new(body),
+                },
             })
         }
 
@@ -358,7 +361,11 @@ pub fn canonicalize(iso: &Iso) -> Result<TypedNode, TypeError> {
             Ok(TypedNode {
                 input: side.clone(),
                 output: side,
-                kind: NodeKind::FoldLoop { spine: l.clone(), dir, body: Box::new(body) },
+                kind: NodeKind::FoldLoop {
+                    spine: l.clone(),
+                    dir,
+                    body: Box::new(body),
+                },
             })
         }
     }
@@ -393,7 +400,10 @@ mod tests {
         let node = assert_canonical(&Iso::SwapProd(bit(), Type::prod(bit(), bit())));
         assert_eq!(
             node.kind,
-            NodeKind::Permute { monoid: Monoid::Prod, sigma: vec![1, 2, 0] }
+            NodeKind::Permute {
+                monoid: Monoid::Prod,
+                sigma: vec![1, 2, 0]
+            }
         );
     }
 
@@ -403,7 +413,10 @@ mod tests {
         let node = assert_canonical(&Iso::SwapSum(Type::One, Type::One));
         assert_eq!(
             node.kind,
-            NodeKind::Permute { monoid: Monoid::Sum, sigma: vec![1, 0] }
+            NodeKind::Permute {
+                monoid: Monoid::Sum,
+                sigma: vec![1, 0]
+            }
         );
     }
 
@@ -417,7 +430,10 @@ mod tests {
         ] {
             let node = assert_canonical(&iso);
             match node.kind {
-                NodeKind::Permute { monoid: Monoid::Prod, sigma } => {
+                NodeKind::Permute {
+                    monoid: Monoid::Prod,
+                    sigma,
+                } => {
                     assert_eq!(sigma, identity_sigma(sigma.len()));
                 }
                 other => panic!("expected Permute, got {other:?}"),

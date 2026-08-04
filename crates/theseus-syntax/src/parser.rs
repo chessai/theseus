@@ -124,7 +124,11 @@ impl Parser {
             _ => Span::new(0, self.src_len),
         };
         let depth_overrides = std::mem::take(&mut self.depth_overrides);
-        Ok(Program { decls, span, depth_overrides })
+        Ok(Program {
+            decls,
+            span,
+            depth_overrides,
+        })
     }
 
     fn decl(&mut self) -> Result<Decl, ParseError> {
@@ -202,9 +206,7 @@ impl Parser {
             (IsoBody::Expr(e), end)
         } else if self.peek() == Some(&Tok::Bar) {
             let clauses = self.clauses()?;
-            let end = clauses
-                .last()
-                .map_or(rhs.span(), |c| c.span);
+            let end = clauses.last().map_or(rhs.span(), |c| c.span);
             (IsoBody::Clauses(clauses), end)
         } else {
             return Err(ParseError::new(
@@ -305,9 +307,7 @@ impl Parser {
                 while self.starts_atom_pat() {
                     args.push(self.atom_pat()?);
                 }
-                let span = args
-                    .last()
-                    .map_or(name.span, |a| name.span.merge(a.span()));
+                let span = args.last().map_or(name.span, |a| name.span.merge(a.span()));
                 Ok(Pattern::Ctor(name, args, span))
             }
             Some(Tok::Dollar) => {

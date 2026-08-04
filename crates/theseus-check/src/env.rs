@@ -282,8 +282,12 @@ impl Env {
                     let old = fuel.insert(n.text.clone(), depth);
                     let result = self.lower_named(&n.text, fuel);
                     match old {
-                        Some(v) => { fuel.insert(n.text.clone(), v); }
-                        None => { fuel.remove(&n.text); }
+                        Some(v) => {
+                            fuel.insert(n.text.clone(), v);
+                        }
+                        None => {
+                            fuel.remove(&n.text);
+                        }
                     }
                     result
                 } else {
@@ -304,9 +308,7 @@ impl Env {
             // Unknown type: total fallback. Names reports the real error.
             return CoreType::Zero;
         };
-        let remaining = fuel
-            .entry(name.to_string())
-            .or_insert(self.unroll_depth);
+        let remaining = fuel.entry(name.to_string()).or_insert(self.unroll_depth);
         if *remaining == 0 {
             // μ-cutoff: a value would need ≥ D unfoldings of `name` -- outside
             // the truncated domain (empty, not junk: see ADR-0035).
@@ -336,9 +338,7 @@ pub(crate) fn right_nested_sum(summands: &[CoreType]) -> CoreType {
     match summands {
         [] => CoreType::Zero,
         [last] => last.clone(),
-        [head, rest @ ..] => {
-            CoreType::sum(head.clone(), right_nested_sum(rest))
-        }
+        [head, rest @ ..] => CoreType::sum(head.clone(), right_nested_sum(rest)),
     }
 }
 
@@ -591,10 +591,7 @@ mod tests {
             CoreType::One,
             CoreType::sum(
                 CoreType::One,
-                CoreType::sum(
-                    CoreType::One,
-                    CoreType::sum(CoreType::One, CoreType::Zero),
-                ),
+                CoreType::sum(CoreType::One, CoreType::sum(CoreType::One, CoreType::Zero)),
             ),
         );
         assert_eq!(core, expected);
@@ -739,7 +736,9 @@ where
         let diags = crate::typing::check(&program, &env);
         let collision_diags: Vec<_> = diags
             .iter()
-            .filter(|d| d.code == crate::diagnostics::Code::T0101 && d.name.as_deref() == Some("helper"))
+            .filter(|d| {
+                d.code == crate::diagnostics::Code::T0101 && d.name.as_deref() == Some("helper")
+            })
             .collect();
         assert_eq!(
             collision_diags.len(),

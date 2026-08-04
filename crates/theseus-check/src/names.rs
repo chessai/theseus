@@ -9,7 +9,9 @@
 //! The check reads the [`Env`] built by [`crate::env::resolve`]; it never
 //! mutates it.
 
-use theseus_syntax::ast::{Clause, Decl, Expr, IsoBody, IsoDecl, Pattern, Program, Type as SurfType};
+use theseus_syntax::ast::{
+    Clause, Decl, Expr, IsoBody, IsoDecl, Pattern, Program, Type as SurfType,
+};
 
 use crate::diagnostics::{Code, Diagnostic, Side};
 use crate::env::Env;
@@ -64,7 +66,8 @@ fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
 fn check_expr(e: &Expr, env: &Env, local: &[&str], diags: &mut Vec<Diagnostic>) {
     match e {
         Expr::Var(n) => {
-            if !env.has_iso(&n.text) && !env.has_prim(&n.text) && !local.contains(&n.text.as_str()) {
+            if !env.has_iso(&n.text) && !env.has_prim(&n.text) && !local.contains(&n.text.as_str())
+            {
                 diags.push(Diagnostic::new(Code::T0101, n.span).with_name(n.text.to_string()));
             }
         }
@@ -125,8 +128,7 @@ fn check_type_refs(ty: &SurfType, env: &Env, side: Option<Side>, diags: &mut Vec
         SurfType::Empty(_) | SurfType::Unit(_) | SurfType::Var(_) => {}
         SurfType::Name(n) => {
             if !env.has_type(&n.text) {
-                let mut d =
-                    Diagnostic::new(Code::T0101, n.span).with_name(n.text.to_string());
+                let mut d = Diagnostic::new(Code::T0101, n.span).with_name(n.text.to_string());
                 if let Some(s) = side {
                     d = d.with_side(s);
                 }
@@ -148,7 +150,10 @@ mod tests {
 
     /// Filter diagnostics to just T0101.
     fn names_only(diags: Vec<Diagnostic>) -> Vec<Diagnostic> {
-        diags.into_iter().filter(|d| d.code == Code::T0101).collect()
+        diags
+            .into_iter()
+            .filter(|d| d.code == Code::T0101)
+            .collect()
     }
 
     #[test]

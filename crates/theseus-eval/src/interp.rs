@@ -34,7 +34,9 @@ pub enum EvalError {
 pub fn eval(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalError> {
     let initial = *fuel;
     eval_inner(iso, value, fuel).map_err(|e| match e {
-        EvalError::OutOfFuel { .. } => EvalError::OutOfFuel { steps_taken: initial },
+        EvalError::OutOfFuel { .. } => EvalError::OutOfFuel {
+            steps_taken: initial,
+        },
         other => other,
     })
 }
@@ -174,7 +176,7 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
                 *fuel -= 1;
                 let t = eval_inner(body, s, fuel)?;
                 match t {
-                    Value::Right(y) => return Ok(*y), // exit on b-side
+                    Value::Right(y) => return Ok(*y),     // exit on b-side
                     Value::Left(w) => s = Value::Left(w), // feed u-state back
                     _ => {
                         return Err(EvalError::DomainError(
@@ -192,8 +194,8 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
         // application, exactly like `trace`.
         Iso::Iter(_n, body) => match value {
             Value::Pair(counter, x) => {
-                let count = numeral_value(&counter)
-                    .ok_or_else(|| domain_err("Iter/counter", &counter))?;
+                let count =
+                    numeral_value(&counter).ok_or_else(|| domain_err("Iter/counter", &counter))?;
                 let mut acc = *x;
                 for _ in 0..count {
                     if *fuel == 0 {
@@ -284,13 +286,13 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
                         ))
                     })?;
                 let out_bytes = spec.forward.eval_bytes(&in_bytes);
-                return theseus_core::prim::try_value_from_leaf_bytes(
-                    &out_bytes,
-                    &def.output_ty,
-                ).map_err(|msg| EvalError::DomainError(format!(
-                    "prim '{}': eval-via-spec recompose failed: {msg}",
-                    def.forward_name
-                )));
+                return theseus_core::prim::try_value_from_leaf_bytes(&out_bytes, &def.output_ty)
+                    .map_err(|msg| {
+                        EvalError::DomainError(format!(
+                            "prim '{}': eval-via-spec recompose failed: {msg}",
+                            def.forward_name
+                        ))
+                    });
             }
             Err(EvalError::DomainError(format!(
                 "prim '{}': value not in forward map and no symbolic spec: {:?}",
@@ -372,9 +374,7 @@ pub fn static_bound(iso: &Iso) -> u64 {
         | Iso::Factor(_, _, _)
         | Iso::Prim(_) => 0,
 
-        Iso::Seq(f, g) | Iso::Times(f, g) => {
-            static_bound(f).saturating_add(static_bound(g))
-        }
+        Iso::Seq(f, g) | Iso::Times(f, g) => static_bound(f).saturating_add(static_bound(g)),
 
         Iso::Plus(f, g) => static_bound(f).max(static_bound(g)),
 
@@ -527,19 +527,13 @@ mod tests {
     #[test]
     fn eval_unite_sum() {
         let iso = Iso::UniteSum(Type::One);
-        assert_eq!(
-            run(&iso, Value::right(Value::Unit)).unwrap(),
-            Value::Unit
-        );
+        assert_eq!(run(&iso, Value::right(Value::Unit)).unwrap(), Value::Unit);
     }
 
     #[test]
     fn eval_uniti_sum() {
         let iso = Iso::UnitiSum(Type::One);
-        assert_eq!(
-            run(&iso, Value::Unit).unwrap(),
-            Value::right(Value::Unit)
-        );
+        assert_eq!(run(&iso, Value::Unit).unwrap(), Value::right(Value::Unit));
     }
 
     #[test]
@@ -661,14 +655,14 @@ mod tests {
         use theseus_core::PrimDef;
 
         // Values in Bit + 1:
-        let r_unit = Value::right(Value::Unit);       // Right(Unit) -- boundary
-        let l_left = Value::left(Value::left(Value::Unit));  // Left(Left(Unit)) -- O
+        let r_unit = Value::right(Value::Unit); // Right(Unit) -- boundary
+        let l_left = Value::left(Value::left(Value::Unit)); // Left(Left(Unit)) -- O
         let l_right = Value::left(Value::right(Value::Unit)); // Left(Right(Unit)) -- I
 
         let mut fwd = BTreeMap::new();
-        fwd.insert(r_unit.clone(), l_left.clone());   // Right(()) → Left(O)
-        fwd.insert(l_left.clone(), l_right.clone());  // Left(O) → Left(I)
-        fwd.insert(l_right.clone(), r_unit.clone());  // Left(I) → Right(())
+        fwd.insert(r_unit.clone(), l_left.clone()); // Right(()) → Left(O)
+        fwd.insert(l_left.clone(), l_right.clone()); // Left(O) → Left(I)
+        fwd.insert(l_right.clone(), r_unit.clone()); // Left(I) → Right(())
 
         // Backward is the inverse permutation.
         let mut bwd = BTreeMap::new();
@@ -744,10 +738,7 @@ mod tests {
                 Iso::SwapProd(bt.clone(), bt),
             ),
         );
-        let v = Value::pair(
-            Value::left(Value::Unit),
-            Value::right(Value::Unit),
-        );
+        let v = Value::pair(Value::left(Value::Unit), Value::right(Value::Unit));
         let mut fuel = 0;
         eval(&iso, v, &mut fuel).unwrap();
         assert_eq!(fuel, 0, "structural tree should consume zero fuel");
@@ -791,12 +782,7 @@ mod tests {
         let iso = Iso::iter(Type::numeral_ty(4), not_body());
         let x = Value::left(Value::Unit);
         let mut fuel = 0; // zero iterations must need zero fuel
-        let result = eval(
-            &iso,
-            Value::pair(numeral(0), x.clone()),
-            &mut fuel,
-        )
-        .unwrap();
+        let result = eval(&iso, Value::pair(numeral(0), x.clone()), &mut fuel).unwrap();
         assert_eq!(result, Value::pair(numeral(0), x));
         assert_eq!(fuel, 0);
     }
@@ -809,12 +795,7 @@ mod tests {
         let i = Value::right(Value::Unit);
         for k in 0..4usize {
             let mut fuel = 100;
-            let result = eval(
-                &iso,
-                Value::pair(numeral(k), o.clone()),
-                &mut fuel,
-            )
-            .unwrap();
+            let result = eval(&iso, Value::pair(numeral(k), o.clone()), &mut fuel).unwrap();
             let expected = if k % 2 == 0 { o.clone() } else { i.clone() };
             assert_eq!(result, Value::pair(numeral(k), expected), "k={k}");
             // Exactly one fuel unit per body application.
@@ -906,7 +887,11 @@ mod tests {
         for x in [bit_o(), bit_i()] {
             for a in [bit_o(), bit_i()] {
                 let a2 = if x == bit_i() {
-                    if a == bit_o() { bit_i() } else { bit_o() }
+                    if a == bit_o() {
+                        bit_i()
+                    } else {
+                        bit_o()
+                    }
                 } else {
                     a.clone()
                 };

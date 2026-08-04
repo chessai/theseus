@@ -3,8 +3,8 @@
 //! Re-exports [`Value`] from `theseus_core` and provides type-membership
 //! checking (`inhabits`).
 
-pub use theseus_core::Value;
 use theseus_core::Type;
+pub use theseus_core::Value;
 
 /// Returns `true` if `value` is a valid inhabitant of `ty`.
 pub fn inhabits(value: &Value, ty: &Type) -> bool {
@@ -70,7 +70,10 @@ mod tests {
     fn wrong_type_fails() {
         assert!(!inhabits(&Value::Unit, &Type::sum(Type::One, Type::One)));
         assert!(!inhabits(&Value::left(Value::Unit), &Type::One));
-        assert!(!inhabits(&Value::pair(Value::Unit, Value::Unit), &Type::One));
+        assert!(!inhabits(
+            &Value::pair(Value::Unit, Value::Unit),
+            &Type::One
+        ));
     }
 
     #[test]

@@ -10,8 +10,8 @@ use std::collections::BTreeMap;
 
 use theseus_core::{enumerate_values, type_of, Iso, PrimDef, Type};
 use theseus_netlist::{
-    bits_of, lower_iso, prim_from_bits, rail_width, value_from_bits, CellKind,
-    PhasedCellNetlist, RailPair,
+    bits_of, lower_iso, prim_from_bits, rail_width, value_from_bits, CellKind, PhasedCellNetlist,
+    RailPair,
 };
 
 fn bit() -> Type {
@@ -23,7 +23,10 @@ fn three_bits() -> Type {
 }
 
 fn fredkin_prim() -> PrimDef {
-    prim_from_bits("fredkin", three_bits(), three_bits(), |b| CellKind::K1.eval(b)).unwrap()
+    prim_from_bits("fredkin", three_bits(), three_bits(), |b| {
+        CellKind::K1.eval(b)
+    })
+    .unwrap()
 }
 
 /// Untimed functional evaluation of the cell netlist: propagate token
@@ -270,11 +273,17 @@ fn bit_encoding_backward_compat() {
     // rail_width = 1, Left(Unit) = [true], Right(Unit) = [false].
     assert_eq!(rail_width(&bit()), Ok(1));
     assert_eq!(
-        bits_of(&theseus_core::Value::left(theseus_core::Value::Unit), &bit()),
+        bits_of(
+            &theseus_core::Value::left(theseus_core::Value::Unit),
+            &bit()
+        ),
         Ok(vec![true])
     );
     assert_eq!(
-        bits_of(&theseus_core::Value::right(theseus_core::Value::Unit), &bit()),
+        bits_of(
+            &theseus_core::Value::right(theseus_core::Value::Unit),
+            &bit()
+        ),
         Ok(vec![false])
     );
 }
@@ -296,11 +305,7 @@ fn identity_on_general_sum_is_wiring() {
 #[test]
 fn swap_sum_on_general_types() {
     // SwapSum on various sum types: tag rail swap, zero cells.
-    for (a, b) in [
-        (bit(), Type::One),
-        (Type::One, bit()),
-        (bit(), bit()),
-    ] {
+    for (a, b) in [(bit(), Type::One), (Type::One, bit()), (bit(), bit())] {
         let iso = Iso::SwapSum(a, b);
         let net = assert_lowering_agrees(&iso);
         assert!(net.cells.is_empty());

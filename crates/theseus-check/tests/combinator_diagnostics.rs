@@ -194,9 +194,7 @@ iso idNB : Nat * Bit <-> Nat * Bit = iter Nat id
     let prog = theseus_syntax::parse(src).expect("source must parse");
     let env = env::resolve(&prog);
     let map = elaborate_program(&prog, &env);
-    let result = map
-        .get("idNB")
-        .expect("iso idNB not in map");
+    let result = map.get("idNB").expect("iso idNB not in map");
     let iso = result
         .as_ref()
         .expect("iter Nat id should elaborate successfully");
@@ -215,22 +213,26 @@ iso idNB : Nat * Bit <-> Nat * Bit = iter Nat id
     // Differential oracle: for every value in the domain, forward and
     // backward must be identity (the k-fold application of id is id).
     let core_lhs = env.lower(&theseus_syntax::ast::Type::Prod(
-        Box::new(theseus_syntax::ast::Type::Name(theseus_syntax::ast::UpperName {
-            text: "Nat".into(),
-            span: theseus_syntax::ast::Span { start: 0, end: 0 },
-        })),
-        Box::new(theseus_syntax::ast::Type::Name(theseus_syntax::ast::UpperName {
-            text: "Bit".into(),
-            span: theseus_syntax::ast::Span { start: 0, end: 0 },
-        })),
+        Box::new(theseus_syntax::ast::Type::Name(
+            theseus_syntax::ast::UpperName {
+                text: "Nat".into(),
+                span: theseus_syntax::ast::Span { start: 0, end: 0 },
+            },
+        )),
+        Box::new(theseus_syntax::ast::Type::Name(
+            theseus_syntax::ast::UpperName {
+                text: "Bit".into(),
+                span: theseus_syntax::ast::Span { start: 0, end: 0 },
+            },
+        )),
         theseus_syntax::ast::Span { start: 0, end: 0 },
     ));
     let values = theseus_core::enumerate_values(&core_lhs);
     assert!(!values.is_empty(), "domain must be nonempty");
     for v in &values {
         let mut fuel = 100_000u64;
-        let fwd = theseus_eval::interp::eval(iso, v.clone(), &mut fuel)
-            .expect("eval forward succeeds");
+        let fwd =
+            theseus_eval::interp::eval(iso, v.clone(), &mut fuel).expect("eval forward succeeds");
         assert_eq!(
             fwd, *v,
             "iter Nat id must be identity, but forward({v:?}) = {fwd:?}"

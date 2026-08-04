@@ -6,7 +6,6 @@
 //! (ADR-0014): the canonicalizer never emits a raw swap or assoc, and the
 //! two monoids never mix in one node.
 
-
 use theseus_core::{PrimDef, Type};
 
 /// The monoid a [`NodeKind::Permute`] acts in (ADR-0014).
@@ -83,7 +82,11 @@ pub enum NodeKind {
     /// preserved on output. Node type: `spine × c ↔ spine × c`;
     /// `spine = 1 + (b × (1 + (b × (... + 0))))`, so its unroll depth − 1
     /// bounds the unroll (ADR-0039).
-    FoldLoop { spine: Type, dir: FoldDir, body: Box<TypedNode> },
+    FoldLoop {
+        spine: Type,
+        dir: FoldDir,
+        body: Box<TypedNode>,
+    },
     /// Registry leaf: an admitted `(forward, backward)` mutual-inverse
     /// pair (ADR-0013 amended).
     Prim(Box<PrimDef>),
@@ -174,12 +177,16 @@ impl TypedNode {
                 let lin = flatten_layer(*monoid, &self.input);
                 let lout = flatten_layer(*monoid, &self.output);
                 if sigma.len() != lin.len() || lout.len() != lin.len() {
-                    return Err(TypedError::BadSigma { context: "permute arity" });
+                    return Err(TypedError::BadSigma {
+                        context: "permute arity",
+                    });
                 }
                 let mut seen = vec![false; lin.len()];
                 for (j, &s) in sigma.iter().enumerate() {
                     if s >= lin.len() || seen[s] {
-                        return Err(TypedError::BadSigma { context: "permute sigma" });
+                        return Err(TypedError::BadSigma {
+                            context: "permute sigma",
+                        });
                     }
                     seen[s] = true;
                     expect("permute layer", &lin[s], &lout[j])?;
@@ -202,10 +209,16 @@ impl TypedNode {
                     DistribDir::Factor => (&self.output, &self.input),
                 };
                 let Type::Prod(a, bc) = prod_side else {
-                    return Err(TypedError::BadShape { context: "distrib product side", ty: prod_side.clone() });
+                    return Err(TypedError::BadShape {
+                        context: "distrib product side",
+                        ty: prod_side.clone(),
+                    });
                 };
                 let Type::Sum(b, c) = bc.as_ref() else {
-                    return Err(TypedError::BadShape { context: "distrib sum operand", ty: bc.as_ref().clone() });
+                    return Err(TypedError::BadShape {
+                        context: "distrib sum operand",
+                        ty: bc.as_ref().clone(),
+                    });
                 };
                 let want = Type::sum(
                     Type::prod(a.as_ref().clone(), b.as_ref().clone()),
@@ -233,7 +246,11 @@ impl TypedNode {
                 expect("iter output", &side, &self.output)?;
                 body.validate()
             }
-            NodeKind::FoldLoop { spine, dir: _, body } => {
+            NodeKind::FoldLoop {
+                spine,
+                dir: _,
+                body,
+            } => {
                 expect("fold body endo", &body.input, &body.output)?;
                 let Type::Prod(elem, acc) = &body.input else {
                     return Err(TypedError::BadShape {
@@ -291,7 +308,10 @@ mod tests {
         // Under ×, Bit = 1 + 1 is a leaf (a + layer), not absorbed.
         assert_eq!(flatten_layer(Monoid::Prod, &bit()), vec![bit()]);
         // Under +, Bit flattens to its two unit arms.
-        assert_eq!(flatten_layer(Monoid::Sum, &bit()), vec![Type::One, Type::One]);
+        assert_eq!(
+            flatten_layer(Monoid::Sum, &bit()),
+            vec![Type::One, Type::One]
+        );
         // 0 is absorbed under +.
         let ty = Type::sum(Type::Zero, bit());
         assert_eq!(flatten_layer(Monoid::Sum, &ty), vec![Type::One, Type::One]);
@@ -303,7 +323,10 @@ mod tests {
         let ok = TypedNode {
             input: Type::prod(bit(), bit()),
             output: Type::prod(bit(), bit()),
-            kind: NodeKind::Permute { monoid: Monoid::Prod, sigma: vec![1, 0] },
+            kind: NodeKind::Permute {
+                monoid: Monoid::Prod,
+                sigma: vec![1, 0],
+            },
         };
         assert_eq!(ok.validate(), Ok(()));
 
@@ -311,7 +334,10 @@ mod tests {
         let bad = TypedNode {
             input: Type::prod(bit(), bit()),
             output: Type::prod(bit(), bit()),
-            kind: NodeKind::Permute { monoid: Monoid::Prod, sigma: vec![0, 0] },
+            kind: NodeKind::Permute {
+                monoid: Monoid::Prod,
+                sigma: vec![0, 0],
+            },
         };
         assert!(matches!(bad.validate(), Err(TypedError::BadSigma { .. })));
 
@@ -321,9 +347,15 @@ mod tests {
         let bad_ty = TypedNode {
             input: Type::prod(bit(), three.clone()),
             output: Type::prod(bit(), three),
-            kind: NodeKind::Permute { monoid: Monoid::Prod, sigma: vec![1, 0] },
+            kind: NodeKind::Permute {
+                monoid: Monoid::Prod,
+                sigma: vec![1, 0],
+            },
         };
-        assert!(matches!(bad_ty.validate(), Err(TypedError::TypeMismatch { .. })));
+        assert!(matches!(
+            bad_ty.validate(),
+            Err(TypedError::TypeMismatch { .. })
+        ));
     }
 
     #[test]
@@ -331,7 +363,10 @@ mod tests {
         let id_bit = TypedNode {
             input: bit(),
             output: bit(),
-            kind: NodeKind::Permute { monoid: Monoid::Prod, sigma: vec![0] },
+            kind: NodeKind::Permute {
+                monoid: Monoid::Prod,
+                sigma: vec![0],
+            },
         };
         let ok = TypedNode {
             input: bit(),
@@ -345,12 +380,19 @@ mod tests {
             output: bit(),
             kind: NodeKind::Seq(vec![id_bit]),
         };
-        assert!(matches!(bad.validate(), Err(TypedError::TypeMismatch { .. })));
+        assert!(matches!(
+            bad.validate(),
+            Err(TypedError::TypeMismatch { .. })
+        ));
     }
 
     #[test]
     fn validate_reg_and_distrib() {
-        let reg = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(3) };
+        let reg = TypedNode {
+            input: bit(),
+            output: bit(),
+            kind: NodeKind::Reg(3),
+        };
         assert_eq!(reg.validate(), Ok(()));
 
         let distrib = TypedNode {

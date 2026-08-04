@@ -62,7 +62,10 @@ pub enum LowerError {
     Typed(#[from] TypedError),
     /// Node vocabulary deferred to a later slice (see module docs).
     #[error("{node} lowering deferred to a later slice ({plan})")]
-    Deferred { node: &'static str, plan: &'static str },
+    Deferred {
+        node: &'static str,
+        plan: &'static str,
+    },
     /// No dual-rail encoding for this type (`0`-typed nets are
     /// statically dead -- `Absurd` pruning is a later pass).
     #[error("no dual-rail encoding for {0}")]
@@ -70,8 +73,10 @@ pub enum LowerError {
     /// The prim could not be synthesized: its flattened width exceeds
     /// the B4.2 synthesis cap ([`MAX_SYNTH_WIDTH`]) or its truth table
     /// is not total (an inadmissible def -- refused, never guessed at).
-    #[error("prim {name:?} not synthesizable: wider than the B4.2 \
-             synthesis cap ({MAX_SYNTH_WIDTH} rail pairs) or non-total")]
+    #[error(
+        "prim {name:?} not synthesizable: wider than the B4.2 \
+             synthesis cap ({MAX_SYNTH_WIDTH} rail pairs) or non-total"
+    )]
     UnsupportedPrim { name: String },
 }
 
@@ -259,7 +264,10 @@ impl BitAt {
     /// NOT: exchange the two token-line roles. Zero cells, zero ticks
     /// (ADR-0031 NOT-in-Permute).
     pub(crate) fn rail_swapped(self) -> BitAt {
-        BitAt { pair: self.pair.swapped(), depth: self.depth }
+        BitAt {
+            pair: self.pair.swapped(),
+            depth: self.depth,
+        }
     }
 }
 
@@ -287,7 +295,10 @@ pub(crate) struct Builder {
 
 impl Builder {
     fn fresh_pair(&mut self) -> RailPair {
-        let pair = RailPair { line0: LineId(self.next_line), line1: LineId(self.next_line + 1) };
+        let pair = RailPair {
+            line0: LineId(self.next_line),
+            line1: LineId(self.next_line + 1),
+        };
         self.next_line += 2;
         pair
     }
@@ -332,7 +343,10 @@ impl Builder {
         });
         outputs
             .into_iter()
-            .map(|pair| BitAt { pair, depth: depth + 1 })
+            .map(|pair| BitAt {
+                pair,
+                depth: depth + 1,
+            })
             .collect()
     }
 
@@ -360,7 +374,10 @@ impl Builder {
 
             // Lemma (ADR-0031): Permute(×, σ) is rail-pair rewiring --
             // zero cells, zero ticks, both directions.
-            NodeKind::Permute { monoid: Monoid::Prod, sigma } => {
+            NodeKind::Permute {
+                monoid: Monoid::Prod,
+                sigma,
+            } => {
                 let layer = flatten_layer(Monoid::Prod, &node.input);
                 let widths = layer
                     .iter()
@@ -389,7 +406,10 @@ impl Builder {
             // sum (e.g. re-association with unequal arm widths) require
             // data-dependent payload rearrangement and are not yet
             // supported.
-            NodeKind::Permute { monoid: Monoid::Sum, sigma } => {
+            NodeKind::Permute {
+                monoid: Monoid::Sum,
+                sigma,
+            } => {
                 // Identity sigma: passthrough if the encoding layout
                 // is the same on both sides (structurally equal types).
                 let is_identity = sigma.iter().enumerate().all(|(i, &j)| i == j);
@@ -447,9 +467,7 @@ impl Builder {
             //
             // Controlled-f is active when tag=true, controlled-g when
             // tag=false (i.e. NOT(tag) controls g's cells).
-            NodeKind::Branch(f, g) => {
-                self.lower_branch(f, g, ins)
-            }
+            NodeKind::Branch(f, g) => self.lower_branch(f, g, ins),
 
             // Lemma (ADR-0031): Distrib/Factor is pure rail regrouping --
             // zero cells. The tag pair moves between positions and the
@@ -501,18 +519,14 @@ impl Builder {
             // TraceLoop unrolling (ADR-0026 C2.4): a total trace runs at
             // most |u|+1 body applications, so full unrolling is always
             // sound. N = |u| + 1 iterations.
-            NodeKind::TraceLoop { carrier, body } => {
-                self.lower_trace(carrier, body, ins)
-            }
+            NodeKind::TraceLoop { carrier, body } => self.lower_trace(carrier, body, ins),
 
             // Iter/Fold/Unfold unrolling (ADR-0039): bounded
             // data-driven loops, lowered in `crate::lower_iter` by
             // unrolling to the type-derived bound with the one-hot
             // counter/spine tags gating each body application.
             NodeKind::IterLoop { counter, body } => self.lower_iter_loop(counter, body, ins),
-            NodeKind::FoldLoop { spine, dir, body } => {
-                self.lower_fold_loop(spine, *dir, body, ins)
-            }
+            NodeKind::FoldLoop { spine, dir, body } => self.lower_fold_loop(spine, *dir, body, ins),
         }
     }
 
@@ -594,7 +608,9 @@ impl Builder {
         let w_out = rail_width(&def.output_ty)?;
         let w = w_in.max(w_out);
         if w > MAX_SYNTH_WIDTH {
-            return Err(LowerError::UnsupportedPrim { name: def.forward_name.clone() });
+            return Err(LowerError::UnsupportedPrim {
+                name: def.forward_name.clone(),
+            });
         }
         if w == 0 {
             // 1-value ↔ 1-value: nothing to route.
@@ -604,7 +620,9 @@ impl Builder {
 
         // ── 1. Flattened truth table as padded bit patterns ──────────
         let pattern = |bits: &[bool]| -> u32 {
-            bits.iter().enumerate().fold(0u32, |acc, (j, &b)| acc | (u32::from(b) << j))
+            bits.iter()
+                .enumerate()
+                .fold(0u32, |acc, (j, &b)| acc | (u32::from(b) << j))
         };
         let mut table: Vec<Option<u32>> = vec![None; size];
         let mut used_out = vec![false; size];
@@ -612,7 +630,9 @@ impl Builder {
         for v in enumerate_values(&def.input_ty) {
             let Some(out) = def.forward.get(&v) else {
                 // Not total ⇒ inadmissible: refuse rather than guess.
-                return Err(LowerError::UnsupportedPrim { name: def.forward_name.clone() });
+                return Err(LowerError::UnsupportedPrim {
+                    name: def.forward_name.clone(),
+                });
             };
             let x = pattern(&bits_of(&v, &def.input_ty)?);
             let y = pattern(&bits_of(out, &def.output_ty)?);
@@ -780,8 +800,7 @@ impl Builder {
         // After this, payload[0..wa] = f(a) when tag=true; unchanged
         // when tag=false.
         let f_input = payload[..wa].to_vec();
-        let (f_result, tag_after_f) =
-            self.controlled_apply(f, &f_input, tag, false)?;
+        let (f_result, tag_after_f) = self.controlled_apply(f, &f_input, tag, false)?;
 
         // Reassemble the full payload after step 1.
         let mut payload_after_f = f_result;
@@ -790,8 +809,7 @@ impl Builder {
         // Step 2: controlled-g on payload[0..wb], active when
         // tag=false (i.e. NOT(tag) is the control).
         let g_input = payload_after_f[..wb].to_vec();
-        let (g_result, tag_after_g) =
-            self.controlled_apply(g, &g_input, tag_after_f, true)?;
+        let (g_result, tag_after_g) = self.controlled_apply(g, &g_input, tag_after_f, true)?;
 
         // Reassemble: [tag, result_payload(max_w_out)]
         let mut result = vec![tag_after_g];
@@ -857,8 +875,10 @@ impl Builder {
         // Transfer any ancilla tracking from the sub-builder.
         self.ancilla_inputs.extend_from_slice(&sub.ancilla_inputs);
         self.ancilla_outputs.extend_from_slice(&sub.ancilla_outputs);
-        self.ancilla_input_origins.extend_from_slice(&sub.ancilla_input_origins);
-        self.ancilla_output_origins.extend_from_slice(&sub.ancilla_output_origins);
+        self.ancilla_input_origins
+            .extend_from_slice(&sub.ancilla_input_origins);
+        self.ancilla_output_origins
+            .extend_from_slice(&sub.ancilla_output_origins);
 
         if sub.cells.is_empty() {
             // Zero-cell arm.  If it's pure identity, return as-is.
@@ -928,7 +948,8 @@ impl Builder {
                     } else {
                         cur_tag
                     };
-                    let outs = self.emit(CellKind::K1, &[control, current[cycle_start], current[k]]);
+                    let outs =
+                        self.emit(CellKind::K1, &[control, current[cycle_start], current[k]]);
                     cur_tag = if invert_tag {
                         outs[0].rail_swapped()
                     } else {
@@ -984,8 +1005,7 @@ impl Builder {
         //
         // We also build a mapping from old output pair → new output
         // pair + depth, so we can update the data_outs at the end.
-        let mut pair_depth_map: HashMap<RailPair, (RailPair, u32)> =
-            HashMap::new();
+        let mut pair_depth_map: HashMap<RailPair, (RailPair, u32)> = HashMap::new();
         // Seed the map: data_ins pairs map to themselves at their
         // current depth (these are primary inputs to the sub-network).
         for bit in data_ins {
@@ -1076,9 +1096,15 @@ impl Builder {
                     });
 
                     let tag_out = if invert_tag {
-                        BitAt { pair: tag_out_pair.swapped(), depth: out_depth }
+                        BitAt {
+                            pair: tag_out_pair.swapped(),
+                            depth: out_depth,
+                        }
                     } else {
-                        BitAt { pair: tag_out_pair, depth: out_depth }
+                        BitAt {
+                            pair: tag_out_pair,
+                            depth: out_depth,
+                        }
                     };
                     cur_tag = tag_out;
                 }
@@ -1098,14 +1124,13 @@ impl Builder {
                     };
                     let anc = self.alloc_ancilla(false);
 
-                    let arrival = |map: &HashMap<RailPair, (RailPair, u32)>,
-                                   p: RailPair,
-                                   fallback: u32| {
-                        map.get(&p)
-                            .or_else(|| map.get(&p.swapped()))
-                            .map(|&(_, d)| d)
-                            .unwrap_or(fallback)
-                    };
+                    let arrival =
+                        |map: &HashMap<RailPair, (RailPair, u32)>, p: RailPair, fallback: u32| {
+                            map.get(&p)
+                                .or_else(|| map.get(&p.swapped()))
+                                .map(|&(_, d)| d)
+                                .unwrap_or(fallback)
+                        };
                     let c_in = cell.inputs[0];
                     let t_in = cell.inputs[1];
                     let c_depth = arrival(&pair_depth_map, c_in, cell.depth);
@@ -1152,12 +1177,21 @@ impl Builder {
                     });
                     pair_depth_map.insert(c_out, (c_out, d3 + 1));
                     // Scratch exits = init (0) on every input: clean.
-                    self.mark_garbage(BitAt { pair: anc_out, depth: d3 + 1 });
+                    self.mark_garbage(BitAt {
+                        pair: anc_out,
+                        depth: d3 + 1,
+                    });
 
                     cur_tag = if invert_tag {
-                        BitAt { pair: tag_out_pair.swapped(), depth: d3 + 1 }
+                        BitAt {
+                            pair: tag_out_pair.swapped(),
+                            depth: d3 + 1,
+                        }
                     } else {
-                        BitAt { pair: tag_out_pair, depth: d3 + 1 }
+                        BitAt {
+                            pair: tag_out_pair,
+                            depth: d3 + 1,
+                        }
                     };
                 }
                 CellKind::K3 => unreachable!("checked above"),
@@ -1171,10 +1205,11 @@ impl Builder {
             .map(|b| {
                 if let Some(&(pair, depth)) = pair_depth_map.get(&b.pair) {
                     BitAt { pair, depth }
-                } else if let Some(&(_, depth)) =
-                    pair_depth_map.get(&b.pair.swapped())
-                {
-                    BitAt { pair: b.pair, depth }
+                } else if let Some(&(_, depth)) = pair_depth_map.get(&b.pair.swapped()) {
+                    BitAt {
+                        pair: b.pair,
+                        depth,
+                    }
                 } else {
                     *b
                 }
@@ -1282,15 +1317,14 @@ impl Builder {
             let false_anc = self.alloc_ancilla(false);
             let split = self.emit(CellKind::K1, &[state[0], true_anc, false_anc]);
             let state_tag = split[0]; // tag value → body's first data input
-            let not_tag = split[1];   // NOT(tag) → garbage
-            let tag_copy = split[2];  // tag value → control for conditional
+            let not_tag = split[1]; // NOT(tag) → garbage
+            let tag_copy = split[2]; // tag value → control for conditional
 
             self.mark_garbage(not_tag);
             state[0] = state_tag;
 
             // Apply body controlled by tag_copy (fires when tag=true=Left).
-            let (new_state, ctrl_out) =
-                self.controlled_apply(body, &state, tag_copy, false)?;
+            let (new_state, ctrl_out) = self.controlled_apply(body, &state, tag_copy, false)?;
             // The control value threads through and comes out unchanged;
             // it's garbage now.
             self.mark_garbage(ctrl_out);
@@ -1372,7 +1406,10 @@ fn mmd_gates(perm: &[u32], w: usize) -> Vec<McNot> {
         // Phase 1: set every bit of i missing from v.
         for j in 0..w {
             if (i >> j) & 1 == 1 && (v >> j) & 1 == 0 {
-                let g = McNot { controls: ones(v), target: j };
+                let g = McNot {
+                    controls: ones(v),
+                    target: j,
+                };
                 apply_all(&mut t, &g);
                 gates.push(g);
                 v |= 1 << j;
@@ -1381,7 +1418,10 @@ fn mmd_gates(perm: &[u32], w: usize) -> Vec<McNot> {
         // Phase 2: clear every bit of v not in i.
         for j in 0..w {
             if (v >> j) & 1 == 1 && (i >> j) & 1 == 0 {
-                let g = McNot { controls: ones(v & !(1 << j)), target: j };
+                let g = McNot {
+                    controls: ones(v & !(1 << j)),
+                    target: j,
+                };
                 apply_all(&mut t, &g);
                 gates.push(g);
                 v &= !(1 << j);
@@ -1395,10 +1435,7 @@ fn mmd_gates(perm: &[u32], w: usize) -> Vec<McNot> {
 
 /// Does `def.forward` compute exactly `f` on flattened bits, over the
 /// whole (finite) domain?
-fn prim_matches(
-    def: &PrimDef,
-    f: impl Fn(&[bool]) -> Vec<bool>,
-) -> Result<bool, LowerError> {
+fn prim_matches(def: &PrimDef, f: impl Fn(&[bool]) -> Vec<bool>) -> Result<bool, LowerError> {
     for v in enumerate_values(&def.input_ty) {
         let Some(w) = def.forward.get(&v) else {
             return Ok(false); // not total ⇒ not this template (inadmissible anyway)
@@ -1459,7 +1496,10 @@ fn lower_inner(
         anc_origin: "untagged",
     };
     let ins: Vec<BitAt> = (0..w_in)
-        .map(|_| BitAt { pair: b.fresh_pair(), depth: 0 })
+        .map(|_| BitAt {
+            pair: b.fresh_pair(),
+            depth: 0,
+        })
         .collect();
     let outs = b.apply(net, &ins)?;
     debug_assert_eq!(outs.len(), w_out);
@@ -1545,7 +1585,9 @@ mod tests {
     }
 
     fn fredkin_prim() -> PrimDef {
-        prim_from_fn("fredkin", three_bits(), three_bits(), |b| CellKind::K1.eval(b))
+        prim_from_fn("fredkin", three_bits(), three_bits(), |b| {
+            CellKind::K1.eval(b)
+        })
     }
 
     fn ccswap_prim() -> PrimDef {
@@ -1557,9 +1599,12 @@ mod tests {
     }
 
     fn cnot_prim() -> PrimDef {
-        prim_from_fn("cnot", Type::prod(bit(), bit()), Type::prod(bit(), bit()), |b| {
-            vec![b[0], b[0] ^ b[1]]
-        })
+        prim_from_fn(
+            "cnot",
+            Type::prod(bit(), bit()),
+            Type::prod(bit(), bit()),
+            |b| vec![b[0], b[0] ^ b[1]],
+        )
     }
 
     /// Untimed functional evaluation of the cell netlist: propagate token
@@ -1720,7 +1765,11 @@ mod tests {
 
     #[test]
     fn reg_lowers_to_buffer_chain() {
-        let reg3 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(3) };
+        let reg3 = TypedNode {
+            input: bit(),
+            output: bit(),
+            kind: NodeKind::Reg(3),
+        };
         let net = lower(&reg3).unwrap();
         assert_eq!(net.validate(), Ok(()));
         assert_eq!(net.cell_counts(), BTreeMap::from([(CellKind::K0, 3)]));
@@ -1736,7 +1785,11 @@ mod tests {
     #[test]
     fn reg_on_two_bits_buffers_each_bit() {
         let ty = Type::prod(bit(), bit());
-        let reg2 = TypedNode { input: ty.clone(), output: ty, kind: NodeKind::Reg(2) };
+        let reg2 = TypedNode {
+            input: ty.clone(),
+            output: ty,
+            kind: NodeKind::Reg(2),
+        };
         let net = lower(&reg2).unwrap();
         assert_eq!(net.cell_counts(), BTreeMap::from([(CellKind::K0, 4)]));
         assert_eq!(
@@ -1756,9 +1809,16 @@ mod tests {
         let id_bit = TypedNode {
             input: bit(),
             output: bit(),
-            kind: NodeKind::Permute { monoid: Monoid::Prod, sigma: vec![0] },
+            kind: NodeKind::Permute {
+                monoid: Monoid::Prod,
+                sigma: vec![0],
+            },
         };
-        let reg1 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(1) };
+        let reg1 = TypedNode {
+            input: bit(),
+            output: bit(),
+            kind: NodeKind::Reg(1),
+        };
         let par = TypedNode {
             input: three_bits(),
             output: three_bits(),
@@ -1804,9 +1864,16 @@ mod tests {
         let id_bit = TypedNode {
             input: bit(),
             output: bit(),
-            kind: NodeKind::Permute { monoid: Monoid::Prod, sigma: vec![0] },
+            kind: NodeKind::Permute {
+                monoid: Monoid::Prod,
+                sigma: vec![0],
+            },
         };
-        let reg1 = TypedNode { input: bit(), output: bit(), kind: NodeKind::Reg(1) };
+        let reg1 = TypedNode {
+            input: bit(),
+            output: bit(),
+            kind: NodeKind::Reg(1),
+        };
         let net = lower(&TypedNode {
             input: Type::prod(bit(), bit()),
             output: Type::prod(bit(), bit()),
@@ -1982,17 +2049,14 @@ mod tests {
         // side is zero-padded with an ancilla; the bijection between
         // value sets synthesizes and oracle-matches.
         let out_ty = Type::sum(Type::One, Type::sum(Type::One, bit()));
-        let widen = prim_from_fn(
-            "widen",
-            Type::prod(bit(), bit()),
-            out_ty,
-            |b| match (b[0], b[1]) {
+        let widen = prim_from_fn("widen", Type::prod(bit(), bit()), out_ty, |b| {
+            match (b[0], b[1]) {
                 (true, true) => vec![true, false, false],
                 (true, false) => vec![false, true, false],
                 (false, true) => vec![false, false, true],
                 (false, false) => vec![false, false, false],
-            },
-        );
+            }
+        });
         assert_lowering_agrees(&Iso::Prim(Box::new(widen)));
     }
 

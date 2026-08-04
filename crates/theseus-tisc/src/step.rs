@@ -490,7 +490,11 @@ where
         add.push(gate_at(n, &[a(i), b(i), a(i + 1)], toffoli_prim()));
     }
     add.push(gate_at(n, &[a(np - 1), b(np - 1)], cnot_prim()));
-    add.push(gate_at(n, &[a(np - 2), b(np - 2), a(np - 1)], toffoli_prim()));
+    add.push(gate_at(
+        n,
+        &[a(np - 2), b(np - 2), a(np - 1)],
+        toffoli_prim(),
+    ));
     for i in (1..np - 1).rev() {
         add.push(gate_at(n, &[a(i), b(i)], cnot_prim()));
         add.push(gate_at(n, &[a(i - 1), b(i - 1), a(i)], toffoli_prim()));
@@ -665,11 +669,11 @@ pub fn step(rom: &[u32]) -> Iso {
 pub fn step_with(layout: &Layout, rom: &[u32]) -> Iso {
     let f = fetch_with(layout, rom);
     let phases = vec![
-        f.clone(),                          // fetch
-        decoder::decode_execute_l(layout),  // decode + execute (SHARED crossbar)
-        f,                                  // unfetch
-        pc_add_br_with(layout),             // PC += BR
-        pc_inc_with(layout),                // PC += 1
+        f.clone(),                         // fetch
+        decoder::decode_execute_l(layout), // decode + execute (SHARED crossbar)
+        f,                                 // unfetch
+        pc_add_br_with(layout),            // PC += BR
+        pc_inc_with(layout),               // PC += 1
     ];
     seq_balanced(phases)
 }
