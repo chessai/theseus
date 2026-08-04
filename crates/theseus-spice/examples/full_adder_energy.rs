@@ -5,7 +5,7 @@
 //!     cargo run -p theseus-spice --example full_adder_energy
 
 use theseus_core::{enumerate_values, type_of};
-use theseus_netlist::{balance, bits_of, lower_iso, rail_width, simulate, CellKind};
+use theseus_netlist::{balance, bits_of, rail_width, simulate, CellKind};
 use theseus_spice::annotate::compiled_energy;
 use theseus_spice::chardb;
 
@@ -57,15 +57,13 @@ fn elaborate(src: &str, iso_name: &str) -> theseus_core::Iso {
 
 // ── Extend input with ancilla bits ──────────────────────────────────
 
-fn extend_with_ancilla(
-    data_bits: &[bool],
-    net: &theseus_netlist::PhasedCellNetlist,
-) -> Vec<bool> {
+// Append the netlist's REQUIRED ancilla initial values. The R1/K1
+// garbage-free construction (ADR-0040) only computes the right function
+// when every ancilla starts at the value the lowering allocated it with,
+// so use the real vector from `lower_iso_with_ancillas`, not a guess.
+fn extend_with_ancilla(data_bits: &[bool], ancilla_values: &[bool]) -> Vec<bool> {
     let mut bits = data_bits.to_vec();
-    let n_ancilla = net.inputs.len() - data_bits.len();
-    for i in 0..n_ancilla {
-        bits.push(i % 2 == 0);
-    }
+    bits.extend_from_slice(ancilla_values);
     bits
 }
 
@@ -79,7 +77,8 @@ fn main() {
     let src = full_adder_source();
     let iso = elaborate(&src, "fa5");
 
-    let net = lower_iso(&iso).expect("fa5 lowering succeeds");
+    let (net, ancilla_values) =
+        theseus_netlist::lower::lower_iso_with_ancillas(&iso).expect("fa5 lowering succeeds");
     let balanced = balance(&net).expect("balance succeeds");
 
     // ── Cell breakdown ──────────────────────────────────────────────
@@ -106,7 +105,7 @@ fn main() {
     // Pick (a=1, b=1, cin=0, s=0, c=0) = index 3 (0b00011)
     let v = &vals[3];
     let data_bits = bits_of(v, &in_ty).unwrap();
-    let full_input = extend_with_ancilla(&data_bits, &balanced);
+    let full_input = extend_with_ancilla(&data_bits, &ancilla_values);
     let sim = simulate(&balanced, &full_input).expect("sim runs");
     let out_bits = &sim.outputs[..n_data_out];
 
@@ -123,9 +122,9 @@ fn main() {
 
     // ── Summary line ────────────────────────────────────────────────
     let k0 = counts.get(&CellKind::K0).copied().unwrap_or(0);
-    let k3 = counts.get(&CellKind::K3).copied().unwrap_or(0);
+    let r1 = counts.get(&CellKind::R1).copied().unwrap_or(0);
     println!(
-        "\nHEADLINE: 5-wire reversible full adder compiles to {k0} K0 + {k3} K3 cells, \
+        "\nHEADLINE: 5-wire reversible full adder compiles to {k0} K0 + {r1} R1 cells, \
          total energy = {:.4e} J/op @ t_ramp = {:.0e} s",
         report.total_j, t_ramp
     );
