@@ -33,5 +33,6 @@ pub mod artifact;
 pub mod bench;
 pub mod chardb;
 pub mod cswap;
+pub(crate) mod deck;
 pub mod dutmatrix;
 pub mod energy;

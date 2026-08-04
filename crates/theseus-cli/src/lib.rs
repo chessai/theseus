@@ -3,4 +3,5 @@
 pub mod lower;
 pub mod pipeline;
 pub mod repl;
+pub mod util;
 pub mod value;

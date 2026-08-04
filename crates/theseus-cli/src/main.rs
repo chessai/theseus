@@ -1,6 +1,5 @@
 //! `theseus` -- minimal CLI driver.
 
-use std::fs;
 use std::process;
 
 use clap::{Parser, Subcommand};
@@ -8,6 +7,7 @@ use clap::{Parser, Subcommand};
 use theseus_cli::lower;
 use theseus_cli::pipeline;
 use theseus_cli::repl::Repl;
+use theseus_cli::util::load_source;
 use theseus_cli::value;
 
 /// theseus -- minimal CLI driver.
@@ -61,10 +61,7 @@ fn main() {
 }
 
 fn cmd_check(file: &str) {
-    let src = fs::read_to_string(file).unwrap_or_else(|e| {
-        eprintln!("error reading {file}: {e}");
-        process::exit(1);
-    });
+    let src = load_source(file);
     match pipeline::diagnostics(&src) {
         Ok(diags) if diags.is_empty() => println!("ok"),
         Ok(diags) => {
@@ -81,25 +78,10 @@ fn cmd_check(file: &str) {
 }
 
 fn cmd_run(file: &str, iso_name: &str, value: &[String]) {
-    let src = fs::read_to_string(file).unwrap_or_else(|e| {
-        eprintln!("error reading {file}: {e}");
-        process::exit(1);
-    });
+    let src = load_source(file);
     let val_str = value.join(" ");
 
-    let ep = match pipeline::elaborate(&src) {
-        Ok(ep) => ep,
-        Err(pipeline::ElabError::Parse(e)) => {
-            eprintln!("parse error: {e:?}");
-            process::exit(1);
-        }
-        Err(pipeline::ElabError::Check(diags)) => {
-            for d in &diags {
-                eprintln!("{d:?}");
-            }
-            process::exit(1);
-        }
-    };
+    let ep = pipeline::elaborate_or_exit(&src);
 
     let sig = pipeline::iso_sig(&ep.env, iso_name).unwrap_or_else(|| {
         eprintln!("unknown iso: {iso_name}");
@@ -134,24 +116,9 @@ fn cmd_run(file: &str, iso_name: &str, value: &[String]) {
 }
 
 fn cmd_repl(file: &str) {
-    let src = fs::read_to_string(file).unwrap_or_else(|e| {
-        eprintln!("error reading {file}: {e}");
-        process::exit(1);
-    });
+    let src = load_source(file);
 
-    let ep = match pipeline::elaborate(&src) {
-        Ok(ep) => ep,
-        Err(pipeline::ElabError::Parse(e)) => {
-            eprintln!("parse error: {e:?}");
-            process::exit(1);
-        }
-        Err(pipeline::ElabError::Check(diags)) => {
-            for d in &diags {
-                eprintln!("{d:?}");
-            }
-            process::exit(1);
-        }
-    };
+    let ep = pipeline::elaborate_or_exit(&src);
 
     let mut repl = Repl::new(ep);
     let stdin = std::io::stdin();
@@ -161,10 +128,7 @@ fn cmd_repl(file: &str) {
 }
 
 fn cmd_lower(file: &str, iso_name: &str) {
-    let src = fs::read_to_string(file).unwrap_or_else(|e| {
-        eprintln!("error reading {file}: {e}");
-        process::exit(1);
-    });
+    let src = load_source(file);
 
     let lowered = match lower::surface_to_cells(&src, iso_name) {
         Ok(l) => l,

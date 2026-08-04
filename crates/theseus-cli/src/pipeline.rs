@@ -45,6 +45,26 @@ pub enum ElabError {
     Check(Vec<Diagnostic>),
 }
 
+/// Parse, check, and elaborate `src`, or print the standard errors to stderr
+/// and exit with code 1. Used by the run/repl subcommands, which abort on any
+/// elaboration failure. (The `check` subcommand prints to stdout by design and
+/// does not use this helper.)
+pub fn elaborate_or_exit(src: &str) -> ElaboratedProgram {
+    match elaborate(src) {
+        Ok(ep) => ep,
+        Err(ElabError::Parse(e)) => {
+            eprintln!("parse error: {e:?}");
+            std::process::exit(1);
+        }
+        Err(ElabError::Check(diags)) => {
+            for d in &diags {
+                eprintln!("{d:?}");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Evaluate an iso forward on a value with the given fuel budget.
 pub fn run_iso(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalError> {
     eval(iso, value, fuel)

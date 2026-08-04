@@ -76,6 +76,17 @@ pub fn parse_meas(stdout: &str, meas_name: &str) -> Option<f64> {
     None
 }
 
+/// Extract a `.meas` result by name, panicking with the standard message if it
+/// is absent from the ngspice output. Callers that treat a missing measurement
+/// as a hard bug (not a user error) route through this helper.
+///
+/// # Panics
+/// Panics if `name` is not present in `stdout`.
+pub(crate) fn require_meas(stdout: &str, name: &str) -> f64 {
+    parse_meas(stdout, name)
+        .unwrap_or_else(|| panic!("measurement '{name}' missing from ngspice output"))
+}
+
 /// Run an ngspice netlist and extract a single `.meas` result (in joules or
 /// whatever unit the measurement produces).
 ///

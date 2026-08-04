@@ -105,7 +105,8 @@
 use std::io;
 
 use crate::adiabatic::{DeviceRung, FetKind};
-use crate::bench::{log_log_slope, parse_meas, run_ngspice_raw};
+use crate::bench::{log_log_slope, require_meas, run_ngspice_raw};
+use crate::deck::finalize_deck;
 
 /// One k-CSWAP input token. `c1`/`c2`/`c3` are the controls (`c1` doubles as
 /// the single control at k = 1; c2/c3 ignored at k ≤ 1; c3 ignored at k ≤ 2),
@@ -724,9 +725,7 @@ pub fn cell_netlist(
             topo.vmax_line()
         ));
     }
-    l.push(".endc".into());
-    l.push(".end".into());
-    l.join("\n") + "\n"
+    finalize_deck(l)
 }
 
 /// The functional (truth-table) deck: two unmeasured lead-in tokens, then
@@ -791,10 +790,7 @@ pub fn run_cell_functional(
 ) -> io::Result<CswapFunctionalRun> {
     let (deck, tokens) = cell_functional_netlist(topo, rung, period_s);
     let out = run_ngspice_raw(&deck)?;
-    let get = |name: &str| {
-        parse_meas(&out, name)
-            .unwrap_or_else(|| panic!("measurement '{name}' missing from ngspice output"))
-    };
+    let get = |name: &str| require_meas(&out, name);
     let mut readings = Vec::new();
     for (j, &t) in tokens.iter().enumerate() {
         let o = topo.out(t);
@@ -871,10 +867,7 @@ pub fn cell_energy_point(
     period_s: f64,
 ) -> io::Result<CswapEnergyPoint> {
     let out = run_ngspice_raw(&cell_energy_netlist(topo, rung, period_s))?;
-    let get = |name: &str| {
-        parse_meas(&out, name)
-            .unwrap_or_else(|| panic!("measurement '{name}' missing from ngspice output"))
-    };
+    let get = |name: &str| require_meas(&out, name);
     Ok(CswapEnergyPoint {
         period_s,
         etot: get("etot"),

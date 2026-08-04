@@ -77,11 +77,12 @@ use crate::adiabatic::{
     adiabatic_tg_curve_rung, cmos_baseline_curve_rung, pfal_curve_rung, DeviceRung, FetKind,
     Sky130Variant,
 };
-use crate::bench::{parse_meas, run_ngspice_raw};
+use crate::bench::{parse_meas, require_meas, run_ngspice_raw};
 use crate::cswap::{
     cell_energy_curve, cell_functional_netlist, cell_netlist, run_cell_functional, CellTopo,
     CswapReading, CswapToken,
 };
+use crate::deck::finalize_deck;
 use crate::energy::{self, EnergyFit};
 
 // ---------------------------------------------------------------------------
@@ -340,8 +341,7 @@ fn sweep_periods(rung: DeviceRung) -> Vec<f64> {
 /// Extract a required measurement, panicking with context if missing (an
 /// infrastructure failure: the deck emitted it).
 fn meas(out: &str, name: &str) -> f64 {
-    parse_meas(out, name)
-        .unwrap_or_else(|| panic!("measurement '{name}' missing from ngspice output"))
+    require_meas(out, name)
 }
 
 /// Insert extra `.meas` directives just before the deck's `.endc`.
@@ -971,9 +971,7 @@ fn tg_admission_deck(
             "meas tran {name} INTEG V({node}) FROM={t0:.9e} TO={t1:.9e}"
         ));
     }
-    l.push(".endc".into());
-    l.push(".end".into());
-    l.join("\n") + "\n"
+    finalize_deck(l)
 }
 
 fn admit_tg(rung: DeviceRung) -> io::Result<AdmissionReport> {
@@ -1169,9 +1167,7 @@ fn cmos_admission_deck(rung: DeviceRung, period: f64) -> String {
             b + period
         ));
     }
-    l.push(".endc".into());
-    l.push(".end".into());
-    l.join("\n") + "\n"
+    finalize_deck(l)
 }
 
 fn admit_cmos(rung: DeviceRung) -> io::Result<AdmissionReport> {
@@ -1296,9 +1292,7 @@ fn pfal_admission_deck(rung: DeviceRung, period: f64, bit: bool) -> String {
             "meas tran {name} INTEG V({node}) FROM={t0:.9e} TO={t1:.9e}"
         ));
     }
-    l.push(".endc".into());
-    l.push(".end".into());
-    l.join("\n") + "\n"
+    finalize_deck(l)
 }
 
 fn admit_pfal(rung: DeviceRung) -> io::Result<AdmissionReport> {

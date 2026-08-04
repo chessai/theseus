@@ -26,6 +26,7 @@
 use std::io;
 
 use crate::bench::{log_log_slope, parse_meas, run_energy, run_ngspice_raw};
+use crate::deck::finalize_deck;
 
 // ---------------------------------------------------------------------------
 // Device-model rungs (ADR-0032 idealization ladder)
@@ -1235,10 +1236,7 @@ fn build_two_lal_sr(period_s: f64, n_stages: usize, bits: &[bool], bit_meas: boo
             }
         }
     }
-    lines.push(".endc".into());
-    lines.push(".end".into());
-
-    lines.join("\n") + "\n"
+    finalize_deck(lines)
 }
 
 /// Sweep the power-clock period and return `(period_s, energy_per_cycle_J)`
@@ -1750,10 +1748,7 @@ mod tests {
         let bits = [true, false, true, true, false, false, true];
         let nl = two_lal_sr_pattern_netlist(period, n_stages, &bits);
         let out = crate::bench::run_ngspice_raw(&nl).expect("ngspice failed");
-        let get = |name: &str| -> f64 {
-            crate::bench::parse_meas(&out, name)
-                .unwrap_or_else(|| panic!("measurement '{name}' missing from ngspice output"))
-        };
+        let get = |name: &str| -> f64 { crate::bench::require_meas(&out, name) };
 
         // (a) Per-stage/per-bit full-level propagation, ALL stages.
         for k in 0..n_stages {
