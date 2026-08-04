@@ -749,6 +749,158 @@ fn recognize_into_row(row: &[BvExpr], r: usize) -> Result<IntoRow, SynthError> {
     Ok((xor_sources, const_mask, and_term))
 }
 
+// --- Shared Bennett-transcriber validation / construction helpers ---
+//
+// The three Bennett transcribers (transcribe_bennett, transcribe_bennett_general,
+// transcribe_bdd_bennett) and the width-aware emit_* gadgets share several
+// byte-identical validation/construction blocks. These private helpers hold the
+// single copy; every call site routes through them with IDENTICAL logic and
+// identical emitted output (error `detail` strings included). Where a call site
+// differs even slightly (e.g. the BDD variant's temp+node disjointness, which
+// legitimately unifies more working words) the block is kept inline at that site.
+
+/// Legal-operand + no-duplicate validation shared by `transcribe_bennett` and
+/// `transcribe_bdd_bennett`. Every carrier and every USED ancilla word must be a
+/// legal operand (rejects reserved s0/s1 = 8/9 and out-of-range >= cap, which
+/// would otherwise panic `operand_get` at exec time rather than fail
+/// verification); no carrier may repeat, and no USED ancilla word may repeat
+/// (an aliased ancilla defeats the "ancilla returned to 0" teeth).
+///
+/// Used by `transcribe_bennett`. The BDD transcriber keeps its own copy inline
+/// because it interleaves temp/node legality checks with this block (preserving
+/// its distinct first-error ordering) and uses a shorter ancilla-dup message.
+fn validate_bennett_operands(
+    carrier_ops: &[u8],
+    ancilla_ops: &[u8],
+    n: usize,
+) -> Result<(), SynthError> {
+    for &c in &carrier_ops[..n] {
+        check_operand_legal("carrier", c)?;
+    }
+    for &a in &ancilla_ops[..n] {
+        check_operand_legal("ancilla", a)?;
+    }
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if carrier_ops[i] == carrier_ops[j] {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!("carrier operand {} appears twice", carrier_ops[i]),
+                });
+            }
+            if ancilla_ops[i] == ancilla_ops[j] {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!(
+                        "ancilla operand {} appears twice (aliased ancilla)",
+                        ancilla_ops[i]
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Carrier-read validation: a carrier row (0..n) may only READ carriers. A
+/// `Var(y)` with `y >= n` reads a register OUTSIDE the carrier set; a permutation
+/// spec on `n` carriers must be a function of those `n` carriers alone -- reject.
+fn validate_bennett_carrier_reads(
+    fwd: &RegTransfer,
+    bwd: &RegTransfer,
+    n: usize,
+) -> Result<(), SynthError> {
+    for spec in [fwd, bwd] {
+        for r in 0..n {
+            let mut reads: Vec<usize> = Vec::new();
+            for e in &spec.regs[r] {
+                collect_var_operands(e, &mut reads);
+            }
+            if let Some(&y) = reads.iter().find(|&&y| y >= n) {
+                return Err(SynthError::MalformedSpec {
+                    detail: format!(
+                        "carrier row {r} reads register {y} outside the {n} carriers; a \
+                         permutation spec must read only carriers"
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Non-carrier identity-row check: the permutation must be identity on registers
+/// `n..NUM_REGS` (the permutation only touches the carriers).
+fn validate_bennett_identity_rows(
+    fwd: &RegTransfer,
+    bwd: &RegTransfer,
+    n: usize,
+) -> Result<(), SynthError> {
+    for r in n..NUM_REGS {
+        if !is_identity_row(&fwd.regs[r], r) || !is_identity_row(&bwd.regs[r], r) {
+            return Err(SynthError::MalformedSpec {
+                detail: format!(
+                    "spec touches reg {r} outside the {n} carriers; the permutation must be \
+                     identity on non-carrier registers"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Build the NUM_REGS-length dst/src operand maps. For carrier rows `0..n`,
+/// `src = carrier`, `dst = ancilla`. Rows `n..NUM_REGS` (which must be
+/// spec-identity) get a harmless self-map so any identity emission is a self-noop.
+fn build_bennett_operand_maps(
+    carrier_ops: &[u8],
+    ancilla_ops: &[u8],
+    n: usize,
+) -> (Vec<u8>, Vec<u8>) {
+    let mut src_map = vec![0u8; NUM_REGS];
+    let mut dst_map = vec![0u8; NUM_REGS];
+    for r in 0..NUM_REGS {
+        if r < n {
+            src_map[r] = carrier_ops[r];
+            dst_map[r] = ancilla_ops[r];
+        } else {
+            src_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
+            dst_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
+        }
+    }
+    (src_map, dst_map)
+}
+
+/// Emit the Bennett carrier<->ancilla swap loop (step 2 of every transcriber):
+/// one exchange per carrier/ancilla pair, `Exch` for reg<->reg, `Xchg` when one
+/// side is a scratch word.
+fn emit_bennett_swaps(
+    carrier_ops: &[u8],
+    ancilla_ops: &[u8],
+    n: usize,
+    out: &mut Vec<Instr>,
+) -> Result<(), SynthError> {
+    for i in 0..n {
+        out.push(swap_operands(carrier_ops[i], ancilla_ops[i])?);
+    }
+    Ok(())
+}
+
+/// Generic pairwise-distinctness guard over an operand list: every entry in
+/// `operands` must be distinct. On the first collision, `on_dup` builds the
+/// call-site-specific error detail (so each caller's exact message is preserved).
+fn validate_operands_distinct(
+    operands: &[u8],
+    on_dup: impl Fn() -> String,
+) -> Result<(), SynthError> {
+    for i in 0..operands.len() {
+        for j in (i + 1)..operands.len() {
+            if operands[i] == operands[j] {
+                return Err(SynthError::MalformedSpec { detail: on_dup() });
+            }
+        }
+    }
+    Ok(())
+}
+
 // ── A-6.1: the Bennett wrapper (general permutation via ancilla) ─────
 
 /// Textbook Bennett reversible-in-place-permutation: realize a permutation
@@ -804,37 +956,12 @@ pub fn transcribe_bennett(
             ),
         });
     }
-    // every carrier and every USED ancilla operand must be a legal
-    // operand (reject reserved s0/s1 = 8/9 and out-of-range ≥16, which would
-    // otherwise panic `operand_get` at exec time rather than fail verification).
-    for &c in &carrier_ops[..n] {
-        check_operand_legal("carrier", c)?;
-    }
-    for &a in &ancilla_ops[..n] {
-        check_operand_legal("ancilla", a)?;
-    }
-
-    // the operand maps must be internally disjoint with no dups:
-    //   * no carrier repeated; no USED ancilla word repeated (aliased ancilla
-    //     `[3,3]` defeats "ancilla returned to 0" teeth -- CE);
-    //   * carriers and used ancilla disjoint (Bennett requires fresh scratch).
-    for i in 0..n {
-        for j in (i + 1)..n {
-            if carrier_ops[i] == carrier_ops[j] {
-                return Err(SynthError::MalformedSpec {
-                    detail: format!("carrier operand {} appears twice", carrier_ops[i]),
-                });
-            }
-            if ancilla_ops[i] == ancilla_ops[j] {
-                return Err(SynthError::MalformedSpec {
-                    detail: format!(
-                        "ancilla operand {} appears twice (aliased ancilla)",
-                        ancilla_ops[i]
-                    ),
-                });
-            }
-        }
-    }
+    // every carrier and every USED ancilla operand must be a legal operand, and
+    // the operand maps must be internally disjoint with no dups: no carrier
+    // repeated; no USED ancilla word repeated (aliased ancilla `[3,3]` defeats
+    // "ancilla returned to 0" teeth -- CE).
+    validate_bennett_operands(carrier_ops, ancilla_ops, n)?;
+    // carriers and used ancilla must be disjoint (Bennett requires fresh scratch).
     for c in &carrier_ops[..n] {
         if ancilla_ops[..n].contains(c) {
             return Err(SynthError::MalformedSpec {
@@ -843,54 +970,19 @@ pub fn transcribe_bennett(
         }
     }
 
-    // a carrier row (0..n) may only READ carriers. `Var(y)` with
-    // `y ≥ n` reads a register OUTSIDE the carrier set; the src_map padding
-    // below wired every such read to a bogus operand (operand 0), silently
-    // producing a wrong body + dirty ancilla. A permutation spec on `n`
-    // carriers must be a function of those `n` carriers alone -- reject.
-    for spec in [fwd, bwd] {
-        for r in 0..n {
-            let mut reads: Vec<usize> = Vec::new();
-            for e in &spec.regs[r] {
-                collect_var_operands(e, &mut reads);
-            }
-            if let Some(&y) = reads.iter().find(|&&y| y >= n) {
-                return Err(SynthError::MalformedSpec {
-                    detail: format!(
-                        "carrier row {r} reads register {y} outside the {n} carriers; a \
-                         permutation spec must read only carriers"
-                    ),
-                });
-            }
-        }
-    }
+    // a carrier row (0..n) may only READ carriers. `Var(y)` with `y >= n` reads a
+    // register OUTSIDE the carrier set; the src_map padding below wired every such
+    // read to a bogus operand (operand 0), silently producing a wrong body + dirty
+    // ancilla. A permutation spec on `n` carriers is a function of those `n`
+    // carriers alone -- reject.
+    validate_bennett_carrier_reads(fwd, bwd, n)?;
 
     // Build NUM_REGS-length dst/src maps. For carrier rows 0..n, src = carrier,
     // dst = ancilla. For rows n..NUM_REGS (which must be spec-identity), point
     // both at the carrier operand so any (identity) emission is a self-noop we
     // never actually emit -- but to be safe reject non-identity there.
-    for r in n..NUM_REGS {
-        if !is_identity_row(&fwd.regs[r], r) || !is_identity_row(&bwd.regs[r], r) {
-            return Err(SynthError::MalformedSpec {
-                detail: format!(
-                    "spec touches reg {r} outside the {n} carriers; the permutation must be \
-                     identity on non-carrier registers"
-                ),
-            });
-        }
-    }
-    let mut src_map = vec![0u8; NUM_REGS];
-    let mut dst_map = vec![0u8; NUM_REGS];
-    for r in 0..NUM_REGS {
-        if r < n {
-            src_map[r] = carrier_ops[r];
-            dst_map[r] = ancilla_ops[r];
-        } else {
-            // Non-carrier rows are identity; give them a harmless self-map.
-            src_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
-            dst_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
-        }
-    }
+    validate_bennett_identity_rows(fwd, bwd, n)?;
+    let (src_map, dst_map) = build_bennett_operand_maps(carrier_ops, ancilla_ops, n);
 
     let mut out = Vec::new();
 
@@ -899,9 +991,7 @@ pub fn transcribe_bennett(
 
     // Step 2: swap carriers ↔ ancilla, per pair. Use Exch for reg↔reg, Xchg
     // (reg↔scratch) when exactly one side is a scratch operand.
-    for i in 0..n {
-        out.push(swap_operands(carrier_ops[i], ancilla_ops[i])?);
-    }
+    emit_bennett_swaps(carrier_ops, ancilla_ops, n, &mut out)?;
 
     // Step 3: O ^= P⁻¹(y)  (dst = ancilla, src = carriers = y now). Clears O→0.
     out.extend(transcribe_into(bwd, &dst_map, &src_map)?);
@@ -1259,25 +1349,13 @@ pub fn transcribe_bennett_general(
         }
     }
     // Build the NUM_REGS-length src/dst maps (spec leaf r → carrier/ancilla op).
-    let mut src_map = vec![0u8; NUM_REGS];
-    let mut dst_map = vec![0u8; NUM_REGS];
-    for r in 0..NUM_REGS {
-        if r < n {
-            src_map[r] = carrier_ops[r];
-            dst_map[r] = out_ancilla[r];
-        } else {
-            src_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
-            dst_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
-        }
-    }
+    let (src_map, dst_map) = build_bennett_operand_maps(carrier_ops, out_ancilla, n);
 
     let mut out = Vec::new();
     // 1. O ^= P(x).
     out.extend(transcribe_into_general(fwd, &dst_map, &src_map, helpers)?);
     // 2. swap carriers ↔ output ancilla.
-    for i in 0..n {
-        out.push(swap_operands(carrier_ops[i], out_ancilla[i])?);
-    }
+    emit_bennett_swaps(carrier_ops, out_ancilla, n, &mut out)?;
     // 3. O ^= P⁻¹(y) → clears O to 0.
     out.extend(transcribe_into_general(bwd, &dst_map, &src_map, helpers)?);
     Ok(out)
@@ -2114,7 +2192,10 @@ pub fn transcribe_bdd_bennett(
         check_operand_legal("node", w)?;
     }
 
-    // Internal-disjointness + no-dup guards.
+    // Internal-disjointness + no-dup guards. (The BDD variant checks temp/node
+    // legality above, before the no-dup loop, and uses the plain "appears twice"
+    // ancilla message -- so it validates its carrier/ancilla legality inline
+    // rather than through `validate_bennett_operands`, to preserve that ordering.)
     for i in 0..n {
         for j in (i + 1)..n {
             if carrier_ops[i] == carrier_ops[j] {
@@ -2130,75 +2211,41 @@ pub fn transcribe_bdd_bennett(
         }
     }
     // All working words must be mutually disjoint: carriers, ancilla, temp, nodes.
+    // This BDD-variant disjointness legitimately UNIFIES temp+nodes with the
+    // carrier/ancilla words, so it is kept per-site (not force-merged into the
+    // generic carrier/ancilla helper) -- only the pairwise-distinct sweep routes
+    // through `validate_operands_distinct`.
     let mut all: Vec<u8> = Vec::new();
     all.extend_from_slice(&carrier_ops[..n]);
     all.extend_from_slice(&out_ancilla[..n]);
     all.push(helpers.temp);
     all.extend_from_slice(helpers.nodes);
-    for i in 0..all.len() {
-        for j in (i + 1)..all.len() {
-            if all[i] == all[j] {
-                return Err(SynthError::MalformedSpec {
-                    detail: format!(
-                        "working operand {} is used twice (carriers/ancilla/temp/nodes must be \
-                         pairwise disjoint)",
-                        all[i]
-                    ),
-                });
-            }
-        }
-    }
+    validate_operands_distinct(&all, || {
+        // On a collision, report the FIRST duplicated operand (matching the
+        // original nested-loop's `all[i]`).
+        let dup = (0..all.len())
+            .find_map(|i| all[i + 1..].iter().find(|&&x| x == all[i]).map(|_| all[i]))
+            .unwrap_or(0);
+        format!(
+            "working operand {dup} is used twice (carriers/ancilla/temp/nodes must be \
+             pairwise disjoint)"
+        )
+    })?;
 
     // a carrier row may only READ carriers (a permutation on `n`
     // carriers is a function of those carriers alone).
-    for spec in [fwd, bwd] {
-        for r in 0..n {
-            let mut reads: Vec<usize> = Vec::new();
-            for e in &spec.regs[r] {
-                collect_var_operands(e, &mut reads);
-            }
-            if let Some(&y) = reads.iter().find(|&&y| y >= n) {
-                return Err(SynthError::MalformedSpec {
-                    detail: format!(
-                        "carrier row {r} reads register {y} outside the {n} carriers; a \
-                         permutation spec must read only carriers"
-                    ),
-                });
-            }
-        }
-    }
+    validate_bennett_carrier_reads(fwd, bwd, n)?;
     // The permutation must be identity on non-carrier registers.
-    for r in n..NUM_REGS {
-        if !is_identity_row(&fwd.regs[r], r) || !is_identity_row(&bwd.regs[r], r) {
-            return Err(SynthError::MalformedSpec {
-                detail: format!(
-                    "spec touches reg {r} outside the {n} carriers; the permutation must be \
-                     identity on non-carrier registers"
-                ),
-            });
-        }
-    }
+    validate_bennett_identity_rows(fwd, bwd, n)?;
 
     // Build the NUM_REGS-length src/dst maps (spec leaf r → carrier/ancilla op).
-    let mut src_map = vec![0u8; NUM_REGS];
-    let mut dst_map = vec![0u8; NUM_REGS];
-    for r in 0..NUM_REGS {
-        if r < n {
-            src_map[r] = carrier_ops[r];
-            dst_map[r] = out_ancilla[r];
-        } else {
-            src_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
-            dst_map[r] = carrier_ops.get(r).copied().unwrap_or(0);
-        }
-    }
+    let (src_map, dst_map) = build_bennett_operand_maps(carrier_ops, out_ancilla, n);
 
     let mut out = Vec::new();
     // 1. O ^= P(x)  (BDD synthesis: dst = ancilla, src = carriers = x).
     out.extend(transcribe_bdd_into(fwd, &dst_map, &src_map, helpers)?);
     // 2. swap carriers ↔ output ancilla.
-    for i in 0..n {
-        out.push(swap_operands(carrier_ops[i], out_ancilla[i])?);
-    }
+    emit_bennett_swaps(carrier_ops, out_ancilla, n, &mut out)?;
     // 3. O ^= P⁻¹(y)  (carriers now hold y) → clears O to 0.
     out.extend(transcribe_bdd_into(bwd, &dst_map, &src_map, helpers)?);
     Ok(out)
@@ -2563,19 +2610,12 @@ pub fn emit_weqzero_width(
     // distinct Ccnot operands throughout).
     let mut all: Vec<u8> = vec![dst_bit, src];
     all.extend_from_slice(&temps[..ntemp]);
-    for i in 0..all.len() {
-        for j in (i + 1)..all.len() {
-            if all[i] == all[j] {
-                return Err(SynthError::MalformedSpec {
-                    detail: format!(
-                        "WEqZero operands not distinct (dst_bit={dst_bit}, src={src}, \
-                         temps={:?})",
-                        &temps[..ntemp]
-                    ),
-                });
-            }
-        }
-    }
+    validate_operands_distinct(&all, || {
+        format!(
+            "WEqZero operands not distinct (dst_bit={dst_bit}, src={src}, temps={:?})",
+            &temps[..ntemp]
+        )
+    })?;
 
     // One OR node: `w.bit0 = acc.bit0 | src.bit_k` into clean `w`. `acc = None`
     // means the implicit clean-zero accumulator (the chain seed, p[0]). `src` is
@@ -2735,19 +2775,12 @@ pub fn emit_wlt_width(
     // All of dst_bit, a, b, and the temps must be pairwise distinct.
     let mut all: Vec<u8> = vec![dst_bit, a, b];
     all.extend_from_slice(&temps[..ntemp]);
-    for i in 0..all.len() {
-        for j in (i + 1)..all.len() {
-            if all[i] == all[j] {
-                return Err(SynthError::MalformedSpec {
-                    detail: format!(
-                        "WLt operands not distinct (dst_bit={dst_bit}, a={a}, b={b}, \
-                         temps={:?})",
-                        &temps[..ntemp]
-                    ),
-                });
-            }
-        }
-    }
+    validate_operands_distinct(&all, || {
+        format!(
+            "WLt operands not distinct (dst_bit={dst_bit}, a={a}, b={b}, temps={:?})",
+            &temps[..ntemp]
+        )
+    })?;
 
     // One borrow node: XOR-accumulate `maj(¬a_k, b_k, bin)` into the target word
     // `c` (a clean chain word, or `dst_bit` for the final bit), with `bin` = the
