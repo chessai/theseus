@@ -23,6 +23,11 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@v14
       - uses: DeterminateSystems/magic-nix-cache-action@v8
       - name: Build proofs
+        # Fresh checkout => no cached project `.lake/build`, so the proof modules
+        # always recompile from source (`cache get` only fetches pinned Mathlib
+        # oleans). `lake build` also elaborates TheseusProofs/AxiomGuard.lean,
+        # which FAILS the build on any sorry/native_decide/stray axiom -- so proof
+        # soundness is CI-enforced, not memory-reliant.
         run: |
           nix develop .#proofs --command bash -c '
             cd theseus-proofs && lake exe cache get && lake build

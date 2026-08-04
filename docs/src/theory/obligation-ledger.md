@@ -21,3 +21,26 @@ The honest inventory of what the implementation leans on
 | TH-REV-3 | **Finite iteration is reversible:** `iter n` unrolls (`iter_succ`/`iter_zero`) and every bounded iterate of a reversible body is bijective | loop reversibility | **proved** -- prose `theory/reversibility.md` (§iter), Lean `iter_succ`, `iter_zero`, `iter_bijective`. Same axiom base. **Modeling scope:** `iter n` abstracts the iteration COUNT; the loop's data-dependent bound (`<= |u|`, finiteness/exactness) is the separate TH-1 (`finite-trace-totality.md` / `FiniteTrace.lean`), not re-proved here |
 | TH-REV-4 | **fold/unfold mutual inverse:** ADR-0037's reversible fold is a `mapAccumL` that threads an accumulator head-to-tail (cells COUPLED); the adjoint `unfold` runs `f.symm` tail-to-head, and the two are mutual inverses at every length, so `foldAcc` is bijective | ADR-0037 fold/unfold reversibility | **proved** -- prose `theory/reversibility.md` (§fold/unfold), Lean **`unfold_fold_acc`, `fold_unfold_acc`, `foldAcc_bijective`** (the genuine accumulator fold over `List Bool`), plus `fold_unfold_inv`/`unfold_fold_inv`/`foldBits_bijective` for the accumulator-free cellwise-map special case. Same axiom base. **Modeling scope:** recursive carrier = `List Bool` (genuine structural recursion, arbitrary length); the per-cell body is `Bool × Bool ≃ Bool × Bool` (accumulator+payload one bit each) -- the threading argument is uniform in the body, so representative, but a fully `Iso`-typed recursive carrier needs `mu`-types (scoped OUT). `foldBits` (`List.map`) is explicitly the DEGENERATE per-cell case, not ADR-0037's fold (reversibility.md §fold/unfold) |
 | TH-REV-5 | **SWAPBR come-from involution:** the control-flow reversibility witness -- `SWAPBR` is its own inverse, realized as `swapT`'s self-inverse through the SAME iso denotation | ADR-0034 D5 come-from control flow | **proved** -- prose `theory/reversibility.md` (§SWAPBR), Lean `comefrom_involution`, `swapbr_eq_denote_swapT`, `swapbrIso_involution`, `notI_involution`. Same axiom base. **Modeling scope:** models the acted-on `(BR, rd)` slice as `Bool × Bool`; untouched registers dropped (identity commutes, involution unchanged). The involution is the algebraic core; NOT modeled: opcode-predicate gating (dispatch), and the in-flight invariance (that instructions between the paired SWAPBRs leave `(BR, rj)` fixed) that resumption of sequential execution additionally needs (reversibility.md §Modeling scope) |
+
+## Verification: deferred / future work
+
+Noted, not planned for now. The mechanized core above stands on its own; these
+would deepen coverage rather than fix a defect:
+
+1. **Model-to-Rust correspondence.** The Lean `denote` / `run` / `foldAcc` are
+   hand-transcribed abstractions of the algebra; nothing mechanically links them
+   to `crates/theseus-tisc`. Closing this (code extraction, or translation
+   validation against the Rust) is the largest remaining gap -- a Rust/Lean
+   divergence is not caught today.
+2. **Generalize the modeled fragments.** `mu`-types (recursive object types) for a
+   fully `Iso`-typed fold rather than the `Bool x Bool`-cell representative;
+   arbitrary-`Iso` fold cells; and general-`|u|` tightness (mechanized only at
+   `|u| = 2`).
+3. **Independent proof-specialist review.** The adversarial review was
+   fresh-context and cross-model, but still an LLM; a Lean expert's eyes would add
+   assurance.
+
+**Already enforced (NOT future work):** the axiom whitelist is checked at BUILD
+time by `theseus-proofs/TheseusProofs/AxiomGuard.lean` -- `lake build` (and CI, on
+a fresh checkout) fails on any `sorry` / `native_decide` / stray axiom, so proof
+soundness cannot silently regress.
