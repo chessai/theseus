@@ -19,7 +19,7 @@ A component or compiler pass ships only when **all** of the following hold:
 
 ## Test tiers
 
-- **Fast (every commit / the per-attempt maestro gate):** units, small-type
+- **Fast (every commit / the pre-commit check):** units, small-type
   exhaustive sweeps, fixed-seed properties, snapshot tests. Seconds–low minutes.
 - **Heavy (`--features heavy-tests`, advisor pre-merge):** integration-test
   binaries dominated by netlist lowering, system-ring simulation, whole-domain
@@ -30,29 +30,51 @@ A component or compiler pass ships only when **all** of the following hold:
 
 ### The `heavy-tests` gate (why the default `cargo test` is fast)
 
-The full `theseus-tisc` integration suite exceeds ~50 min and cannot finish in a
-delegation gate's window; several binaries run 4–12 min each (measured:
-`compile` 723 s, `bveq_recognize` 460 s, `energy`/`decoder`/ring family, the
-whole-domain `valwidth*`/`branching`). So every such binary carries
-`#![cfg(feature = "heavy-tests")]` at the top — **off by default**, so a plain
-`cargo test -p theseus-tisc` compiles them empty and the fast tier runs in
-seconds. Two rules:
+The full `theseus-tisc` integration suite is long — several binaries run minutes
+each (`compile`, `bveq_recognize`, the `energy`/`decoder`/ring family, the
+whole-domain `valwidth*`/`branching`) — too long for a fast edit/check loop. So
+every such binary carries `#![cfg(feature = "heavy-tests")]` at the top — **off by
+default**, so a plain `cargo test -p theseus-tisc` compiles them empty and the
+fast tier runs in seconds. Two rules:
 
-1. **Per-attempt maestro gate** (`check_commands` in a delegation spec): run only
-   the fast tier, and prefer scoping to the change — e.g. `cargo test -p
-   theseus-tisc --test <the_relevant_binary>` (like the χ task's `--test chi`).
-   Never gate a delegation on the whole suite.
-2. **Advisor pre-merge** (and whenever a change touches the energy / netlist /
+1. **While iterating (per commit):** run only the fast tier, and prefer scoping to
+   the change — e.g. `cargo test -p theseus-tisc --test <the_relevant_binary>`.
+2. **Before merging** (and whenever a change touches the energy / netlist /
    decoder / ring / recognizer path): run the heavy tier
    **`cargo test -p theseus-tisc --features heavy-tests -- --test-threads=1`**.
    The `--test-threads=1` is mandatory — concurrent heavy tests each hold GB-scale
    resident structures and stack past RAM (SIGKILL) even with the flake's
    `MALLOC_ARENA_MAX=1`. A `#[ignore]`d heavy test *within* an otherwise-fast
-   binary (e.g. `chi.rs`'s system-ring authority) is run with `--test <bin> --
-   --ignored --test-threads=1`.
+   binary is run with `--test <bin> -- --ignored --test-threads=1`.
 
-Quality is retained because the complete suite still gates the **merge** (advisor,
-above); only the fast-iteration loop is trimmed.
+Quality is retained because the complete suite still gates the **merge**; only the
+fast-iteration loop is trimmed.
+
+## Machine-checked proofs (`theseus-proofs/`)
+
+The Lean 4 / Mathlib meta-theory lives in `theseus-proofs/` and builds separately
+from the Rust workspace (pinned Mathlib; fetch its prebuilt oleans, then build):
+
+```
+nix develop .#proofs --command bash -c 'cd theseus-proofs && lake exe cache get && lake build'
+```
+
+Soundness is enforced by the build, not by convention:
+
+- **No `sorry`, no `native_decide`, no new axioms.** Every key theorem must reduce
+  to the Mathlib classical base `{propext, Classical.choice, Quot.sound}`. A plain
+  `sorry` is only a *warning* to `lake`, so `TheseusProofs/AxiomGuard.lean` checks
+  the axiom dependencies during `lake build` and **fails the build** on any
+  violation (`sorryAx`, `native_decide`'s `ofReduceBool`, or a stray axiom). CI
+  runs this on a fresh checkout, so it cannot go stale. Prefer `by decide` (kernel)
+  over `native_decide` (which the guard bans anyway).
+- **A proof ships only when paired** with (a) the Lean theorem, (b) a
+  natural-language companion proof in `docs/src/theory/`, and (c) a row in
+  `docs/src/theory/obligation-ledger.md` stating what is proved and — honestly —
+  what is only modeled or scoped out. Overclaiming the Lean's reach (e.g. a prose
+  claim stronger than the mechanized statement) is a defect.
+- When you add or rename a checked theorem, add it to the `AxiomGuard.lean` list
+  so the guard covers it.
 
 ## Code policies
 
