@@ -29,7 +29,7 @@ clap = { version = "4", features = ["derive"] }    # CLI
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
-todo = "allow"        # skeleton phase only; flips to "deny" at v0.1 freeze
+todo = "deny"         # skeleton phase over: no todo!() stubs may ship
 
 # The TISC-1 decoder tests (theseus-tisc/tests/decoder.rs) walk
 # multi-million-node iso terms through canonicalize/lower/eval/simulate;
