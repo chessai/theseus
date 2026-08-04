@@ -1,6 +1,6 @@
-# Project status -- where theseus is (2026-08-02)
+# Project status -- where theseus is (2026-08-03)
 
-> **⇒ CURRENT DIRECTION (2026-08-02): TISC-2 -- BVEQ symbolic-verification program COMPLETE; efficiency line + variable-T + wide come-from all merged.**
+> **⇒ CURRENT DIRECTION (2026-08-03): TISC-2 -- BVEQ symbolic-verification program COMPLETE; efficiency line + variable-T + wide come-from all merged.**
 > The canonical, LIVE record is the **[TISC-2 roadmap](tisc2-roadmap.md)** -- read it first; this
 > block is a pointer. TISC-1's paradigm (fixed-WCET + reversible park + PC-offset branching) is kept
 > and proven; TISC-2 is a provisioning + compiler + datapath redesign, all merged to
@@ -17,7 +17,10 @@
 > (memory/system-ring, symbolic mem addr = a byte permutation, no blow-up), plus valwidth w=4; and a
 > **hierarchical-method POC** proving nested loops are solvable (inner-loop triple substituted opaquely
 > into the outer body). Each retired real-CPU authority is kept as an `#[ignore]` advisor-run RE-ANCHOR
-> for step/decoder/lower_trace netlist changes. See [[maestro-fast-tests-tenet]].
+> for step/decoder/lower_trace netlist changes. (Fast-tests strategy: prefer
+whole-domain SYMBOLIC equivalence -- BVEQ / canonical-ROBDD equality, coverage
+≥ exhaustive and domain-size-independent -- over hours-long brute-force
+simulation sweeps, without trading away correctness.)
 >
 > **Feature work (merged):** A-0 (shared scratch-addressable operand crossbar, −11.9%) → the full
 > **B-1/B-2 efficiency line** -- shared configurable ALU (B-1, step_j −39.4%) + **per-program widths**

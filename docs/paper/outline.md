@@ -53,7 +53,7 @@ netlist; and an energy model reporting measured joules per program. Correctness 
 proved, not sampled: primitive and whole-program behavior are checked by whole-domain
 symbolic (BDD) equivalence, and the core meta-theory -- reversibility by construction,
 loop termination, and reversible control flow -- is machine-checked in Lean. We evaluate
-on [fib, LFSR, adders, variable-time loops], reporting per-program energy and correctness
+on [fib, LFSR, adders, bounded/synthetic reversible loops], reporting per-program energy and correctness
 coverage. theseus shows a high-level reversible language can be compiled, verified, and
 energy-measured as a single artifact.
 
@@ -104,7 +104,9 @@ energy-measured as a single artifact.
 7. Evaluation
    - Energy results: the money plot and its slope; per-program joules.
    - Correctness coverage: whole-domain results; the differential oracle.
-   - Case studies: fib, LFSR, adders, variable-time loops.
+   - Case studies: fib, LFSR, adders, bounded/synthetic reversible loops
+     (the synthetic `vart_halve` bit-rotation runs on the real CPU; general
+     variable-time algorithms like GCD do not lower yet -- see the frontier below).
    - Honest coverage boundary: what lowers, what does not, and why (register pressure,
      body-size / width budgets) -- the frontier.
 

@@ -13,8 +13,8 @@ truth for `--explain` (ADR-0020/0021). Skeleton allocation:
 | T0301 | non-exhaustive clause side (witness: unmatched value) |
 | T0302 | overlapping clauses (witness: value + clause pair) |
 | T0303 | label state space not covered |
-| T0401 | prim signature mismatch with registry |
-| T0501 | construct outside the synthesizable dialect |
+| T0401 | prim signature mismatch with registry (**reserved -- deferred beyond M1**; not yet emitted, conformance fixture 0009 is skipped as deferred scope) |
+| T0501 | construct outside the synthesizable dialect (**reserved -- not implemented / untested**) |
 | T0601 | `iter` counter type is not a numeral |
 | T0602 | `iter` body is not an endo-iso |
 | T0603 | `fold`/`unfold` spine type is not a uniform list |

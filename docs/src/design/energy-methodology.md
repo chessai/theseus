@@ -14,9 +14,12 @@ keep that report honest:
   assumptions* with an explicit error budget: ±15% absolute; log-log
   E-vs-period slope within ±0.1 of the theoretical −1 -- slope is the
   hard requirement (axes per ADR-0023).
-- Attribution flows through provenance to the source: `--emit=energy`
-  reports pJ/op per clause and per iso, with balancing-buffer share as a
-  tracked metric.
+- Attribution flows through provenance to the source: the programmatic
+  energy API (`theseus-spice::annotate`, `rom_program_energy`) reports pJ/op
+  with balancing-buffer share as a tracked metric. *(A `--emit=energy` CLI flag
+  surfacing per-clause / per-iso attribution is deferred, v0.2+ -- today the
+  attribution is available programmatically and via the energy examples, not a
+  driver flag.)*
 - Bench energy reports are committed golden files; regressions are PR
   diffs. The three-curve money plot (canonical axes per ADR-0023: E/op
   vs period -- 2LAL slope −1, CMOS flat, PFAL floored; one netlist) is

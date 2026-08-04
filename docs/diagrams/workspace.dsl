@@ -4,15 +4,15 @@ workspace "theseus" "Reversible language, compiler, and hardware stack (ADR-0021
     dev = person "Language user" "Writes theseus programs; reads witness-bearing diagnostics"
 
     theseus = softwareSystem "theseus toolchain" "Compiler, interpreter, simulators, verifier" {
-      cli = container "theseus-cli" "Driver + REPL (:step/:unstep); invariant-ledger validation" "Rust"
+      cli = container "theseus-cli" "Driver (check/run/repl/lower) + REPL (:step/:unstep)" "Rust"
       syntax = container "theseus-syntax" "Lexer, recursive-descent parser, pretty" "Rust"
       check = container "theseus-check" "Elaboration; bidirectional coverage + linearity (ADR-0004)" "Rust"
       core = container "theseus-core" "Core Pi; adjoint involution; fixed-order rewrites (ADR-0010)" "Rust"
       eval = container "theseus-eval" "Fuel interpreter; exhaustive enumerator; oracle root" "Rust"
-      netlist = container "theseus-netlist" "Typed hierarchical IR; canonicalize->Permute (ADR-0014); schedule/balance; typed+bit simulators" "Rust"
-      emit = container "theseus-emit" "Encoding lowering (ADR-0011/0012); typed Verilog mini-AST; Verilator harness" "Rust"
-      verify = container "theseus-verify" "Miter + Tseitin + CnfSolver/ObligationOracle (ADR-0020)" "Rust"
+      netlist = container "theseus-netlist" "Typed hierarchical IR; canonicalize->Permute (ADR-0014); schedule/balance; lowering (lower.rs/lower_iter.rs, ADR-0011/0012/0031) -> phased cell netlist; typed+bit simulators" "Rust"
+      tisc = container "theseus-tisc" "TISC-1/-2 CPU, ROM compiler, BVEQ whole-domain symbolic verification (bveq.rs/bveq_netlist.rs)" "Rust"
       spice = container "theseus-spice" "Phased cell netlist + tick sim (INV-TOKEN); SPICE deck emission; characterization DB; energy reports (ADR-0025/0026/0028)" "Rust"
+      emit = container "theseus-emit (PLANNED, v0.2+ -- empty stub)" "FUTURE: encoding lowering to a typed Verilog mini-AST + Verilator harness (ADR-0011/0012/0020). Not implemented today." "Rust"
     }
 
     verilator = softwareSystem "Verilator" "Oracle-chain terminus; framed stdio protocol" "external"
@@ -26,11 +26,12 @@ workspace "theseus" "Reversible language, compiler, and hardware stack (ADR-0021
     check -> core "elaborated core Pi"
     core -> eval "interpretation"
     core -> netlist "canonicalization"
-    netlist -> emit "flat typed netlist"
-    emit -> verilator "verilated model + protocol"
-    emit -> fpgaFlow "structural Verilog"
-    netlist -> verify "lowering lemma obligations"
+    core -> tisc "ROM compilation (surface -> TISC-1 ROM, ADR-0042)"
     netlist -> spice "flat typed netlist (dual-rail lowering, ADR-0031)"
+    tisc -> tisc "BVEQ whole-domain symbolic equivalence (verification, ADR-0008)"
+    netlist -> emit "PLANNED (v0.2+): flat typed netlist"
+    emit -> verilator "PLANNED (v0.2+): verilated model + protocol"
+    emit -> fpgaFlow "PLANNED (v0.2+): structural Verilog"
     spice -> ngspice "decks; transients decoded back through typed layer (B5.3)"
     spice -> silicon "rung-4 handoff (M5, optional)"
   }

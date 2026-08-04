@@ -1,7 +1,13 @@
 # Appendix: invariant ledger
 
-Machine-checked registry (skeleton -- grows with passes). Cited by the
-driver's static ordering check (ADR-0016).
+**Status: documentation-only design ledger** (skeleton -- grows with passes).
+This table records the pass invariants the design *intends* to preserve; it is
+**not** a machine-checked registry today. There is no `theseus-cli` pass-ordering
+validator and no `--verify-lowering` flag -- driver-level static validation of
+this ledger is **planned (v0.2+)**, per ADR-0016. What is actually enforced in
+code is noted per-row in the "Checked" column (e.g. sim assertions, constructor
+invariants); rows describing a "debug validator" or "static ordering check"
+describe the *intended* mechanism, not shipped functionality.
 
 | ID | Invariant | Established by | Required by | Checked |
 |---|---|---|---|---|

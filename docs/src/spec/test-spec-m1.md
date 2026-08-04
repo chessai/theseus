@@ -47,7 +47,7 @@ payload keys, each present exactly when the code carries that datum:
 | `witness:` | a value (compared as a value, not a string) | T0301, T0302, T0303 |
 | `clauses:` | 1-indexed indices, declaration order, compared as a set | T0302 (a pair), T0102 |
 | `variable:` | a variable name | T0201, T0202 |
-| `name:` | an identifier | T0101, T0401 |
+| `name:` | an identifier | T0101, T0401 (T0401 is **reserved -- deferred beyond M1**; not yet emitted, fixture 0009 skipped as deferred scope) |
 
 A listed block **matches** a reported diagnostic iff the `error` code is equal
 and every listed payload key is equal (`witness` as a value; `name`/`variable`

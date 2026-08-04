@@ -40,15 +40,19 @@ that comes from, for a `trace` produced by elaborating a label loop:
 
 * **Plain body:** the coverage+linearity checker certifies it (TH-4a,
   `theory/coverage-bijectivity.md`).
-* **Label body -- DISCHARGED (TH-4a-label).** v0.1 `trace` bodies are produced by
-  label-loop elaboration (`design/elaboration.md`). Plain TH-4a covers only the
-  plain fragment, but **TH-4a-label** (`theory/coverage-bijectivity-labels.md`)
-  now certifies the label case: the label checks reduce to the plain checks over
-  the extended type `U + A ≅ U + B`, so the elaborated `trace Φ` has exactly the
-  total-bijection body this theorem needs -- with the label carrier `U` already in
-  the fed-back `inl` summand. The WCET corollaries below are therefore
-  unconditional for well-typed finite-dialect label programs (modulo the standing,
-  tested elaboration-correctness obligation). Tracked in
+* **Label body -- scoped and documented (Lean-TH-1 + text-TH-4a-label).** v0.1
+  `trace` bodies are produced by label-loop elaboration (`design/elaboration.md`).
+  The Lean-mechanized TH-1 proves termination for an *abstract* bijection body;
+  what certifies that an elaborated label loop *denotes* such a bijection is the
+  **text**-argued **TH-4a-label** (`theory/coverage-bijectivity-labels.md`): the
+  label checks reduce to the plain checks over the extended type `U + A ≅ U + B`,
+  so the elaborated `trace Φ` has the total-bijection body this theorem needs --
+  with the label carrier `U` already in the fed-back `inl` summand. The end-to-end
+  discharge is therefore the **conjunction** of the mechanized termination and the
+  text reduction; it is scoped and documented, not itself mechanically proved (the
+  Lean proof does not know the body came from a label loop). The WCET corollaries
+  below hold for well-typed finite-dialect label programs on this basis (modulo the
+  standing, tested elaboration-correctness obligation). Tracked in
   `theory/obligation-ledger.md` (TH-4a / TH-1 rows).
 * **Prim body:** the prim mutual-inverse admission check (`design/core-pi.md`
   §Prim admission).

@@ -129,6 +129,7 @@ Source: `crates/theseus-cli/src/main.rs`, `crates/theseus-cli/src/pipeline.rs`.
 | `check` | `theseus check <FILE>` | Parse + check; prints diagnostics. |
 | `run` | `theseus run <FILE> <iso> <value>` | Parse + check + elaborate + eval the named iso on one value. |
 | `repl` | `theseus repl <FILE>` | Interactive REPL over the elaborated program. |
+| `lower` | `theseus lower <FILE> <iso>` | Parse + check + elaborate + **lower to a phased cell netlist**, print a summary, and run the differential oracle (see below). |
 
 ### Pipeline internals (`pipeline.rs`)
 
@@ -158,12 +159,23 @@ pub fn to_core(sv: &SVal, ty: &Type, env: &Env) -> Value
 pub fn render(v: &Value, ty: &Type, env: &Env) -> String
 ```
 
-### Current gap -- no `lower` verb
+### The `lower` verb -- surface source to cells
 
-The CLI pipeline stops at eval.  **There is no CLI verb that emits the
-lowered cell netlist.**  To go from surface source to cells you must
-call `elaborate` and then `theseus_netlist::lower_iso_with_ancillas`
-yourself (see §6 for a proposed fix).
+`theseus lower <FILE> <iso>` takes surface source all the way to a
+lowered **`PhasedCellNetlist`** and self-checks it
+(`crates/theseus-cli/src/main.rs` `cmd_lower`, `crates/theseus-cli/src/lower.rs`):
+
+1. `surface_to_cells(src, iso)` parses + checks + elaborates the named iso, then
+   lowers it via `theseus_netlist` to a `LoweredIso { iso, net: PhasedCellNetlist,
+   .. }`.
+2. `print_summary` prints the netlist summary (cell / line / ancilla counts).
+3. **Differential oracle:** when the value domain is small enough (`<= 4096`
+   values) the command runs `oracle_check`, confirming the lowered cells agree
+   with `theseus-eval` on every input (`oracle: cells agree with eval on N
+   inputs`); above the threshold the oracle is skipped with a note.
+
+The `surface_to_cells` one-call helper (`theseus_cli::lower::surface_to_cells`)
+is the programmatic entry point.
 
 ---
 
@@ -298,34 +310,11 @@ Nat encoding in core values: `Zero = Left(Unit)`,
 
 ---
 
-## 6. Recommended shortcut (proposal)
+## 6. The one-call shortcut (shipped)
 
-Today, going from surface source to a cell netlist requires manually
-calling `elaborate` then `lower_iso_with_ancillas`.  Two additions
-would close this gap:
-
-**A one-call helper** in `crates/theseus-cli/src/pipeline.rs`:
-
-```rust
-pub fn surface_to_cells(src: &str, iso_name: &str)
-    -> Result<(PhasedCellNetlist, Vec<bool>), /* error type */>
-{
-    let elab = elaborate(src)?;
-    let iso = elab.isos.get(iso_name)
-        .ok_or(/* not found */)?
-        .as_ref().map_err(/* elab error */)?;
-    Ok(theseus_netlist::lower_iso_with_ancillas(iso)?)
-}
-```
-
-**A CLI verb** in `crates/theseus-cli/src/main.rs`:
-
-```
-theseus lower <FILE> <iso>
-```
-
-Print the `PhasedCellNetlist` (cell count, line count, ancilla count;
-optionally a machine-readable JSON/textual dump).
-
-Neither exists today -- this section is a recommendation, not a
-description of implemented functionality.
+Going from surface source to a cell netlist is a single call --
+`theseus_cli::lower::surface_to_cells(src, iso_name)` returns a `LoweredIso`
+(the elaborated `iso` + its `PhasedCellNetlist`), and the `theseus lower <FILE>
+<iso>` CLI verb wraps it with a summary print and the differential oracle (see
+§2, "The `lower` verb"). The manual `elaborate` + `lower_iso_with_ancillas`
+dance is no longer required.
