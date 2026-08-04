@@ -26,7 +26,6 @@ pub mod cells {
     //! k-CSWAP library bindings (k ∈ {0,1,2}), baselines (CMOS, PFAL),
     //! bench source/sink; `.subckt` text lives in /cells (ADR-0027).
 }
-pub mod deck {}
 pub mod admission;
 pub mod bench;
 pub mod adiabatic;

@@ -46,14 +46,6 @@ pub mod sim_typed {
     //! (spirit of ADR-0012's always-on validity assertion).
     pub use crate::sim::{simulate, SimError, SimResult};
 }
-pub mod sim_bits {
-    //! TODO(bit-level sim): the electrical (rail, mirror) SR granularity
-    //! *below* the token line -- per-phase trapezoid edges and C2.6
-    //! validity-window arithmetic, pinned empirically in B5 against the
-    //! reference decks. Deferred; the typed-token sim ([`crate::sim`])
-    //! is this slice's executor.
-}
-
 pub use balance::{balance, balance_compact, BalanceError, CompactBalanced, CompactSimError};
 pub use bennett::{bennett_wrap, lower_iso_bennett, BennettError, BennettWrapError};
 pub use canonicalize::canonicalize;

@@ -276,7 +276,13 @@ fn eval_inner(iso: &Iso, value: Value, fuel: &mut u64) -> Result<Value, EvalErro
             }
             // Eval-via-spec: decompose → eval_expr per bit → recompose.
             if let Some(spec) = &def.symbolic {
-                let in_bytes = theseus_core::prim::value_to_leaf_bytes(&value, &def.input_ty);
+                let in_bytes = theseus_core::prim::value_to_leaf_bytes(&value, &def.input_ty)
+                    .map_err(|msg| {
+                        EvalError::DomainError(format!(
+                            "prim '{}': eval-via-spec decompose failed: {msg}",
+                            def.forward_name
+                        ))
+                    })?;
                 let out_bytes = spec.forward.eval_bytes(&in_bytes);
                 return theseus_core::prim::try_value_from_leaf_bytes(
                     &out_bytes,

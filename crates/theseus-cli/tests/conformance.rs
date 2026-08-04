@@ -139,8 +139,10 @@ fn conformance_programs() {
 
         // Grade each row -- forward AND backward.
         for (lhs_str, rhs_str) in rows {
-            let lhs_sv = value::parse_surface_value(lhs_str);
-            let rhs_sv = value::parse_surface_value(rhs_str);
+            let lhs_sv = value::parse_surface_value(lhs_str)
+                .unwrap_or_else(|e| panic!("[{stem}] parse lhs `{lhs_str}`: {e}"));
+            let rhs_sv = value::parse_surface_value(rhs_str)
+                .unwrap_or_else(|e| panic!("[{stem}] parse rhs `{rhs_str}`: {e}"));
             let lhs_val = value::to_core(&lhs_sv, &sig.lhs, &env);
             let rhs_val = value::to_core(&rhs_sv, &sig.rhs, &env);
 
@@ -176,7 +178,8 @@ fn conformance_programs() {
 
             // Every row must Done within exactly the static bound.
             for (lhs_str, _) in rows {
-                let lhs_sv = value::parse_surface_value(lhs_str);
+                let lhs_sv = value::parse_surface_value(lhs_str)
+                    .unwrap_or_else(|e| panic!("[{stem}] parse `{lhs_str}`: {e}"));
                 let lhs_val = value::to_core(&lhs_sv, &sig.lhs, &env);
                 let mut fuel = expected_bound;
                 eval(&iso, lhs_val, &mut fuel).unwrap_or_else(|e| {
@@ -193,7 +196,8 @@ fn conformance_programs() {
             );
             // Grant n fuel → every row Done.
             for (lhs_str, _) in rows {
-                let lhs_sv = value::parse_surface_value(lhs_str);
+                let lhs_sv = value::parse_surface_value(lhs_str)
+                    .unwrap_or_else(|e| panic!("[{stem}] parse `{lhs_str}`: {e}"));
                 let lhs_val = value::to_core(&lhs_sv, &sig.lhs, &env);
                 let mut fuel = n;
                 eval(&iso, lhs_val, &mut fuel).unwrap_or_else(|e| {
@@ -202,7 +206,8 @@ fn conformance_programs() {
             }
             // Grant n-1 fuel → every row OutOfFuel with steps_taken == n-1.
             for (lhs_str, _) in rows {
-                let lhs_sv = value::parse_surface_value(lhs_str);
+                let lhs_sv = value::parse_surface_value(lhs_str)
+                    .unwrap_or_else(|e| panic!("[{stem}] parse `{lhs_str}`: {e}"));
                 let lhs_val = value::to_core(&lhs_sv, &sig.lhs, &env);
                 let mut fuel = n - 1;
                 let result = eval(&iso, lhs_val, &mut fuel);

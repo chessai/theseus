@@ -441,10 +441,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "theseus-emit"
-version = "0.1.0-dev"
-
-[[package]]
 name = "theseus-eval"
 version = "0.1.0-dev"
 dependencies = [
@@ -498,10 +494,6 @@ dependencies = [
  "theseus-syntax",
  "thiserror",
 ]
-
-[[package]]
-name = "theseus-verify"
-version = "0.1.0-dev"
 
 [[package]]
 name = "thiserror"

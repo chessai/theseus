@@ -47,22 +47,27 @@ fn tokenize(s: &str) -> Vec<String> {
 // ── Parser ───────────────────────────────────────────────────────────────
 
 /// Parse a surface value string into an [`SVal`].
-pub fn parse_surface_value(s: &str) -> SVal {
+///
+/// Returns `Err(message)` on malformed input (unexpected end of input,
+/// unbalanced parentheses, trailing tokens, ...) so CLI/REPL callers can
+/// report a diagnostic instead of crashing the process.
+pub fn parse_surface_value(s: &str) -> Result<SVal, String> {
     let toks = tokenize(s);
     let mut pos = 0;
-    let v = parse_app(&toks, &mut pos);
-    assert!(
-        pos == toks.len(),
-        "trailing tokens parsing surface value: {s:?} (at {pos}, toks={toks:?})"
-    );
-    v
+    let v = parse_app(&toks, &mut pos)?;
+    if pos != toks.len() {
+        return Err(format!(
+            "trailing tokens parsing surface value: {s:?} (at {pos}, toks={toks:?})"
+        ));
+    }
+    Ok(v)
 }
 
 /// Parse an "application-level" value: a constructor optionally followed by
 /// atom arguments, or a bare atom.
-fn parse_app(toks: &[String], pos: &mut usize) -> SVal {
+fn parse_app(toks: &[String], pos: &mut usize) -> Result<SVal, String> {
     if *pos >= toks.len() {
-        panic!("unexpected end of tokens in surface value");
+        return Err("unexpected end of tokens in surface value".into());
     }
     let head = &toks[*pos];
     if is_ctor_name(head) {
@@ -70,9 +75,9 @@ fn parse_app(toks: &[String], pos: &mut usize) -> SVal {
         *pos += 1;
         let mut args = Vec::new();
         while *pos < toks.len() && is_atom_start(toks, *pos) {
-            args.push(parse_atom(toks, pos));
+            args.push(parse_atom(toks, pos)?);
         }
-        SVal::Ctor(name, args)
+        Ok(SVal::Ctor(name, args))
     } else {
         parse_atom(toks, pos)
     }
@@ -80,42 +85,41 @@ fn parse_app(toks: &[String], pos: &mut usize) -> SVal {
 
 /// Parse an atom: a parenthesised tuple, a numeric literal, or a bare
 /// constructor with no args.
-fn parse_atom(toks: &[String], pos: &mut usize) -> SVal {
+fn parse_atom(toks: &[String], pos: &mut usize) -> Result<SVal, String> {
     if *pos >= toks.len() {
-        panic!("unexpected end of tokens in surface value (atom)");
+        return Err("unexpected end of tokens in surface value (atom)".into());
     }
     let head = &toks[*pos];
     if head == "(" {
         *pos += 1; // consume '('
-        let first = parse_app(toks, pos);
+        let first = parse_app(toks, pos)?;
         let mut elems = vec![first];
         while *pos < toks.len() && toks[*pos] == "," {
             *pos += 1; // consume ','
-            elems.push(parse_app(toks, pos));
+            elems.push(parse_app(toks, pos)?);
         }
-        assert!(
-            *pos < toks.len() && toks[*pos] == ")",
-            "expected ')' in tuple"
-        );
+        if !(*pos < toks.len() && toks[*pos] == ")") {
+            return Err("expected ')' in tuple".into());
+        }
         *pos += 1; // consume ')'
         if elems.len() == 1 {
             // Parenthesised single value -- unwrap.
-            elems.into_iter().next().unwrap()
+            Ok(elems.into_iter().next().unwrap())
         } else {
-            SVal::Tuple(elems)
+            Ok(SVal::Tuple(elems))
         }
     } else if is_ctor_name(head) {
         // Bare constructor (no args at atom level).
         let name = head.clone();
         *pos += 1;
-        SVal::Ctor(name, Vec::new())
+        Ok(SVal::Ctor(name, Vec::new()))
     } else if is_numeric(head) {
         // Numeric literal -- treat as a constructor name.
         let name = head.clone();
         *pos += 1;
-        SVal::Ctor(name, Vec::new())
+        Ok(SVal::Ctor(name, Vec::new()))
     } else {
-        panic!("unexpected token in surface value: {head:?}");
+        Err(format!("unexpected token in surface value: {head:?}"))
     }
 }
 

@@ -570,7 +570,7 @@ fn f5_cross_crate_decompose_agreement() {
     assert_eq!(domain.len(), 4096);
 
     for v in &domain {
-        let core_bytes = prim::value_to_leaf_bytes(v, &ty);
+        let core_bytes = prim::value_to_leaf_bytes(v, &ty).expect("valid domain value");
         let tisc_bytes = theseus_tisc::compile::value_to_leaf_bytes_pub(v, &ty);
         assert_eq!(
             core_bytes, tisc_bytes,
@@ -636,7 +636,7 @@ fn r2_f5_sum_type_decompose_agreement() {
     assert_eq!(domain.len(), 32);
 
     for v in &domain {
-        let core_bytes = prim::value_to_leaf_bytes(v, &ty);
+        let core_bytes = prim::value_to_leaf_bytes(v, &ty).expect("valid domain value");
         let tisc_bytes = theseus_tisc::compile::value_to_leaf_bytes_pub(v, &ty);
         assert_eq!(
             core_bytes, tisc_bytes,

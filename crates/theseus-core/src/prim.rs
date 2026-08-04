@@ -247,7 +247,8 @@ pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
     if let Some(spec) = &def.symbolic {
         // Forward spec vs forward table.
         for (in_val, table_out) in &def.forward {
-            let in_bytes = value_to_leaf_bytes(in_val, &def.input_ty);
+            let in_bytes =
+                value_to_leaf_bytes(in_val, &def.input_ty).map_err(AdmitError::InvalidSpec)?;
             let out_bytes = spec.forward.eval_bytes(&in_bytes);
             let spec_out = value_from_leaf_bytes(&out_bytes, &def.output_ty);
             if &spec_out != table_out {
@@ -258,7 +259,8 @@ pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
         }
         // F4: backward spec vs backward table.
         for (in_val, table_out) in &def.backward {
-            let in_bytes = value_to_leaf_bytes(in_val, &def.output_ty);
+            let in_bytes =
+                value_to_leaf_bytes(in_val, &def.output_ty).map_err(AdmitError::InvalidSpec)?;
             let out_bytes = spec.backward.eval_bytes(&in_bytes);
             let spec_out = value_from_leaf_bytes(&out_bytes, &def.input_ty);
             if &spec_out != table_out {
@@ -274,10 +276,14 @@ pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
 
 /// Decompose a Value into leaf bytes (LSB-first, matching VarMap convention).
 /// Core-native: no BDD dependency.
-pub fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
+///
+/// Returns `Err` if the value does not inhabit `ty` (wrong shape for a `Sum`,
+/// `Prod`, or `Flat`, or a `Flat` leaf out of range) -- these are reachable
+/// from user input via the evaluator, so they are errors rather than panics.
+pub fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Result<Vec<u8>, String> {
     match ty {
-        Type::Zero => panic!("value_to_leaf_bytes: Zero type"),
-        Type::One => vec![],
+        Type::Zero => Err("value_to_leaf_bytes: Zero type".into()),
+        Type::One => Ok(vec![]),
         Type::Sum(a, b) => {
             let la = count_leaves(a);
             let lb = count_leaves(b);
@@ -286,26 +292,30 @@ pub fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
             match v {
                 Value::Left(inner) => {
                     let mut bytes = vec![0u8]; // tag = 0 (Left)
-                    bytes.extend(value_to_leaf_bytes(inner, a));
+                    bytes.extend(value_to_leaf_bytes(inner, a)?);
                     bytes.resize(total, 0);
-                    bytes
+                    Ok(bytes)
                 }
                 Value::Right(inner) => {
                     let mut bytes = vec![1u8]; // tag = 1 (Right)
-                    bytes.extend(value_to_leaf_bytes(inner, b));
+                    bytes.extend(value_to_leaf_bytes(inner, b)?);
                     bytes.resize(total, 0);
-                    bytes
+                    Ok(bytes)
                 }
-                _ => panic!("value_to_leaf_bytes: expected Left/Right for Sum, got {v:?}"),
+                _ => Err(format!(
+                    "value_to_leaf_bytes: expected Left/Right for Sum, got {v:?}"
+                )),
             }
         }
         Type::Prod(a, b) => {
             let Value::Pair(va, vb) = v else {
-                panic!("value_to_leaf_bytes: expected Pair for Prod, got {v:?}");
+                return Err(format!(
+                    "value_to_leaf_bytes: expected Pair for Prod, got {v:?}"
+                ));
             };
-            let mut bytes = value_to_leaf_bytes(va, a);
-            bytes.extend(value_to_leaf_bytes(vb, b));
-            bytes
+            let mut bytes = value_to_leaf_bytes(va, a)?;
+            bytes.extend(value_to_leaf_bytes(vb, b)?);
+            Ok(bytes)
         }
         Type::Flat(n) => {
             // thermometer Right^k(Left(Unit)) → k as byte
@@ -318,11 +328,13 @@ pub fn value_to_leaf_bytes(v: &Value, ty: &Type) -> Vec<u8> {
                         k += 1;
                         cur = rest;
                     }
-                    _ => panic!("value_to_leaf_bytes: not a Flat leaf: {v:?}"),
+                    _ => return Err(format!("value_to_leaf_bytes: not a Flat leaf: {v:?}")),
                 }
             }
-            assert!((k as u64) < (1u64 << n), "leaf byte {k} out of range for Flat({n})");
-            vec![k]
+            if (k as u64) >= (1u64 << n) {
+                return Err(format!("leaf byte {k} out of range for Flat({n})"));
+            }
+            Ok(vec![k])
         }
     }
 }

@@ -118,7 +118,10 @@ fn cmd_run(file: &str, iso_name: &str, value: &[String]) {
         }
     };
 
-    let sv = value::parse_surface_value(&val_str);
+    let sv = value::parse_surface_value(&val_str).unwrap_or_else(|e| {
+        eprintln!("error parsing value {val_str:?}: {e}");
+        process::exit(1);
+    });
     let core_val = value::to_core(&sv, &sig.lhs, &ep.env);
 
     let mut fuel = 1_000_000u64;

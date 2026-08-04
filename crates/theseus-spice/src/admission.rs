@@ -344,10 +344,14 @@ fn inject_meas(deck: &str, extra: &[String]) -> String {
 }
 
 /// Parse a SPICE number with an optional scale suffix (`5f`, `100f`, `1p`).
-fn spice_value(s: &str) -> f64 {
+///
+/// Returns `Err` on an unparseable value rather than panicking, so the
+/// admission gate (`admit` -> `cell_conservation_verdict` -> `parse_caps`)
+/// surfaces a diagnostic instead of crashing.
+fn spice_value(s: &str) -> Result<f64, String> {
     let s = s.trim().to_lowercase();
     if let Ok(v) = s.parse::<f64>() {
-        return v;
+        return Ok(v);
     }
     for (suffix, mult) in [
         ("meg", 1e6),
@@ -360,26 +364,27 @@ fn spice_value(s: &str) -> f64 {
     ] {
         if let Some(prefix) = s.strip_suffix(suffix) {
             if let Ok(v) = prefix.parse::<f64>() {
-                return v * mult;
+                return Ok(v * mult);
             }
         }
     }
-    panic!("cannot parse SPICE value '{s}'")
+    Err(format!("cannot parse SPICE value '{s}'"))
 }
 
 /// Every explicit capacitor in a deck: `(node, farads)`. Grounded two-node
-/// caps only (which is all these decks emit).
-fn parse_caps(deck: &str) -> Vec<(String, f64)> {
-    deck.lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() == 4 && parts[0].starts_with('C') && parts[2] == "0" {
-                Some((parts[1].to_string(), spice_value(parts[3])))
-            } else {
-                None
-            }
-        })
-        .collect()
+/// caps only (which is all these decks emit). Returns `Err` if a capacitor's
+/// value field is unparseable.
+fn parse_caps(deck: &str) -> io::Result<Vec<(String, f64)>> {
+    let mut caps = Vec::new();
+    for line in deck.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() == 4 && parts[0].starts_with('C') && parts[2] == "0" {
+            let farads = spice_value(parts[3])
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            caps.push((parts[1].to_string(), farads));
+        }
+    }
+    Ok(caps)
 }
 
 /// The shared closure verdict: settled-cycle periodicity, per-source sum
@@ -664,7 +669,7 @@ fn cell_conservation_verdict(topo: CellTopo, rung: DeviceRung, period: f64) -> i
     let n_tokens = n0 + 2 * len + 1;
     let tokens: Vec<CswapToken> = orbit.iter().copied().cycle().take(n_tokens).collect();
     let deck = cell_netlist(topo, rung, period, &tokens, true);
-    let caps = parse_caps(&deck);
+    let caps = parse_caps(&deck)?;
     assert!(!caps.is_empty(), "cswap deck must declare explicit caps");
     let (t0, t1) = (n0 as f64 * period, (n0 + len) as f64 * period);
     let mut extra: Vec<String> = Vec::new();

@@ -121,7 +121,13 @@ impl Repl {
         };
 
         // Parse the surface value and convert to core.
-        let sv = value::parse_surface_value(val_str);
+        let sv = match value::parse_surface_value(val_str) {
+            Ok(sv) => sv,
+            Err(e) => {
+                let _ = writeln!(out, "error parsing value `{val_str}`: {e}");
+                return;
+            }
+        };
         let core_val = value::to_core(&sv, &sig.lhs, &self.ep.env);
 
         let rendered = value::render(&core_val, &sig.lhs, &self.ep.env);

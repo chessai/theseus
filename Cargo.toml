@@ -6,7 +6,6 @@ members = [
   "crates/theseus-check",
   "crates/theseus-eval",
   "crates/theseus-netlist",
-  "crates/theseus-emit",
   "crates/theseus-spice",
   "crates/theseus-cli",
   "crates/theseus-tisc",
