@@ -11,26 +11,75 @@ worst-case running time, by construction rather than by annotation. That is
 what makes programs safe to run on reversible hardware, where information is
 never erased and so never has to pay the Landauer energy cost of erasure.
 
-```
-   .thse source
-        |
-        |   parse + type / coverage check
-        v
-   core Iso  (reversible IR)  ----------->  interpreter  (reference oracle)
-        |
-        +-----------------------------+
-        |                             |
-        v                             v
-   reversible netlist            TISC ROM
-        |                             |
-        v                             v
-   adiabatic CPU model           reversible CPU  (forwards and backwards)
-        |                             |
-        v                             v
-   energy  (joules)              output  ==  interpreter
+<p align="center">
+  <img src="docs/img/cpu-money-plot.svg" width="760" alt="Energy per CPU step falls as ~1/T with the power-clock ramp, sliding below the flat CMOS 1/2 CV^2 floor."><br>
+  <em>The payoff: as the power clock is slowed, the reversible CPU's energy per
+  step falls as ~1/T and slides <strong>below</strong> the flat CMOS
+  <code>1/2 CV&sup2;</code> floor that an irreversible design can never beat.</em>
+</p>
 
-   backed by Lean 4 proofs: reversible by construction; loops terminate; branches reversible
+## The pipeline
+
+```mermaid
+flowchart TD
+    src([".thse source"]) --> syn["theseus-syntax<br/>lex + parse"]
+    syn --> chk["theseus-check<br/>elaborate: coverage + linearity"]
+    chk --> core["theseus-core<br/>Core Iso IR + adjoint"]
+    core --> eval["theseus-eval<br/>interpreter: reference oracle"]
+    core --> net["theseus-netlist<br/>canonicalize + lower to cells"]
+    core --> tisc["theseus-tisc<br/>TISC ROM compiler + BVEQ verify"]
+    tisc --> cpu["reversible CPU<br/>forwards and backwards"]
+    cpu -.->|output ==| eval
+    net --> spice["theseus-spice<br/>phased cell sim + energy model"]
+    spice --> phys["ngspice + SkyWater sky130<br/>SPICE characterization"]
+    spice --> joules(["energy in joules"])
+
+    classDef energy fill:#e8f6f1,stroke:#1b9e77,color:#0b3d2e;
+    classDef phys fill:#fdf0e6,stroke:#d95f02,color:#5a2800;
+    class net,spice,joules energy;
+    class phys phys;
 ```
+
+The whole stack is backed by Lean 4 proofs: reversible by construction, loops
+terminate, branches are reversible (see [Proofs](#proofs)).
+
+## Energy: the whole point
+
+Reversible logic never erases information, so it is not bound by the Landauer
+floor -- and on an *adiabatic* fabric that recovers the energy it moves, the
+dissipation per operation scales as `~1/T` with the power-clock ramp time `T`
+(ADR-0028). An irreversible CMOS gate instead pays a flat `1/2 CV^2` every
+cycle, no matter how slowly you run it. The plot above is that contrast at the
+whole-CPU level, summed over a compiled TISC step's cell inventory -- and it
+reproduces **offline**, from the committed rung-0 characterization fits, no
+simulator required.
+
+**On real silicon.** The same three-family contrast holds when the cells are
+characterized against the real SkyWater **sky130** 130 nm PDK with ngspice:
+adiabatic transmission-gate logic recovers charge (log-log slope ~ -0.96),
+positive-feedback adiabatic logic falls then floors on leakage, and static CMOS
+stays flat.
+
+<p align="center">
+  <img src="docs/img/sky130-money-plot.svg" width="720" alt="sky130 three-family money plot: adiabatic-TG, PFAL, and static CMOS energy per operation vs clock period."><br>
+  <em>Energy per operation vs clock period on SkyWater sky130 cells (ngspice).</em>
+</p>
+
+**On real programs.** Compiled programs inherit the win. Priced at a fixed ramp,
+a reversible program's total energy sits far below the CMOS-equivalent gate
+count charged at `1/2 CV^2` -- e.g. the Fibonacci ROM costs roughly an order
+of magnitude less.
+
+<p align="center">
+  <img src="docs/img/benchmark-energy.svg" width="720" alt="Per-benchmark energy: reversible total vs CMOS-equivalent baseline for fib and adder."><br>
+  <em>Whole-program energy, reversible vs CMOS-equivalent, at a fixed power-clock ramp.</em>
+</p>
+
+Regenerate every figure with:
+
+    cargo run -p theseus-tisc --example readme_figures     # figs 1 and 3 (offline)
+    nix develop .#char --command \
+      cargo run -p theseus-tisc --example readme_figures    # adds the sky130 fig (ngspice + PDK)
 
 ## The stack
 
@@ -103,11 +152,14 @@ The `theseus-proofs/` Lean 4 project proves the core guarantees:
 - **Branches are reversible.** The come-from branch instruction is its own
   inverse.
 
+The build refuses `sorry`, `native_decide`, or any stray axiom
+(`AxiomGuard.lean`), so a green build is a real proof.
+
 ## Project layout
 
 | Path | Contents |
 |---|---|
-| `crates/` | The Rust workspace: syntax, checker, interpreter, netlist, TISC compiler, CLI. |
+| `crates/` | The Rust workspace: syntax, checker, interpreter, netlist, TISC compiler, energy backend, CLI. |
 | `theseus-proofs/` | Lean 4 proofs of the core properties. |
 | `conformance/` | Language-independent programs with expected outputs. |
 | `docs/` | Design docs, decision records (ADRs), the language spec, and the roadmap. |

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="520" viewBox="0 0 880 520" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+<rect width="880" height="520" fill="#ffffff"/>
+<text x="78" y="30" font-size="18" font-weight="700" fill="#111111" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">Per-benchmark energy: reversible vs CMOS-equivalent</text>
+<text x="78" y="50" font-size="12" fill="#666666" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">compiled TISC-1 ROMs priced at t_ramp = 1e-6 s (log scale)</text>
+<line x1="78" y1="398.503" x2="852" y2="398.503" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="364.87" x2="852" y2="364.87" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="341.007" x2="852" y2="341.007" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="322.497" x2="852" y2="322.497" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="307.373" x2="852" y2="307.373" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="294.586" x2="852" y2="294.586" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="283.51" x2="852" y2="283.51" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="273.74" x2="852" y2="273.74" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="207.503" x2="852" y2="207.503" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="173.87" x2="852" y2="173.87" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="150.007" x2="852" y2="150.007" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="131.497" x2="852" y2="131.497" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="116.373" x2="852" y2="116.373" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="103.586" x2="852" y2="103.586" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="92.51" x2="852" y2="92.51" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="82.74" x2="852" y2="82.74" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="456" x2="852" y2="456" stroke="#d0d0d0" stroke-width="1"/>
+<text x="68" y="460" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-9</tspan></text><line x1="78" y1="265" x2="852" y2="265" stroke="#d0d0d0" stroke-width="1"/>
+<text x="68" y="269" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-8</tspan></text><line x1="78" y1="74" x2="852" y2="74" stroke="#d0d0d0" stroke-width="1"/>
+<text x="68" y="78" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-7</tspan></text><rect x="78" y="74" width="774" height="382" fill="none" stroke="#333333" stroke-width="1.25"/>
+<rect x="139.92" y="346.466" width="126.317" height="109.534" fill="#1b9e77" rx="2"/>
+<text x="203.078" y="341.466" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">3.75e-9</text>
+<rect x="276.763" y="75.084" width="126.317" height="380.916" fill="#d95f02" rx="2"/>
+<text x="339.922" y="70.084" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">9.87e-8</text>
+<text x="271.5" y="478" font-size="12.5" fill="#222222" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">fib</text>
+<rect x="526.92" y="441.009" width="126.317" height="14.991" fill="#1b9e77" rx="2"/>
+<text x="590.078" y="436.009" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">1.20e-9</text>
+<rect x="663.763" y="128.764" width="126.317" height="327.236" fill="#d95f02" rx="2"/>
+<text x="726.922" y="123.764" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">5.17e-8</text>
+<text x="658.5" y="478" font-size="12.5" fill="#222222" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">adder</text>
+<text x="22" y="265" font-size="13" fill="#333333" text-anchor="middle" transform="rotate(-90 22 265)" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">total energy (J)</text>
+<rect x="88" y="84" width="250" height="52" rx="6" fill="#ffffff" fill-opacity="0.96" stroke="#cccccc"/>
+<line x1="96" y1="101" x2="116" y2="101" stroke="#1b9e77" stroke-width="3"/>
+<text x="124" y="105" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">reversible (total)</text>
+<line x1="96" y1="119" x2="116" y2="119" stroke="#d95f02" stroke-width="3"/>
+<text x="124" y="123" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">CMOS-equivalent</text>
+</svg>
