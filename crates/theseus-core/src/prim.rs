@@ -529,6 +529,123 @@ fn validate_expr_var_indices(
     }
 }
 
+// ── Builtin prim registry (ADR-0047) ────────────────────────────────
+//
+// A `prim name : T <-> T = "key"` declaration is opaque until its key resolves
+// to a concrete `(forward, backward)` pair. Builtin keys resolve here: given the
+// declared (lowered) input/output types, [`builtin_prim`] materializes the
+// `PrimDef` the elaborator wraps in `Iso::Prim`. Today the only builtin is the
+// reversible word add.
+
+/// The reversible word-add prim key: `(a, b) |-> (a, a + b mod 2^w)` over a pair
+/// of `W<n>` machine words (a `Flat(w)` leaf each). The addend `a` is preserved,
+/// so the map is a bijection; the inverse subtracts. At `w = 8` the TISC compiler
+/// recognizes it as a single reversible `Add` instruction.
+pub const ADD_INTO_KEY: &str = "theseus.arith.add_into";
+
+/// Resolve a builtin prim `key` against its declared (lowered) `input_ty` and
+/// `output_ty`, returning the concrete [`PrimDef`] or `None` if the key is
+/// unknown or the types do not fit the builtin's shape.
+///
+/// The returned def carries a symbolic [`PrimSpec`] (no materialized table). The
+/// caller validates it structurally via [`PrimSpec::validate_against`]; full
+/// mutual-inverse certification is the compiler's symbolic BVEQ (`admit_symbolic`
+/// in theseus-tisc), since `core::admit` cannot certify a symbolic-only prim.
+pub fn builtin_prim(key: &str, input_ty: &Type, output_ty: &Type) -> Option<PrimDef> {
+    match key {
+        ADD_INTO_KEY => {
+            // add_into is an endo-prim over a homogeneous word pair.
+            if input_ty != output_ty {
+                return None;
+            }
+            let w = flat_pair_width(input_ty)?;
+            Some(build_add_into(w))
+        }
+        _ => None,
+    }
+}
+
+/// If `ty` is `Prod(Flat(w), Flat(w))` (a pair of equal-width words), return `w`.
+fn flat_pair_width(ty: &Type) -> Option<u8> {
+    match ty {
+        Type::Prod(a, b) => match (a.as_ref(), b.as_ref()) {
+            (Type::Flat(wa), Type::Flat(wb)) if wa == wb => Some(*wa),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Build the `add_into` symbolic prim at width `w` (1..=8):
+/// `(a, b) |-> (a, (a + b) mod 2^w)`, inverse `(a, s) |-> (a, (s - a) mod 2^w)`.
+///
+/// A **symbolic** spec (bit-level ripple-carry `BvExpr`s), not a table: the
+/// `Flat(w)` value domain is `2^w` deep-thermometer values, so a materialized
+/// `2^w x 2^w` table is quadratically large and heap-heavy. The spec is `O(w)`
+/// tiny expressions -- eval decodes each input to bytes on demand, and the TISC
+/// compiler certifies + recognizes it symbolically (BDD) rather than enumerating.
+fn build_add_into(w: u8) -> PrimDef {
+    debug_assert!((1..=8).contains(&w), "add_into width must be 1..=8");
+    let f = Type::Flat(w);
+    let ty = Type::prod(f.clone(), f);
+    let spec = PrimSpec {
+        forward: add_transfer(w),
+        backward: sub_transfer(w),
+    };
+    PrimDef {
+        forward_name: "add_into".into(),
+        backward_name: "sub_into".into(),
+        input_ty: ty.clone(),
+        output_ty: ty,
+        forward: BTreeMap::new(),
+        backward: BTreeMap::new(),
+        symbolic: Some(spec),
+    }
+}
+
+/// Forward transfer `(a, b) |-> (a, a + b mod 2^w)`. Operand 0 = `a` (preserved),
+/// operand 1 = `b`; output leaf 0 = `a`, leaf 1 = the ripple-carry sum. The final
+/// carry-out is dropped, giving mod-`2^w` (wrapping) semantics.
+fn add_transfer(w: u8) -> SpecTransfer {
+    let n = w as usize;
+    let a = |i: usize| BvExpr::var(0, i);
+    let b = |i: usize| BvExpr::var(1, i);
+    let leaf_a: Vec<BvExpr> = (0..n).map(a).collect();
+    let mut sum = Vec::with_capacity(n);
+    let mut carry = BvExpr::constant(false);
+    for i in 0..n {
+        // s_i = a_i ^ b_i ^ carry_i
+        sum.push(a(i).xor(b(i)).xor(carry.clone()));
+        // carry_{i+1} = (a_i & b_i) | (carry_i & (a_i ^ b_i))
+        carry = a(i).and(b(i)).or(carry.and(a(i).xor(b(i))));
+    }
+    SpecTransfer {
+        leaves: vec![leaf_a, sum],
+        width: w,
+    }
+}
+
+/// Backward transfer `(a, s) |-> (a, s - a mod 2^w)`. Operand 0 = `a` (preserved),
+/// operand 1 = `s`; output leaf 0 = `a`, leaf 1 = the ripple-borrow difference.
+fn sub_transfer(w: u8) -> SpecTransfer {
+    let n = w as usize;
+    let a = |i: usize| BvExpr::var(0, i);
+    let s = |i: usize| BvExpr::var(1, i);
+    let leaf_a: Vec<BvExpr> = (0..n).map(a).collect();
+    let mut diff = Vec::with_capacity(n);
+    let mut borrow = BvExpr::constant(false);
+    for i in 0..n {
+        // d_i = s_i ^ a_i ^ borrow_i
+        diff.push(s(i).xor(a(i)).xor(borrow.clone()));
+        // borrow_{i+1} = (!s_i & a_i) | (borrow_i & !(s_i ^ a_i))
+        borrow = s(i).not().and(a(i)).or(borrow.and(s(i).xor(a(i)).not()));
+    }
+    SpecTransfer {
+        leaves: vec![leaf_a, diff],
+        width: w,
+    }
+}
+
 /// Count the number of leaves in a type (for Sum padding).
 pub fn count_leaves(ty: &Type) -> usize {
     match ty {

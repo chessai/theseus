@@ -1,0 +1,20 @@
+-- Conformance P0027 (dialect: synthesizable, ADR-0047 W<n> + add_into prim)
+-- Byte-wide Fibonacci: three steps of the U8 fib iteration over the machine
+-- word W8, composed explicitly (constant count, like 0023-fib3 but full-byte).
+--
+-- The step is the reversible bijection (a, b) |-> (b, a + b mod 256), built as
+-- `swap2 ; add_into`, where `add_into` is the builtin reversible word-add prim
+-- (a Flat(8) leaf per operand -> a single TISC `Add` instruction).
+--
+--   (0, 1)     -> (1, 1) -> (1, 2) -> (2, 3)
+--   (13, 21)   -> (21, 34) -> (34, 55) -> (55, 89)
+--   (200, 100) -> (100, 44) -> (44, 144) -> (144, 188)   (carry wraps mod 256)
+
+prim add_into : W8 * W8 <-> W8 * W8 = "theseus.arith.add_into"
+
+iso swap2 : W8 * W8 <-> W8 * W8
+| (a, b) <-> (b, a)
+
+iso fibStep : W8 * W8 <-> W8 * W8 = swap2 ; add_into
+
+iso fib8 : W8 * W8 <-> W8 * W8 = fibStep ; fibStep ; fibStep

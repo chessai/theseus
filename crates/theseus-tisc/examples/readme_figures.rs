@@ -16,12 +16,11 @@
 //! Figure 1 lowering takes a couple of minutes and some GB; figure 3 lowers
 //! one step-net per benchmark. The output is deterministic (no clock/random).
 
-use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
 
-use theseus_core::{Iso, PrimDef, Type, Value};
+use theseus_core::{Iso, Value};
 use theseus_netlist::lower_iso;
 use theseus_spice::chardb::rung0_measured;
 use theseus_tisc::money_plot::{cmos_crossing_t_ramp, cpu_money_plot, CMOS_STATIC_E_PER_GATE_J};
@@ -219,13 +218,18 @@ fn figure3_benchmarks(
 
     // fib (u8): a real byte-wide Fibonacci -- FIB8_STEPS reversible steps of
     // `(a, b) |-> (b, a + b mod 256)`, each step compiling to the two-word
-    // reversible datapath `EXCH ; ADD` (a Flat(8) `addInto` prim recognized as
-    // a single TISC `Add`). Seeded (0, 1); after 10 steps the registers hold
-    // (fib_10, fib_11) = (55, 89). This is the same fib the CPU runs in
-    // tests/fib_cpu.rs, priced end to end.
-    let fib8 = fib8_iso(FIB8_STEPS);
-    let fib8_input = Value::pair(therm(0), therm(1)); // (a, b) = (0, 1) as Flat(8)
-    match price_iso("fib (u8)", &fib8, &fib8_input, db) {
+    // reversible datapath `EXCH ; ADD` (the `add_into` W8 prim recognized as a
+    // single TISC `Add`, ADR-0047). Compiled from real surface source (parse ->
+    // check -> elaborate), seeded (0, 1); after 10 steps the registers hold
+    // (fib_10, fib_11) = (55, 89) -- the same fib the CPU runs in tests/fib_cpu.rs.
+    let fib8_input = Value::pair(therm(0), therm(1)); // (a, b) = (0, 1) as W8
+    match price_benchmark(
+        "fib (u8)",
+        &fib8_source(FIB8_STEPS),
+        "fib8",
+        &fib8_input,
+        db,
+    ) {
         Ok(r) => results.push(r),
         Err(e) => eprintln!("[fig3] SKIP fib (u8): {e}"),
     }
@@ -284,51 +288,24 @@ fn therm(k: u32) -> Value {
     v
 }
 
-/// `addInto8 : (Flat8, Flat8) <-> (Flat8, Flat8)`, `(a, b) |-> (a, a + b mod
-/// 256)`. A word-wide reversible add: the addend `a` is preserved and `b` takes
-/// the sum. The TISC compiler recognizes this prim's forward table as a single
-/// reversible `Add` instruction (`recognize_prim`), so it costs one machine
-/// datapath op -- not a bit-blasted gate tree.
-fn add_into8() -> Iso {
-    let f = Type::flat(8);
-    let ty = Type::prod(f.clone(), f);
-    let mut fwd = BTreeMap::new();
-    for a in 0u16..256 {
-        for b in 0u16..256 {
-            let inp = Value::pair(therm(a as u32), therm(b as u32));
-            let out = Value::pair(
-                therm(a as u32),
-                therm((a as u8).wrapping_add(b as u8) as u32),
-            );
-            fwd.insert(inp, out);
-        }
-    }
-    let bwd: BTreeMap<Value, Value> = fwd.iter().map(|(x, y)| (y.clone(), x.clone())).collect();
-    Iso::Prim(Box::new(PrimDef {
-        forward_name: "addInto8".into(),
-        backward_name: "subInto8".into(),
-        input_ty: ty.clone(),
-        output_ty: ty,
-        forward: fwd,
-        backward: bwd,
-        symbolic: None,
-    }))
-}
-
-/// A constant-count byte-wide Fibonacci: `n_steps` repetitions of
-/// `fibStep = swap ; addInto`, i.e. `(a, b) |-> (b, a + b mod 256)`, over a pair
-/// of `Flat(8)` word registers. Unrolled (no data-carried counter), it compiles
-/// to `2 * n_steps` instructions (`EXCH ; ADD` per step) -- the exact ROM shape
-/// tests/fib_cpu.rs runs on the simulated CPU.
-fn fib8_iso(n_steps: usize) -> Iso {
+/// Surface source for a constant-count byte-wide Fibonacci: `n_steps` unrolled
+/// steps of `fibStep = swap2 ; add_into` (i.e. `(a, b) |-> (b, a + b mod 256)`)
+/// over the machine word `W8` (ADR-0047). Dogfoods the real surface prim through
+/// the full front end; unrolled, it compiles to `2 * n_steps` instructions
+/// (`EXCH ; ADD` per step) -- the exact ROM shape tests/fib_cpu.rs runs.
+fn fib8_source(n_steps: usize) -> String {
     assert!(n_steps >= 1, "fib8 needs >= 1 step");
-    let f = Type::flat(8);
-    let step = || Iso::seq(Iso::SwapProd(f.clone(), f.clone()), add_into8());
-    let mut iso = step();
+    let mut steps = String::from("fibStep");
     for _ in 1..n_steps {
-        iso = Iso::seq(iso, step());
+        steps.push_str(" ; fibStep");
     }
-    iso
+    format!(
+        "prim add_into : W8 * W8 <-> W8 * W8 = \"theseus.arith.add_into\"\n\
+         iso swap2 : W8 * W8 <-> W8 * W8\n\
+         | (a, b) <-> (b, a)\n\
+         iso fibStep : W8 * W8 <-> W8 * W8 = swap2 ; add_into\n\
+         iso fib8 : W8 * W8 <-> W8 * W8 = {steps}\n"
+    )
 }
 
 /// Compile, lower, and price one program to `(reversible_j, cmos_equiv_j)` at
