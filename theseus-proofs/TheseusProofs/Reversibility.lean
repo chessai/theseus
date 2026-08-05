@@ -200,6 +200,59 @@ noncomputable def toEquiv {a b : Ty} (i : Iso a b) : denoteTy a ≃ denoteTy b :
 @[simp] theorem toEquiv_apply {a b : Ty} (i : Iso a b) (x : denoteTy a) :
     toEquiv i x = denote i x := rfl
 
+/-! ### Cardinality preservation (Pi/Theseus structural type soundness)
+
+The Pi language (James–Sabry, *Information Effects*, POPL'12) builds types as a
+commutative semiring `(0, 1, +, ×)` and combinators as its isomorphisms; the
+structural soundness fact is that a well-typed combinator relates types of EQUAL
+cardinality (a bijection between finite sets forces `|A| = |B|`). We derive it
+here from `denote_bijective`, and state its contrapositive — there is NO iso
+between types of different cardinality.
+
+This is exactly the obligation the surface checker enforces on `= expr` iso
+bodies (`theseus-check` typing, `T0102`): an iso's body must have the SAME type
+as its declared signature, hence the same cardinality. Accepting
+`iso f : Bit <-> Bit = swap2` (where `swap2 : Bit*Bit <-> Bit*Bit`, `|Bit| = 2`
+but `|Bit*Bit| = 4`) would claim an iso between types this theorem proves cannot
+be related — the soundness hole the checker fix closes. -/
+
+-- These four hold by definitional unfolding of `denoteTy` on each constructor
+-- (`unit ↦ Unit`, `bit ↦ Bool`, `prod ↦ ×`, `sum ↦ ⊕`); the cited `Fintype.card`
+-- lemma matches the goal up to that defeq.
+
+/-- `denoteTy` realizes the type-level semiring on cardinalities: `unit ↦ 1`. -/
+theorem card_unit : Fintype.card (denoteTy unit) = 1 := Fintype.card_unit
+
+/-- `bit ↦ 2`. -/
+theorem card_bit : Fintype.card (denoteTy bit) = 2 := Fintype.card_bool
+
+/-- `prod ↦ ×`: cardinality is multiplicative on products. -/
+theorem card_prod (a b : Ty) :
+    Fintype.card (denoteTy (prod a b))
+      = Fintype.card (denoteTy a) * Fintype.card (denoteTy b) :=
+  Fintype.card_prod (denoteTy a) (denoteTy b)
+
+/-- `sum ↦ +`: cardinality is additive on sums. -/
+theorem card_sum (a b : Ty) :
+    Fintype.card (denoteTy (sum a b))
+      = Fintype.card (denoteTy a) + Fintype.card (denoteTy b) :=
+  Fintype.card_sum
+
+/-- **Cardinality preservation.** Every combinator `i : Iso a b` relates types of
+    equal cardinality — a direct corollary of `denote_bijective` (a bijection of
+    finite types is cardinality-preserving). -/
+theorem card_preserved {a b : Ty} (i : Iso a b) :
+    Fintype.card (denoteTy a) = Fintype.card (denoteTy b) :=
+  Fintype.card_congr (toEquiv i)
+
+/-- **No cross-cardinality iso.** If two types differ in cardinality there is no
+    combinator between them. This is the semantic justification for rejecting an
+    `= expr` iso body whose type has a different cardinality than the declared
+    signature: such an iso cannot denote anything, so the checker must reject it. -/
+theorem no_iso_of_card_ne {a b : Ty}
+    (h : Fintype.card (denoteTy a) ≠ Fintype.card (denoteTy b)) : Iso a b → False :=
+  fun i => h (card_preserved i)
+
 /-- The syntactic adjoint really is the inverse: `denote (inv i) = (toEquiv i).symm`.
     Since `denote (inv i) = Function.invFun (denote i)` and `denote i` is a
     bijection, its `invFun` coincides with the `Equiv` inverse. -/

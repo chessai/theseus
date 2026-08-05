@@ -30,7 +30,11 @@ use theseus_syntax::ast::{
 use crate::diagnostics::{Code, Diagnostic};
 use crate::env::{self, Env, Inj};
 
-type ElabResult = Result<Iso, Vec<Diagnostic>>;
+/// Result of elaborating one iso: the core [`Iso`] on success, a list of
+/// diagnostics on a typed failure, or `Err(vec![])` when the body is not in the
+/// structural core (unsupported). This is the value type of
+/// [`elaborate_program`]'s map.
+pub type ElabResult = Result<Iso, Vec<Diagnostic>>;
 
 /// The "not elaborated (unsupported in the structural core)" sentinel -- an empty
 /// error vector, matching the crate convention (no `T0xxx` diagnostic applies).
@@ -76,8 +80,32 @@ fn collect_where<'a>(iso: &'a IsoDecl, out: &mut BTreeMap<String, &'a IsoDecl>) 
 }
 
 fn elab_iso(iso: &IsoDecl, env: &Env, isos: &BTreeMap<String, &IsoDecl>) -> ElabResult {
-    match &iso.body {
-        IsoBody::Expr(e) => elab_expr(e, env, isos, Some(&iso.lhs)),
+    // Each top-level elaboration starts a fresh reference chain.
+    let mut visiting = Vec::new();
+    elab_iso_rec(iso, env, isos, &mut visiting)
+}
+
+/// Recursion-guarded elaboration. `visiting` is the stack of iso names currently
+/// being elaborated along the `= expr` reference chain. Re-entering one is an
+/// ill-founded cycle: a reversible iso may only recurse through a structural
+/// combinator (`iter`/`fold`), never by naming itself (directly or mutually) in
+/// an `= expr` body -- such a definition has no terminating denotation. We report
+/// it as `T0102` (an ill-formed iso) rather than recursing forever (a stack
+/// overflow that would otherwise abort the whole checker).
+fn elab_iso_rec(
+    iso: &IsoDecl,
+    env: &Env,
+    isos: &BTreeMap<String, &IsoDecl>,
+    visiting: &mut Vec<String>,
+) -> ElabResult {
+    if visiting.iter().any(|n| n == &iso.name.text) {
+        return Err(vec![
+            Diagnostic::new(Code::T0102, iso.name.span).with_name(iso.name.text.clone())
+        ]);
+    }
+    visiting.push(iso.name.text.clone());
+    let result = match &iso.body {
+        IsoBody::Expr(e) => elab_expr(e, env, isos, Some(&iso.lhs), visiting),
         IsoBody::Clauses(cs) => {
             let labels = env.iso_labels(&iso.name.text);
             if labels.is_empty() {
@@ -86,7 +114,9 @@ fn elab_iso(iso: &IsoDecl, env: &Env, isos: &BTreeMap<String, &IsoDecl>) -> Elab
                 elab_clauses_label(cs, &iso.lhs, &iso.rhs, labels, env, &iso.name.text)
             }
         }
-    }
+    };
+    visiting.pop();
+    result
 }
 
 fn elab_expr(
@@ -94,11 +124,12 @@ fn elab_expr(
     env: &Env,
     isos: &BTreeMap<String, &IsoDecl>,
     iso_lhs: Option<&SurfType>,
+    visiting: &mut Vec<String>,
 ) -> ElabResult {
     match e {
-        Expr::Paren(inner, _) => elab_expr(inner, env, isos, iso_lhs),
+        Expr::Paren(inner, _) => elab_expr(inner, env, isos, iso_lhs, visiting),
         Expr::Var(name) => match isos.get(&name.text) {
-            Some(iso) => elab_iso(iso, env, isos),
+            Some(iso) => elab_iso_rec(iso, env, isos, visiting),
             // Not an iso -- a reference to a declared `prim` resolves via the
             // builtin registry against its declared (lowered) types (ADR-0047).
             None => match env.prim(&name.text) {
@@ -106,10 +137,10 @@ fn elab_expr(
                 None => unsupported(),
             },
         },
-        Expr::Adjoint(inner, _) => Ok(Iso::sym(elab_expr(inner, env, isos, None)?)),
+        Expr::Adjoint(inner, _) => Ok(Iso::sym(elab_expr(inner, env, isos, None, visiting)?)),
         Expr::Bin(op, l, r, _) => {
-            let lf = elab_expr(l, env, isos, None)?;
-            let rf = elab_expr(r, env, isos, None)?;
+            let lf = elab_expr(l, env, isos, None, visiting)?;
+            let rf = elab_expr(r, env, isos, None, visiting)?;
             Ok(match op {
                 BinOp::Seq => Iso::seq(lf, rf),
                 BinOp::Prod => Iso::times(lf, rf),
@@ -131,9 +162,9 @@ fn elab_expr(
                 // iso's declared signature.
                 Expr::Id(_) => match infer_combinator_id_body(kind, &core_ty, iso_lhs, env) {
                     Some(iso) => iso,
-                    None => elab_expr(body, env, isos, None)?,
+                    None => elab_expr(body, env, isos, None, visiting)?,
                 },
-                _ => elab_expr(body, env, isos, None)?,
+                _ => elab_expr(body, env, isos, None, visiting)?,
             };
             let iso = match kind {
                 CombKind::Iter => Iso::iter(core_ty, body_iso),
