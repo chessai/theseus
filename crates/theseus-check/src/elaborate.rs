@@ -130,7 +130,12 @@ fn elab_expr(
         Expr::Paren(inner, _) => elab_expr(inner, env, isos, iso_lhs, visiting),
         Expr::Var(name) => match isos.get(&name.text) {
             Some(iso) => elab_iso_rec(iso, env, isos, visiting),
-            None => unsupported(),
+            // Not an iso -- a reference to a declared `prim` resolves via the
+            // builtin registry against its declared (lowered) types (ADR-0047).
+            None => match env.prim(&name.text) {
+                Some(sig) => elab_prim_ref(sig, env),
+                None => unsupported(),
+            },
         },
         Expr::Adjoint(inner, _) => Ok(Iso::sym(elab_expr(inner, env, isos, None, visiting)?)),
         Expr::Bin(op, l, r, _) => {
@@ -184,6 +189,32 @@ fn elab_expr(
         // `Ctor`, `Tuple`, `Unit` do not appear as slice-1 combinator bodies.
         _ => unsupported(),
     }
+}
+
+/// Elaborate a reference to a declared `prim` (ADR-0047): lower its declared
+/// LHS/RHS types, resolve the key against the builtin registry, and admit the
+/// resulting `(forward, backward)` pair (mutual-inverse over the finite domain)
+/// before wrapping it in `Iso::Prim`. An unknown key, or a type the builtin
+/// does not support, elaborates to `unsupported()` (an empty-diagnostic sentinel
+/// -- the surrounding type/coverage checks report the user-facing error).
+fn elab_prim_ref(sig: &crate::env::PrimSig, env: &Env) -> ElabResult {
+    let in_ty = env.lower(&sig.lhs);
+    let out_ty = env.lower(&sig.rhs);
+    let Some(def) = theseus_core::prim::builtin_prim(&sig.key, &in_ty, &out_ty) else {
+        return unsupported();
+    };
+    // Guard the def before wrapping. A symbolic-only prim (builtins carry a
+    // `PrimSpec`, no table) cannot be certified by `core::admit` -- validate its
+    // spec structurally here; full mutual-inverse certification is the compiler's
+    // symbolic BVEQ. A table prim (should one appear) still runs `admit`.
+    let admissible = match &def.symbolic {
+        Some(spec) => spec.validate_against(&def.input_ty, &def.output_ty).is_ok(),
+        None => theseus_core::prim::admit(&def).is_ok(),
+    };
+    if !admissible {
+        return unsupported();
+    }
+    Ok(Iso::Prim(Box::new(def)))
 }
 
 /// Position type inference for `id` as a combinator body (ADR-0038).

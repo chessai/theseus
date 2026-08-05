@@ -143,6 +143,18 @@ fn is_un_type(name: &str) -> bool {
         .is_some_and(|n| n > 0 && n.is_power_of_two())
 }
 
+/// Is `name` a builtin `W<n>` machine-word type (power-of-two width in 1..=8)?
+/// Like `U<n>`, its values marshal to/from decimal numeric literals.
+fn is_wn_type(name: &str) -> bool {
+    match name.strip_prefix('W') {
+        // Canonical decimal only: reject empty and leading-zero forms (`W08`).
+        Some(d) if !d.is_empty() && (d.len() == 1 || !d.starts_with('0')) => d
+            .parse::<u32>()
+            .is_ok_and(|n| n > 0 && n <= 8 && n.is_power_of_two()),
+        _ => false,
+    }
+}
+
 // ── Surface→Core conversion ──────────────────────────────────────────────
 
 /// Convert a surface value to a core [`Value`], guided by the surface [`Type`]
@@ -183,10 +195,10 @@ fn tuple_to_core(elems: &[SVal], ty: &Type, env: &Env) -> Value {
 }
 
 fn ctor_to_core(name: &str, args: &[SVal], ty: &Type, env: &Env) -> Value {
-    // Numeric literal at a U<n> type: the k-th enumerated value.
+    // Numeric literal at a U<n>/W<n> type: the k-th enumerated value.
     if is_numeric(name) && args.is_empty() {
         if let Type::Name(n) = strip_paren_ty(ty) {
-            if is_un_type(&n.text) {
+            if is_un_type(&n.text) || is_wn_type(&n.text) {
                 let k: usize = name
                     .parse()
                     .unwrap_or_else(|_| panic!("bad numeric literal: {name}"));
@@ -258,8 +270,9 @@ pub fn render(v: &Value, ty: &Type, env: &Env) -> String {
 }
 
 fn render_named(v: &Value, type_name: &str, env: &Env) -> String {
-    // U<n> builtin: render as the numeric index of the value in the enumeration.
-    if is_un_type(type_name) {
+    // U<n>/W<n> builtin: render as the numeric index of the value in the
+    // enumeration.
+    if is_un_type(type_name) || is_wn_type(type_name) {
         let ty = Type::Name(theseus_syntax::ast::UpperName {
             text: type_name.into(),
             span: theseus_syntax::ast::Span { start: 0, end: 0 },

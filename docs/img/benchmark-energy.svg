@@ -22,11 +22,11 @@
 <text x="68" y="460" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-9</tspan></text><line x1="78" y1="265" x2="852" y2="265" stroke="#d0d0d0" stroke-width="1"/>
 <text x="68" y="269" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-8</tspan></text><line x1="78" y1="74" x2="852" y2="74" stroke="#d0d0d0" stroke-width="1"/>
 <text x="68" y="78" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-7</tspan></text><rect x="78" y="74" width="774" height="382" fill="none" stroke="#333333" stroke-width="1.25"/>
-<rect x="139.92" y="346.466" width="126.317" height="109.534" fill="#1b9e77" rx="2"/>
-<text x="203.078" y="341.466" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">3.75e-9</text>
-<rect x="276.763" y="75.084" width="126.317" height="380.916" fill="#d95f02" rx="2"/>
-<text x="339.922" y="70.084" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">9.87e-8</text>
-<text x="271.5" y="478" font-size="12.5" fill="#222222" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">fib</text>
+<rect x="139.92" y="377.281" width="126.317" height="78.719" fill="#1b9e77" rx="2"/>
+<text x="203.078" y="372.281" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">2.58e-9</text>
+<rect x="276.763" y="81.864" width="126.317" height="374.136" fill="#d95f02" rx="2"/>
+<text x="339.922" y="76.864" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">9.10e-8</text>
+<text x="271.5" y="478" font-size="12.5" fill="#222222" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">fib (u8)</text>
 <rect x="526.92" y="441.009" width="126.317" height="14.991" fill="#1b9e77" rx="2"/>
 <text x="590.078" y="436.009" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">1.20e-9</text>
 <rect x="663.763" y="128.764" width="126.317" height="327.236" fill="#d95f02" rx="2"/>

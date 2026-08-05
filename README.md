@@ -67,11 +67,12 @@ stays flat.
 
 **On real programs.** Compiled programs inherit the win. Priced at a fixed ramp,
 a reversible program's total energy sits far below the CMOS-equivalent gate
-count charged at `1/2 CV^2` -- e.g. the Fibonacci ROM costs roughly an order
-of magnitude less.
+count charged at `1/2 CV^2` -- e.g. a byte-wide (U8) Fibonacci ROM, ten
+reversible `(a, b) |-> (b, a + b mod 256)` steps each compiling to the
+two-word datapath `EXCH ; ADD`, costs well over an order of magnitude less.
 
 <p align="center">
-  <img src="docs/img/benchmark-energy.svg" width="720" alt="Per-benchmark energy: reversible total vs CMOS-equivalent baseline for fib and adder."><br>
+  <img src="docs/img/benchmark-energy.svg" width="720" alt="Per-benchmark energy: reversible total vs CMOS-equivalent baseline for a U8 Fibonacci and a half-adder."><br>
   <em>Whole-program energy, reversible vs CMOS-equivalent, at a fixed power-clock ramp.</em>
 </p>
 
