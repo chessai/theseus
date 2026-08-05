@@ -300,8 +300,12 @@ impl Env {
     /// Lower a named ADT into its right-nested sum-of-products, spending one
     /// unit of the name's per-path unroll budget (μ-cutoff ⇒ `Zero`).
     fn lower_named(&self, name: &str, fuel: &mut BTreeMap<String, usize>) -> CoreType {
-        // Builtin U<n> types are not user-declared; intercept before ADT lookup.
+        // Builtin U<n>/W<n> types are not user-declared; intercept before ADT
+        // lookup.
         if let Some(ct) = lower_un(name) {
+            return ct;
+        }
+        if let Some(ct) = lower_wn(name) {
             return ct;
         }
         let Some(info) = self.types.get(name) else {
@@ -378,11 +382,11 @@ pub(crate) fn navigate<'a>(value: &'a Value, path: &[Inj]) -> Option<&'a Value> 
     Some(v)
 }
 
-/// The blessed stdlib numeric types `U<n>` (ADR-0017): `U1`, `U2`, `U4`, `U8`,
-/// `U16`, ... -- builtin, not user-declared, so name resolution treats them as
-/// known.
+/// The blessed stdlib builtin types: the numeric types `U<n>` (ADR-0017) and the
+/// machine-word types `W<n>` (ADR-0047). Both are builtin, not user-declared, so
+/// name resolution treats them as known.
 fn is_builtin_type(name: &str) -> bool {
-    parse_un_bits(name).is_some()
+    parse_un_bits(name).is_some() || parse_wn_bits(name).is_some()
 }
 
 /// Parse a `U<n>` name and return the bit-width `n` if it is a valid builtin
@@ -421,6 +425,34 @@ fn lower_un_bits(n: u32) -> CoreType {
         let half = lower_un_bits(n / 2);
         CoreType::prod(half.clone(), half)
     }
+}
+
+/// Parse a `W<n>` machine-word name and return the bit-width `n` if valid
+/// (a power of two in `1..=8`). See [`lower_wn`] for the representation.
+fn parse_wn_bits(name: &str) -> Option<u8> {
+    let digits = name.strip_prefix('W')?;
+    // Only the canonical decimal form is a builtin: no empty suffix, no leading
+    // zeros (`W08` is not `W8` -- it stays an ordinary, unknown type name).
+    if digits.is_empty() || (digits.len() > 1 && digits.starts_with('0')) {
+        return None;
+    }
+    let n: u32 = digits.parse().ok()?;
+    // A machine word is a single ISA register, so it caps at the byte width 8.
+    if n == 0 || n > 8 || !n.is_power_of_two() {
+        return None;
+    }
+    Some(n as u8)
+}
+
+/// Lower a `W<n>` machine-word type to its core encoding (ADR-0047).
+///
+/// Unlike the tree-encoded numeric `U<n>` (which is `1+1` bits nested by
+/// products), a `W<n>` lowers to a single packed [`CoreType::Flat`] leaf -- one
+/// ISA register. That single-leaf shape is what lets the compiler recognize
+/// register-native word operations (e.g. the `add_into` prim → one reversible
+/// `Add`). Capped at 8 bits: one register is byte-wide.
+fn lower_wn(name: &str) -> Option<CoreType> {
+    parse_wn_bits(name).map(CoreType::Flat)
 }
 
 /// Build the resolution environment for a program.
@@ -667,6 +699,31 @@ mod tests {
         assert!(parse_un_bits("U3").is_none());
         assert!(parse_un_bits("U0").is_none());
         assert!(parse_un_bits("U5").is_none());
+    }
+
+    #[test]
+    fn wn_word_type_parses_and_lowers_to_flat() {
+        // Valid W<n>: power of two in 1..=8, one Flat leaf.
+        for n in [1u8, 2, 4, 8] {
+            let name = format!("W{n}");
+            assert_eq!(parse_wn_bits(&name), Some(n), "parse {name}");
+            assert_eq!(lower_wn(&name), Some(CoreType::Flat(n)), "lower {name}");
+            assert!(is_builtin_type(&name), "{name} must be a builtin type");
+        }
+        // W8 has 256 inhabitants (one packed byte), unlike the U8 bit-tree.
+        assert_eq!(enumerate_values(&lower_wn("W8").unwrap()).len(), 256);
+    }
+
+    #[test]
+    fn wn_rejects_non_power_of_two_and_over_byte() {
+        assert!(parse_wn_bits("W3").is_none()); // not a power of two
+        assert!(parse_wn_bits("W0").is_none()); // zero width
+        assert!(parse_wn_bits("W16").is_none()); // exceeds the byte-wide register
+        assert!(parse_wn_bits("W").is_none()); // no digits
+        assert!(parse_wn_bits("W08").is_none()); // leading zero is not canonical
+        assert!(parse_wn_bits("W008").is_none());
+        assert!(!is_builtin_type("W16"));
+        assert!(!is_builtin_type("W08"));
     }
 
     #[test]
