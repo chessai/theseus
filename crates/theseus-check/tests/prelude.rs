@@ -59,8 +59,8 @@ iso asc : (Bit, (Bit, Bit)) <-> ((Bit, Bit), Bit)
 iso cnotMid : (Bit, (Bit, Bit)) <-> (Bit, (Bit, Bit))
 = asc ; (cnot * idb) ; ~asc
 
-iso tofMid : (Bit, (Bit, Bit)) <-> (Bit, (Bit, Bit))
-= asc ; (toffoli * idb) ; ~asc
+iso tofUse : (Bit, (Bit, Bit)) <-> (Bit, (Bit, Bit))
+= toffoli ; toffoli
 "#;
     let program = theseus_syntax::parse(src).unwrap();
     let merged = with_prelude(&program);
@@ -74,8 +74,8 @@ iso tofMid : (Bit, (Bit, Bit)) <-> (Bit, (Bit, Bit))
         "cnotMid (using prelude cnot) should elaborate"
     );
     assert!(
-        isos.get("tofMid").unwrap().is_ok(),
-        "tofMid (using prelude toffoli) should elaborate"
+        isos.get("tofUse").unwrap().is_ok(),
+        "tofUse (using prelude toffoli) should elaborate"
     );
 }
 

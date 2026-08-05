@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use theseus_syntax::ast::{Decl, IsoBody, IsoDecl, Pattern, Program, Type as SurfType};
 
 use crate::diagnostics::{Code, Diagnostic, Side};
+use crate::elaborate;
 use crate::env::Env;
 
 /// Run the typing check over a whole program.
@@ -27,7 +28,77 @@ pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
             check_iso(id, env, &mut diags);
         }
     }
+    // The clause-pattern checks above cover `| p <-> q` bodies; `= expr`
+    // (combinator / composition) bodies are typed here.
+    check_expr_bodies(program, env, &mut diags);
     diags
+}
+
+/// Type every `= expr` iso body against its declared signature.
+///
+/// The clause path is checked structurally by [`check_iso`] (patterns) plus
+/// Coverage; but a combinator/composition body (`= f ; g`, `= iter T h`,
+/// `= p`, `= ~q`) has no clause patterns, and elaboration alone never compares
+/// the body's type to the declared signature. Without this, `iso f : A <-> B =
+/// expr` is accepted even when `expr` is ill-typed (an incompatible `;`) or has
+/// a type other than `A <-> B` (a cardinality/domain-escape soundness hole:
+/// e.g. `f : Bit <-> Bit = swap2` where `swap2 : Bit*Bit <-> Bit*Bit`). Every
+/// well-typed iso must satisfy `type_of(body) = (A, B)` -- the Pi/Theseus rule
+/// that a combinator's synthesized type is exactly its declared boundary.
+///
+/// Reuses the elaborator + core `type_of` (so `id`, `iter`/`fold` counter and
+/// endo rules, etc. are handled once, authoritatively). An `= expr` body that
+/// the structural core cannot elaborate (`Err(vec![])`) is *not* a type error
+/// here -- it is reported (or skipped) by the pipeline's later, elaboration-time
+/// handling; a body that elaborates but is ill-typed, or whose type differs from
+/// the signature, is a `T0102`. Combinator type errors (`T06xx`) elaboration
+/// already localized are surfaced verbatim.
+fn check_expr_bodies(program: &Program, env: &Env, diags: &mut Vec<Diagnostic>) {
+    let elab = elaborate::elaborate_program(program, env);
+    for decl in &program.decls {
+        if let Decl::Iso(id) = decl {
+            check_iso_expr_body(id, env, &elab, diags);
+        }
+    }
+}
+
+fn check_iso_expr_body(
+    id: &IsoDecl,
+    env: &Env,
+    elab: &BTreeMap<String, crate::elaborate::ElabResult>,
+    diags: &mut Vec<Diagnostic>,
+) {
+    if let IsoBody::Expr(_) = &id.body {
+        match elab.get(&id.name.text) {
+            Some(Ok(core)) => match theseus_core::type_of(core) {
+                Ok((got_in, got_out)) => {
+                    let want_in = env.lower(&id.lhs);
+                    let want_out = env.lower(&id.rhs);
+                    if got_in != want_in || got_out != want_out {
+                        diags.push(
+                            Diagnostic::new(Code::T0102, id.name.span)
+                                .with_name(id.name.text.clone()),
+                        );
+                    }
+                }
+                // The body elaborates but is internally ill-typed -- e.g. an
+                // incompatible sequential composition `f ; g` (out(f) != in(g)).
+                Err(_) => {
+                    diags.push(
+                        Diagnostic::new(Code::T0102, id.name.span).with_name(id.name.text.clone()),
+                    );
+                }
+            },
+            // Combinator type errors (T06xx) already carry precise spans.
+            Some(Err(errs)) if !errs.is_empty() => diags.extend(errs.iter().cloned()),
+            // `Err(vec![])` = unsupported in the structural core (not a type
+            // error); `None` cannot happen for a declared iso. Leave to later.
+            _ => {}
+        }
+    }
+    for w in &id.wheres {
+        check_iso_expr_body(w, env, elab, diags);
+    }
 }
 
 fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
@@ -504,6 +575,75 @@ mod tests {
         assert!(
             reported.is_empty(),
             "unexpected T0102 in spin: {reported:?}"
+        );
+    }
+
+    // ── `= expr` body typing (soundness: body type must equal the signature) ──
+    // Before this, `check` never typed combinator/composition bodies, so an
+    // ill-typed or wrong-cardinality `= expr` iso was silently accepted -- the
+    // declared signature (used for marshaling and as the iso's type) was a lie.
+
+    fn check_src(src: &str) -> Vec<Diagnostic> {
+        let program = theseus_syntax::parse(src).unwrap();
+        let env = crate::env::resolve(&program);
+        check(&program, &env)
+    }
+
+    #[test]
+    fn expr_body_cardinality_mismatch_emits_t0102() {
+        // f claims Bit <-> Bit (|Bit| = 2) but its body is a pair swap
+        // (|Bit*Bit| = 4). A bijection cannot exist -- must be rejected.
+        let src = "type Bit = O | I\n\
+                    iso swap2 : Bit * Bit <-> Bit * Bit\n\
+                    | (a, b) <-> (b, a)\n\
+                    iso f : Bit <-> Bit = swap2\n";
+        let d = typing_only(check_src(src));
+        assert!(
+            d.iter().any(|x| x.name.as_deref() == Some("f")),
+            "expected T0102 naming f for cardinality/type mismatch, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn expr_body_ill_typed_composition_emits_t0102() {
+        // notb : Bit<->Bit ; swap2 : Bit*Bit<->Bit*Bit -- the composition is
+        // ill-typed (out(notb)=Bit != in(swap2)=Bit*Bit).
+        let src = "type Bit = O | I\n\
+                    iso notb : Bit <-> Bit | O <-> I | I <-> O\n\
+                    iso swap2 : Bit * Bit <-> Bit * Bit | (a, b) <-> (b, a)\n\
+                    iso f : Bit <-> Bit = notb ; swap2\n";
+        let d = typing_only(check_src(src));
+        assert!(
+            d.iter().any(|x| x.name.as_deref() == Some("f")),
+            "expected T0102 naming f for ill-typed composition, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn expr_body_bad_combinator_surfaces_t0601() {
+        // `iter Bit notb` -- the counter Bit is not a numeral type. This T0601
+        // was produced by the elaborator but never surfaced by `check` before.
+        let src = "type Bit = O | I\n\
+                    iso notb : Bit <-> Bit | O <-> I | I <-> O\n\
+                    iso f : Bit <-> Bit = iter Bit notb\n";
+        let d = check_src(src);
+        assert!(
+            d.iter().any(|x| x.code == Code::T0601),
+            "expected T0601 for non-numeral iter counter, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn well_typed_expr_bodies_no_diag() {
+        // A correct composition and a correct adjoint must stay clean.
+        let src = "type Bit = O | I\n\
+                    iso notb : Bit <-> Bit | O <-> I | I <-> O\n\
+                    iso twice : Bit <-> Bit = notb ; notb\n\
+                    iso inv : Bit <-> Bit = ~ notb\n";
+        let d = check_src(src);
+        assert!(
+            d.is_empty(),
+            "unexpected diagnostics on valid bodies: {d:?}"
         );
     }
 }

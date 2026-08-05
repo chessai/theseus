@@ -30,7 +30,11 @@ use theseus_syntax::ast::{
 use crate::diagnostics::{Code, Diagnostic};
 use crate::env::{self, Env, Inj};
 
-type ElabResult = Result<Iso, Vec<Diagnostic>>;
+/// Result of elaborating one iso: the core [`Iso`] on success, a list of
+/// diagnostics on a typed failure, or `Err(vec![])` when the body is not in the
+/// structural core (unsupported). This is the value type of
+/// [`elaborate_program`]'s map.
+pub type ElabResult = Result<Iso, Vec<Diagnostic>>;
 
 /// The "not elaborated (unsupported in the structural core)" sentinel -- an empty
 /// error vector, matching the crate convention (no `T0xxx` diagnostic applies).
