@@ -646,4 +646,31 @@ mod tests {
             "unexpected diagnostics on valid bodies: {d:?}"
         );
     }
+
+    #[test]
+    fn self_recursive_expr_body_rejected_without_crash() {
+        // `iso f = f` is ill-founded (a reversible iso recurses only through a
+        // structural combinator, never by naming itself). Before the cycle
+        // guard, elaborating this stack-overflowed and aborted the checker; now
+        // it is a clean T0102.
+        let src = "type Bit = O | I\niso f : Bit <-> Bit = f\n";
+        let d = check_src(src);
+        assert!(
+            d.iter().any(|x| x.name.as_deref() == Some("f")),
+            "expected T0102 naming f for self-recursive body, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn mutually_recursive_expr_bodies_rejected() {
+        // `f = g ; g = f` -- a mutual `= expr` cycle, equally ill-founded.
+        let src = "type Bit = O | I\n\
+                    iso f : Bit <-> Bit = g\n\
+                    iso g : Bit <-> Bit = f\n";
+        let d = check_src(src);
+        assert!(
+            d.iter().any(|x| x.code == Code::T0102),
+            "expected T0102 for mutual recursion, got: {d:?}"
+        );
+    }
 }
