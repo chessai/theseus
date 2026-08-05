@@ -16,11 +16,12 @@
 //! Figure 1 lowering takes a couple of minutes and some GB; figure 3 lowers
 //! one step-net per benchmark. The output is deterministic (no clock/random).
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
 
-use theseus_core::Value;
+use theseus_core::{Iso, PrimDef, Type, Value};
 use theseus_netlist::lower_iso;
 use theseus_spice::chardb::rung0_measured;
 use theseus_tisc::money_plot::{cmos_crossing_t_ramp, cpu_money_plot, CMOS_STATIC_E_PER_GATE_J};
@@ -43,8 +44,10 @@ const C_PRODUCTIVE: &str = "#7570b3"; // muted violet -- productive share
 
 const OUT_DIR: &str = "docs/img";
 
-const FIB_SRC: &str = include_str!("../../../conformance/programs/0022-fib.thse");
 const ADDER_SRC: &str = include_str!("../../../conformance/programs/0024-adder.thse");
+
+/// Number of reversible byte-wide Fibonacci steps in the `fib (u8)` benchmark.
+const FIB8_STEPS: usize = 10;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let out = Path::new(OUT_DIR);
@@ -214,15 +217,17 @@ fn figure3_benchmarks(
 ) -> Result<(), Box<dyn Error>> {
     let mut results = Vec::new();
 
-    // fib(1): the canonical loop program, marshalled exactly as in rom_energy.rs.
-    let fib_input = {
-        let nat1 = Value::right(Value::left(Value::Unit));
-        let pair = Value::pair(Value::right(Value::Unit), Value::left(Value::Unit));
-        Value::pair(nat1, pair)
-    };
-    match price_benchmark("fib", FIB_SRC, "fib", &fib_input, db) {
+    // fib (u8): a real byte-wide Fibonacci -- FIB8_STEPS reversible steps of
+    // `(a, b) |-> (b, a + b mod 256)`, each step compiling to the two-word
+    // reversible datapath `EXCH ; ADD` (a Flat(8) `addInto` prim recognized as
+    // a single TISC `Add`). Seeded (0, 1); after 10 steps the registers hold
+    // (fib_10, fib_11) = (55, 89). This is the same fib the CPU runs in
+    // tests/fib_cpu.rs, priced end to end.
+    let fib8 = fib8_iso(FIB8_STEPS);
+    let fib8_input = Value::pair(therm(0), therm(1)); // (a, b) = (0, 1) as Flat(8)
+    match price_iso("fib (u8)", &fib8, &fib8_input, db) {
         Ok(r) => results.push(r),
-        Err(e) => eprintln!("[fig3] SKIP fib: {e}"),
+        Err(e) => eprintln!("[fig3] SKIP fib (u8): {e}"),
     }
 
     // adder (ha4): compositional half-adder, input (a,b,s,c) = (I,I,O,O).
@@ -268,6 +273,64 @@ fn figure3_benchmarks(
     write_svg(out, "benchmark-energy.svg", &svg)
 }
 
+/// Thermometer encoding `k |-> Right^k(Left(Unit))` -- the value shape of both a
+/// `Flat(w)` leaf (byte `k`) and a unary numeral count. Used to marshal the
+/// `fib (u8)` seed.
+fn therm(k: u32) -> Value {
+    let mut v = Value::left(Value::Unit);
+    for _ in 0..k {
+        v = Value::right(v);
+    }
+    v
+}
+
+/// `addInto8 : (Flat8, Flat8) <-> (Flat8, Flat8)`, `(a, b) |-> (a, a + b mod
+/// 256)`. A word-wide reversible add: the addend `a` is preserved and `b` takes
+/// the sum. The TISC compiler recognizes this prim's forward table as a single
+/// reversible `Add` instruction (`recognize_prim`), so it costs one machine
+/// datapath op -- not a bit-blasted gate tree.
+fn add_into8() -> Iso {
+    let f = Type::flat(8);
+    let ty = Type::prod(f.clone(), f);
+    let mut fwd = BTreeMap::new();
+    for a in 0u16..256 {
+        for b in 0u16..256 {
+            let inp = Value::pair(therm(a as u32), therm(b as u32));
+            let out = Value::pair(
+                therm(a as u32),
+                therm((a as u8).wrapping_add(b as u8) as u32),
+            );
+            fwd.insert(inp, out);
+        }
+    }
+    let bwd: BTreeMap<Value, Value> = fwd.iter().map(|(x, y)| (y.clone(), x.clone())).collect();
+    Iso::Prim(Box::new(PrimDef {
+        forward_name: "addInto8".into(),
+        backward_name: "subInto8".into(),
+        input_ty: ty.clone(),
+        output_ty: ty,
+        forward: fwd,
+        backward: bwd,
+        symbolic: None,
+    }))
+}
+
+/// A constant-count byte-wide Fibonacci: `n_steps` repetitions of
+/// `fibStep = swap ; addInto`, i.e. `(a, b) |-> (b, a + b mod 256)`, over a pair
+/// of `Flat(8)` word registers. Unrolled (no data-carried counter), it compiles
+/// to `2 * n_steps` instructions (`EXCH ; ADD` per step) -- the exact ROM shape
+/// tests/fib_cpu.rs runs on the simulated CPU.
+fn fib8_iso(n_steps: usize) -> Iso {
+    assert!(n_steps >= 1, "fib8 needs >= 1 step");
+    let f = Type::flat(8);
+    let step = || Iso::seq(Iso::SwapProd(f.clone(), f.clone()), add_into8());
+    let mut iso = step();
+    for _ in 1..n_steps {
+        iso = Iso::seq(iso, step());
+    }
+    iso
+}
+
 /// Compile, lower, and price one program to `(reversible_j, cmos_equiv_j)` at
 /// [`T_RAMP_REF`]. The CMOS-equivalent baseline charges every productively
 /// executed step for `active_cells` static-CMOS gate switchings.
@@ -278,8 +341,6 @@ fn price_benchmark(
     input: &Value,
     db: &theseus_spice::chardb::CharDb,
 ) -> Result<BenchResult, Box<dyn Error>> {
-    eprintln!("[fig3] pricing '{name}' ({iso_name})...");
-
     let program = theseus_syntax::parse(src).map_err(|e| format!("parse: {e:?}"))?;
     let env = theseus_check::env::resolve(&program);
     let isos = theseus_check::elaborate::elaborate_program(&program, &env);
@@ -288,14 +349,26 @@ fn price_benchmark(
         .ok_or_else(|| format!("iso {iso_name:?} not found"))?
         .clone()
         .map_err(|e| format!("elaborate {iso_name:?}: {e:?}"))?;
+    price_iso(name, &iso, input, db)
+}
 
-    let lowered = theseus_tisc::compile::compile_with_metadata(&iso)
-        .map_err(|e| format!("compile: {e:?}"))?;
+/// Price an already-built core `Iso` (the source-independent core of
+/// [`price_benchmark`], also used for the Rust-constructed `fib (u8)`).
+fn price_iso(
+    name: &str,
+    iso: &Iso,
+    input: &Value,
+    db: &theseus_spice::chardb::CharDb,
+) -> Result<BenchResult, Box<dyn Error>> {
+    eprintln!("[fig3] pricing '{name}'...");
+
+    let lowered =
+        theseus_tisc::compile::compile_with_metadata(iso).map_err(|e| format!("compile: {e:?}"))?;
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).map_err(|e| format!("assemble: {e}"))?;
 
     let step_net = lower_iso(&step(&rom)).map_err(|e| format!("lower step: {e:?}"))?;
 
-    let pe = theseus_tisc::energy::rom_program_energy(&iso, input, db, T_RAMP_REF, &step_net)
+    let pe = theseus_tisc::energy::rom_program_energy(iso, input, db, T_RAMP_REF, &step_net)
         .map_err(|e| format!("rom_program_energy: {e:?}"))?;
 
     // Derive the per-step CMOS-equivalent from THIS program's step-net, so the
