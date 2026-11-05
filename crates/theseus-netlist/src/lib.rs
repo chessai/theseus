@@ -38,6 +38,7 @@ pub mod lower;
 pub mod lower_iter;
 pub mod ring;
 pub mod sim;
+pub mod sim_lanes;
 
 pub mod sim_typed {
     //! Typed-token simulation: the tick-level phased-sim ([`crate::sim`])
@@ -57,4 +58,8 @@ pub use lower::{
     bits_of, lower, lower_iso, prim_from_bits, rail_width, value_from_bits, LowerError,
 };
 pub use ring::{pad_ring, RingError, RingNetlist};
-pub use sim::{simulate, SimError, SimResult};
+pub use sim::{simulate, simulate_rails, SimError, SimResult};
+pub use sim_lanes::{
+    pack_lanes, simulate_lanes, simulate_rails_lanes, unpack_lane, unpack_lanes, Lane, LaneScratch,
+    LaneSimError, Lanes, SimResultLanes,
+};

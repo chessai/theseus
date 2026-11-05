@@ -440,14 +440,40 @@ fn chi_system_ring_authority() {
     let ring = chi_ring();
     let t = chi_instrs().len() as u32; // 17 revolutions = full χ
 
+    // Every start below runs in ONE lane-parallel pass (ADR-0048):
+    // [0, 32) the per-row domain, 32 discriminating, 33 golden, 34 the
+    // sample, then random full-byte rows.
+    let mut lanes: Vec<[u8; 5]> = (0u8..32)
+        .map(|row| std::array::from_fn(|i| if (row >> i) & 1 == 1 { 0xFF } else { 0x00 }))
+        .collect();
+    let disc_rows: [u8; 8] = [
+        0b00000, 0b11111, 0b10110, 0b01001, 0b10101, 0b01010, 0b00011, 0b11000,
+    ];
+    let mut a_disc = [0u8; 5];
+    for i in 0..5 {
+        for b in 0..8 {
+            if (disc_rows[b] >> i) & 1 == 1 {
+                a_disc[i] |= 1 << b;
+            }
+        }
+    }
+    let golden_in: [u8; 5] = [1, 0, 1, 1, 0];
+    let sample_a: [u8; 5] = [0xAB, 0xCD, 0x5E, 0x0F, 0xF0];
+    lanes.extend([a_disc, golden_in, sample_a]);
+    let mut x = 0x9E37_79B9_7F4A_7C15u64;
+    while lanes.len() < 256 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        lanes.push(std::array::from_fn(|i| (x >> (8 * i)) as u8));
+    }
+    let starts: Vec<StateVals> = lanes.iter().map(|&a| state_with_lanes(a)).collect();
+    let outs = ring.run_many(&starts, t);
+
     // ── 1. Whole per-row 32-state domain (packed ×8) ─────────────────
     for row in 0u8..32 {
-        let mut a = [0u8; 5];
-        for i in 0..5 {
-            a[i] = if (row >> i) & 1 == 1 { 0xFF } else { 0x00 };
-        }
-        let state = state_with_lanes(a);
-        let out = ring.run(&state, t);
+        let a = lanes[row as usize];
+        let out = &outs[row as usize];
 
         let expect = chi_ref_bytes(a);
         for i in 0..5 {
@@ -470,18 +496,7 @@ fn chi_system_ring_authority() {
     }
 
     // ── 2. Discriminating packing (8 distinct rows one-per-bit) ──────
-    let disc_rows: [u8; 8] = [
-        0b00000, 0b11111, 0b10110, 0b01001, 0b10101, 0b01010, 0b00011, 0b11000,
-    ];
-    let mut a_disc = [0u8; 5];
-    for i in 0..5 {
-        for b in 0..8 {
-            if (disc_rows[b] >> i) & 1 == 1 {
-                a_disc[i] |= 1 << b;
-            }
-        }
-    }
-    let disc_out = ring.run(&state_with_lanes(a_disc), t);
+    let disc_out = &outs[32];
     let disc_expect = chi_ref_bytes(a_disc);
     for i in 0..5 {
         assert_eq!(
@@ -491,15 +506,22 @@ fn chi_system_ring_authority() {
     }
 
     // ── 3. Keccak golden vector ──────────────────────────────────────
-    let golden_in: [u8; 5] = [1, 0, 1, 1, 0];
     let golden_expect: [u8; 5] = [0, 0, 1, 0, 0];
-    let golden_out = ring.run(&state_with_lanes(golden_in), t);
+    let golden_out = &outs[33];
     for i in 0..5 {
         assert_eq!(
             golden_out.regs[i] & 1,
             golden_expect[i],
             "ring golden χ lane {i}"
         );
+    }
+
+    // ── 3b. Random full-byte rows: every bit position an independent row
+    for (k, (a, out)) in lanes.iter().zip(&outs).enumerate().skip(35) {
+        let expect = chi_ref_bytes(*a);
+        for i in 0..5 {
+            assert_eq!(out.regs[i], expect[i], "ring random rows #{k} lane {i}");
+        }
     }
 
     // ── 4. Forward + adjoint restores input, ancillas → 0 ───────────
@@ -510,9 +532,8 @@ fn chi_system_ring_authority() {
     // revolutions on the forward ring does NOT restore the input (χ is
     // not an involution), then verify ancilla restoration and bus
     // quiescence per-revolution (structural property of the lowering).
-    let sample_a: [u8; 5] = [0xAB, 0xCD, 0x5E, 0x0F, 0xF0];
     let sample_state = state_with_lanes(sample_a);
-    let fwd = ring.run(&sample_state, t);
+    let fwd = &outs[34];
     let fwd_expect = chi_ref_bytes(sample_a);
     for i in 0..5 {
         assert_eq!(fwd.regs[i], fwd_expect[i], "ring sample fwd lane {i}");
@@ -553,7 +574,8 @@ fn chi_system_ring_authority() {
 
     eprintln!(
         "χ system-ring authority (L19): all 32 per-row states + discriminating + golden \
-         match independent ref on the real system_ring. Ancilla restoration + bus \
+         + random full-byte rows match independent ref on the real system_ring, in one \
+         256-lane pass. Ancilla restoration + bus \
          quiescence confirmed."
     );
 }

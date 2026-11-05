@@ -89,6 +89,83 @@ pub enum SimError {
     },
 }
 
+/// When each rail pair is checked and each cell fires. Shared by
+/// [`simulate_rails`] and the lane simulator ([`crate::sim_lanes`]) so
+/// both assert INV-TOKEN in the same order -- hence both report the same
+/// first violation.
+pub(crate) struct TickSchedule {
+    /// Every rail pair in the netlist, keyed by its valid tick, in check
+    /// order.
+    pub(crate) pairs_at: BTreeMap<u32, Vec<RailPair>>,
+    /// Cell indices keyed by firing tick (= depth), in firing order.
+    pub(crate) cells_at: BTreeMap<u32, Vec<usize>>,
+}
+
+impl TickSchedule {
+    /// The timed sim's preflight, in its refusal order: invalid netlist,
+    /// wrong input width (`n_inputs` vs the input ports), tick imbalance.
+    pub(crate) fn new(net: &PhasedCellNetlist, n_inputs: usize) -> Result<Self, SimError> {
+        net.validate().map_err(SimError::Net)?;
+        if n_inputs != net.inputs.len() {
+            return Err(SimError::InputWidth {
+                want: net.inputs.len(),
+                got: n_inputs,
+            });
+        }
+        if let Some(imb) = net
+            .tick_imbalances()
+            .map_err(SimError::Net)?
+            .into_iter()
+            .next()
+        {
+            return Err(SimError::Unbalanced {
+                cell: imb.cell,
+                arrivals: imb.arrivals,
+            });
+        }
+        let arrival = net.line_arrivals().map_err(SimError::Net)?;
+
+        // Every rail pair in the netlist, indexed by its valid tick.
+        // validate() already rejected pair skew, so a pair's valid tick is
+        // its lines' (equal) arrival tick. The same two lines may be named
+        // by both their driver and their consumer (possibly role-swapped --
+        // NOT-in-Permute); the 1-of-2 predicate is role-symmetric, so one
+        // check per unordered line pair suffices.
+        let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
+        let mut pairs_at: BTreeMap<u32, Vec<RailPair>> = BTreeMap::new();
+        {
+            let mut note = |p: &RailPair| {
+                let key = (p.line0.0.min(p.line1.0), p.line0.0.max(p.line1.0));
+                if seen.insert(key) {
+                    pairs_at
+                        .entry(arrival[p.line1.0 as usize])
+                        .or_default()
+                        .push(*p);
+                }
+            };
+            for p in &net.inputs {
+                note(p);
+            }
+            for cell in &net.cells {
+                for p in cell.inputs.iter().chain(&cell.outputs) {
+                    note(p);
+                }
+            }
+            for p in &net.outputs {
+                note(p);
+            }
+        }
+
+        // Cells grouped by firing tick (= depth).
+        let mut cells_at: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        for (i, cell) in net.cells.iter().enumerate() {
+            cells_at.entry(cell.depth).or_default().push(i);
+        }
+
+        Ok(TickSchedule { pairs_at, cells_at })
+    }
+}
+
 /// The per-tick INV-TOKEN assertion for one rail pair: both lines driven
 /// and exactly one high.
 fn check_pair_at(high: &[Option<bool>], pair: RailPair, tick: u32) -> Result<(), SimError> {
@@ -115,68 +192,28 @@ fn check_pair_at(high: &[Option<bool>], pair: RailPair, tick: u32) -> Result<(),
 /// Refuses invalid ([`SimError::Net`]) and tick-imbalanced
 /// ([`SimError::Unbalanced`]) netlists up front.
 pub fn simulate(net: &PhasedCellNetlist, input_tokens: &[bool]) -> Result<SimResult, SimError> {
-    net.validate().map_err(SimError::Net)?;
-    if input_tokens.len() != net.inputs.len() {
-        return Err(SimError::InputWidth {
-            want: net.inputs.len(),
-            got: input_tokens.len(),
-        });
-    }
-    if let Some(imb) = net
-        .tick_imbalances()
-        .map_err(SimError::Net)?
-        .into_iter()
-        .next()
-    {
-        return Err(SimError::Unbalanced {
-            cell: imb.cell,
-            arrivals: imb.arrivals,
-        });
-    }
-    let arrival = net.line_arrivals().map_err(SimError::Net)?;
+    let rails: Vec<(bool, bool)> = input_tokens.iter().map(|&tok| (!tok, tok)).collect();
+    simulate_rails(net, &rails)
+}
 
-    // Every rail pair in the netlist, indexed by its valid tick.
-    // validate() already rejected pair skew, so a pair's valid tick is
-    // its lines' (equal) arrival tick. The same two lines may be named
-    // by both their driver and their consumer (possibly role-swapped --
-    // NOT-in-Permute); the 1-of-2 predicate is role-symmetric, so one
-    // check per unordered line pair suffices.
-    let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
-    let mut pairs_at: BTreeMap<u32, Vec<RailPair>> = BTreeMap::new();
-    {
-        let mut note = |p: &RailPair| {
-            let key = (p.line0.0.min(p.line1.0), p.line0.0.max(p.line1.0));
-            if seen.insert(key) {
-                pairs_at
-                    .entry(arrival[p.line1.0 as usize])
-                    .or_default()
-                    .push(*p);
-            }
-        };
-        for p in &net.inputs {
-            note(p);
-        }
-        for cell in &net.cells {
-            for p in cell.inputs.iter().chain(&cell.outputs) {
-                note(p);
-            }
-        }
-        for p in &net.outputs {
-            note(p);
-        }
-    }
-
-    // Cells grouped by firing tick (= depth).
-    let mut cells_at: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-    for (i, cell) in net.cells.iter().enumerate() {
-        cells_at.entry(cell.depth).or_default().push(i);
-    }
+/// [`simulate`] with each input pair's two token lines driven raw, as
+/// `(line0, line1)` -- the fault-injection entry point. A non-1-of-2
+/// input pair is the one way to reach [`SimError::InvToken`] on a valid,
+/// balanced netlist (every cell write is dual-rail), so this is how the
+/// dynamic check, and the lane simulator's per-lane reporting of it
+/// ([`crate::sim_lanes`]), are exercised end to end.
+pub fn simulate_rails(
+    net: &PhasedCellNetlist,
+    input_rails: &[(bool, bool)],
+) -> Result<SimResult, SimError> {
+    let TickSchedule { pairs_at, cells_at } = TickSchedule::new(net, input_rails.len())?;
 
     // high[line] = the line's pulse at its (single) valid tick; None
-    // until driven. Dual-rail encode the inputs at tick 0.
+    // until driven. Drive the input pairs at tick 0.
     let mut high: Vec<Option<bool>> = vec![None; net.num_lines as usize];
-    for (p, &tok) in net.inputs.iter().zip(input_tokens) {
-        p.set(&mut high, tok);
+    for (p, &(line0, line1)) in net.inputs.iter().zip(input_rails) {
+        high[p.line0.0 as usize] = Some(line0);
+        high[p.line1.0 as usize] = Some(line1);
     }
 
     let ticks = net.depth();
@@ -231,6 +268,7 @@ mod tests {
     use crate::ir::cell::{Cell, LineId};
     use crate::ir::typed::{NodeKind, TypedNode};
     use crate::lower::{bits_of, lower, lower_iso, prim_from_bits};
+    use crate::sim_lanes::{pack_lanes, simulate_lanes, unpack_lane, Lane};
 
     fn bit() -> Type {
         Type::sum(Type::One, Type::One)
@@ -262,22 +300,32 @@ mod tests {
     /// tick-level sim of the lowered netlist must agree with the core
     /// interpreter (the semantic root, ADR-0008/0018) -- extending the
     /// untimed lowering oracle in `lower::tests` to the timed executor.
+    /// The domain is swept lane-parallel ([`crate::sim_lanes`], ADR-0048),
+    /// each lane also checked against the scalar sim, the reference.
     fn assert_timed_sim_agrees(iso: &Iso) -> PhasedCellNetlist {
         let (in_ty, out_ty) = type_of(iso).expect("iso types");
         let net = lower_iso(iso).expect("lowering succeeds");
-        for v in enumerate_values(&in_ty) {
-            let bits = bits_of(&v, &in_ty).unwrap();
-            let res = simulate(&net, &bits).expect("timed sim runs");
-            let mut fuel = 10_000u64;
-            let expected = theseus_eval::eval(iso, v.clone(), &mut fuel)
-                .unwrap_or_else(|e| panic!("core eval failed on {v:?}: {e:?}"));
-            assert_eq!(
-                res.outputs,
-                bits_of(&expected, &out_ty).unwrap(),
-                "timed sim disagrees with core eval on {v:?}"
-            );
+        let values = enumerate_values(&in_ty);
+        for chunk in values.chunks(Lane::WIDTH) {
+            let bits: Vec<Vec<bool>> = chunk.iter().map(|v| bits_of(v, &in_ty).unwrap()).collect();
+            let res = simulate_lanes::<4>(&net, &pack_lanes(&bits)).expect("timed lane sim runs");
             assert_eq!(res.ticks, net.depth());
             assert_eq!(res.occupancy, net.occupancy());
+            for (lane, (v, bits)) in chunk.iter().zip(&bits).enumerate() {
+                let mut fuel = 10_000u64;
+                let expected = theseus_eval::eval(iso, v.clone(), &mut fuel)
+                    .unwrap_or_else(|e| panic!("core eval failed on {v:?}: {e:?}"));
+                assert_eq!(
+                    unpack_lane(&res.outputs, lane),
+                    bits_of(&expected, &out_ty).unwrap(),
+                    "timed sim disagrees with core eval on {v:?}"
+                );
+                assert_eq!(
+                    res.lane(lane),
+                    simulate(&net, bits).expect("timed sim runs"),
+                    "lane sim disagrees with the scalar sim on {v:?}"
+                );
+            }
         }
         net
     }
