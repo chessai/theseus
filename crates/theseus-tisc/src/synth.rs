@@ -1440,23 +1440,39 @@ pub fn table_to_regtransfer(
     let n_rows = 1usize << n_in;
 
     // ── Build the truth table for every output (leaf, bit) in one sweep. ──
-    // truth[leaf][bit][x] = bit `bit` of output leaf `leaf` for input row `x`,
-    // where `x` is the packed assignment of the `n_in` input bits (bit k of `x`
-    // = input_vars[k]).
-    let mut truth: Vec<Vec<Vec<bool>>> = (0..n_leaves)
+    // truth[leaf][bit] = packed truth table of bit `bit` of output leaf `leaf`:
+    // row `x` (the packed assignment of the `n_in` input bits, bit k of `x` =
+    // input_vars[k]) is bit `x & 63` of word `x >> 6`.
+    let n_words = n_rows.div_ceil(64);
+    let mut truth: Vec<Vec<Vec<u64>>> = (0..n_leaves)
         .map(|leaf| {
             let w = in_bit_widths[leaf] as usize;
-            vec![vec![false; n_rows]; w]
+            vec![vec![0u64; n_words]; w]
         })
         .collect();
+    // Leaf `i`'s input bits are the contiguous run of `x` starting at
+    // `leaf_shift[i]` (input_vars is built leaf by leaf, bits ascending).
+    let leaf_shift: Vec<usize> = in_bit_widths
+        .iter()
+        .scan(0usize, |at, &w| {
+            let shift = *at;
+            *at += w as usize;
+            Some(shift)
+        })
+        .collect();
+    // Per leaf, 8 rows of output bytes bit-transposed: bit `b` of row `r`
+    // (r = x & 7) sits at bit `8b + r` (one byte lane per output bit) ...
+    let mut lanes = vec![0u64; n_leaves];
+    // ... drained every 8 rows into the current 64-row word of every output
+    // table, which is flushed when full.
+    let mut words: Vec<Vec<u64>> = truth.iter().map(|bits| vec![0; bits.len()]).collect();
 
+    let mut in_bytes = vec![0u8; n_leaves];
     for x in 0..n_rows {
         // Materialise the carrier bytes for assignment `x`.
-        let mut in_bytes = vec![0u8; n_leaves];
-        for (k, &(leaf, _reg, bit)) in input_vars.iter().enumerate() {
-            if (x >> k) & 1 == 1 {
-                in_bytes[leaf] |= 1 << bit;
-            }
+        for leaf in 0..n_leaves {
+            let mask = (1usize << in_bit_widths[leaf]) - 1;
+            in_bytes[leaf] = ((x >> leaf_shift[leaf]) & mask) as u8;
         }
         let out_bytes = map(&in_bytes);
         assert_eq!(
@@ -1465,10 +1481,23 @@ pub fn table_to_regtransfer(
             "table_to_regtransfer: map returned {} bytes, expected {n_leaves}",
             out_bytes.len()
         );
+        let last = x + 1 == n_rows;
         for leaf in 0..n_leaves {
-            let w = in_bit_widths[leaf] as usize;
-            for bit in 0..w {
-                truth[leaf][bit][x] = (out_bytes[leaf] >> bit) & 1 == 1;
+            lanes[leaf] |= SPREAD_BITS[usize::from(out_bytes[leaf])] << (x & 7);
+        }
+        if x & 7 == 7 || last {
+            for (lane, current) in lanes.iter_mut().zip(words.iter_mut()) {
+                for (bit, word) in current.iter_mut().enumerate() {
+                    *word |= ((*lane >> (8 * bit)) & 0xFF) << (x & 56);
+                }
+                *lane = 0;
+            }
+        }
+        if x & 63 == 63 || last {
+            for (tables, current) in truth.iter_mut().zip(words.iter_mut()) {
+                for (table, word) in tables.iter_mut().zip(current.iter_mut()) {
+                    table[x >> 6] = std::mem::take(word);
+                }
             }
         }
     }
@@ -1479,8 +1508,9 @@ pub fn table_to_regtransfer(
         let reg = reg as usize;
         let w = in_bit_widths[leaf] as usize;
         for bit in 0..w {
-            let coeffs = mobius_transform(&truth[leaf][bit]);
-            transfer.regs[reg][bit] = anf_to_bvexpr(&coeffs, &var_pairs, n_in);
+            let coeffs = &mut truth[leaf][bit];
+            mobius_transform(coeffs, n_in);
+            transfer.regs[reg][bit] = anf_to_bvexpr(coeffs, &var_pairs);
         }
         // Above-width bits of a carrier leaf are Flat(w) zero-extended.
         for bit in w..BITS {
@@ -1490,66 +1520,97 @@ pub fn table_to_regtransfer(
     transfer
 }
 
-/// In-place Möbius (Reed-Muller) transform of a truth table over `n` bits.
-///
-/// Input `f[x]` is the truth table (`x` packs the `n` input bits). Output is the
-/// ANF coefficient vector `c[S]`, where `c[S] = XOR_{T ⊆ S} f[T]`. Classic
-/// butterfly: for each bit `k`, XOR the low half into the high half. O(n·2^n).
-fn mobius_transform(f: &[bool]) -> Vec<bool> {
-    let len = f.len();
-    debug_assert!(len.is_power_of_two());
-    let mut c = f.to_vec();
-    let mut step = 1usize;
-    while step < len {
-        let mut i = 0usize;
-        while i < len {
-            for j in i..i + step {
-                // The "high" half (index with this bit set) XORs in the "low".
-                let hi = j + step;
-                c[hi] ^= c[j];
-            }
-            i += step << 1;
+/// `SPREAD_BITS[v]` has bit `8b` set iff bit `b` of `v` is: a byte's bits spread
+/// one per byte lane, for the bit transpose in [`table_to_regtransfer`].
+const SPREAD_BITS: [u64; 256] = {
+    let mut t = [0u64; 256];
+    let mut v = 0;
+    while v < 256 {
+        let mut b = 0;
+        while b < 8 {
+            t[v] |= (((v >> b) & 1) as u64) << (8 * b);
+            b += 1;
         }
-        step <<= 1;
+        v += 1;
     }
-    c
+    t
+};
+
+/// `MOBIUS_MASKS[k]` selects the positions of a 64-row word whose index has
+/// bit `k` clear -- the "low" halves of the stride-`2^k` butterfly.
+const MOBIUS_MASKS: [u64; 6] = [
+    0x5555_5555_5555_5555,
+    0x3333_3333_3333_3333,
+    0x0F0F_0F0F_0F0F_0F0F,
+    0x00FF_00FF_00FF_00FF,
+    0x0000_FFFF_0000_FFFF,
+    0x0000_0000_FFFF_FFFF,
+];
+
+/// In-place Möbius (Reed-Muller) transform of a packed truth table over `n`
+/// variables.
+///
+/// `c` holds `2^n` rows packed 64 per word (row `x` is bit `x & 63` of word
+/// `x >> 6`; for `n < 6` one word whose rows `2^n..` are zero). On return row
+/// `S` is the ANF coefficient `c[S] = XOR_{T ⊆ S} f[T]`. Butterfly: for each
+/// variable `k`, XOR the low half into the high half -- inside each word for
+/// `k < 6` (shift by `2^k` under a mask), across words for `k ≥ 6` (whole
+/// word slices). O(n·2^n / 64) word ops.
+fn mobius_transform(c: &mut [u64], n: usize) {
+    debug_assert_eq!(c.len(), (1usize << n).div_ceil(64));
+    for (k, &mask) in MOBIUS_MASKS.iter().enumerate().take(n) {
+        for w in c.iter_mut() {
+            *w ^= (*w & mask) << (1u32 << k);
+        }
+    }
+    let mut half = 1;
+    while half < c.len() {
+        for block in c.chunks_exact_mut(2 * half) {
+            let (lo, hi) = block.split_at_mut(half);
+            for (h, &l) in hi.iter_mut().zip(lo.iter()) {
+                *h ^= l;
+            }
+        }
+        half *= 2;
+    }
 }
 
-/// Build the `BvExpr` for one output bit from its ANF coefficients.
+/// Build the `BvExpr` for one output bit from its packed ANF coefficients.
 ///
-/// `coeffs[S]` (indexed by the subset bitmask `S` over the `n_in` input bits) is
-/// 1 iff monomial `∧_{k ∈ S} var_pairs[k]` is present. The result is the XOR of
-/// all present monomials; the empty monomial (`S = 0`) is `Const(true)`. If no
-/// coefficient is set the function is the constant `Const(false)`.
-// Index k is the subset-mask bit position: it is both the shift `s >> k` and the
-// var_pairs index, so the range loop mirrors the ANF monomial construction.
-#[allow(clippy::needless_range_loop)]
-fn anf_to_bvexpr(coeffs: &[bool], var_pairs: &[(usize, usize)], n_in: usize) -> BvExpr {
-    let mut terms: Vec<BvExpr> = Vec::new();
-    for (s, &present) in coeffs.iter().enumerate() {
-        if !present {
-            continue;
-        }
-        // Build the AND-monomial for subset `s`.
-        let mut monomial: Option<BvExpr> = None;
-        for k in 0..n_in {
-            if (s >> k) & 1 == 1 {
-                let (reg, bit) = var_pairs[k];
+/// Row `S` of `coeffs` (the subset bitmask over the input bits, packed as in
+/// [`mobius_transform`]) is 1 iff monomial `∧_{k ∈ S} var_pairs[k]` is
+/// present. The result is the XOR of all present monomials in ascending `S`;
+/// the empty monomial (`S = 0`) is `Const(true)`. If no coefficient is set the
+/// function is the constant `Const(false)`. Only set bits are visited: zero
+/// words are skipped, set bits found with `trailing_zeros`.
+fn anf_to_bvexpr(coeffs: &[u64], var_pairs: &[(usize, usize)]) -> BvExpr {
+    let mut acc: Option<BvExpr> = None;
+    for (wi, &word) in coeffs.iter().enumerate() {
+        let mut rest = word;
+        while rest != 0 {
+            let s = (wi << 6) | rest.trailing_zeros() as usize;
+            rest &= rest - 1;
+            // The AND-monomial for subset `s`, variables in ascending order.
+            let mut monomial: Option<BvExpr> = None;
+            let mut vars = s;
+            while vars != 0 {
+                let (reg, bit) = var_pairs[vars.trailing_zeros() as usize];
+                vars &= vars - 1;
                 let v = BvExpr::var(reg, bit);
                 monomial = Some(match monomial {
                     None => v,
                     Some(m) => m.and(v),
                 });
             }
+            let term = monomial.unwrap_or(BvExpr::Const(true));
+            acc = Some(match acc {
+                None => term,
+                Some(a) => a.xor(term),
+            });
         }
-        terms.push(monomial.unwrap_or(BvExpr::Const(true)));
     }
-    // XOR all present monomials; none present ⇒ constant 0.
-    let mut it = terms.into_iter();
-    match it.next() {
-        None => BvExpr::Const(false),
-        Some(first) => it.fold(first, |acc, t| acc.xor(t)),
-    }
+    // None present ⇒ constant 0.
+    acc.unwrap_or(BvExpr::Const(false))
 }
 
 /// A flat XOR term category (at a fixed bit position).
@@ -3685,6 +3746,218 @@ fn check_wvalue_vars(val: &WValue, n: usize, which: &str) -> Result<(), SynthErr
             check_wvalue_vars(guard, n, which)?;
             check_wvalue_vars(then_, n, which)?;
             check_wvalue_vars(else_, n, which)
+        }
+    }
+}
+
+#[cfg(test)]
+mod anf_tests {
+    use super::*;
+    use crate::bveq::{eval_expr, eval_transfer};
+
+    /// The pre-packing scalar Möbius butterfly, one `bool` per row: the
+    /// reference the packed transform is checked against.
+    fn mobius_scalar(f: &[bool]) -> Vec<bool> {
+        let len = f.len();
+        let mut c = f.to_vec();
+        let mut step = 1usize;
+        while step < len {
+            let mut i = 0usize;
+            while i < len {
+                for j in i..i + step {
+                    c[j + step] ^= c[j];
+                }
+                i += step << 1;
+            }
+            step <<= 1;
+        }
+        c
+    }
+
+    /// The pre-packing linear-scan ANF → `BvExpr` builder (reference).
+    fn anf_to_bvexpr_scalar(coeffs: &[bool], var_pairs: &[(usize, usize)]) -> BvExpr {
+        let mut terms: Vec<BvExpr> = Vec::new();
+        for (s, &present) in coeffs.iter().enumerate() {
+            if !present {
+                continue;
+            }
+            let mut monomial: Option<BvExpr> = None;
+            for (k, &(reg, bit)) in var_pairs.iter().enumerate() {
+                if (s >> k) & 1 == 1 {
+                    let v = BvExpr::var(reg, bit);
+                    monomial = Some(match monomial {
+                        None => v,
+                        Some(m) => m.and(v),
+                    });
+                }
+            }
+            terms.push(monomial.unwrap_or(BvExpr::Const(true)));
+        }
+        let mut it = terms.into_iter();
+        match it.next() {
+            None => BvExpr::Const(false),
+            Some(first) => it.fold(first, |acc, t| acc.xor(t)),
+        }
+    }
+
+    fn pack(f: &[bool]) -> Vec<u64> {
+        let mut c = vec![0u64; f.len().div_ceil(64)];
+        for (x, _) in f.iter().enumerate().filter(|(_, &v)| v) {
+            c[x >> 6] |= 1 << (x & 63);
+        }
+        c
+    }
+
+    fn unpack(c: &[u64], len: usize) -> Vec<bool> {
+        (0..len).map(|x| (c[x >> 6] >> (x & 63)) & 1 == 1).collect()
+    }
+
+    /// splitmix64: fixed seeds, reproducible tables.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        /// A random table over `n` variables, each row 1 with probability
+        /// `density / 8`.
+        fn table(&mut self, n: usize, density: u64) -> Vec<bool> {
+            (0..1usize << n)
+                .map(|_| self.next() % 8 < density)
+                .collect()
+        }
+    }
+
+    /// Input variable `k` is bit `k % 8` of operand `k / 8`.
+    fn var_pairs(n: usize) -> Vec<(usize, usize)> {
+        (0..n).map(|k| (k / 8, k % 8)).collect()
+    }
+
+    // (a) packed ≡ scalar on random tables, n = 0..=12 -- including the
+    // one-word (n = 6) and two-word (n = 7) boundaries, sub-word tables
+    // (n < 6, whose unused high rows must stay 0), and the all-zero /
+    // all-one / single-row tables.
+    #[test]
+    fn packed_mobius_matches_scalar() {
+        let mut rng = Rng(0xA2F);
+        for n in 0..=12 {
+            let len = 1usize << n;
+            let mut tables = vec![vec![false; len], vec![true; len]];
+            let mut one_hot = vec![false; len];
+            one_hot[len - 1] = true;
+            tables.push(one_hot);
+            let trials = if n == 6 || n == 7 { 64 } else { 8 };
+            for t in 0..trials {
+                tables.push(rng.table(n, 1 + t % 7));
+            }
+            for f in &tables {
+                let mut c = pack(f);
+                mobius_transform(&mut c, n);
+                assert_eq!(unpack(&c, len), mobius_scalar(f), "n = {n}");
+                // Rows past 2^n (sub-word tables) stay zero.
+                assert_eq!(c, pack(&mobius_scalar(f)), "n = {n}: stray high rows");
+                // Möbius is an involution over GF(2).
+                mobius_transform(&mut c, n);
+                assert_eq!(c, pack(f), "n = {n}: not an involution");
+            }
+        }
+    }
+
+    // The packed set-bit scan builds exactly the BvExpr the linear scan did.
+    #[test]
+    fn packed_anf_builds_the_scalar_expr() {
+        let mut rng = Rng(0xB0B);
+        for n in 0..=12 {
+            for density in [1, 4, 7] {
+                let f = rng.table(n, density);
+                let coeffs = mobius_scalar(&f);
+                let vp = var_pairs(n);
+                assert_eq!(
+                    anf_to_bvexpr(&pack(&coeffs), &vp),
+                    anf_to_bvexpr_scalar(&coeffs, &vp),
+                    "n = {n}"
+                );
+            }
+        }
+    }
+
+    // (c) ANF → BvExpr → eval_expr reproduces the original table.
+    #[test]
+    fn anf_bvexpr_reproduces_table() {
+        let mut rng = Rng(0xC0DE);
+        for n in 0..=10 {
+            for density in [0, 1, 4, 7, 8] {
+                let f = rng.table(n, density);
+                let mut c = pack(&f);
+                mobius_transform(&mut c, n);
+                let expr = anf_to_bvexpr(&c, &var_pairs(n));
+                for (x, &want) in f.iter().enumerate() {
+                    let operands = [x as u8, (x >> 8) as u8];
+                    assert_eq!(eval_expr(&expr, &operands), want, "n = {n}, row {x}");
+                }
+            }
+        }
+    }
+
+    // End to end through the packed sweep: a random bijection on each carrier
+    // shape comes back exactly -- sub-word tables (n_in < 6, including a
+    // partial 8-row group), the one/two-word boundaries and a multi-word one.
+    #[test]
+    fn table_to_regtransfer_reproduces_random_bijections() {
+        let mut rng = Rng(0xD1CE);
+        let regs: [u8; 3] = [2, 5, 0];
+        for widths in [
+            &[1u8][..],
+            &[2],
+            &[1, 1],
+            &[3, 3],
+            &[3, 4],
+            &[2, 2, 3],
+            &[4, 5],
+            &[8, 2],
+        ] {
+            let carrier = &regs[..widths.len()];
+            let n: usize = widths.iter().map(|&w| usize::from(w)).sum();
+            let mut perm: Vec<usize> = (0..1 << n).collect();
+            for i in (1..perm.len()).rev() {
+                perm.swap(i, (rng.next() % (i as u64 + 1)) as usize);
+            }
+            // Bytes ↔ packed row, leaf by leaf (low leaf = low bits).
+            let to_row = |b: &[u8]| {
+                let mut shift = 0;
+                widths.iter().zip(b).fold(0usize, |x, (&w, &byte)| {
+                    let x = x | (usize::from(byte) << shift);
+                    shift += usize::from(w);
+                    x
+                })
+            };
+            let to_bytes = |mut x: usize| -> Vec<u8> {
+                widths
+                    .iter()
+                    .map(|&w| {
+                        let byte = (x & ((1 << w) - 1)) as u8;
+                        x >>= w;
+                        byte
+                    })
+                    .collect()
+            };
+            let map = |b: &[u8]| to_bytes(perm[to_row(b)]);
+            let t = table_to_regtransfer(map, carrier, widths);
+            for (x, &y) in perm.iter().enumerate() {
+                let mut state = [0u8; NUM_REGS];
+                for (&r, byte) in carrier.iter().zip(to_bytes(x)) {
+                    state[usize::from(r)] = byte;
+                }
+                let out = eval_transfer(&t, &state);
+                let got: Vec<u8> = carrier.iter().map(|&r| out[usize::from(r)]).collect();
+                assert_eq!(got, to_bytes(y), "widths {widths:?}, row {x}");
+                for r in (0..NUM_REGS).filter(|r| !carrier.contains(&(*r as u8))) {
+                    assert_eq!(out[r], state[r], "widths {widths:?}, row {x}: reg {r}");
+                }
+            }
         }
     }
 }
