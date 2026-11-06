@@ -21,8 +21,9 @@ step netlist, so runs differ only in their input bits.
 `Lanes<N>` is `[u64; N]`: bit `l` of the line's word is its token in
 independent run `l`. `Lane = Lanes<4>` (256 lanes) is the default block.
 Plain `u64` loops only -- the workspace denies `unsafe` (no `std::arch`)
-and the source stays stable-compatible (ADR-0019; no `std::simd`). LLVM
-vectorizes the fixed-size array loops.
+and the source stays stable-compatible (ADR-0019; no `std::simd`). Each
+word op advances 64 lanes; whether LLVM also vectorizes the array loops
+depends on the target and is not relied on.
 
 Every cell is a pure bitwise function, so one more method next to
 `CellKind::eval` carries all lane semantics, `CellKind::eval_lanes`:
@@ -125,8 +126,8 @@ dominates every ring test's wall time.
 
 - **`std::simd` / `std::arch`** -- nightly-only / `unsafe` (ADR-0019,
   workspace lints).
-- **The `wide` crate** -- a dependency for what `[u64; 4]` loops already
-  vectorize to.
+- **The `wide` crate** -- a new dependency; the portable `[u64; N]` loops
+  are the baseline.
 - **Per-lane drivenness** -- drivenness is a static property of the
   netlist; a mask per line would be checked work with no information.
 - **Replacing the scalar simulators** -- they are the reference.

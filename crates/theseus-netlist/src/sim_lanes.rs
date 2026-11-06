@@ -31,8 +31,8 @@ use crate::ir::cell::{CellKind, LaneOp, PhasedCellNetlist, RailPair};
 use crate::sim::{SimError, SimResult, TickSchedule};
 
 /// `64 * N` independent boolean lanes: bit `l % 64` of word `l / 64` is
-/// lane `l`. Bitwise operators act lane-wise; plain `[u64; N]` loops, so
-/// LLVM vectorizes them without `unsafe` or `std::simd`.
+/// lane `l`. Bitwise operators act lane-wise as plain `[u64; N]` loops: portable
+/// bit-slicing (64 lanes per word op), no `unsafe` or `std::simd`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Lanes<const N: usize>(pub [u64; N]);
 
