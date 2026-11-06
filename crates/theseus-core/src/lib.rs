@@ -18,6 +18,7 @@ pub mod enumerate;
 pub mod iso;
 pub mod prim;
 pub mod rewrite;
+pub mod simd;
 pub mod ty;
 pub mod typing;
 

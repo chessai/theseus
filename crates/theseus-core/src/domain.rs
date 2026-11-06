@@ -41,7 +41,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::bvexpr::{pack_lane, unpack_lane, LANES, LANE_ZERO, OPERAND_BITS};
+use crate::bvexpr::{pack_rows, unpack_rows, LANES, LANE_ZERO, OPERAND_BITS};
 use crate::enumerate::cardinality_u64;
 use crate::prim::{value_from_leaf_bytes, AdmitError, PrimDef, SpecTransfer, Value};
 use crate::ty::Type;
@@ -591,25 +591,34 @@ impl BitTable {
         if stray != 0 || transfer.width as usize > OPERAND_BITS {
             return None;
         }
-        let mut vars = vec![[LANE_ZERO; OPERAND_BITS]; from.layout.leaves];
-        let mut in_bytes = vec![0u8; from.layout.leaves];
-        let mut out_bytes = vec![0u8; transfer.leaves.len()];
+        // Flattened once, evaluated per chunk; rows move through the bulk
+        // transposes (ADR-0052).
+        let program = transfer.lane_program();
+        let (n_in, n_out) = (from.layout.leaves, transfer.leaves.len());
+        let mut vars = vec![[LANE_ZERO; OPERAND_BITS]; n_in];
+        let mut out = vec![[LANE_ZERO; OPERAND_BITS]; n_out];
+        let mut in_rows = vec![0u8; LANES * n_in];
+        let mut out_rows = vec![0u8; LANES * n_out];
         for chunk in from.valid.chunks(LANES) {
+            let in_rows = &mut in_rows[..chunk.len() * n_in];
+            in_rows.fill(0);
             for (lane, &i) in chunk.iter().enumerate() {
-                in_bytes.fill(0);
-                from.layout.write_leaf_bytes(u64::from(i), &mut in_bytes);
-                pack_lane(&mut vars, lane, &in_bytes);
+                let row = &mut in_rows[lane * n_in..(lane + 1) * n_in];
+                from.layout.write_leaf_bytes(u64::from(i), row);
             }
-            let out = transfer.eval_lanes(&vars);
+            pack_rows(in_rows, &mut vars);
+            program.eval(&vars, out.as_flattened_mut());
+            let out_rows = &mut out_rows[..chunk.len() * n_out];
+            unpack_rows(&out, out_rows);
             for (lane, &i) in chunk.iter().enumerate() {
-                unpack_lane(&out, lane, &mut out_bytes);
-                let got = match to.layout.read_leaf_bytes(&out_bytes) {
+                let out_bytes = &out_rows[lane * n_out..(lane + 1) * n_out];
+                let got = match to.layout.read_leaf_bytes(out_bytes) {
                     Some(o) => o,
                     // Undecodable: decode anyway, to fail exactly as the
                     // `Value` path does (it panics).
                     None => to
                         .layout
-                        .encode(&value_from_leaf_bytes(&out_bytes, &to.ty))
+                        .encode(&value_from_leaf_bytes(out_bytes, &to.ty))
                         .expect("a decoded value inhabits its type"),
                 };
                 // An ill-typed table value never equals a decoded one.

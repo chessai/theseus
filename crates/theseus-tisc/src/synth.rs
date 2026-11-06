@@ -37,6 +37,7 @@
 use crate::asm::Instr;
 use crate::bveq::{expr_to_bdd, BvExpr, RegTransfer, VarMap, BITS};
 use crate::types::NUM_REGS;
+use theseus_core::simd::SimdLevel;
 
 /// Why a spec could not be transcribed into the in-place ancilla-free class.
 ///
@@ -1400,43 +1401,155 @@ pub fn transcribe_bennett_general(
 /// The result is ANF -- length is whatever the ANF is (not minimised); A-6.4 /
 /// widen-PC funds the resulting body size. Callers verify with the symbolic
 /// oracle (all-register operands) and/or the exec/net-zero path.
-// Loop indices here double as bit-shift amounts and packed-assignment keys (x, bit,
-// k address truth/out_bytes/var_pairs in lockstep with `>> k`/`>> bit` arithmetic),
-// so the explicit range loops keep the truth-table construction unambiguous.
-#[allow(clippy::needless_range_loop)]
+///
+/// The row sweep and the Möbius transforms run on the explicit SIMD kernels
+/// (ADR-0052): output bytes are buffered per leaf and turned into bit
+/// planes 64 rows per word by `theseus_core::simd::bytes_to_planes`, and
+/// each plane is Möbius-transformed by `theseus_core::simd::mobius_transform`.
+/// [`table_to_regtransfer_reference`] keeps the portable path.
 pub fn table_to_regtransfer(
     map: impl Fn(&[u8]) -> Vec<u8>,
     carrier_regs: &[u8],
     in_bit_widths: &[u8],
 ) -> RegTransfer {
+    let (var_pairs, n_in) = carrier_vars(carrier_regs, in_bit_widths);
+    let mut truth = truth_planes(&map, in_bit_widths, n_in);
+    let n_words = (1usize << n_in).div_ceil(64);
+
+    // ── Möbius transform each output-bit truth table → ANF, build BvExpr. ──
+    let mut transfer = RegTransfer::identity();
+    for (leaf, &reg) in carrier_regs.iter().enumerate() {
+        let reg = reg as usize;
+        let w = in_bit_widths[leaf] as usize;
+        for (bit, coeffs) in truth[leaf].chunks_exact_mut(n_words).enumerate() {
+            mobius_transform(coeffs, n_in);
+            transfer.regs[reg][bit] = anf_to_bvexpr(coeffs, &var_pairs);
+        }
+        // Above-width bits of a carrier leaf are Flat(w) zero-extended.
+        for bit in w..BITS {
+            transfer.regs[reg][bit] = BvExpr::Const(false);
+        }
+    }
+    transfer
+}
+
+/// The input variables of a carrier: `(var_pairs, n_in)`, where
+/// `var_pairs[k]` is the `(register, bit)` of input bit `k` (leaf by leaf,
+/// bits ascending) and `n_in` their count.
+fn carrier_vars(carrier_regs: &[u8], in_bit_widths: &[u8]) -> (Vec<(usize, usize)>, usize) {
     assert_eq!(
         carrier_regs.len(),
         in_bit_widths.len(),
         "table_to_regtransfer: carrier_regs and in_bit_widths must align"
     );
-    let n_leaves = carrier_regs.len();
-
-    // Flattened list of meaningful input bits, one entry per bit in carrier
-    // order: `input_vars[k] = (leaf index, register, bit position)` is the k-th
-    // input variable (bit `k` of the packed assignment `x`).
-    let mut input_vars: Vec<(usize, usize, usize)> = Vec::new();
+    let mut var_pairs: Vec<(usize, usize)> = Vec::new();
     for (leaf, (&reg, &w)) in carrier_regs.iter().zip(in_bit_widths.iter()).enumerate() {
         assert!(
             (w as usize) <= BITS,
             "table_to_regtransfer: leaf {leaf} width {w} exceeds BITS={BITS}"
         );
         for bit in 0..w as usize {
-            input_vars.push((leaf, reg as usize, bit));
+            var_pairs.push((reg as usize, bit));
         }
     }
-    // The (reg, bit) pair of each input variable, used to build ANF monomials.
-    let var_pairs: Vec<(usize, usize)> = input_vars.iter().map(|&(_, r, b)| (r, b)).collect();
-    let n_in = input_vars.len();
+    let n_in = var_pairs.len();
     assert!(
         n_in <= 24,
         "table_to_regtransfer: {n_in} input bits → 2^{n_in} rows is too large to enumerate; \
          the ANF construction is exponential in the total carrier width"
     );
+    (var_pairs, n_in)
+}
+
+/// Rows per sweep chunk: each leaf's output bytes are buffered this many
+/// rows at a time, then transposed in one kernel call.
+const SWEEP_CHUNK: usize = 4096;
+
+/// The row sweep (ADR-0052): `truth[leaf]` holds the packed truth table of
+/// output bit `b` of leaf `leaf` at `truth[leaf][b * n_words..][..n_words]`
+/// (row `x` is bit `x & 63` of word `x >> 6`; rows past `2^n_in` zero).
+///
+/// Each chunk of rows calls `map` once per row and stores output byte
+/// `leaf` at `bufs[leaf][row]`; one `bytes_to_planes` per leaf and chunk
+/// then peels the leaf's bit planes off 64 rows at a time (`vpmovmskb` on
+/// AVX2). Output bits at and above a leaf's width are dropped, as before.
+fn truth_planes(
+    map: &impl Fn(&[u8]) -> Vec<u8>,
+    in_bit_widths: &[u8],
+    n_in: usize,
+) -> Vec<Vec<u64>> {
+    let n_leaves = in_bit_widths.len();
+    let n_rows = 1usize << n_in;
+    let n_words = n_rows.div_ceil(64);
+    let mut truth: Vec<Vec<u64>> = in_bit_widths
+        .iter()
+        .map(|&w| vec![0u64; usize::from(w) * n_words])
+        .collect();
+    // Leaf `i`'s input bits are the contiguous run of `x` starting at
+    // `leaf_shift[i]`, masked by `leaf_mask[i]`.
+    let leaf_shift: Vec<usize> = in_bit_widths
+        .iter()
+        .scan(0usize, |at, &w| {
+            let shift = *at;
+            *at += w as usize;
+            Some(shift)
+        })
+        .collect();
+    let leaf_mask: Vec<usize> = in_bit_widths.iter().map(|&w| (1usize << w) - 1).collect();
+
+    let chunk = SWEEP_CHUNK.min(64 * n_words);
+    let mut bufs = vec![vec![0u8; chunk]; n_leaves];
+    let mut in_bytes = vec![0u8; n_leaves];
+    for x0 in (0..n_rows).step_by(chunk) {
+        let rows = chunk.min(n_rows - x0);
+        for r in 0..rows {
+            let x = x0 + r;
+            for ((byte, &shift), &mask) in in_bytes.iter_mut().zip(&leaf_shift).zip(&leaf_mask) {
+                *byte = ((x >> shift) & mask) as u8;
+            }
+            let out_bytes = map(&in_bytes);
+            assert_eq!(
+                out_bytes.len(),
+                n_leaves,
+                "table_to_regtransfer: map returned {} bytes, expected {n_leaves}",
+                out_bytes.len()
+            );
+            for (buf, &byte) in bufs.iter_mut().zip(&out_bytes) {
+                buf[r] = byte;
+            }
+        }
+        let words = rows.div_ceil(64);
+        for ((buf, planes), &w) in bufs.iter_mut().zip(&mut truth).zip(in_bit_widths) {
+            if w == 0 {
+                continue;
+            }
+            // A sub-word table (n_in < 6) pads its one word with zero rows.
+            buf[rows..words * 64].fill(0);
+            theseus_core::simd::bytes_to_planes(
+                &buf[..words * 64],
+                &mut planes[x0 / 64..],
+                n_words,
+                usize::from(w),
+            );
+        }
+    }
+    truth
+}
+
+/// The portable [`table_to_regtransfer`] (the pre-ADR-0052 path, kept as
+/// the reference): a `SPREAD_BITS` byte → bit-plane transpose 8 rows at a
+/// time, and the one-pass-per-stage scalar Möbius loop.
+// Loop indices here double as bit-shift amounts and packed-assignment keys (x, bit,
+// k address truth/out_bytes/var_pairs in lockstep with `>> k`/`>> bit` arithmetic),
+// so the explicit range loops keep the truth-table construction unambiguous.
+#[allow(clippy::needless_range_loop)]
+pub fn table_to_regtransfer_reference(
+    map: impl Fn(&[u8]) -> Vec<u8>,
+    carrier_regs: &[u8],
+    in_bit_widths: &[u8],
+) -> RegTransfer {
+    let (var_pairs, n_in) = carrier_vars(carrier_regs, in_bit_widths);
+    let n_leaves = carrier_regs.len();
     let n_rows = 1usize << n_in;
 
     // ── Build the truth table for every output (leaf, bit) in one sweep. ──
@@ -1509,7 +1622,7 @@ pub fn table_to_regtransfer(
         let w = in_bit_widths[leaf] as usize;
         for bit in 0..w {
             let coeffs = &mut truth[leaf][bit];
-            mobius_transform(coeffs, n_in);
+            theseus_core::simd::mobius_transform_with(SimdLevel::Scalar, coeffs, n_in);
             transfer.regs[reg][bit] = anf_to_bvexpr(coeffs, &var_pairs);
         }
         // Above-width bits of a carrier leaf are Flat(w) zero-extended.
@@ -1521,7 +1634,7 @@ pub fn table_to_regtransfer(
 }
 
 /// `SPREAD_BITS[v]` has bit `8b` set iff bit `b` of `v` is: a byte's bits spread
-/// one per byte lane, for the bit transpose in [`table_to_regtransfer`].
+/// one per byte lane, for the bit transpose in [`table_to_regtransfer_reference`].
 const SPREAD_BITS: [u64; 256] = {
     let mut t = [0u64; 256];
     let mut v = 0;
@@ -1536,17 +1649,6 @@ const SPREAD_BITS: [u64; 256] = {
     t
 };
 
-/// `MOBIUS_MASKS[k]` selects the positions of a 64-row word whose index has
-/// bit `k` clear -- the "low" halves of the stride-`2^k` butterfly.
-const MOBIUS_MASKS: [u64; 6] = [
-    0x5555_5555_5555_5555,
-    0x3333_3333_3333_3333,
-    0x0F0F_0F0F_0F0F_0F0F,
-    0x00FF_00FF_00FF_00FF,
-    0x0000_FFFF_0000_FFFF,
-    0x0000_0000_FFFF_FFFF,
-];
-
 /// In-place Möbius (Reed-Muller) transform of a packed truth table over `n`
 /// variables.
 ///
@@ -1556,23 +1658,13 @@ const MOBIUS_MASKS: [u64; 6] = [
 /// variable `k`, XOR the low half into the high half -- inside each word for
 /// `k < 6` (shift by `2^k` under a mask), across words for `k ≥ 6` (whole
 /// word slices). O(n·2^n / 64) word ops.
+///
+/// Runs `theseus_core::simd::mobius_transform` (ADR-0052): SSE2/AVX2
+/// kernels that fuse the in-word and first cross-word stages into one pass
+/// and the rest three per pass; its `Scalar` level is this function's
+/// former body, verbatim.
 fn mobius_transform(c: &mut [u64], n: usize) {
-    debug_assert_eq!(c.len(), (1usize << n).div_ceil(64));
-    for (k, &mask) in MOBIUS_MASKS.iter().enumerate().take(n) {
-        for w in c.iter_mut() {
-            *w ^= (*w & mask) << (1u32 << k);
-        }
-    }
-    let mut half = 1;
-    while half < c.len() {
-        for block in c.chunks_exact_mut(2 * half) {
-            let (lo, hi) = block.split_at_mut(half);
-            for (h, &l) in hi.iter_mut().zip(lo.iter()) {
-                *h ^= l;
-            }
-        }
-        half *= 2;
-    }
+    theseus_core::simd::mobius_transform(c, n);
 }
 
 /// Build the `BvExpr` for one output bit from its packed ANF coefficients.
@@ -3946,6 +4038,11 @@ mod anf_tests {
             };
             let map = |b: &[u8]| to_bytes(perm[to_row(b)]);
             let t = table_to_regtransfer(map, carrier, widths);
+            assert_eq!(
+                t.regs,
+                table_to_regtransfer_reference(map, carrier, widths).regs,
+                "widths {widths:?}: SIMD sweep != reference"
+            );
             for (x, &y) in perm.iter().enumerate() {
                 let mut state = [0u8; NUM_REGS];
                 for (&r, byte) in carrier.iter().zip(to_bytes(x)) {
@@ -3958,6 +4055,46 @@ mod anf_tests {
                     assert_eq!(out[r], state[r], "widths {widths:?}, row {x}: reg {r}");
                 }
             }
+        }
+    }
+
+    // ADR-0052: the SIMD row sweep (bytes_to_planes per chunk) builds the
+    // same truth tables as the SPREAD_BITS reference -- across sub-word,
+    // one-word and multi-chunk tables (2^13 rows = two sweep chunks), with
+    // output bits above a leaf's width set (they must be dropped), and a
+    // zero-width leaf.
+    #[test]
+    fn simd_sweep_matches_spread_bits_reference() {
+        let mut rng = Rng(0x5EE9);
+        for widths in [
+            &[1u8][..],
+            &[3, 2],
+            &[6],
+            &[4, 3],
+            &[8],
+            &[5, 0, 4],
+            &[8, 5],
+            &[7, 6],
+        ] {
+            let n: usize = widths.iter().map(|&w| usize::from(w)).sum();
+            let table: Vec<u64> = (0..1usize << n).map(|_| rng.next()).collect();
+            let carrier = &[1u8, 4, 6][..widths.len()];
+            let map = |b: &[u8]| {
+                let x = widths
+                    .iter()
+                    .zip(b)
+                    .fold((0usize, 0), |(x, s), (&w, &byte)| {
+                        (x | usize::from(byte) << s, s + usize::from(w))
+                    });
+                // Junk in every bit, including above each leaf's width.
+                table[x.0].to_le_bytes()[..widths.len()].to_vec()
+            };
+            let t = table_to_regtransfer(map, carrier, widths);
+            assert_eq!(
+                t.regs,
+                table_to_regtransfer_reference(map, carrier, widths).regs,
+                "{widths:?}"
+            );
         }
     }
 }

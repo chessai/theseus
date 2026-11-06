@@ -13,11 +13,13 @@
 mod common;
 
 use common::bit;
+use theseus_core::simd::SimdLevel;
 use theseus_core::{type_of, Iso, Type};
 use theseus_netlist::{
     balance, balance_compact, lower, lower_iso, pack_lanes, prim_from_bits, simulate,
-    simulate_lanes, simulate_rails, simulate_rails_lanes, unpack_lane, CellKind, LaneSimError,
-    Lanes, Monoid, NodeKind, PhasedCellNetlist, SimError, TypedNode,
+    simulate_lanes, simulate_rails, simulate_rails_lanes, unpack_lane, unpack_lanes, CellKind,
+    CompactBalanced, CompactKernel, LaneScratch, LaneSimError, Lanes, Monoid, NodeKind,
+    PhasedCellNetlist, SimError, TypedNode,
 };
 
 /// splitmix64: a fixed-seed generator, so every failure reproduces.
@@ -226,6 +228,40 @@ fn compact_lanes_match_scalar_on_corpus() {
     for net in &corpus() {
         let inputs = random_inputs(&mut rng, net, Lanes::<4>::WIDTH);
         assert_compact_lanes_agree(net, &inputs);
+    }
+}
+
+/// ADR-0052: every compact-sim kernel (reference, portable uniform, and
+/// the SIMD kernel at each level this host has) at every block width with
+/// a kernel (2, 4, 8 words), lane for lane against the scalar sim.
+#[test]
+fn every_compact_kernel_matches_scalar_on_corpus() {
+    fn check<const N: usize>(compact: &CompactBalanced, inputs: &[Vec<bool>], want: &[Vec<bool>]) {
+        let packed = pack_lanes::<N, _>(&inputs[..inputs.len().min(Lanes::<N>::WIDTH)]);
+        let mut kernels = vec![CompactKernel::Reference, CompactKernel::UniformPortable];
+        kernels.extend(SimdLevel::available().into_iter().map(CompactKernel::Simd));
+        let mut scratch = LaneScratch::default();
+        for kernel in kernels {
+            let out = compact
+                .simulate_lanes_kernel(&packed, &mut scratch, kernel)
+                .unwrap();
+            let got = unpack_lanes(&out, inputs.len().min(Lanes::<N>::WIDTH));
+            for (lane, (got, want)) in got.iter().zip(want).enumerate() {
+                assert_eq!(got, want, "{kernel:?}, N = {N}, lane {lane}");
+            }
+        }
+    }
+    let mut rng = Rng(0x0052);
+    for net in &corpus() {
+        let compact = balance_compact(net).unwrap();
+        let inputs = random_inputs(&mut rng, net, Lanes::<8>::WIDTH);
+        let want: Vec<Vec<bool>> = inputs
+            .iter()
+            .map(|i| compact.simulate(i).unwrap().outputs)
+            .collect();
+        check::<2>(&compact, &inputs, &want);
+        check::<4>(&compact, &inputs, &want);
+        check::<8>(&compact, &inputs, &want);
     }
 }
 

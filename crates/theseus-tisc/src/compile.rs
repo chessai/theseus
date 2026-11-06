@@ -1175,7 +1175,7 @@ fn emit_skip_block(
 ///    output bits depend only on operand-register input variables.
 /// 3. POINTWISE over the table: every `(in, out)` row of `def.forward`
 ///    agrees with the transfer on the operand registers (evaluated
-///    lane-parallel, `eval_transfer_lanes`).
+///    lane-parallel by a `transfer_program` compiled once, ADR-0052).
 ///
 /// Returns `Ok(())` on success, `Err(CompileError::EmissionVerificationFailed)`
 /// on mismatch. `operand_regs` MUST be TYPE-derived (from `regs`/`ctx.homes`),
@@ -1268,6 +1268,8 @@ pub fn bveq_verify_emission(
     // chunk decodes its input keys before checking, so an ill-typed key
     // (which panics in `value_to_leaf_bytes`) can now panic ahead of an
     // earlier row's mismatch in the same chunk.
+    // The transfer is flattened once and evaluated per chunk (ADR-0052).
+    let program = bveq::transfer_program(&transfer);
     let mut rows = def.forward.iter();
     let mut chunk: Vec<(Vec<u8>, &Value)> = Vec::with_capacity(bveq::LANES);
     let mut inputs: Vec<[u8; NUM_REGS]> = Vec::with_capacity(bveq::LANES);
@@ -1293,11 +1295,11 @@ pub fn bveq_verify_emission(
             return Ok(());
         }
 
-        let result_planes = bveq::eval_transfer_lanes(&transfer, &bveq::pack_regs(&inputs));
+        let result_planes = bveq::eval_program_lanes(&program, &bveq::pack_regs(&inputs));
+        let results = bveq::unpack_regs_all(&result_planes, chunk.len());
 
-        for (lane, (in_bytes, out_val)) in chunk.iter().enumerate() {
+        for ((in_bytes, out_val), result_regs) in chunk.iter().zip(&results) {
             let out_bytes = value_to_leaf_bytes(out_val, &def.output_ty);
-            let result_regs = bveq::unpack_regs(&result_planes, lane);
 
             // Check operand registers against expected output.
             for (leaf_idx, &r) in operand_regs.iter().enumerate() {

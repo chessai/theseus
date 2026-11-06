@@ -7,7 +7,8 @@
 //! each is individually bijective.
 
 use crate::bvexpr::{
-    eval_expr_lanes, pack_lane, unpack_lane, BvExpr, Lane, LANES, LANE_ZERO, OPERAND_BITS,
+    eval_expr_lanes, pack_rows, unpack_rows, BvExpr, Lane, LaneProgram, LANES, LANE_ZERO,
+    OPERAND_BITS,
 };
 use crate::domain::BitTable;
 use crate::ty::Type;
@@ -318,19 +319,30 @@ fn spec_matches_table(
     if transfer.width as usize > OPERAND_BITS {
         return spec_matches_table_scalar(transfer, table, in_ty, out_ty);
     }
-    let mut vars = vec![[LANE_ZERO; OPERAND_BITS]; count_leaves(in_ty)];
-    let mut out_bytes = vec![0u8; transfer.leaves.len()];
+    // Flattened once, evaluated per chunk (ADR-0052).
+    let program = transfer.lane_program();
+    let n_in = count_leaves(in_ty);
+    let n_out = transfer.leaves.len();
+    let mut vars = vec![[LANE_ZERO; OPERAND_BITS]; n_in];
+    let mut out = vec![[LANE_ZERO; OPERAND_BITS]; n_out];
+    // Row-major input / output leaf bytes, one row per lane.
+    let mut in_rows: Vec<u8> = Vec::with_capacity(LANES * n_in);
+    let mut out_rows = vec![0u8; LANES * n_out];
     let mut chunk: Vec<(&Value, &Value)> = Vec::with_capacity(LANES);
     let mut entries = table.iter();
     loop {
         chunk.clear();
+        in_rows.clear();
         // A decode error ends the chunk; it is reported after the lanes
         // before it are checked, as the scalar loop would.
         let mut decode_err = None;
         for (in_val, table_out) in entries.by_ref() {
             match value_to_leaf_bytes(in_val, in_ty) {
                 Ok(in_bytes) => {
-                    pack_lane(&mut vars, chunk.len(), &in_bytes);
+                    // As `pack_lane`: short rows zero-extend, long ones panic.
+                    let at = in_rows.len();
+                    in_rows.resize(at + n_in, 0);
+                    in_rows[at..at + in_bytes.len()].copy_from_slice(&in_bytes);
                     chunk.push((in_val, table_out));
                 }
                 Err(e) => {
@@ -343,13 +355,16 @@ fn spec_matches_table(
             }
         }
         if !chunk.is_empty() {
-            let out = transfer.eval_lanes(&vars);
+            pack_rows(&in_rows, &mut vars);
+            program.eval(&vars, out.as_flattened_mut());
+            let out_rows = &mut out_rows[..chunk.len() * n_out];
+            unpack_rows(&out, out_rows);
             for (i, &(in_val, table_out)) in chunk.iter().enumerate() {
-                unpack_lane(&out, i, &mut out_bytes);
-                let same = match leaf_bytes_match(&out_bytes, out_ty, table_out) {
+                let out_bytes = &out_rows[i * n_out..(i + 1) * n_out];
+                let same = match leaf_bytes_match(out_bytes, out_ty, table_out) {
                     Some(same) => same,
                     // Undecodable: decode anyway, to fail exactly as before.
-                    None => value_from_leaf_bytes(&out_bytes, out_ty) == *table_out,
+                    None => value_from_leaf_bytes(out_bytes, out_ty) == *table_out,
                 };
                 if !same {
                     return Err(AdmitError::SpecTableMismatch {
@@ -589,10 +604,42 @@ impl SpecTransfer {
     }
 
     /// Lane-parallel [`eval_bytes`](Self::eval_bytes) (ADR-0049): `vars`
-    /// holds the input leaves' bit planes (see [`pack_lane`]); returns one
+    /// holds the input leaves' bit planes (see [`crate::bvexpr::pack_lane`]); returns one
     /// plane set per output leaf, bits at and above `width` zero.
     /// Requires `width <= OPERAND_BITS`.
+    ///
+    /// Compiles [`Self::lane_program`] on every call; a sweep over many
+    /// chunks should compile once and call [`LaneProgram::eval`] instead.
     pub fn eval_lanes(&self, vars: &[[Lane; OPERAND_BITS]]) -> Vec<[Lane; OPERAND_BITS]> {
+        let mut out = vec![[LANE_ZERO; OPERAND_BITS]; self.leaves.len()];
+        self.lane_program().eval(vars, out.as_flattened_mut());
+        out
+    }
+
+    /// This transfer flattened into a [`LaneProgram`] (ADR-0052): output
+    /// `leaf * 8 + bit` is `leaves[leaf][bit]` for `bit < width`, and the
+    /// bits at and above `width` stay zero. Requires `width <= OPERAND_BITS`.
+    pub fn lane_program(&self) -> LaneProgram {
+        let width = self.width as usize;
+        assert!(
+            width <= OPERAND_BITS,
+            "eval_lanes: width {width} > {OPERAND_BITS}"
+        );
+        LaneProgram::new(
+            self.leaves.len() * OPERAND_BITS,
+            self.leaves.iter().enumerate().flat_map(|(leaf, row)| {
+                row[..width]
+                    .iter()
+                    .enumerate()
+                    .map(move |(bit, expr)| (leaf * OPERAND_BITS + bit, expr))
+            }),
+        )
+    }
+
+    /// The pre-ADR-0052 [`Self::eval_lanes`]: one recursive
+    /// [`eval_expr_lanes`] walk per output bit. The reference the flattened
+    /// program is tested against.
+    pub fn eval_lanes_recursive(&self, vars: &[[Lane; OPERAND_BITS]]) -> Vec<[Lane; OPERAND_BITS]> {
         let width = self.width as usize;
         assert!(
             width <= OPERAND_BITS,
@@ -1542,6 +1589,40 @@ mod tests {
             "PartialTableWithSpec",
         ] {
             assert!(variants.contains(v), "{v} in {variants:?}");
+        }
+    }
+
+    /// ADR-0052: the flattened transfer program at every SIMD level equals
+    /// the recursive per-bit walk, on the test prims' specs and random
+    /// corruptions of them, over random full and partial chunks.
+    #[test]
+    fn spec_lane_program_matches_recursive_every_level() {
+        let mut rng = SplitMix64(0x5BEC_0052);
+        for base in [flat3_cube(), flat3_sum()] {
+            let spec = base.symbolic.clone().unwrap();
+            let mut transfers = vec![spec.forward.clone(), spec.backward.clone()];
+            for _ in 0..10 {
+                let mut t = spec.forward.clone();
+                let (leaves, w) = (t.leaves.len(), t.width as usize);
+                let (leaf, bit) = (rng.below(leaves), rng.below(w));
+                t.leaves[leaf][bit] = random_expr(&mut rng, 6, leaves, w);
+                transfers.push(t);
+            }
+            for t in &transfers {
+                let k = t.leaves.len();
+                let n = [1, 64, 200, LANES][rng.below(4)];
+                let rows: Vec<u8> = (0..n * k).map(|_| rng.below(8) as u8).collect();
+                let mut vars = vec![[LANE_ZERO; OPERAND_BITS]; k];
+                pack_rows(&rows, &mut vars);
+                let want = t.eval_lanes_recursive(&vars);
+                assert_eq!(t.eval_lanes(&vars), want);
+                let program = t.lane_program();
+                for level in crate::simd::SimdLevel::available() {
+                    let mut got = vec![[LANE_ZERO; OPERAND_BITS]; k];
+                    program.eval_with(level, &vars, got.as_flattened_mut());
+                    assert_eq!(got, want, "{level}");
+                }
+            }
         }
     }
 }

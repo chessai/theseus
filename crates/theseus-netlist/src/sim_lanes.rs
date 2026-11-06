@@ -21,7 +21,10 @@
 //!   ([`CompactBalanced::simulate`]) over a flat `CompactPlan` built
 //!   once per netlist: K0 buffers, pass-through controls and rail-role
 //!   swaps are resolved at plan time into slot aliases, so the hot loop
-//!   touches only the cells that compute, and never allocates.
+//!   touches only the cells that compute, and never allocates. For 2-, 4-
+//!   and 8-word blocks the cell loop runs as explicit SSE2/AVX2 kernels
+//!   over a branch-free re-encoding of the plan (`crate::simd`,
+//!   ADR-0052); the portable loop stays the reference ([`CompactKernel`]).
 
 use std::collections::BTreeMap;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
@@ -29,6 +32,8 @@ use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, N
 use crate::balance::{CompactBalanced, CompactSimError};
 use crate::ir::cell::{CellKind, LaneOp, PhasedCellNetlist, RailPair};
 use crate::sim::{SimError, SimResult, TickSchedule};
+use crate::simd::{UCell, UniformPlan};
+use theseus_core::simd::{self, SimdLevel};
 
 /// `64 * N` independent boolean lanes: bit `l % 64` of word `l / 64` is
 /// lane `l`. Bitwise operators act lane-wise as plain `[u64; N]` loops: portable
@@ -166,6 +171,23 @@ pub fn pack_lanes<const N: usize, V: AsRef<[bool]>>(vectors: &[V]) -> Vec<Lanes<
         Lanes::<N>::WIDTH
     );
     let width = vectors.first().map_or(0, |v| v.as_ref().len());
+    let rows: Vec<&[bool]> = vectors
+        .iter()
+        .enumerate()
+        .map(|(lane, v)| {
+            let v = v.as_ref();
+            assert_eq!(v.len(), width, "lane {lane}: vector width mismatch");
+            v
+        })
+        .collect();
+    unflatten(&pack_bool_rows(&rows, width, N))
+}
+
+/// The scalar reference for [`pack_lanes`] (one bit per `set`, the
+/// pre-ADR-0052 loop).
+pub fn pack_lanes_scalar<const N: usize, V: AsRef<[bool]>>(vectors: &[V]) -> Vec<Lanes<N>> {
+    assert!(vectors.len() <= Lanes::<N>::WIDTH);
+    let width = vectors.first().map_or(0, |v| v.as_ref().len());
     let mut words = vec![Lanes::ZERO; width];
     for (lane, v) in vectors.iter().enumerate() {
         let v = v.as_ref();
@@ -183,9 +205,96 @@ pub fn unpack_lane<const N: usize>(words: &[Lanes<N>], lane: usize) -> Vec<bool>
     words.iter().map(|w| w.get(lane)).collect()
 }
 
-/// Lanes `0..n_lanes` of `words`, one bit vector per lane.
+/// Lanes `0..n_lanes` of `words`, one bit vector per lane: a bulk
+/// [`unpack_lane`] through the SIMD bit-matrix transposes (ADR-0052).
+///
+/// # Panics
+/// If `n_lanes` exceeds the lane width.
 pub fn unpack_lanes<const N: usize>(words: &[Lanes<N>], n_lanes: usize) -> Vec<Vec<bool>> {
-    (0..n_lanes).map(|lane| unpack_lane(words, lane)).collect()
+    if words.is_empty() {
+        return vec![Vec::new(); n_lanes];
+    }
+    assert!(
+        n_lanes <= Lanes::<N>::WIDTH,
+        "{n_lanes} lanes exceed the {} lane width",
+        Lanes::<N>::WIDTH
+    );
+    unpack_bool_rows(&flatten(words), N, words.len(), n_lanes)
+}
+
+/// Bytes per packed row of `width` bools.
+fn row_bytes(width: usize) -> usize {
+    width.div_ceil(8)
+}
+
+/// [`pack_lanes`] on flat words (non-generic: compiled here at this
+/// crate's opt-level). A transpose of the `lanes x width` bit matrix:
+///
+/// 1. each row's bools pack 8 per byte (`bools_to_bits`, 32 per
+///    `vpmovmskb`);
+/// 2. per 64-lane word group, byte `g` of the 64 rows gathers into a
+///    64-byte column block `g`;
+/// 3. one `bytes_to_planes` call turns every column block into 8 words
+///    (positions `8g..8g + 8`).
+fn pack_bool_rows(rows: &[&[bool]], width: usize, n: usize) -> Vec<u64> {
+    use theseus_core::simd::{bools_to_bits, bytes_to_planes};
+    if width == 0 {
+        return Vec::new();
+    }
+    let nb = row_bytes(width);
+    let mut bits = vec![0u8; rows.len() * nb];
+    for (row, out) in rows.iter().zip(bits.chunks_exact_mut(nb)) {
+        bools_to_bits(row, out);
+    }
+    let mut words = vec![0u64; width * n];
+    let mut cols = vec![0u8; nb * 64];
+    let mut planes = vec![0u64; 8 * nb];
+    for q in 0..n.min(rows.len().div_ceil(64)) {
+        let group = &bits[64 * q * nb..(rows.len() * nb).min(64 * (q + 1) * nb)];
+        cols.fill(0);
+        for (i, row) in group.chunks_exact(nb).enumerate() {
+            for (g, &byte) in row.iter().enumerate() {
+                cols[64 * g + i] = byte;
+            }
+        }
+        // planes[b * nb + g] = position 8g + b of lanes 64q..64q + 64.
+        bytes_to_planes(&cols, &mut planes, nb, 8);
+        for (p, word) in words.chunks_exact_mut(n).enumerate() {
+            word[q] = planes[(p % 8) * nb + p / 8];
+        }
+    }
+    words
+}
+
+/// [`unpack_lanes`] on flat words: [`pack_bool_rows`] run backwards
+/// (`planes_to_bytes`, a byte scatter, `bits_to_bools`).
+fn unpack_bool_rows(words: &[u64], n: usize, width: usize, n_lanes: usize) -> Vec<Vec<bool>> {
+    use theseus_core::simd::{bits_to_bools, planes_to_bytes};
+    if width == 0 {
+        return vec![Vec::new(); n_lanes];
+    }
+    let nb = row_bytes(width);
+    let mut bits = vec![0u8; n_lanes * nb];
+    let mut cols = vec![0u8; nb * 64];
+    let mut planes = vec![0u64; 8 * nb];
+    for q in 0..n_lanes.div_ceil(64) {
+        planes.fill(0);
+        for (p, word) in words.chunks_exact(n).enumerate() {
+            planes[(p % 8) * nb + p / 8] = word[q];
+        }
+        planes_to_bytes(&planes, nb, 8, &mut cols);
+        let group = &mut bits[64 * q * nb..(n_lanes * nb).min(64 * (q + 1) * nb)];
+        for (i, row) in group.chunks_exact_mut(nb).enumerate() {
+            for (g, byte) in row.iter_mut().enumerate() {
+                *byte = cols[64 * g + i];
+            }
+        }
+    }
+    let mut out = vec![vec![false; width]; n_lanes];
+    for (row, src) in out.iter_mut().zip(bits.chunks_exact(nb)) {
+        bits_to_bools(src, row);
+    }
+    out
 }
 
 // ── Timed lane simulator ────────────────────────────────────────────
@@ -424,6 +533,7 @@ fn check_pair_lanes<const N: usize>(
 /// "read negated" (the consumer names the producer's pair role-swapped).
 type SlotRef = u32;
 const NEG: SlotRef = 1 << 31;
+const _: () = assert!(NEG == crate::simd::NEG, "one polarity bit");
 
 #[inline]
 fn read<const N: usize>(slots: &[u64], r: SlotRef) -> Lanes<N> {
@@ -451,6 +561,11 @@ pub(crate) struct CompactPlan {
     n_slots: usize,
     cells: Vec<CompactCell>,
     outputs: Vec<SlotRef>,
+    /// The same cells in the branch-free encoding the SIMD kernels run
+    /// (ADR-0052), over two extra slots: `n_slots` (all zeros; read
+    /// negated it is the all-ones "no control") and `n_slots + 1` (the
+    /// write-only sink for a flip's second output).
+    uniform: UniformPlan,
 }
 
 impl CompactPlan {
@@ -509,13 +624,27 @@ impl CompactPlan {
                 bind(&mut line_ref, p, r);
             }
         }
-        assert!(n_slots < NEG, "slot file exceeds 2^31 entries");
+        assert!(n_slots + 2 < NEG, "slot file exceeds 2^31 entries");
 
+        let outputs = net.outputs.iter().map(|p| get(&line_ref, p)).collect();
+        CompactPlan::assemble(net.inputs.len(), n_slots as usize, cells, outputs)
+    }
+
+    /// A plan from resolved cells, with its uniform re-encoding.
+    fn assemble(
+        n_inputs: usize,
+        n_slots: usize,
+        cells: Vec<CompactCell>,
+        outputs: Vec<SlotRef>,
+    ) -> Self {
+        let zero = u32::try_from(n_slots).expect("slot file exceeds 2^31 entries");
+        let uniform = cells.iter().map(|c| c.uniform(zero, zero + 1)).collect();
         CompactPlan {
-            n_inputs: net.inputs.len(),
-            n_slots: n_slots as usize,
-            outputs: net.outputs.iter().map(|p| get(&line_ref, p)).collect(),
+            uniform: UniformPlan::new(uniform, n_slots + 2).level_order(),
+            n_inputs,
+            n_slots,
             cells,
+            outputs,
         }
     }
 
@@ -526,22 +655,63 @@ impl CompactPlan {
 
     /// Evaluate on `n`-word lane blocks, passed flat (non-generic, so it
     /// is compiled here whatever the caller's opt-level): one block per
-    /// input port in, one per output port out. `slots` is scratch,
-    /// reusable across calls: every slot is written before it is read.
-    pub(crate) fn run_words(&self, n: usize, inputs: &[u64], slots: &mut Vec<u64>) -> Vec<u64> {
-        with_words!(n, W => self.run_fixed::<W>(inputs, slots))
-    }
-
-    fn run_fixed<const N: usize>(&self, inputs: &[u64], slots: &mut Vec<u64>) -> Vec<u64> {
+    /// input port in, one per output port out. `scratch` is reusable
+    /// across calls: every slot is written before it is read.
+    ///
+    /// `kernel` picks the cell loop (ADR-0052); every choice computes the
+    /// same words, and `Simd(level)` falls back to the reference loop for
+    /// block widths without a kernel (`n` other than 2, 4, 8) or at
+    /// `Scalar`.
+    pub(crate) fn run_words(
+        &self,
+        n: usize,
+        inputs: &[u64],
+        scratch: &mut Vec<u64>,
+        kernel: CompactKernel,
+    ) -> Vec<u64> {
         assert_eq!(
             inputs.len(),
-            self.n_inputs * N,
+            self.n_inputs * n,
             "input width checked by caller"
         );
-        if slots.len() < self.n_slots * N {
-            slots.resize(self.n_slots * N, 0);
-        }
+        let simd = match kernel {
+            CompactKernel::Simd(level) if UniformPlan::has_kernel(level, n) => Some(level),
+            _ => None,
+        };
+        let uniform = simd.is_some() || kernel == CompactKernel::UniformPortable;
+        let n_slots = if uniform {
+            self.uniform.n_slots()
+        } else {
+            self.n_slots
+        };
+        let slots = aligned_window(scratch, n_slots * n);
         slots[..inputs.len()].copy_from_slice(inputs);
+        if uniform {
+            // The all-zeros slot (read negated: the absent controls).
+            slots[self.n_slots * n..][..n].fill(0);
+        }
+        match simd {
+            Some(level) => {
+                let ran = self.uniform.run(level, n, slots);
+                debug_assert!(ran, "has_kernel({level}, {n})");
+            }
+            None if uniform => with_words!(n, W => self.uniform.run_portable::<W>(slots)),
+            None => with_words!(n, W => self.run_fixed::<W>(slots)),
+        }
+        let mut out = vec![0u64; self.outputs.len() * n];
+        for (block, &r) in out.chunks_exact_mut(n).zip(&self.outputs) {
+            let neg = 0u64.wrapping_sub(u64::from(r >> 31));
+            let slot = &slots[(r & !NEG) as usize * n..][..n];
+            for (w, &s) in block.iter_mut().zip(slot) {
+                *w = s ^ neg;
+            }
+        }
+        out
+    }
+
+    /// The reference cell loop (ADR-0048): portable `[u64; N]` ops,
+    /// branching per cell on the control count and swap-vs-flip.
+    fn run_fixed<const N: usize>(&self, slots: &mut [u64]) {
         for c in &self.cells {
             let k = usize::from(c.controls);
             let mut s = Lanes::<N>::ONES;
@@ -557,9 +727,58 @@ impl CompactPlan {
                 st(slots, c.outs[0] as usize, t);
             }
         }
-        let outputs: Vec<Lanes<N>> = self.outputs.iter().map(|&r| read(slots, r)).collect();
-        flatten(&outputs)
     }
+}
+
+impl CompactCell {
+    /// This cell in the branch-free uniform encoding (ADR-0052): absent
+    /// controls read `zero | NEG` (all ones), and a flip `t ^= s` becomes
+    /// the cswap of `t` with `!t` whose second output goes to `sink`.
+    fn uniform(&self, zero: u32, sink: u32) -> UCell {
+        let k = usize::from(self.controls);
+        assert!(k <= 3, "a cell has at most 3 controls, got {k}");
+        let mut refs = [zero | NEG; 5];
+        refs[..k].copy_from_slice(&self.ins[..k]);
+        refs[3] = self.ins[k];
+        let outs = if self.swap {
+            refs[4] = self.ins[k + 1];
+            self.outs
+        } else {
+            refs[4] = self.ins[k] ^ NEG;
+            [self.outs[0], sink]
+        };
+        UCell::new(refs, outs)
+    }
+}
+
+/// `words` words of `scratch`, starting on a 64-byte boundary so an
+/// 8-word slot is one cache line and a 4-word one never straddles two
+/// (grows `scratch` as needed; the offset is recomputed per call).
+fn aligned_window(scratch: &mut Vec<u64>, words: usize) -> &mut [u64] {
+    if scratch.len() < words + 7 {
+        scratch.resize(words + 7, 0);
+    }
+    let off = scratch.as_ptr().align_offset(64);
+    let off = if off < 8 { off } else { 0 };
+    &mut scratch[off..off + words]
+}
+
+/// Which compact-sim cell loop to run (ADR-0052). Every choice computes
+/// the same result; the default ([`CompactBalanced::simulate_lanes_with`])
+/// is `Simd(theseus_core::simd::level())`. Tests and benches pick one
+/// explicitly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompactKernel {
+    /// The portable reference loop (ADR-0048): `[u64; N]` ops, branching
+    /// per cell on the control count and swap-vs-flip.
+    Reference,
+    /// The branch-free uniform encoding, in portable Rust: isolates the
+    /// encoding from the vector width.
+    UniformPortable,
+    /// The uniform encoding's explicit SSE2/AVX2 kernel at this level
+    /// (capped at what the CPU has). `Scalar`, and block widths without
+    /// a kernel (`N` other than 2, 4, 8), run [`Self::Reference`].
+    Simd(SimdLevel),
 }
 
 /// Reusable slot file for [`CompactBalanced::simulate_lanes_with`].
@@ -567,6 +786,27 @@ impl CompactPlan {
 pub struct LaneScratch(Vec<u64>);
 
 impl CompactBalanced {
+    /// [`Self::simulate_lanes_with`] with an explicit cell loop (tests and
+    /// benches; ADR-0052).
+    pub fn simulate_lanes_kernel<const N: usize>(
+        &self,
+        inputs: &[Lanes<N>],
+        scratch: &mut LaneScratch,
+        kernel: CompactKernel,
+    ) -> Result<Vec<Lanes<N>>, CompactSimError> {
+        const { assert!(N >= 1 && N <= MAX_WORDS, "lane blocks are 1..=8 words") };
+        if inputs.len() != self.net().inputs.len() {
+            return Err(CompactSimError::InputWidth {
+                want: self.net().inputs.len(),
+                got: inputs.len(),
+            });
+        }
+        let outputs = self
+            .lane_plan()
+            .run_words(N, &flatten(inputs), &mut scratch.0, kernel);
+        Ok(unflatten(&outputs))
+    }
+
     /// [`CompactBalanced::simulate`] on [`Lanes::WIDTH`] input vectors at
     /// once: `inputs[p]` holds input port `p`'s token for every lane;
     /// returns one word per output port. Lane `l` equals `simulate` on
@@ -586,17 +826,7 @@ impl CompactBalanced {
         inputs: &[Lanes<N>],
         scratch: &mut LaneScratch,
     ) -> Result<Vec<Lanes<N>>, CompactSimError> {
-        const { assert!(N >= 1 && N <= MAX_WORDS, "lane blocks are 1..=8 words") };
-        if inputs.len() != self.net().inputs.len() {
-            return Err(CompactSimError::InputWidth {
-                want: self.net().inputs.len(),
-                got: inputs.len(),
-            });
-        }
-        let outputs = self
-            .lane_plan()
-            .run_words(N, &flatten(inputs), &mut scratch.0);
-        Ok(unflatten(&outputs))
+        self.simulate_lanes_kernel(inputs, scratch, CompactKernel::Simd(simd::level()))
     }
 
     /// Number of cells the lane simulator evaluates per pass: the active
@@ -777,5 +1007,168 @@ mod tests {
                 },
             })
         );
+    }
+}
+
+/// ADR-0052: every compact-sim kernel against the reference loop, and
+/// the SIMD-backed pack/unpack against the per-bit loops.
+#[cfg(test)]
+mod kernel_tests {
+    use super::*;
+
+    /// splitmix64 (fixed seed: failures reproduce).
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    /// A random single-assignment plan: `cells` cells over `n_inputs`
+    /// inputs, each reading earlier slots (random polarity) with 0..=3
+    /// controls, swap or flip; `n_out` random output refs.
+    fn random_plan(rng: &mut Rng, n_inputs: usize, cells: usize, n_out: usize) -> CompactPlan {
+        let mut n_slots = n_inputs as u32;
+        let mut plan_cells = Vec::with_capacity(cells);
+        for i in 0..cells {
+            // Cycle the shapes so every (controls, swap) pair shows up.
+            let controls = (i % 4) as u8;
+            let swap = (i / 4) % 2 == 0 || rng.below(3) == 0;
+            let mut ins = [0; MAX_ARITY];
+            for r in ins.iter_mut().take(usize::from(controls) + 2) {
+                *r = rng.below(n_slots as usize) as u32 | if rng.below(2) == 0 { NEG } else { 0 };
+            }
+            let outs = [n_slots, n_slots + 1];
+            n_slots += if swap { 2 } else { 1 };
+            plan_cells.push(CompactCell {
+                controls,
+                swap,
+                ins,
+                outs,
+            });
+        }
+        let outputs = (0..n_out)
+            .map(|_| rng.below(n_slots as usize) as u32 | if rng.below(2) == 0 { NEG } else { 0 })
+            .collect();
+        CompactPlan::assemble(n_inputs, n_slots as usize, plan_cells, outputs)
+    }
+
+    fn kernels() -> Vec<CompactKernel> {
+        let mut k = vec![CompactKernel::Reference, CompactKernel::UniformPortable];
+        k.extend(SimdLevel::available().into_iter().map(CompactKernel::Simd));
+        k
+    }
+
+    #[test]
+    fn every_kernel_matches_the_reference() {
+        let mut rng = Rng(0x51D_0052);
+        let shapes = [(1, 0, 1), (3, 1, 2), (4, 4, 3), (8, 37, 5), (20, 300, 16)];
+        // Miri: the small shapes only.
+        let shapes = if cfg!(miri) {
+            &shapes[..4]
+        } else {
+            &shapes[..]
+        };
+        for &(n_inputs, cells, n_out) in shapes {
+            let plan = random_plan(&mut rng, n_inputs, cells, n_out);
+            for n in 1..=MAX_WORDS {
+                let inputs: Vec<u64> = (0..n_inputs * n).map(|_| rng.next()).collect();
+                let want = plan.run_words(n, &inputs, &mut Vec::new(), CompactKernel::Reference);
+                assert_eq!(want.len(), n_out * n);
+                // One scratch across kernels: stale slots must not leak.
+                let mut scratch = vec![u64::MAX; 3];
+                for kernel in kernels() {
+                    let got = plan.run_words(n, &inputs, &mut scratch, kernel);
+                    assert_eq!(got, want, "{kernel:?}, N = {n}, {cells} cells");
+                }
+            }
+        }
+    }
+
+    /// Exhaustive over one cell of each shape: every (controls, swap)
+    /// pair and every polarity pattern of its refs, at the widest block.
+    #[test]
+    fn every_cell_shape_and_polarity() {
+        let mut rng = Rng(0xCE11);
+        for controls in 0..=3u8 {
+            for swap in [false, true] {
+                let n_refs = usize::from(controls) + if swap { 2 } else { 1 };
+                for pol in 0..1u32 << n_refs {
+                    let mut ins = [0; MAX_ARITY];
+                    for (j, r) in ins.iter_mut().take(n_refs).enumerate() {
+                        *r = j as u32 | if (pol >> j) & 1 == 1 { NEG } else { 0 };
+                    }
+                    let cell = CompactCell {
+                        controls,
+                        swap,
+                        ins,
+                        outs: [5, 6],
+                    };
+                    let n_slots = if swap { 7 } else { 6 };
+                    let outputs = (0..n_slots).collect();
+                    let plan = CompactPlan::assemble(5, n_slots as usize, vec![cell], outputs);
+                    let inputs: Vec<u64> = (0..5 * MAX_WORDS).map(|_| rng.next()).collect();
+                    let want = plan.run_words(
+                        MAX_WORDS,
+                        &inputs,
+                        &mut Vec::new(),
+                        CompactKernel::Reference,
+                    );
+                    for kernel in kernels() {
+                        let got = plan.run_words(MAX_WORDS, &inputs, &mut Vec::new(), kernel);
+                        assert_eq!(
+                            got, want,
+                            "{kernel:?}: {controls} controls, swap {swap}, pol {pol:b}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pack_unpack_match_the_bit_loops() {
+        let mut rng = Rng(0xBACC);
+        let (widths, lanes): (&[usize], &[usize]) = if cfg!(miri) {
+            (&[0, 1, 9, 65], &[0, 1, 65, 130])
+        } else {
+            (
+                &[0, 1, 7, 8, 9, 63, 64, 65, 200, 686],
+                &[0, 1, 31, 64, 65, 200, 256],
+            )
+        };
+        for &width in widths {
+            for &n_lanes in lanes {
+                let vectors: Vec<Vec<bool>> = (0..n_lanes)
+                    .map(|_| (0..width).map(|_| rng.next() & 1 == 1).collect())
+                    .collect();
+                let want = pack_lanes_scalar::<4, _>(&vectors);
+                assert_eq!(pack_lanes::<4, _>(&vectors), want, "{width} x {n_lanes}");
+                let per_lane: Vec<Vec<bool>> =
+                    (0..n_lanes).map(|l| unpack_lane(&want, l)).collect();
+                assert_eq!(per_lane, vectors);
+                assert_eq!(unpack_lanes(&want, n_lanes), vectors, "{width} x {n_lanes}");
+                if n_lanes <= 128 {
+                    let want2 = pack_lanes_scalar::<2, _>(&vectors);
+                    assert_eq!(pack_lanes::<2, _>(&vectors), want2);
+                    assert_eq!(unpack_lanes(&want2, n_lanes), vectors);
+                }
+                if n_lanes <= 64 {
+                    let want1 = pack_lanes_scalar::<1, _>(&vectors);
+                    assert_eq!(pack_lanes::<1, _>(&vectors), want1);
+                }
+                let want8 = pack_lanes_scalar::<8, _>(&vectors);
+                assert_eq!(pack_lanes::<8, _>(&vectors), want8);
+                assert_eq!(unpack_lanes(&want8, n_lanes), vectors);
+            }
+        }
     }
 }
