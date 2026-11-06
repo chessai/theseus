@@ -24,7 +24,8 @@ re-walks the same small trees once per input.
 2. **Concrete, not generic.** A generic is compiled at the *calling* crate's
    opt-level, and in dev builds theseus-tisc is opt-level 0 while theseus-core
    is 2. `Lane` is a fixed `[u64; 4]` so the evaluator always runs as
-   theseus-core code. Plain `[u64; 4]` loops; LLVM vectorizes them.
+   theseus-core code. Plain `[u64; 4]` loops: portable bit-slicing,
+   no vector instructions relied on.
 3. **Scalar stays the reference.** `eval_expr` / `eval_transfer` are kept for
    single inputs (eval-via-spec, counterexample checks) and as the oracle the
    lane path is property-tested against (random trees, partial chunks, every
