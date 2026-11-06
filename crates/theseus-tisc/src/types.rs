@@ -618,7 +618,13 @@ impl StateVals {
     /// A-0 32-bit IR, plus the appended PC_hi). Memory fields are NOT
     /// included -- use [`encode_composite`] for the system_step carrier.
     pub fn encode(&self) -> Value {
-        let ty = state_ty();
+        value_from_bits(&state_ty(), &self.encode_bits()).expect("StateVals::encode")
+    }
+
+    /// [`Self::encode`] as the flat `state_ty()` bits, `bits_of(&self.encode(),
+    /// &state_ty())`, without building the `Value` -- the lane ring runners
+    /// marshal a block of states per pass (ADR-0048).
+    pub fn encode_bits(&self) -> Vec<bool> {
         let mut all_bits: Vec<bool> = Vec::with_capacity(STATE_BITS);
         // Fields in order: r0..r7, PC_lo, BR, IR_b0..b3, s0..s7, PC_hi.
         for &r in &self.regs {
@@ -639,7 +645,7 @@ impl StateVals {
             push_u8_bits(&mut all_bits, s);
         }
         push_u8_bits(&mut all_bits, (self.pc >> 8) as u8); // PC_hi (appended)
-        value_from_bits(&ty, &all_bits).expect("StateVals::encode")
+        all_bits
     }
 
     /// B-2.1b: encode this State's CPU fields against a **reduced** `Layout`
@@ -822,20 +828,24 @@ impl StateVals {
     /// Memory fields are set to zero -- use [`decode_composite`] for the
     /// system_step carrier.
     pub fn decode(val: &Value) -> Self {
-        let ty = state_ty();
-        let all_bits = bits_of(val, &ty).expect("StateVals::decode");
+        Self::decode_bits(&bits_of(val, &state_ty()).expect("StateVals::decode"))
+    }
+
+    /// [`Self::decode`] from the flat `state_ty()` bits (the inverse of
+    /// [`Self::encode_bits`]).
+    pub fn decode_bits(all_bits: &[bool]) -> Self {
         assert_eq!(all_bits.len(), STATE_BITS);
 
         let mut regs = [0u8; NUM_REGS];
         for (i, r) in regs.iter_mut().enumerate() {
-            *r = read_u8_bits(&all_bits, i * W);
+            *r = read_u8_bits(all_bits, i * W);
         }
-        let pc = read_pc_bits(&all_bits);
-        let br = u16::from(read_u8_bits(&all_bits, BR_FIELD * W));
-        let ir = read_ir_bits(&all_bits, IR_B0_FIELD * W);
+        let pc = read_pc_bits(all_bits);
+        let br = u16::from(read_u8_bits(all_bits, BR_FIELD * W));
+        let ir = read_ir_bits(all_bits, IR_B0_FIELD * W);
         let mut scratch = [0u8; NUM_SCRATCH];
         for (i, s) in scratch.iter_mut().enumerate() {
-            *s = read_u8_bits(&all_bits, scratch_field(i) * W);
+            *s = read_u8_bits(all_bits, scratch_field(i) * W);
         }
 
         StateVals {
@@ -1019,6 +1029,28 @@ pub fn decode_system(val: &Value) -> StateVals {
     decode_composite(composite_val)
 }
 
+/// [`encode_system`] as the flat `system_state_ty()` bits -- CPU ++ mem
+/// ++ a quiescent bus -- without building the `Value` (ADR-0048).
+pub fn encode_system_bits(s: &StateVals) -> Vec<bool> {
+    let mut bits = s.encode_bits();
+    for &m in &s.mem {
+        push_u8_bits(&mut bits, m);
+    }
+    bits.resize(SYSTEM_BITS, false); // BusMsg = 0
+    bits
+}
+
+/// [`decode_system`] from the flat `system_state_ty()` bits (the bus is
+/// dropped).
+pub fn decode_system_bits(bits: &[bool]) -> StateVals {
+    assert_eq!(bits.len(), SYSTEM_BITS);
+    let mut s = StateVals::decode_bits(&bits[..STATE_BITS]);
+    for (i, m) in s.mem.iter_mut().enumerate() {
+        *m = read_u8_bits(bits, STATE_BITS + i * W);
+    }
+    s
+}
+
 /// Decode the BusMsg factor from a system `Value` as `[enable, addr, word]`.
 ///
 /// Returns three bytes; for quiescence checks all three must be zero.
@@ -1077,4 +1109,48 @@ fn read_u8_bits(bits: &[bool], offset: usize) -> u8 {
         }
     }
     val
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_states() -> Vec<StateVals> {
+        (0..40u32)
+            .map(|i| {
+                let b = |k: u32| (i.wrapping_mul(2_654_435_761).rotate_left(k) >> 8) as u8;
+                StateVals {
+                    regs: std::array::from_fn(|r| b(r as u32)),
+                    pc: (u16::from(b(9)) << 8) | u16::from(b(10)),
+                    br: u16::from(b(11)),
+                    ir: i.wrapping_mul(0x9E37_79B9),
+                    scratch: std::array::from_fn(|s| b(12 + s as u32)),
+                    mem: std::array::from_fn(|m| b(20 + m as u32)),
+                }
+            })
+            .collect()
+    }
+
+    // The bit-level marshalling is exactly the `Value` route.
+    #[test]
+    fn bit_marshalling_matches_value_marshalling() {
+        for s in sample_states() {
+            let cpu = s.encode_bits();
+            assert_eq!(cpu, bits_of(&s.encode(), &state_ty()).unwrap());
+            let cpu_only = StateVals {
+                mem: [0; MEM_WORDS],
+                ..s.clone()
+            };
+            assert_eq!(StateVals::decode_bits(&cpu), cpu_only);
+            assert_eq!(StateVals::decode(&s.encode()), cpu_only);
+
+            let sys = encode_system_bits(&s);
+            assert_eq!(
+                sys,
+                bits_of(&encode_system(&s), &system_state_ty()).unwrap()
+            );
+            assert_eq!(decode_system_bits(&sys), s);
+            assert_eq!(decode_system(&encode_system(&s)), s);
+        }
+    }
 }
