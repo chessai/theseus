@@ -13,6 +13,7 @@
 
 pub mod adjoint;
 pub mod bvexpr;
+pub mod domain;
 pub mod enumerate;
 pub mod iso;
 pub mod prim;

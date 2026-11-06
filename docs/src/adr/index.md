@@ -72,3 +72,4 @@ Numbering preserves the original planning-log identifiers. All ADRs below are
 ## Verification tooling (0050-)
 
 - [ADR-0050: Packed gate truth tables and the Shannon BDD build](0050-packed-gate-tables.md)
+- [ADR-0051: Flat bit-encoded domains for admission and truth tables](0051-flat-bit-encoded-domains.md)

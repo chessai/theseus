@@ -14,7 +14,8 @@
 use std::collections::HashMap;
 
 use biodivine_lib_bdd::{Bdd, BddVariableSet};
-use theseus_core::{adjoint, enumerate_values, Iso, Type};
+use theseus_core::domain::{bits_of_index, BitTable, Entry};
+use theseus_core::{adjoint, Iso, Type};
 use theseus_netlist::{bits_of, rail_width};
 
 use crate::asm::Instr;
@@ -364,8 +365,9 @@ struct GateTable {
 ///
 /// Uses `bits_of` on the admission-checked `forward` map -- the identical
 /// table `theseus_eval::eval` runs (MAJOR-4: no hand-written gate BDDs).
-/// Each value lands on the row [`row_of`] its input bits name, so the
-/// packing never depends on `enumerate_values` order.
+/// The map is read once into a [`BitTable`] and the domain walked as its
+/// index range (ADR-0051); each input lands on the row [`row_of`] its bits
+/// name, so the packing never depends on enumeration order.
 fn synthesize_gate(def: &theseus_core::PrimDef) -> Result<GateTable, NetlistWalkError> {
     let err =
         |what: String| NetlistWalkError::GateError(format!("prim '{}': {what}", def.forward_name));
@@ -376,21 +378,32 @@ fn synthesize_gate(def: &theseus_core::PrimDef) -> Result<GateTable, NetlistWalk
             "{n_in} input bits exceed the packed-table limit {MAX_GATE_INPUTS}"
         )));
     }
+    let table =
+        BitTable::from_def(def).ok_or_else(|| err("domain too wide for a bit table".into()))?;
     let mut cols = vec![Mask::zero(n_in); n_out];
-    for v in enumerate_values(&def.input_ty) {
-        let in_bits =
-            bits_of(&v, &def.input_ty).map_err(|e| err(format!("bits_of input: {e:?}")))?;
-        let out_v = def
-            .forward
-            .get(&v)
-            .ok_or_else(|| err(format!("input not in forward map: {v:?}")))?;
-        let out_bits =
-            bits_of(out_v, &def.output_ty).map_err(|e| err(format!("bits_of output: {e:?}")))?;
-        if in_bits.len() != n_in || out_bits.len() != n_out {
-            return Err(err(format!(
-                "bits_of width disagrees with rail_width at {v:?}"
-            )));
-        }
+    for &i in table.inputs() {
+        // An index is `bits_of` packed (ADR-0051), so these are the input's bits.
+        let in_bits = bits_of_index(i.into(), n_in);
+        let out_bits = match table.forward(i) {
+            Entry::Index(o) => bits_of_index(o.into(), n_out),
+            Entry::Missing => {
+                return Err(err(format!(
+                    "input not in forward map: {:?}",
+                    table.input_value(i)
+                )))
+            }
+            Entry::IllTyped => {
+                let v = table.input_value(i);
+                let bits = bits_of(&def.forward[&v], &def.output_ty)
+                    .map_err(|e| err(format!("bits_of output: {e:?}")))?;
+                if bits.len() != n_out {
+                    return Err(err(format!(
+                        "bits_of width disagrees with rail_width at {v:?}"
+                    )));
+                }
+                bits
+            }
+        };
         let x = row_of(&in_bits);
         for (col, &b) in cols.iter_mut().zip(&out_bits) {
             if b {
@@ -786,6 +799,7 @@ mod tests {
 
     use super::*;
     use crate::types::{bit, flat};
+    use theseus_core::enumerate_values;
 
     thread_local! {
         /// BDD apply ops `shannon` issued on this thread.
