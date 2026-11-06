@@ -626,10 +626,11 @@ fn bveq_major5_all_two_op_aliased_rejected() {
 // ── T6: reconciliation L-a (symbolic ≡ exec_instr, full domain) ─────
 
 /// Symbolic outputs for the 256 register files `regs(x)`, `x = 0..=255`, in
-/// one lane-parallel transfer walk (ADR-0049); lane `x` is input `x`.
-fn sym_outs(transfer: &RegTransfer, regs: impl Fn(u8) -> [u8; 8]) -> bveq::RegPlanes {
+/// one lane-parallel evaluation (ADR-0049) of the transfer program compiled
+/// once per instruction (ADR-0052); lane `x` is input `x`.
+fn sym_outs(program: &bveq::LaneProgram, regs: impl Fn(u8) -> [u8; 8]) -> bveq::RegPlanes {
     let inputs: Vec<[u8; 8]> = (0..=255u8).map(regs).collect();
-    bveq::eval_transfer_lanes(transfer, &bveq::pack_regs(&inputs))
+    bveq::eval_program_lanes(program, &bveq::pack_regs(&inputs))
 }
 
 #[test]
@@ -646,8 +647,9 @@ fn bveq_reconciliation_la_full_domain() {
 
     for instr in &two_op {
         let transfer = bveq::instr_semantics(instr).unwrap();
+        let program = bveq::transfer_program(&transfer);
         for a in 0..=255u8 {
-            let sym = sym_outs(&transfer, |b| [a, b, 0, 0, 0, 0, 0, 0]);
+            let sym = sym_outs(&program, |b| [a, b, 0, 0, 0, 0, 0, 0]);
             for b in 0..=255u8 {
                 let sym_out = bveq::unpack_regs(&sym, b as usize);
 
@@ -678,9 +680,10 @@ fn bveq_reconciliation_la_full_domain() {
 
     for instr in &three_op {
         let transfer = bveq::instr_semantics(instr).unwrap();
+        let program = bveq::transfer_program(&transfer);
         for a in 0..=255u8 {
             for b in 0..=255u8 {
-                let sym = sym_outs(&transfer, |c| [a, b, c, 0, 0, 0, 0, 0]);
+                let sym = sym_outs(&program, |c| [a, b, c, 0, 0, 0, 0, 0]);
                 for c in 0..=255u8 {
                     let sym_out = bveq::unpack_regs(&sym, c as usize);
 
@@ -707,7 +710,9 @@ fn bveq_reconciliation_la_full_domain() {
         ];
         for instr in &imm_instrs {
             let transfer = bveq::instr_semantics(instr).unwrap();
-            let sym = sym_outs(&transfer, |a| [a, 0, 0, 0, 0, 0, 0, 0]);
+            let sym = sym_outs(&bveq::transfer_program(&transfer), |a| {
+                [a, 0, 0, 0, 0, 0, 0, 0]
+            });
             for a in 0..=255u8 {
                 let sym_out = bveq::unpack_regs(&sym, a as usize);
 

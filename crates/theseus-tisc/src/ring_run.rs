@@ -57,7 +57,7 @@
 use theseus_netlist::ir::cell::CellNetError;
 use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_netlist::{
-    balance_compact, bits_of, lower_iso_bennett, pack_lanes, unpack_lane, CompactBalanced, Lane,
+    balance_compact, bits_of, lower_iso_bennett, pack_lanes, unpack_lanes, CompactBalanced, Lane,
     LaneScratch, Lanes, PHASE_COUNT,
 };
 
@@ -94,10 +94,12 @@ impl Carrier {
         pack_lanes(&bits)
     }
 
-    /// Lanes `0..n_starts` of `data` back to states.
+    /// Lanes `0..n_starts` of `data` back to states (one bulk SIMD
+    /// transpose, ADR-0052).
     fn unpack<const N: usize>(&self, data: &[Lanes<N>], n_starts: usize) -> Vec<StateVals> {
-        (0..n_starts)
-            .map(|lane| (self.decode)(&unpack_lane(data, lane)))
+        unpack_lanes(data, n_starts)
+            .iter()
+            .map(|bits| (self.decode)(bits))
             .collect()
     }
 }
@@ -833,8 +835,8 @@ impl TwoBodyRing {
 
         // Decode back to StateVals
         let mut result = Carrier::CPU.unpack(&cpu, starts.len());
-        for (lane, s) in result.iter_mut().enumerate() {
-            Self::decode_mem_bits(&unpack_lane(&mem, lane), s);
+        for (s, bits) in result.iter_mut().zip(unpack_lanes(&mem, starts.len())) {
+            Self::decode_mem_bits(&bits, s);
         }
         result
     }

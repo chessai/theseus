@@ -257,8 +257,10 @@ pub fn eval_transfer(transfer: &RegTransfer, regs: &[u8; NUM_REGS]) -> [u8; NUM_
 
 // ── Lane-parallel evaluator (ADR-0049) ──────────────────────────────
 
-pub use theseus_core::bvexpr::{eval_expr_lanes, Lane, LANES};
-use theseus_core::bvexpr::{pack_lane, unpack_lane, LANE_ZERO, OPERAND_BITS};
+pub use theseus_core::bvexpr::{eval_expr_lanes, Lane, LaneProgram, LANES};
+use theseus_core::bvexpr::{
+    pack_lane, pack_rows, unpack_lane, unpack_rows, LANE_ZERO, OPERAND_BITS,
+};
 
 const _: () = assert!(BITS == OPERAND_BITS, "register planes are byte-wide");
 
@@ -268,7 +270,23 @@ pub type RegPlanes = [[Lane; BITS]; NUM_REGS];
 
 /// Pack up to [`LANES`] register files (input `i` → lane `i`) into
 /// [`RegPlanes`]. Lanes past `inputs.len()` are zero.
+///
+/// One byte column per register, transposed 64 lanes at a time by the
+/// SIMD bytes → bit-planes kernel (ADR-0052).
 pub fn pack_regs(inputs: &[[u8; NUM_REGS]]) -> RegPlanes {
+    assert!(
+        inputs.len() <= LANES,
+        "pack_regs: {} inputs > LANES",
+        inputs.len()
+    );
+    let mut planes = [[LANE_ZERO; BITS]; NUM_REGS];
+    pack_rows(inputs.as_flattened(), &mut planes);
+    planes
+}
+
+/// The pre-ADR-0052 [`pack_regs`] (one `pack_lane` per input), kept as
+/// the reference.
+pub fn pack_regs_scalar(inputs: &[[u8; NUM_REGS]]) -> RegPlanes {
     assert!(
         inputs.len() <= LANES,
         "pack_regs: {} inputs > LANES",
@@ -288,9 +306,44 @@ pub fn unpack_regs(planes: &RegPlanes, i: usize) -> [u8; NUM_REGS] {
     regs
 }
 
+/// [`unpack_regs`] for lanes `0..n` at once, through the SIMD bit-planes →
+/// bytes kernel (ADR-0052). Panics if `n > LANES`.
+pub fn unpack_regs_all(planes: &RegPlanes, n: usize) -> Vec<[u8; NUM_REGS]> {
+    let mut regs = vec![[0u8; NUM_REGS]; n];
+    unpack_rows(planes, regs.as_flattened_mut());
+    regs
+}
+
+/// `transfer` flattened once into a [`LaneProgram`] (ADR-0052): output
+/// `r * BITS + bit` is `transfer.regs[r][bit]`. Build it once per transfer
+/// and evaluate it per chunk with [`eval_program_lanes`].
+pub fn transfer_program(transfer: &RegTransfer) -> LaneProgram {
+    LaneProgram::new(
+        NUM_REGS * BITS,
+        (0..NUM_REGS)
+            .flat_map(|r| (0..BITS).map(move |bit| (r * BITS + bit, &transfer.regs[r][bit]))),
+    )
+}
+
+/// Evaluate a [`transfer_program`] on one chunk of packed inputs.
+pub fn eval_program_lanes(program: &LaneProgram, vars: &RegPlanes) -> RegPlanes {
+    let mut out = [[LANE_ZERO; BITS]; NUM_REGS];
+    program.eval(vars, out.as_flattened_mut());
+    out
+}
+
 /// Lane-parallel [`eval_transfer`]: lane `i` of the result is
 /// `eval_transfer(transfer, input_i)` for the inputs packed in `vars`.
+///
+/// Compiles the transfer on every call; a sweep should hoist
+/// [`transfer_program`] out of its chunk loop.
 pub fn eval_transfer_lanes(transfer: &RegTransfer, vars: &RegPlanes) -> RegPlanes {
+    eval_program_lanes(&transfer_program(transfer), vars)
+}
+
+/// The pre-ADR-0052 [`eval_transfer_lanes`]: one recursive
+/// [`eval_expr_lanes`] walk per output bit. The reference.
+pub fn eval_transfer_lanes_recursive(transfer: &RegTransfer, vars: &RegPlanes) -> RegPlanes {
     let mut out = [[LANE_ZERO; BITS]; NUM_REGS];
     for (r, planes) in out.iter_mut().enumerate() {
         for (bit, plane) in planes.iter_mut().enumerate() {
@@ -1466,6 +1519,46 @@ mod lane_tests {
                 .copied()
                 .unwrap_or_else(|| 1 + rng.below(LANES));
             assert_lanes_match(&transfer, &mut rng, n, &format!("{body:?}"));
+        }
+    }
+
+    /// ADR-0052: the compiled transfer program at every SIMD level equals
+    /// the recursive walk, and the SIMD pack/unpack equal the per-lane
+    /// loops, on instruction-sequence transfers and random trees.
+    #[test]
+    fn transfer_program_and_transposes_match_references_every_level() {
+        use theseus_core::simd::SimdLevel;
+        let mut rng = SplitMix64(0xAD2_0052);
+        for case in 0..60 {
+            let transfer = if case % 2 == 0 {
+                let len = 1 + rng.below(4);
+                let body: Vec<Instr> = (0..len).map(|_| random_instr(&mut rng)).collect();
+                symbolic_exec(&body).expect("register-pure body")
+            } else {
+                let regs = (0..NUM_REGS)
+                    .map(|_| (0..BITS).map(|_| random_expr(&mut rng, 6)).collect())
+                    .collect();
+                RegTransfer { regs }
+            };
+            let n = SIZES[case % SIZES.len()];
+            let inputs: Vec<[u8; NUM_REGS]> = (0..n)
+                .map(|_| std::array::from_fn(|_| rng.next_u64() as u8))
+                .collect();
+            let vars = pack_regs(&inputs);
+            assert_eq!(vars, pack_regs_scalar(&inputs), "pack_regs, n = {n}");
+            assert_eq!(
+                unpack_regs_all(&vars, n),
+                inputs,
+                "unpack_regs_all, n = {n}"
+            );
+            let want = eval_transfer_lanes_recursive(&transfer, &vars);
+            let program = transfer_program(&transfer);
+            for level in SimdLevel::available() {
+                let mut got = [[LANE_ZERO; BITS]; NUM_REGS];
+                program.eval_with(level, &vars, got.as_flattened_mut());
+                assert_eq!(got, want, "case {case}, {level}");
+            }
+            assert_eq!(eval_program_lanes(&program, &vars), want);
         }
     }
 }
