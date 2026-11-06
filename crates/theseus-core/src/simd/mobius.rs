@@ -95,6 +95,7 @@ fn scalar(c: &mut [u64], n: usize) {
 
 /// Radix-`R` butterfly (`R` = 1, 2, 4 or 8) on `R` registers: `log2 R`
 /// cross-register stages, `v[i] ^= v[i ^ h]` for every `i` with bit `h`.
+#[cfg(target_arch = "x86_64")]
 macro_rules! butterfly {
     ($v:expr, $R:expr, $xor:ident) => {{
         let mut h = 1;
@@ -112,6 +113,7 @@ macro_rules! butterfly {
 /// The two pass drivers, shared by both flavours: `$first::<G>` runs the
 /// in-register stages over groups of `G` registers, `$pass::<R>` a
 /// radix-`R` cross-word pass. `c.len()` is a power of two, at least `$W`.
+#[cfg(target_arch = "x86_64")]
 macro_rules! drive {
     ($c:expr, $W:expr, $first:ident, $pass:ident) => {{
         let c = $c;

@@ -127,6 +127,7 @@ fn scalar_run(cells: &[MuxCell], slots: &mut [Lane]) {
 
 /// Byte offset of slot `r` (32-byte slots): the 32-bit shift drops the
 /// polarity bit, and slots stay below `MAX_SLOTS = 2^26`.
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn byte_offset(r: u32) -> usize {
     (r << 5) as usize

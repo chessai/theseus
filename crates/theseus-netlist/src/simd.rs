@@ -156,6 +156,7 @@ impl UniformPlan {
             slots.len(),
             self.n_slots
         );
+        #[cfg(target_arch = "x86_64")]
         let cells = &self.cells[..];
         match (level.supported(), n) {
             #[cfg(target_arch = "x86_64")]
@@ -221,6 +222,7 @@ impl UniformPlan {
 /// bit along with every bit at or above 28, and `UniformPlan::new` keeps
 /// slot indices below `MAX_SLOTS = 2^26`, so no index bit is lost; the
 /// remaining scale folds into the x86 addressing mode.
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn byte_offset(r: u32, bytes: usize) -> usize {
     ((r << 4) as usize) * (bytes / 16)
