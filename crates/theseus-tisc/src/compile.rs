@@ -1174,7 +1174,8 @@ fn emit_skip_block(
 /// 2. FRAME CLOSURE: non-operand registers unchanged (identity); operand
 ///    output bits depend only on operand-register input variables.
 /// 3. POINTWISE over the table: every `(in, out)` row of `def.forward`
-///    agrees with `eval_transfer` on the operand registers.
+///    agrees with the transfer on the operand registers (evaluated
+///    lane-parallel, `eval_transfer_lanes`).
 ///
 /// Returns `Ok(())` on success, `Err(CompileError::EmissionVerificationFailed)`
 /// on mismatch. `operand_regs` MUST be TYPE-derived (from `regs`/`ctx.homes`),
@@ -1261,41 +1262,60 @@ pub fn bveq_verify_emission(
         }
     }
 
-    // Step 3: Pointwise over the table.
-    for (in_val, out_val) in &def.forward {
-        let in_bytes = value_to_leaf_bytes(in_val, &def.input_ty);
-        let out_bytes = value_to_leaf_bytes(out_val, &def.output_ty);
+    // Step 3: Pointwise over the table, lane-parallel (ADR-0049): `LANES`
+    // rows per transfer walk, checked in table order, so the reported
+    // mismatch (first row, then first operand leaf) is the scalar one. A
+    // chunk decodes its input keys before checking, so an ill-typed key
+    // (which panics in `value_to_leaf_bytes`) can now panic ahead of an
+    // earlier row's mismatch in the same chunk.
+    let mut rows = def.forward.iter();
+    let mut chunk: Vec<(Vec<u8>, &Value)> = Vec::with_capacity(bveq::LANES);
+    let mut inputs: Vec<[u8; NUM_REGS]> = Vec::with_capacity(bveq::LANES);
+    loop {
+        chunk.clear();
+        inputs.clear();
+        for (in_val, out_val) in rows.by_ref().take(bveq::LANES) {
+            let in_bytes = value_to_leaf_bytes(in_val, &def.input_ty);
 
-        // Build input register state: operand regs get their leaf bytes,
-        // all other regs are zero (they are unconstrained by step 2's closure,
-        // so any fixed value works -- zero is canonical).
-        let mut input_regs = [0u8; NUM_REGS];
-        for (leaf_idx, &r) in operand_regs.iter().enumerate() {
-            if leaf_idx < in_bytes.len() {
-                input_regs[r as usize] = in_bytes[leaf_idx];
+            // Build input register state: operand regs get their leaf bytes,
+            // all other regs are zero (they are unconstrained by step 2's
+            // closure, so any fixed value works -- zero is canonical).
+            let mut input_regs = [0u8; NUM_REGS];
+            for (leaf_idx, &r) in operand_regs.iter().enumerate() {
+                if leaf_idx < in_bytes.len() {
+                    input_regs[r as usize] = in_bytes[leaf_idx];
+                }
             }
+            inputs.push(input_regs);
+            chunk.push((in_bytes, out_val));
+        }
+        if chunk.is_empty() {
+            return Ok(());
         }
 
-        let result_regs = bveq::eval_transfer(&transfer, &input_regs);
+        let result_planes = bveq::eval_transfer_lanes(&transfer, &bveq::pack_regs(&inputs));
 
-        // Check operand registers against expected output.
-        for (leaf_idx, &r) in operand_regs.iter().enumerate() {
-            let expected = if leaf_idx < out_bytes.len() {
-                out_bytes[leaf_idx]
-            } else {
-                0
-            };
-            if result_regs[r as usize] != expected {
-                return Err(CompileError::EmissionVerificationFailed(format!(
-                    "pointwise mismatch for '{}': input={:?}, reg {} (leaf {}): \
-                     got {} expected {}",
-                    def.forward_name, in_bytes, r, leaf_idx, result_regs[r as usize], expected
-                )));
+        for (lane, (in_bytes, out_val)) in chunk.iter().enumerate() {
+            let out_bytes = value_to_leaf_bytes(out_val, &def.output_ty);
+            let result_regs = bveq::unpack_regs(&result_planes, lane);
+
+            // Check operand registers against expected output.
+            for (leaf_idx, &r) in operand_regs.iter().enumerate() {
+                let expected = if leaf_idx < out_bytes.len() {
+                    out_bytes[leaf_idx]
+                } else {
+                    0
+                };
+                if result_regs[r as usize] != expected {
+                    return Err(CompileError::EmissionVerificationFailed(format!(
+                        "pointwise mismatch for '{}': input={:?}, reg {} (leaf {}): \
+                         got {} expected {}",
+                        def.forward_name, in_bytes, r, leaf_idx, result_regs[r as usize], expected
+                    )));
+                }
             }
         }
     }
-
-    Ok(())
 }
 
 // ── Prim recognition ─────────────────────────────────────────────────
@@ -5516,5 +5536,92 @@ mod tests {
             block.len(),
             out.pc
         );
+    }
+
+    // ── bveq_verify_emission: lane-parallel step 3 vs the scalar loop ──
+
+    /// The pre-ADR-0049 scalar step 3 (one `eval_transfer` per row): the
+    /// reference for the lane-parallel loop's verdict and message.
+    fn pointwise_scalar(body: &[Instr], def: &PrimDef, operand_regs: &[u8]) -> Result<(), String> {
+        let transfer = bveq::symbolic_exec(body).unwrap();
+        for (in_val, out_val) in &def.forward {
+            let in_bytes = value_to_leaf_bytes(in_val, &def.input_ty);
+            let out_bytes = value_to_leaf_bytes(out_val, &def.output_ty);
+            let mut input_regs = [0u8; NUM_REGS];
+            for (leaf_idx, &r) in operand_regs.iter().enumerate() {
+                if leaf_idx < in_bytes.len() {
+                    input_regs[r as usize] = in_bytes[leaf_idx];
+                }
+            }
+            let result_regs = bveq::eval_transfer(&transfer, &input_regs);
+            for (leaf_idx, &r) in operand_regs.iter().enumerate() {
+                let expected = out_bytes.get(leaf_idx).copied().unwrap_or(0);
+                if result_regs[r as usize] != expected {
+                    return Err(format!(
+                        "pointwise mismatch for '{}': input={:?}, reg {} (leaf {}): \
+                         got {} expected {}",
+                        def.forward_name, in_bytes, r, leaf_idx, result_regs[r as usize], expected
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `Flat(3)^3` Toffoli table `(a, b, c) ↦ (a ^ (b & c), b, c)` -- 512
+    /// rows, two lane chunks -- with the rows in `corrupt` (enumeration
+    /// order, which is table order here) given a wrong first output leaf.
+    fn ccnot_table_f3(corrupt: &[usize]) -> PrimDef {
+        let f = Type::Flat(3);
+        let ty = Type::prod(f.clone(), Type::prod(f.clone(), f));
+        let mut forward = BTreeMap::new();
+        for (k, v) in theseus_core::prim::enumerate_values(&ty).iter().enumerate() {
+            let mut b = value_to_leaf_bytes(v, &ty);
+            b[0] ^= b[1] & b[2];
+            if corrupt.contains(&k) {
+                b[0] ^= 0b101;
+            }
+            forward.insert(v.clone(), value_from_leaf_bytes(&b, &ty).0);
+        }
+        PrimDef {
+            forward_name: "ccnot3".into(),
+            backward_name: "ccnot3".into(),
+            input_ty: ty.clone(),
+            output_ty: ty,
+            forward,
+            backward: BTreeMap::new(),
+            symbolic: None,
+        }
+    }
+
+    #[test]
+    fn bveq_verify_emission_lanes_match_scalar() {
+        let body = [Instr::Ccnot {
+            rd: 5,
+            rs: 2,
+            rt: 7,
+        }];
+        let regs: &[u8] = &[5, 2, 7];
+        assert_eq!(pointwise_scalar(&body, &ccnot_table_f3(&[]), regs), Ok(()));
+        assert!(bveq_verify_emission(&body, &ccnot_table_f3(&[]), regs).is_ok());
+        let cases: [&[usize]; 7] = [
+            &[0],
+            &[63, 64],
+            &[200, 130],
+            &[255, 256],
+            &[511],
+            &[300, 470, 257],
+            &[64, 128, 192, 320],
+        ];
+        for corrupt in cases {
+            let def = ccnot_table_f3(corrupt);
+            let expected = pointwise_scalar(&body, &def, regs).unwrap_err();
+            match bveq_verify_emission(&body, &def, regs) {
+                Err(CompileError::EmissionVerificationFailed(msg)) => {
+                    assert_eq!(msg, expected, "rows {corrupt:?}")
+                }
+                other => panic!("rows {corrupt:?}: expected mismatch, got {other:?}"),
+            }
+        }
     }
 }

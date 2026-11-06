@@ -64,9 +64,10 @@ Numbering preserves the original planning-log identifiers. All ADRs below are
 - [ADR-0046: M-C2 build -- the composite-ring memory bus](0046-mc2-build-composite-ring.md)
 - [ADR-0047: W<n> machine-word type and the `add_into` word-add prim](0047-wn-word-type-and-add-into-prim.md)
 
-## Simulation (0048)
+## Simulation (0048-0049)
 
 - [ADR-0048: Lane-parallel (bit-sliced) netlist simulation](0048-lane-parallel-netlist-simulation.md)
+- [ADR-0049: Lane-parallel `BvExpr` evaluation](0049-lane-parallel-bvexpr-eval.md)
 
 ## Verification tooling (0050-)
 
