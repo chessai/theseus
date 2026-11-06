@@ -191,27 +191,34 @@ fn bus_quiescent_with_mixed_rom() {
 fn system_ring_mexchr_matches_eval_oracle() {
     let c = ctx();
     const MAX_R: u32 = 2;
+    let pcs = [0u8, 1, 4];
+    let starts: Vec<StateVals> = pcs.iter().map(|&pc| sample_state(pc)).collect();
+    let mut oracle = starts.clone();
 
-    for &pc in &[0u8, 1, 4] {
-        let start = sample_state(pc);
-        let mut oracle = start.clone();
-
-        for r in 0..=MAX_R {
-            let ring_result = c.ring.run(&start, r);
+    // Every start at once, lane-parallel (ADR-0048).
+    for r in 0..=MAX_R {
+        let ring_results = c.ring.run_many(&starts, r);
+        let open_results = c.ring.run_open_many(&starts, r);
+        for (i, pc) in pcs.iter().enumerate() {
             assert_eq!(
-                ring_result, oracle,
+                ring_results[i], oracle[i],
                 "SystemRing.run(s, {r}) != eval^{r} at pc={pc} (MEXCHR ROM)"
             );
-            let open_result = c.ring.run_open(&start, r);
             assert_eq!(
-                open_result, ring_result,
+                open_results[i], ring_results[i],
                 "SystemRing: run_open != run at pc={pc}, r={r} (MEXCHR ROM)"
             );
-            oracle = eval_system_state(&format!("mexchr/pc={pc}/r={r}"), &c.iso, &oracle);
         }
+        oracle = oracle
+            .iter()
+            .zip(pcs)
+            .map(|(s, pc)| eval_system_state(&format!("mexchr/pc={pc}/r={r}"), &c.iso, s))
+            .collect();
+    }
 
+    for (start, pc) in starts.iter().zip(pcs) {
         assert!(
-            c.ring.bus_quiescent(&start),
+            c.ring.bus_quiescent(start),
             "SystemRing: bus NOT quiescent at pc={pc} (MEXCHR ROM)"
         );
     }
@@ -228,23 +235,27 @@ fn two_body_ring_mexchr_matches_system_ring() {
     let iso = system_step(&rom);
 
     let samples: Vec<StateVals> = SAMPLE_PCS.iter().map(|&pc| sample_state(pc)).collect();
+    let mut oracle = samples.clone();
 
-    for (si, start) in samples.iter().enumerate() {
-        let mut oracle = start.clone();
-        for r in 1..=2u32 {
-            oracle = eval_system_state(&format!("two_body_mexchr/si={si}/r={r}"), &iso, &oracle);
-            let two_result = two.run(start, r);
-            let sys_result = sys.run(start, r);
+    for r in 1..=2u32 {
+        oracle = oracle
+            .iter()
+            .enumerate()
+            .map(|(si, s)| eval_system_state(&format!("two_body_mexchr/si={si}/r={r}"), &iso, s))
+            .collect();
+        let two_results = two.run_many(&samples, r);
+        let sys_results = sys.run_many(&samples, r);
+        for si in 0..samples.len() {
             assert_eq!(
-                two_result, oracle,
+                two_results[si], oracle[si],
                 "TwoBodyRing.run != eval^{r} at sample {si} (MEXCHR ROM)"
             );
             assert_eq!(
-                sys_result, oracle,
+                sys_results[si], oracle[si],
                 "SystemRing.run != eval^{r} at sample {si} (MEXCHR ROM)"
             );
             assert_eq!(
-                two_result, sys_result,
+                two_results[si], sys_results[si],
                 "TwoBodyRing.run != SystemRing.run at sample {si}, r={r} (MEXCHR ROM)"
             );
         }

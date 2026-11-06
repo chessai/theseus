@@ -186,39 +186,44 @@ fn sbox_whole_domain_packed() {
     let budget = sbox_instrs().len();
 
     for x in 0u8..16 {
-        let out = run_rom_fast(&rom, state_packed(x), budget);
-
-        // Same input in all 8 lanes → all 8 nibbles equal the table entry.
-        for b in 0..8 {
-            assert_eq!(
-                out_nibble(&out, b),
-                PRESENT_SBOX[x as usize],
-                "x={x:#04X} lane {b}: ROM {:#04X} != table {:#04X}",
-                out_nibble(&out, b),
-                PRESENT_SBOX[x as usize]
-            );
-        }
-        // Whole parked bytes are 0x00/0xFF (uniform packing).
-        for i in 0..4 {
-            let want = if (PRESENT_SBOX[x as usize] >> i) & 1 == 1 {
-                0xFF
-            } else {
-                0x00
-            };
-            assert_eq!(out.scratch[2 + i], want, "x={x:#04X} output byte y{i}");
-        }
-        // STANDALONE garbage-free: inputs preserved, acc + temp back to 0.
-        for i in 0..4 {
-            let inp = if (x >> i) & 1 == 1 { 0xFF } else { 0x00 };
-            assert_eq!(out.regs[i], inp, "x={x:#04X}: input r{i} must be preserved");
-        }
-        assert_eq!(out.regs[ACC as usize], 0, "x={x:#04X}: acc r4 not clean");
-        assert_eq!(out.regs[TMP as usize], 0, "x={x:#04X}: temp r5 not clean");
+        assert_sbox_packed(x, &run_rom_fast(&rom, state_packed(x), budget));
     }
     eprintln!(
         "PRESENT S-box correct on all 16 inputs (packed x8); inputs preserved, \
          acc+temp clean → STANDALONE garbage-free."
     );
+}
+
+/// The whole-domain obligations for input `x` packed ×8, on any executor
+/// (the fast emulator here, the real system ring in
+/// `sbox_system_ring_authority`).
+fn assert_sbox_packed(x: u8, out: &StateVals) {
+    // Same input in all 8 lanes → all 8 nibbles equal the table entry.
+    for b in 0..8 {
+        assert_eq!(
+            out_nibble(out, b),
+            PRESENT_SBOX[x as usize],
+            "x={x:#04X} lane {b}: ROM {:#04X} != table {:#04X}",
+            out_nibble(out, b),
+            PRESENT_SBOX[x as usize]
+        );
+    }
+    // Whole parked bytes are 0x00/0xFF (uniform packing).
+    for i in 0..4 {
+        let want = if (PRESENT_SBOX[x as usize] >> i) & 1 == 1 {
+            0xFF
+        } else {
+            0x00
+        };
+        assert_eq!(out.scratch[2 + i], want, "x={x:#04X} output byte y{i}");
+    }
+    // STANDALONE garbage-free: inputs preserved, acc + temp back to 0.
+    for i in 0..4 {
+        let inp = if (x >> i) & 1 == 1 { 0xFF } else { 0x00 };
+        assert_eq!(out.regs[i], inp, "x={x:#04X}: input r{i} must be preserved");
+    }
+    assert_eq!(out.regs[ACC as usize], 0, "x={x:#04X}: acc r4 not clean");
+    assert_eq!(out.regs[TMP as usize], 0, "x={x:#04X}: temp r5 not clean");
 }
 
 // ── 2. Discriminating packing: 8 DIFFERENT inputs across the 8 bit positions ──
@@ -451,28 +456,49 @@ fn sbox_system_ring_authority() {
         assert!(ring.bus_quiescent(&start), "x={x:#04X}: bus not quiescent");
     }
 
-    // Whole-program authority: run all 47 revolutions, output == published table.
-    // A few discriminating inputs (whole-domain is proven fast-tier by run_rom_fast).
-    for &x in &[0x0u8, 0x3, 0x7, 0xA, 0xC, 0xF] {
-        let out = ring.run(&state_packed(x), revolutions);
-        assert_eq!(
-            out_nibble(&out, 0),
-            PRESENT_SBOX[x as usize],
-            "system-ring: S({x:#04X}) real-CPU {:#04X} != table {:#04X}",
-            out_nibble(&out, 0),
-            PRESENT_SBOX[x as usize]
-        );
-        // Inputs preserved on the real ring too.
+    // Whole-program authority: run all 47 revolutions over the WHOLE
+    // domain in one lane-parallel pass (ADR-0048) -- lanes [0, 16) are
+    // the 16 inputs packed ×8 (the `sbox_whole_domain_packed`
+    // obligations), the rest random discriminating packings (every bit
+    // position an independent input). Every final state must also equal
+    // the fast emulator's.
+    let mut starts: Vec<StateVals> = (0u8..16).map(state_packed).collect();
+    let mut x = 0x2545_F491_4F6C_DD1Du64;
+    while starts.len() < 256 {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        let mut s = empty_state();
         for i in 0..4 {
-            let inp = if (x >> i) & 1 == 1 { 0xFF } else { 0x00 };
+            s.regs[i] = (x >> (8 * i)) as u8;
+        }
+        starts.push(s);
+    }
+    let outs = ring.run_many(&starts, revolutions);
+    for (k, (start, out)) in starts.iter().zip(&outs).enumerate() {
+        assert_eq!(
+            *out,
+            run_rom_fast(&rom, start.clone(), revolutions as usize),
+            "system-ring start {k}: real CPU != fast emulator"
+        );
+        if k < 16 {
+            assert_sbox_packed(k as u8, out);
+            continue;
+        }
+        for b in 0..8u8 {
+            let inp = (0..4).fold(0u8, |v, i| v | (((start.regs[i] >> b) & 1) << i));
             assert_eq!(
-                out.regs[i], inp,
-                "system-ring x={x:#04X}: input r{i} not preserved"
+                out_nibble(out, b),
+                PRESENT_SBOX[inp as usize],
+                "system-ring start {k} bit {b}: S({inp:#04X})"
             );
         }
     }
     eprintln!(
         "PRESENT system-ring authority: closed real CPU reproduces the table over \
-         6 inputs ({revolutions}-revolution program); ancillas restored + bus quiescent."
+         the whole domain + {} discriminating packings in one {}-lane pass \
+         ({revolutions}-revolution program); ancillas restored + bus quiescent.",
+        starts.len() - 16,
+        starts.len()
     );
 }

@@ -10,11 +10,13 @@
 //! deficit, never more.
 
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 
 use crate::ir::cell::{
     Cell, CellKind, CellNetError, LineId, PhasedCellNetlist, RailPair, PHASE_COUNT,
 };
 use crate::sim::SimResult;
+use crate::sim_lanes::CompactPlan;
 
 /// Error from the tick-exact balancer.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -59,6 +61,8 @@ pub struct CompactBalanced {
     /// Cached Σ of all delays = number of K0 cells [`balance`] would
     /// materialize.
     total_k0_inserted: usize,
+    /// The lane simulator's flat plan, built on first use (ADR-0048).
+    lane_plan: OnceLock<CompactPlan>,
 }
 
 impl CompactBalanced {
@@ -96,6 +100,10 @@ impl CompactBalanced {
     /// A reference to the original (unbalanced) netlist.
     pub fn net(&self) -> &PhasedCellNetlist {
         &self.net
+    }
+
+    pub(crate) fn lane_plan(&self) -> &CompactPlan {
+        self.lane_plan.get_or_init(|| CompactPlan::new(&self.net))
     }
 
     /// Per-input delay for cell `cell_idx`, port `port_idx`.
@@ -362,5 +370,6 @@ pub fn balance_compact(net: &PhasedCellNetlist) -> Result<CompactBalanced, Balan
         net: net.clone(),
         cell_input_delays,
         total_k0_inserted: total_k0,
+        lane_plan: OnceLock::new(),
     })
 }

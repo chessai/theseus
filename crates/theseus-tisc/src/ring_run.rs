@@ -3,9 +3,19 @@
 //!
 //! [`step_ring`] lowers and compact-balances `step(rom)` without
 //! materializing the ~1.6 M K0 buffers (uses [`balance_compact`]).
-//! [`StepRing::run`] recirculates via [`CompactBalanced::simulate`],
-//! re-supplying fresh ancilla-init bits each revolution. The
-//! differential oracle is `eval(step)^R`.
+//! [`StepRing::run`] recirculates via [`CompactBalanced::simulate_lanes`].
+//! The differential oracle is `eval(step)^R`.
+//!
+//! # Many starts at once (ADR-0048)
+//!
+//! The ROM is baked into the netlist, so runs from different start
+//! states differ only in their input bits. Every runner here is
+//! lane-parallel: `run_many` recirculates up to [`Lane::WIDTH`] start
+//! states per pass, and the single-start `run` is the same code with
+//! one lane. The scalar [`CompactBalanced::simulate`] remains the
+//! reference the lane simulator is checked against
+//! (`theseus-netlist/tests/sim_lanes.rs`), and the ancilla / bus probes
+//! below still use it.
 //!
 //! # Ancilla restoration -- the zero-garbage ring
 //!
@@ -47,14 +57,109 @@
 use theseus_netlist::ir::cell::CellNetError;
 use theseus_netlist::lower::lower_iso_with_ancillas;
 use theseus_netlist::{
-    balance_compact, bits_of, lower_iso_bennett, value_from_bits, CompactBalanced, PHASE_COUNT,
+    balance_compact, bits_of, lower_iso_bennett, pack_lanes, unpack_lane, CompactBalanced, Lane,
+    LaneScratch, Lanes, PHASE_COUNT,
 };
 
 use crate::step::{step, system_step};
 use crate::types::{
-    decode_system, encode_system, mem_state_ty, state_ty, system_state_ty, StateVals,
-    COMPOSITE_BITS, MEM_WORDS, NUM_BUS_FIELDS, STATE_BITS, SYSTEM_BITS, W,
+    decode_system_bits, encode_system, encode_system_bits, mem_state_ty, state_ty, system_state_ty,
+    StateVals, COMPOSITE_BITS, MEM_WORDS, NUM_BUS_FIELDS, STATE_BITS, SYSTEM_BITS, W,
 };
+
+// ── Lane-parallel recirculation (ADR-0048) ─────────────────────────
+
+/// How a single-body ring marshals [`StateVals`] to its carrier's flat
+/// bits (the `bits_of` image of the carrier value, built directly).
+struct Carrier {
+    encode: fn(&StateVals) -> Vec<bool>,
+    decode: fn(&[bool]) -> StateVals,
+}
+
+impl Carrier {
+    /// The CPU-only `state_ty()` carrier.
+    const CPU: Carrier = Carrier {
+        encode: StateVals::encode_bits,
+        decode: StateVals::decode_bits,
+    };
+    /// The `((CpuState, MemState), BusMsg)` carrier.
+    const SYSTEM: Carrier = Carrier {
+        encode: encode_system_bits,
+        decode: decode_system_bits,
+    };
+
+    /// One lane per start state, one word per carrier bit.
+    fn pack<const N: usize>(&self, starts: &[StateVals]) -> Vec<Lanes<N>> {
+        let bits: Vec<Vec<bool>> = starts.iter().map(self.encode).collect();
+        pack_lanes(&bits)
+    }
+
+    /// Lanes `0..n_starts` of `data` back to states.
+    fn unpack<const N: usize>(&self, data: &[Lanes<N>], n_starts: usize) -> Vec<StateVals> {
+        (0..n_starts)
+            .map(|lane| (self.decode)(&unpack_lane(data, lane)))
+            .collect()
+    }
+}
+
+/// Run `starts` through `run` in [`Lane::WIDTH`]-sized blocks.
+fn in_blocks(starts: &[StateVals], run: impl Fn(&[StateVals]) -> Vec<StateVals>) -> Vec<StateVals> {
+    starts.chunks(Lane::WIDTH).flat_map(run).collect()
+}
+
+/// Every lane `bits[j]`, per `j`.
+fn splat_bits<const N: usize>(bits: &[bool]) -> Vec<Lanes<N>> {
+    bits.iter().map(|&b| Lanes::splat(b)).collect()
+}
+
+/// Recirculate one compact body `revolutions` times over every lane of
+/// `data` (one word per data port). Each revolution feeds back the data
+/// outputs and the first `n_feedback` ancilla outputs (TRUE
+/// recirculation); the remaining ancillas are re-supplied from
+/// `ancilla_init`. Returns the final data words.
+fn recirculate<const N: usize>(
+    compact: &CompactBalanced,
+    data: Vec<Lanes<N>>,
+    ancilla_init: &[bool],
+    n_feedback: usize,
+    revolutions: u32,
+) -> Vec<Lanes<N>> {
+    let n_data = data.len();
+    let mut input = data;
+    input.extend(splat_bits::<N>(ancilla_init));
+    let mut scratch = LaneScratch::default();
+    for _ in 0..revolutions {
+        let out = compact
+            .simulate_lanes_with(&input, &mut scratch)
+            .expect("simulate");
+        input[..n_data + n_feedback].copy_from_slice(&out[..n_data + n_feedback]);
+    }
+    input.truncate(n_data);
+    input
+}
+
+/// The lowest of lanes `0..n_starts` whose ancilla outputs, after one
+/// revolution with fresh inits, differ from those inits -- with the
+/// differing ancilla indices.
+fn first_unrestored<const N: usize>(
+    compact: &CompactBalanced,
+    data: &[Lanes<N>],
+    ancilla_init: &[bool],
+    n_starts: usize,
+) -> Option<(usize, Vec<usize>)> {
+    let mut input = data.to_vec();
+    input.extend(splat_bits::<N>(ancilla_init));
+    let out = compact.simulate_lanes(&input).expect("simulate");
+    let active = Lanes::first(n_starts);
+    let diffs: Vec<Lanes<N>> = out[data.len()..]
+        .iter()
+        .zip(ancilla_init)
+        .map(|(&o, &init)| (o ^ Lanes::splat(init)) & active)
+        .collect();
+    let lane = diffs.iter().fold(Lanes::ZERO, |acc, &d| acc | d).lowest()?;
+    let mismatches = (0..diffs.len()).filter(|&j| diffs[j].get(lane)).collect();
+    Some((lane, mismatches))
+}
 
 /// A compact-balanced TISC-1 step ready for ring recirculation.
 pub struct StepRing {
@@ -102,27 +207,16 @@ impl StepRing {
     /// fan-outs), use [`Self::run_open`] (re-supply fresh inits) or the
     /// Bennett [`ClosedStepRing`] fallback instead.
     pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
-        debug_assert!(
-            self.ancillas_restored(start),
-            "StepRing::run assumes an ancilla-clean lowering (zero-garbage \
-             ring); this lowering leaves garbage -- use run_open or \
-             ClosedStepRing. mismatches: {:?}",
-            self.ancilla_mismatches(start)
-        );
-        let ty = state_ty();
-        let mut data_bits = bits_of(&start.encode(), &ty).expect("bits_of");
-        let mut ancilla_bits = self.ancilla_init.clone();
+        self.run_lanes::<1>(std::slice::from_ref(start), revolutions, true)
+            .remove(0)
+    }
 
-        for _ in 0..revolutions {
-            let mut input = data_bits.clone();
-            input.extend_from_slice(&ancilla_bits);
-            let sim = self.compact.simulate(&input).expect("simulate");
-            data_bits = sim.outputs[..self.n_data].to_vec();
-            ancilla_bits = sim.outputs[self.n_data..].to_vec();
-        }
-
-        let val = value_from_bits(&ty, &data_bits).expect("value_from_bits");
-        StateVals::decode(&val)
+    /// [`Self::run`] from many start states at once, [`Lane::WIDTH`] per
+    /// pass (ADR-0048): result `i` is `run(&starts[i], revolutions)`.
+    pub fn run_many(&self, starts: &[StateVals], revolutions: u32) -> Vec<StateVals> {
+        in_blocks(starts, |block| {
+            self.run_lanes::<4>(block, revolutions, true)
+        })
     }
 
     /// Recirculate with the ring OPEN: each revolution discards the
@@ -133,19 +227,45 @@ impl StepRing {
     /// the equivalence that certifies the zero-garbage closure. Retained
     /// as the robust fallback for non-ancilla-clean lowerings.
     pub fn run_open(&self, start: &StateVals, revolutions: u32) -> StateVals {
-        let ty = state_ty();
-        let mut data_bits = bits_of(&start.encode(), &ty).expect("bits_of");
-        assert_eq!(data_bits.len(), self.n_data);
+        self.run_lanes::<1>(std::slice::from_ref(start), revolutions, false)
+            .remove(0)
+    }
 
-        for _ in 0..revolutions {
-            let mut input = data_bits.clone();
-            input.extend_from_slice(&self.ancilla_init);
-            let sim = self.compact.simulate(&input).expect("simulate");
-            data_bits = sim.outputs[..self.n_data].to_vec();
+    /// [`Self::run_open`] from many start states at once (ADR-0048).
+    pub fn run_open_many(&self, starts: &[StateVals], revolutions: u32) -> Vec<StateVals> {
+        in_blocks(starts, |block| {
+            self.run_lanes::<4>(block, revolutions, false)
+        })
+    }
+
+    fn run_lanes<const N: usize>(
+        &self,
+        starts: &[StateVals],
+        revolutions: u32,
+        closed: bool,
+    ) -> Vec<StateVals> {
+        let data = Carrier::CPU.pack::<N>(starts);
+        assert_eq!(data.len(), self.n_data);
+        if closed && cfg!(debug_assertions) {
+            if let Some((i, mismatches)) =
+                first_unrestored(&self.compact, &data, &self.ancilla_init, starts.len())
+            {
+                panic!(
+                    "StepRing::run assumes an ancilla-clean lowering (zero-garbage \
+                     ring); this lowering leaves garbage -- use run_open or \
+                     ClosedStepRing. start {i} mismatches: {mismatches:?}"
+                );
+            }
         }
-
-        let val = value_from_bits(&ty, &data_bits).expect("value_from_bits");
-        StateVals::decode(&val)
+        let n_feedback = if closed { self.ancilla_init.len() } else { 0 };
+        let data = recirculate(
+            &self.compact,
+            data,
+            &self.ancilla_init,
+            n_feedback,
+            revolutions,
+        );
+        Carrier::CPU.unpack(&data, starts.len())
     }
 
     /// Indices of ancilla lines whose output differs from their init
@@ -176,6 +296,11 @@ impl StepRing {
     /// The compact-balanced body.
     pub fn compact(&self) -> &CompactBalanced {
         &self.compact
+    }
+
+    /// Ancilla init values, in netlist input order after the data bits.
+    pub fn ancilla_init(&self) -> &[bool] {
+        &self.ancilla_init
     }
 
     /// Number of ancilla lines.
@@ -246,26 +371,29 @@ impl ClosedStepRing {
     /// `run(s, R) == eval(step)^R` therefore certifies that the
     /// forward ancillas really do come back clean every revolution.
     pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
-        let ty = state_ty();
-        let mut data_bits = bits_of(&start.encode(), &ty).expect("bits_of");
-        assert_eq!(data_bits.len(), self.n_data);
-        let mut forward_bits = self.ancilla_init[..self.n_forward].to_vec();
-        let boundary_init = &self.ancilla_init[self.n_forward..];
+        self.run_lanes::<1>(std::slice::from_ref(start), revolutions)
+            .remove(0)
+    }
 
-        for _ in 0..revolutions {
-            let mut input = data_bits.clone();
-            input.extend_from_slice(&forward_bits);
-            input.extend_from_slice(boundary_init);
-            let sim = self.compact.simulate(&input).expect("simulate");
-            data_bits = sim.outputs[..self.n_data].to_vec();
-            // Feed the forward ancillas back -- TRUE recirculation.
-            forward_bits = sim.outputs[self.n_data..self.n_data + self.n_forward].to_vec();
-            // Boundary outputs (the Bennett residue) exit the ring;
-            // fresh (1, 0) pairs are re-supplied next revolution.
-        }
+    /// [`Self::run`] from many start states at once (ADR-0048).
+    pub fn run_many(&self, starts: &[StateVals], revolutions: u32) -> Vec<StateVals> {
+        in_blocks(starts, |block| self.run_lanes::<4>(block, revolutions))
+    }
 
-        let val = value_from_bits(&ty, &data_bits).expect("value_from_bits");
-        StateVals::decode(&val)
+    fn run_lanes<const N: usize>(&self, starts: &[StateVals], revolutions: u32) -> Vec<StateVals> {
+        let data = Carrier::CPU.pack::<N>(starts);
+        assert_eq!(data.len(), self.n_data);
+        // Feed the forward ancillas back -- TRUE recirculation. Boundary
+        // outputs (the Bennett residue) exit the ring; fresh (1, 0) pairs
+        // are re-supplied every revolution.
+        let data = recirculate(
+            &self.compact,
+            data,
+            &self.ancilla_init,
+            self.n_forward,
+            revolutions,
+        );
+        Carrier::CPU.unpack(&data, starts.len())
     }
 
     /// Indices (into the forward-ancilla section) of forward ancilla
@@ -332,7 +460,7 @@ impl ClosedStepRing {
 /// A compact-balanced TISC-1 `system_step` ready for ring recirculation.
 ///
 /// Like [`StepRing`] but over the 3-factor `((CpuState, MemState), BusMsg)`
-/// carrier, using [`encode_system`]/[`decode_system`] for I/O.
+/// carrier, using [`encode_system`]/[`decode_system`](crate::types::decode_system) for I/O.
 /// The bus-quiescence boundary condition is checked via
 /// [`SystemRing::bus_quiescent`].
 pub struct SystemRing {
@@ -376,20 +504,16 @@ impl SystemRing {
     /// panic before the certificate can observe `run==run_open` /
     /// `bus_quiescent`, and it doubles per-call cost.
     pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
-        let ty = system_state_ty();
-        let mut data_bits = bits_of(&encode_system(start), &ty).expect("bits_of");
-        let mut ancilla_bits = self.ancilla_init.clone();
+        self.run_lanes::<1>(std::slice::from_ref(start), revolutions, true)
+            .remove(0)
+    }
 
-        for _ in 0..revolutions {
-            let mut input = data_bits.clone();
-            input.extend_from_slice(&ancilla_bits);
-            let sim = self.compact.simulate(&input).expect("simulate");
-            data_bits = sim.outputs[..self.n_data].to_vec();
-            ancilla_bits = sim.outputs[self.n_data..].to_vec();
-        }
-
-        let val = value_from_bits(&ty, &data_bits).expect("value_from_bits");
-        decode_system(&val)
+    /// [`Self::run`] from many start states at once, [`Lane::WIDTH`] per
+    /// pass (ADR-0048): result `i` is `run(&starts[i], revolutions)`.
+    pub fn run_many(&self, starts: &[StateVals], revolutions: u32) -> Vec<StateVals> {
+        in_blocks(starts, |block| {
+            self.run_lanes::<4>(block, revolutions, true)
+        })
     }
 
     /// Recirculate with the ring OPEN: each revolution discards the
@@ -399,19 +523,34 @@ impl SystemRing {
     /// [`Self::run`] exactly when the lowering is ancilla-clean, which
     /// is the equivalence that certifies the zero-garbage closure.
     pub fn run_open(&self, start: &StateVals, revolutions: u32) -> StateVals {
-        let ty = system_state_ty();
-        let mut data_bits = bits_of(&encode_system(start), &ty).expect("bits_of");
-        assert_eq!(data_bits.len(), self.n_data);
+        self.run_lanes::<1>(std::slice::from_ref(start), revolutions, false)
+            .remove(0)
+    }
 
-        for _ in 0..revolutions {
-            let mut input = data_bits.clone();
-            input.extend_from_slice(&self.ancilla_init);
-            let sim = self.compact.simulate(&input).expect("simulate");
-            data_bits = sim.outputs[..self.n_data].to_vec();
-        }
+    /// [`Self::run_open`] from many start states at once (ADR-0048).
+    pub fn run_open_many(&self, starts: &[StateVals], revolutions: u32) -> Vec<StateVals> {
+        in_blocks(starts, |block| {
+            self.run_lanes::<4>(block, revolutions, false)
+        })
+    }
 
-        let val = value_from_bits(&ty, &data_bits).expect("value_from_bits");
-        decode_system(&val)
+    fn run_lanes<const N: usize>(
+        &self,
+        starts: &[StateVals],
+        revolutions: u32,
+        closed: bool,
+    ) -> Vec<StateVals> {
+        let data = Carrier::SYSTEM.pack::<N>(starts);
+        assert_eq!(data.len(), self.n_data);
+        let n_feedback = if closed { self.ancilla_init.len() } else { 0 };
+        let data = recirculate(
+            &self.compact,
+            data,
+            &self.ancilla_init,
+            n_feedback,
+            revolutions,
+        );
+        Carrier::SYSTEM.unpack(&data, starts.len())
     }
 
     /// Indices of ancilla lines whose output differs from their init
@@ -464,6 +603,11 @@ impl SystemRing {
     /// The compact-balanced body.
     pub fn compact(&self) -> &CompactBalanced {
         &self.compact
+    }
+
+    /// Ancilla init values, in netlist input order after the data bits.
+    pub fn ancilla_init(&self) -> &[bool] {
+        &self.ancilla_init
     }
 
     /// Number of ancilla lines.
@@ -584,109 +728,114 @@ impl TwoBodyRing {
     ///   (c) relocate Bus back to offset 160, sim cpu_post on Cpu+Bus
     ///   (d) F3: assert the 24 Bus output bits of cpu_post are ALL ZERO
     pub fn run(&self, start: &StateVals, revolutions: u32) -> StateVals {
-        let cpu_ty = state_ty();
+        self.run_lanes::<1>(std::slice::from_ref(start), revolutions, true)
+            .remove(0)
+    }
 
-        // Encode CPU and Mem bits separately
-        let mut cpu_bits = bits_of(&start.encode(), &cpu_ty).expect("cpu bits_of");
-        let mut mem_bits = Self::encode_mem_bits(start);
-
-        let mut pre_anc = self.pre_ancilla.clone();
-        let mut mem_anc = self.mem_ancilla.clone();
-        let mut post_anc = self.post_ancilla.clone();
-
-        for _ in 0..revolutions {
-            // (a) cpu_pre: Cpu[0..160) + Bus[160..184)=0
-            let mut pre_input = cpu_bits.clone();
-            pre_input.extend(std::iter::repeat_n(false, BUS_BITS)); // Bus = 0
-            pre_input.extend_from_slice(&pre_anc);
-            let pre_sim = self.pre.simulate(&pre_input).expect("simulate cpu_pre");
-            cpu_bits = pre_sim.outputs[..STATE_BITS].to_vec();
-            let bus_from_pre = pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
-            pre_anc = pre_sim.outputs[self.pre_n_data..].to_vec();
-
-            // (b) mem_body: Mem[0..32) + Bus[32..56) (relocate bus)
-            let mut mem_input = mem_bits.clone();
-            mem_input.extend_from_slice(&bus_from_pre);
-            mem_input.extend_from_slice(&mem_anc);
-            let mem_sim = self.mem.simulate(&mem_input).expect("simulate mem_body");
-            mem_bits = mem_sim.outputs[..MEM_WORDS * W].to_vec();
-            let bus_from_mem = mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
-            mem_anc = mem_sim.outputs[self.mem_n_data..].to_vec();
-
-            // (c) cpu_post: Cpu[0..160) + Bus[160..184) (relocate bus back)
-            let mut post_input = cpu_bits.clone();
-            post_input.extend_from_slice(&bus_from_mem);
-            post_input.extend_from_slice(&post_anc);
-            let post_sim = self.post.simulate(&post_input).expect("simulate cpu_post");
-            cpu_bits = post_sim.outputs[..STATE_BITS].to_vec();
-            post_anc = post_sim.outputs[self.post_n_data..].to_vec();
-
-            // (d) F3: assert bus quiescence -- the §3 lemma made runtime
-            let bus_out = &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
-            assert!(
-                bus_out.iter().all(|&b| !b),
-                "TwoBodyRing: bus NOT quiescent after cpu_post -- \
-                 §3 quiescence lemma violated (nonzero bus bits: {:?})",
-                bus_out
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, &b)| b)
-                    .map(|(i, _)| i)
-                    .collect::<Vec<_>>()
-            );
-        }
-
-        // Decode back to StateVals
-        let cpu_val = value_from_bits(&cpu_ty, &cpu_bits).expect("cpu value_from_bits");
-        let mut result = StateVals::decode(&cpu_val);
-        Self::decode_mem_bits(&mem_bits, &mut result);
-        result
+    /// [`Self::run`] from many start states at once, [`Lane::WIDTH`] per
+    /// pass (ADR-0048): result `i` is `run(&starts[i], revolutions)`.
+    pub fn run_many(&self, starts: &[StateVals], revolutions: u32) -> Vec<StateVals> {
+        in_blocks(starts, |block| {
+            self.run_lanes::<4>(block, revolutions, true)
+        })
     }
 
     /// Recirculate with each body's ring OPEN: each revolution re-supplies
     /// fresh ancilla inits per body. Equals [`Self::run`] when each body
     /// is ancilla-clean.
     pub fn run_open(&self, start: &StateVals, revolutions: u32) -> StateVals {
-        let cpu_ty = state_ty();
+        self.run_lanes::<1>(std::slice::from_ref(start), revolutions, false)
+            .remove(0)
+    }
 
-        let mut cpu_bits = bits_of(&start.encode(), &cpu_ty).expect("cpu bits_of");
-        let mut mem_bits = Self::encode_mem_bits(start);
+    /// [`Self::run_open`] from many start states at once (ADR-0048).
+    pub fn run_open_many(&self, starts: &[StateVals], revolutions: u32) -> Vec<StateVals> {
+        in_blocks(starts, |block| {
+            self.run_lanes::<4>(block, revolutions, false)
+        })
+    }
+
+    fn run_lanes<const N: usize>(
+        &self,
+        starts: &[StateVals],
+        revolutions: u32,
+        closed: bool,
+    ) -> Vec<StateVals> {
+        let active = Lanes::<N>::first(starts.len());
+        let mut cpu = Carrier::CPU.pack::<N>(starts);
+        let mem_bits: Vec<Vec<bool>> = starts.iter().map(Self::encode_mem_bits).collect();
+        let mut mem: Vec<Lanes<N>> = pack_lanes(&mem_bits);
+
+        // Each body's input buffer: data ++ bus ++ ancillas. The ancilla
+        // tails hold the inits and, when closed, are overwritten with the
+        // fed-back outputs every revolution.
+        let body_input = |data_len: usize, ancilla_init: &[bool]| {
+            let mut input = vec![Lanes::<N>::ZERO; data_len];
+            input.extend(splat_bits::<N>(ancilla_init));
+            input
+        };
+        let mut pre_in = body_input(self.pre_n_data, &self.pre_ancilla);
+        let mut mem_in = body_input(self.mem_n_data, &self.mem_ancilla);
+        let mut post_in = body_input(self.post_n_data, &self.post_ancilla);
+        let mut scratch = LaneScratch::default();
 
         for _ in 0..revolutions {
-            // (a) cpu_pre
-            let mut pre_input = cpu_bits.clone();
-            pre_input.extend(std::iter::repeat_n(false, BUS_BITS));
-            pre_input.extend_from_slice(&self.pre_ancilla);
-            let pre_sim = self.pre.simulate(&pre_input).expect("simulate cpu_pre");
-            cpu_bits = pre_sim.outputs[..STATE_BITS].to_vec();
-            let bus_from_pre = pre_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS].to_vec();
+            // (a) cpu_pre: Cpu[0..160) + Bus[160..184)=0
+            pre_in[..STATE_BITS].copy_from_slice(&cpu);
+            pre_in[CPU_BUS_OFFSET..self.pre_n_data].fill(Lanes::ZERO); // Bus = 0
+            let pre_out = self
+                .pre
+                .simulate_lanes_with(&pre_in, &mut scratch)
+                .expect("simulate cpu_pre");
+            cpu.copy_from_slice(&pre_out[..STATE_BITS]);
+            if closed {
+                pre_in[self.pre_n_data..].copy_from_slice(&pre_out[self.pre_n_data..]);
+            }
 
-            // (b) mem_body
-            let mut mem_input = mem_bits.clone();
-            mem_input.extend_from_slice(&bus_from_pre);
-            mem_input.extend_from_slice(&self.mem_ancilla);
-            let mem_sim = self.mem.simulate(&mem_input).expect("simulate mem_body");
-            mem_bits = mem_sim.outputs[..MEM_WORDS * W].to_vec();
-            let bus_from_mem = mem_sim.outputs[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS].to_vec();
+            // (b) mem_body: Mem[0..32) + Bus[32..56) (relocate bus)
+            mem_in[..MEM_BUS_OFFSET].copy_from_slice(&mem);
+            mem_in[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS]
+                .copy_from_slice(&pre_out[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS]);
+            let mem_out = self
+                .mem
+                .simulate_lanes_with(&mem_in, &mut scratch)
+                .expect("simulate mem_body");
+            mem.copy_from_slice(&mem_out[..MEM_WORDS * W]);
+            if closed {
+                mem_in[self.mem_n_data..].copy_from_slice(&mem_out[self.mem_n_data..]);
+            }
 
-            // (c) cpu_post
-            let mut post_input = cpu_bits.clone();
-            post_input.extend_from_slice(&bus_from_mem);
-            post_input.extend_from_slice(&self.post_ancilla);
-            let post_sim = self.post.simulate(&post_input).expect("simulate cpu_post");
-            cpu_bits = post_sim.outputs[..STATE_BITS].to_vec();
+            // (c) cpu_post: Cpu[0..160) + Bus[160..184) (relocate bus back)
+            post_in[..STATE_BITS].copy_from_slice(&cpu);
+            post_in[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS]
+                .copy_from_slice(&mem_out[MEM_BUS_OFFSET..MEM_BUS_OFFSET + BUS_BITS]);
+            let post_out = self
+                .post
+                .simulate_lanes_with(&post_in, &mut scratch)
+                .expect("simulate cpu_post");
+            cpu.copy_from_slice(&post_out[..STATE_BITS]);
+            if closed {
+                post_in[self.post_n_data..].copy_from_slice(&post_out[self.post_n_data..]);
+            }
 
-            // (d) F3: assert bus quiescence
-            let bus_out = &post_sim.outputs[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
-            assert!(
-                bus_out.iter().all(|&b| !b),
-                "TwoBodyRing (open): bus NOT quiescent after cpu_post"
-            );
+            // (d) F3: assert bus quiescence -- the §3 lemma made runtime
+            let bus_out = &post_out[CPU_BUS_OFFSET..CPU_BUS_OFFSET + BUS_BITS];
+            let noisy = bus_out.iter().fold(Lanes::ZERO, |acc, &w| acc | w) & active;
+            if let Some(lane) = noisy.lowest() {
+                let nonzero: Vec<usize> = (0..BUS_BITS).filter(|&i| bus_out[i].get(lane)).collect();
+                panic!(
+                    "TwoBodyRing{}: bus NOT quiescent after cpu_post -- \
+                     §3 quiescence lemma violated (start {lane}, nonzero bus bits: {nonzero:?})",
+                    if closed { "" } else { " (open)" },
+                );
+            }
         }
 
-        let cpu_val = value_from_bits(&cpu_ty, &cpu_bits).expect("cpu value_from_bits");
-        let mut result = StateVals::decode(&cpu_val);
-        Self::decode_mem_bits(&mem_bits, &mut result);
+        // Decode back to StateVals
+        let mut result = Carrier::CPU.unpack(&cpu, starts.len());
+        for (lane, s) in result.iter_mut().enumerate() {
+            Self::decode_mem_bits(&unpack_lane(&mem, lane), s);
+        }
         result
     }
 
