@@ -21,7 +21,10 @@
 //!   ([`CompactBalanced::simulate`]) over a flat `CompactPlan` built
 //!   once per netlist: K0 buffers, pass-through controls and rail-role
 //!   swaps are resolved at plan time into slot aliases, so the hot loop
-//!   touches only the cells that compute, and never allocates.
+//!   touches only the cells that compute, and never allocates. For 2-, 4-
+//!   and 8-word blocks the cell loop runs as explicit SSE2/AVX2 kernels
+//!   over a branch-free re-encoding of the plan (`crate::simd`,
+//!   ADR-0052); the portable loop stays the reference ([`CompactKernel`]).
 
 use std::collections::BTreeMap;
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};

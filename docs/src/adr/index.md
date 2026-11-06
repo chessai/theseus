@@ -64,7 +64,7 @@ Numbering preserves the original planning-log identifiers. All ADRs below are
 - [ADR-0046: M-C2 build -- the composite-ring memory bus](0046-mc2-build-composite-ring.md)
 - [ADR-0047: W<n> machine-word type and the `add_into` word-add prim](0047-wn-word-type-and-add-into-prim.md)
 
-## Simulation (0048-0049)
+## Simulation (0048-0049, 0052)
 
 - [ADR-0048: Lane-parallel (bit-sliced) netlist simulation](0048-lane-parallel-netlist-simulation.md)
 - [ADR-0049: Lane-parallel `BvExpr` evaluation](0049-lane-parallel-bvexpr-eval.md)
@@ -73,3 +73,7 @@ Numbering preserves the original planning-log identifiers. All ADRs below are
 
 - [ADR-0050: Packed gate truth tables and the Shannon BDD build](0050-packed-gate-tables.md)
 - [ADR-0051: Flat bit-encoded domains for admission and truth tables](0051-flat-bit-encoded-domains.md)
+
+## SIMD kernels (0052)
+
+- [ADR-0052: Explicit SIMD kernels with scoped unsafe](0052-explicit-simd-kernels.md)

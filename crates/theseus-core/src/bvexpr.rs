@@ -6,7 +6,9 @@
 //! stays in theseus-tisc.
 //!
 //! [`eval_expr`] is the scalar reference; [`eval_expr_lanes`] is its
-//! bit-sliced twin for whole-domain sweeps (ADR-0049).
+//! bit-sliced twin for whole-domain sweeps (ADR-0049), and [`LaneProgram`]
+//! compiles a set of trees once for sweeps over many 256-input chunks,
+//! evaluated by explicit SSE2/AVX2 kernels (ADR-0052).
 
 /// Per-bit boolean expression over w-bit operand lanes (w ≤ 8).
 ///
