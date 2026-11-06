@@ -63,3 +63,7 @@ Numbering preserves the original planning-log identifiers. All ADRs below are
 - [ADR-0045: M-C2 -- the Option-B memory bus (external recirculating memory)](0045-mc2-memory-bus.md)
 - [ADR-0046: M-C2 build -- the composite-ring memory bus](0046-mc2-build-composite-ring.md)
 - [ADR-0047: W<n> machine-word type and the `add_into` word-add prim](0047-wn-word-type-and-add-into-prim.md)
+
+## Verification tooling (0050-)
+
+- [ADR-0050: Packed gate truth tables and the Shannon BDD build](0050-packed-gate-tables.md)

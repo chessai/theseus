@@ -54,6 +54,7 @@
   - [0044 M-C: compiler-targeted memory](adr/0044-mc-compiler-memory.md)
   - [0045 M-C2: the Option-B memory bus](adr/0045-mc2-memory-bus.md)
   - [0046 M-C2 build: the composite-ring memory bus](adr/0046-mc2-build-composite-ring.md)
+  - [0050 Packed gate truth tables + Shannon BDD build](adr/0050-packed-gate-tables.md)
 
 # Design Document
 
