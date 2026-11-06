@@ -68,3 +68,7 @@ Numbering preserves the original planning-log identifiers. All ADRs below are
 
 - [ADR-0048: Lane-parallel (bit-sliced) netlist simulation](0048-lane-parallel-netlist-simulation.md)
 - [ADR-0049: Lane-parallel `BvExpr` evaluation](0049-lane-parallel-bvexpr-eval.md)
+
+## Verification tooling (0050-)
+
+- [ADR-0050: Packed gate truth tables and the Shannon BDD build](0050-packed-gate-tables.md)

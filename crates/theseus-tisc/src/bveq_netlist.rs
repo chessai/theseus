@@ -4,7 +4,8 @@
 //! # Trust core (NEW -- a bug here makes the netlist reconciliation vacuous)
 //!
 //! - `eval_bdd`: symbolic Iso interpreter (mirrors `theseus_eval::eval`)
-//! - Gate BDD synthesis from `PrimDef::forward` truth tables (MAJOR-4)
+//! - Gate BDD synthesis from `PrimDef::forward` truth tables (MAJOR-4),
+//!   packed per output column and built by Shannon expansion (ADR-0050)
 //! - Extended `VarMap` (regs + s0 + BR + mem) -- the ONE TCB mapping
 //!
 //! Defended by: walk-vs-`run_rom_on_cpu` bootstrap (T2), negative controls,
@@ -14,7 +15,7 @@ use std::collections::HashMap;
 
 use biodivine_lib_bdd::{Bdd, BddVariableSet};
 use theseus_core::{adjoint, enumerate_values, Iso, Type};
-use theseus_netlist::bits_of;
+use theseus_netlist::{bits_of, rail_width};
 
 use crate::asm::Instr;
 use crate::bveq::VarMap;
@@ -196,74 +197,270 @@ pub fn sv_to_u16(sv: &SV, vs: &BddVariableSet) -> u16 {
 
 // ── Gate truth table synthesis (MAJOR-4) ───────────────────────────
 
-/// Pre-computed truth table for a gate prim, ready for BDD application.
+/// Gates with at most this many input bits pack each output column into one
+/// `u64` (`2^6` rows). Every cell-family gate (K1–K3, R1–R3, CNOT, Toffoli,
+/// CCCNOT: ≤ 5 wires) takes this path (ADR-0050).
+const WORD_INPUTS: usize = 6;
+
+/// Widest gate the packed table admits: `2^24` rows, 2 MiB per column.
+/// A wider prim is rejected (MINOR-6: fail closed), never materialized.
+const MAX_GATE_INPUTS: usize = 24;
+
+/// `LIT[i]`: the rows of a word whose index has bit `i` set -- the packed
+/// column of input `i` itself.
+const LIT: [u64; WORD_INPUTS] = [
+    0xAAAA_AAAA_AAAA_AAAA,
+    0xCCCC_CCCC_CCCC_CCCC,
+    0xF0F0_F0F0_F0F0_F0F0,
+    0xFF00_FF00_FF00_FF00,
+    0xFFFF_0000_FFFF_0000,
+    0xFFFF_FFFF_0000_0000,
+];
+
+/// The live rows of a one-word column over `m ≤ 6` inputs: the low `2^m` bits.
+const fn word_rows(m: usize) -> u64 {
+    if m >= WORD_INPUTS {
+        u64::MAX
+    } else {
+        (1 << (1 << m)) - 1
+    }
+}
+
+/// Word `w` of the packed column of input `j` over `> 6` inputs.
+fn lit_word(j: usize, w: usize) -> u64 {
+    if j < WORD_INPUTS {
+        LIT[j]
+    } else if (w >> (j - WORD_INPUTS)) & 1 == 1 {
+        u64::MAX
+    } else {
+        0
+    }
+}
+
+/// Gather the even-indexed bits of `x` into its low 32 bits: the
+/// input-0 = 0 cofactor of a packed word (`x >> 1` gives input-0 = 1).
+fn pack_even(x: u64) -> u64 {
+    let mut x = x & 0x5555_5555_5555_5555;
+    x = (x | (x >> 1)) & 0x3333_3333_3333_3333;
+    x = (x | (x >> 2)) & 0x0F0F_0F0F_0F0F_0F0F;
+    x = (x | (x >> 4)) & 0x00FF_00FF_00FF_00FF;
+    x = (x | (x >> 8)) & 0x0000_FFFF_0000_FFFF;
+    (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF
+}
+
+/// Row index of an input bit string: bit `i` of the row is `bits[i]`
+/// (`bits_of` order, LSB first). The ONE place the packing order is
+/// encoded (ADR-0050); pinned by `tests::row_order_pins_bits_of`.
+fn row_of(bits: &[bool]) -> usize {
+    bits.iter().rev().fold(0, |x, &b| (x << 1) | usize::from(b))
+}
+
+/// A packed truth-table column, or a cofactor of one, over `m` inputs:
+/// bit `x` is the output on the input row [`row_of`] maps to `x`. Rows
+/// `bits_of` never produces (uneven-sum padding) are 0, exactly as the
+/// minterm expansion left them. Invariant: bits past row `2^m` are 0.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Mask {
+    /// `m ≤ 6`: the low `2^m` bits of one word.
+    Word(u64),
+    /// `m > 6`: `2^(m-6)` words; row `x` is word `x / 64`, bit `x % 64`.
+    Words(Vec<u64>),
+}
+
+impl Mask {
+    /// The all-0 column over `m` inputs.
+    fn zero(m: usize) -> Self {
+        if m <= WORD_INPUTS {
+            Mask::Word(0)
+        } else {
+            Mask::Words(vec![0; 1 << (m - WORD_INPUTS)])
+        }
+    }
+
+    fn set(&mut self, x: usize) {
+        match self {
+            Mask::Word(w) => *w |= 1 << x,
+            Mask::Words(ws) => ws[x / 64] |= 1 << (x % 64),
+        }
+    }
+
+    fn is_zero(&self) -> bool {
+        match self {
+            Mask::Word(w) => *w == 0,
+            Mask::Words(ws) => ws.iter().all(|&w| w == 0),
+        }
+    }
+
+    fn is_ones(&self, m: usize) -> bool {
+        match self {
+            Mask::Word(w) => *w == word_rows(m),
+            Mask::Words(ws) => ws.iter().all(|&w| w == u64::MAX),
+        }
+    }
+
+    /// Whether `self == !other` over `m` inputs.
+    fn is_complement_of(&self, other: &Mask, m: usize) -> bool {
+        match (self, other) {
+            (Mask::Word(a), Mask::Word(b)) => a ^ b == word_rows(m),
+            (Mask::Words(a), Mask::Words(b)) => a.iter().zip(b).all(|(x, y)| x ^ y == u64::MAX),
+            _ => false,
+        }
+    }
+
+    /// The input this column passes through: `Some((j, true))` if it is
+    /// input `j`, `Some((j, false))` if it is `¬input j`.
+    fn literal(&self, m: usize) -> Option<(usize, bool)> {
+        (0..m).find_map(|j| {
+            let (pos, neg) = match self {
+                Mask::Word(w) => {
+                    let lit = LIT[j] & word_rows(m);
+                    (*w == lit, *w == lit ^ word_rows(m))
+                }
+                Mask::Words(ws) => (
+                    ws.iter().enumerate().all(|(i, &w)| w == lit_word(j, i)),
+                    ws.iter().enumerate().all(|(i, &w)| w == !lit_word(j, i)),
+                ),
+            };
+            (pos || neg).then_some((j, pos))
+        })
+    }
+
+    /// Cofactors on input 0, `(f|x₀=0, f|x₀=1)`, each over `m - 1` inputs.
+    fn split(&self, m: usize) -> (Mask, Mask) {
+        match self {
+            Mask::Word(w) => (Mask::Word(pack_even(*w)), Mask::Word(pack_even(w >> 1))),
+            Mask::Words(ws) => {
+                // Cofactor row y sits at bit 2y + x₀: words 2k, 2k+1 pack into word k.
+                let half = |x0: u32| -> Vec<u64> {
+                    let (pairs, _) = ws.as_chunks::<2>();
+                    pairs
+                        .iter()
+                        .map(|&[a, b]| pack_even(a >> x0) | (pack_even(b >> x0) << 32))
+                        .collect()
+                };
+                let (lo, hi) = (half(0), half(1));
+                if m - 1 == WORD_INPUTS {
+                    (Mask::Word(lo[0]), Mask::Word(hi[0]))
+                } else {
+                    (Mask::Words(lo), Mask::Words(hi))
+                }
+            }
+        }
+    }
+}
+
+/// A gate's truth table packed by output column (ADR-0050), ready for
+/// BDD application.
 struct GateTable {
-    /// (input_bits, output_bits) for each row of the truth table.
-    rows: Vec<(Vec<bool>, Vec<bool>)>,
+    /// `cols[j]`: output bit `j` over every input row.
+    cols: Vec<Mask>,
     /// Number of input bits.
     n_in: usize,
-    /// Number of output bits.
-    n_out: usize,
     /// Output type (for rebuilding SV structure).
     out_ty: Type,
 }
 
-/// Synthesize a gate's truth table from its `PrimDef::forward` map.
+/// Synthesize a gate's packed truth table from its `PrimDef::forward` map.
 ///
 /// Uses `bits_of` on the admission-checked `forward` map -- the identical
 /// table `theseus_eval::eval` runs (MAJOR-4: no hand-written gate BDDs).
+/// Each value lands on the row [`row_of`] its input bits name, so the
+/// packing never depends on `enumerate_values` order.
 fn synthesize_gate(def: &theseus_core::PrimDef) -> Result<GateTable, NetlistWalkError> {
-    let in_vals = enumerate_values(&def.input_ty);
-    let mut rows = Vec::with_capacity(in_vals.len());
-    let mut n_in = 0;
-    let mut n_out = 0;
-    for v in &in_vals {
-        let in_bits = bits_of(v, &def.input_ty)
-            .map_err(|e| NetlistWalkError::GateError(format!("bits_of input: {e:?}")))?;
-        let out_v = def.forward.get(v).ok_or_else(|| {
-            NetlistWalkError::GateError(format!(
-                "prim '{}': input not in forward map: {v:?}",
-                def.forward_name
-            ))
-        })?;
-        let out_bits = bits_of(out_v, &def.output_ty)
-            .map_err(|e| NetlistWalkError::GateError(format!("bits_of output: {e:?}")))?;
-        n_in = in_bits.len();
-        n_out = out_bits.len();
-        rows.push((in_bits, out_bits));
+    let err =
+        |what: String| NetlistWalkError::GateError(format!("prim '{}': {what}", def.forward_name));
+    let n_in = rail_width(&def.input_ty).map_err(|e| err(format!("input width: {e:?}")))?;
+    let n_out = rail_width(&def.output_ty).map_err(|e| err(format!("output width: {e:?}")))?;
+    if n_in > MAX_GATE_INPUTS {
+        return Err(err(format!(
+            "{n_in} input bits exceed the packed-table limit {MAX_GATE_INPUTS}"
+        )));
+    }
+    let mut cols = vec![Mask::zero(n_in); n_out];
+    for v in enumerate_values(&def.input_ty) {
+        let in_bits =
+            bits_of(&v, &def.input_ty).map_err(|e| err(format!("bits_of input: {e:?}")))?;
+        let out_v = def
+            .forward
+            .get(&v)
+            .ok_or_else(|| err(format!("input not in forward map: {v:?}")))?;
+        let out_bits =
+            bits_of(out_v, &def.output_ty).map_err(|e| err(format!("bits_of output: {e:?}")))?;
+        if in_bits.len() != n_in || out_bits.len() != n_out {
+            return Err(err(format!(
+                "bits_of width disagrees with rail_width at {v:?}"
+            )));
+        }
+        let x = row_of(&in_bits);
+        for (col, &b) in cols.iter_mut().zip(&out_bits) {
+            if b {
+                col.set(x);
+            }
+        }
     }
     Ok(GateTable {
-        rows,
+        cols,
         n_in,
-        n_out,
         out_ty: def.output_ty.clone(),
     })
 }
 
-/// Apply a gate's truth table to BDD inputs via minterm expansion.
-///
-/// For each output bit j, OR together the minterms (AND of input literals)
-/// for all truth-table rows where output bit j is 1.
+/// Apply a gate's packed truth table to BDD inputs: one [`shannon`] build
+/// per output column (ADR-0050).
 fn apply_gate(table: &GateTable, input_bdds: &[Bdd], vs: &BddVariableSet) -> Vec<Bdd> {
-    let mut outputs = Vec::with_capacity(table.n_out);
-    for j in 0..table.n_out {
-        let mut out_bdd = vs.mk_false();
-        for (in_bits, out_bits) in &table.rows {
-            if out_bits[j] {
-                let mut term = vs.mk_true();
-                for (i, &b) in in_bits.iter().enumerate() {
-                    if b {
-                        term = term.and(&input_bdds[i]);
-                    } else {
-                        term = term.and(&input_bdds[i].not());
-                    }
-                }
-                out_bdd = out_bdd.or(&term);
-            }
-        }
-        outputs.push(out_bdd);
+    table
+        .cols
+        .iter()
+        .map(|col| shannon(col, input_bdds, vs))
+        .collect()
+}
+
+/// Build the BDD of packed column `f` over `inputs` by Shannon expansion,
+/// `f = ite(x₀, f|x₀=1, f|x₀=0)`, splitting inputs in `bits_of` order
+/// (ADR-0050). Cells list controls first, so K2's swap arm comes out as
+/// `ite(c1, ite(c2, b, a), a)`. Every level short-circuits from the masks
+/// alone: constant and pass-through columns cost no BDD op, equal cofactors
+/// or a constant input skip the split, and a constant or complementary
+/// cofactor folds the `ite` into one binary op.
+fn shannon(f: &Mask, inputs: &[Bdd], vs: &BddVariableSet) -> Bdd {
+    let m = inputs.len();
+    if f.is_zero() {
+        return vs.mk_false();
     }
-    outputs
+    if f.is_ones(m) {
+        return vs.mk_true();
+    }
+    if let Some((j, pos)) = f.literal(m) {
+        return if pos {
+            inputs[j].clone()
+        } else {
+            inputs[j].not()
+        };
+    }
+    let (lo, hi) = f.split(m);
+    let (x, rest) = (&inputs[0], &inputs[1..]);
+    if lo == hi || x.is_false() {
+        return shannon(&lo, rest, vs);
+    }
+    if x.is_true() {
+        return shannon(&hi, rest, vs);
+    }
+    #[cfg(test)]
+    tests::APPLY_OPS.with(|n| n.set(n.get() + 1));
+    let n = m - 1;
+    if lo.is_zero() {
+        x.and(&shannon(&hi, rest, vs))
+    } else if hi.is_zero() {
+        shannon(&lo, rest, vs).and_not(x)
+    } else if lo.is_ones(n) {
+        x.imp(&shannon(&hi, rest, vs))
+    } else if hi.is_ones(n) {
+        x.or(&shannon(&lo, rest, vs))
+    } else if hi.is_complement_of(&lo, n) {
+        x.xor(&shannon(&lo, rest, vs))
+    } else {
+        Bdd::if_then_else(x, &shannon(&hi, rest, vs), &shannon(&lo, rest, vs))
+    }
 }
 
 // ── Walk context (gate cache) ──────────────────────────────────────
@@ -576,4 +773,398 @@ pub fn build_concrete_system_sv(s: &crate::types::StateVals, vs: &BddVariableSet
 /// Symbolic s0 correctly REJECTS these two instructions (spike E2).
 pub fn needs_s0_pinned(instr: &Instr) -> bool {
     matches!(instr, Instr::Addi { .. } | Instr::Subi { .. })
+}
+
+// ── Tests: packed tables vs the minterm oracle (ADR-0050) ──────────
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use theseus_core::PrimDef;
+    use theseus_netlist::{prim_from_bits, CellKind, RoleSwapKind};
+
+    use super::*;
+    use crate::types::{bit, flat};
+
+    thread_local! {
+        /// BDD apply ops `shannon` issued on this thread.
+        pub(super) static APPLY_OPS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    /// `apply_gate`, also returning the BDD apply ops it issued.
+    fn counted_apply(table: &GateTable, inputs: &[Bdd], vs: &BddVariableSet) -> (Vec<Bdd>, usize) {
+        let before = APPLY_OPS.with(Cell::get);
+        let out = apply_gate(table, inputs, vs);
+        (out, APPLY_OPS.with(Cell::get) - before)
+    }
+
+    // ── Oracle: the pre-ADR-0050 row table + minterm expansion ─────
+
+    /// One truth-table row: `(input_bits, output_bits)`.
+    type Row = (Vec<bool>, Vec<bool>);
+
+    /// `(input_bits, output_bits)` per value, in `enumerate_values` order.
+    fn minterm_rows(def: &PrimDef) -> Vec<Row> {
+        enumerate_values(&def.input_ty)
+            .iter()
+            .map(|v| {
+                let out = &def.forward[v];
+                (
+                    bits_of(v, &def.input_ty).unwrap(),
+                    bits_of(out, &def.output_ty).unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// For each output bit j, OR together the minterms (AND of input
+    /// literals) for all rows where output bit j is 1.
+    fn apply_minterm(
+        rows: &[Row],
+        n_out: usize,
+        input_bdds: &[Bdd],
+        vs: &BddVariableSet,
+    ) -> Vec<Bdd> {
+        let mut outputs = Vec::with_capacity(n_out);
+        for j in 0..n_out {
+            let mut out_bdd = vs.mk_false();
+            for (in_bits, out_bits) in rows {
+                if out_bits[j] {
+                    let mut term = vs.mk_true();
+                    for (i, &b) in in_bits.iter().enumerate() {
+                        if b {
+                            term = term.and(&input_bdds[i]);
+                        } else {
+                            term = term.and(&input_bdds[i].not());
+                        }
+                    }
+                    out_bdd = out_bdd.or(&term);
+                }
+            }
+            outputs.push(out_bdd);
+        }
+        outputs
+    }
+
+    // ── Inputs: plain variables, then composite BDDs ───────────────
+
+    /// SplitMix64: a fixed-seed generator for reproducible random BDDs.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    /// A small random formula: a literal combined with 1-3 more by and/or/xor.
+    fn random_bdd(rng: &mut Rng, vs: &BddVariableSet) -> Bdd {
+        let vars = vs.variables();
+        let lit = |rng: &mut Rng| vs.mk_literal(vars[rng.below(vars.len())], rng.next() & 1 == 1);
+        let mut f = lit(rng);
+        for _ in 0..1 + rng.below(3) {
+            let g = lit(rng);
+            f = match rng.below(3) {
+                0 => f.and(&g),
+                1 => f.or(&g),
+                _ => f.xor(&g),
+            };
+        }
+        f
+    }
+
+    /// Input vectors for a `k`-input gate: plain variables; all-random
+    /// formulas; then mixes with constants and copies/complements of an
+    /// earlier input (the constant-input and equal-cofactor paths).
+    fn input_sets(k: usize, vs: &BddVariableSet, rng: &mut Rng) -> Vec<Vec<Bdd>> {
+        let vars = vs.variables();
+        let mut sets = vec![(0..k).map(|i| vs.mk_var(vars[i])).collect::<Vec<_>>()];
+        for round in 0..4 {
+            let mut ins: Vec<Bdd> = Vec::with_capacity(k);
+            for i in 0..k {
+                let b = match rng.below(4) {
+                    2 if round > 0 => {
+                        if rng.next() & 1 == 1 {
+                            vs.mk_true()
+                        } else {
+                            vs.mk_false()
+                        }
+                    }
+                    3 if round > 0 && i > 0 => {
+                        let src = &ins[rng.below(i)];
+                        if rng.next() & 1 == 1 {
+                            src.clone()
+                        } else {
+                            src.not()
+                        }
+                    }
+                    _ => random_bdd(rng, vs),
+                };
+                ins.push(b);
+            }
+            sets.push(ins);
+        }
+        sets
+    }
+
+    /// Assert the Shannon build equals the minterm oracle column by column
+    /// (biodivine BDDs are canonical, so `==` is semantic equality).
+    fn assert_same(got: &[Bdd], want: &[Bdd], what: &str) {
+        assert_eq!(got.len(), want.len(), "{what}: output count");
+        for (j, (g, w)) in got.iter().zip(want).enumerate() {
+            assert!(
+                g == w,
+                "{what}: output bit {j} diverges from the minterm oracle"
+            );
+        }
+    }
+
+    /// `apply_gate` on `def`'s packed table == the minterm oracle on every input set.
+    fn assert_prim_matches_oracle(def: &PrimDef, vs: &BddVariableSet, rng: &mut Rng) {
+        let table = synthesize_gate(def).unwrap();
+        let rows = minterm_rows(def);
+        for inputs in input_sets(table.n_in, vs, rng) {
+            let got = apply_gate(&table, &inputs, vs);
+            let want = apply_minterm(&rows, table.cols.len(), &inputs, vs);
+            assert_same(&got, &want, &def.forward_name);
+        }
+    }
+
+    /// A one-column table over `k` inputs with row `x` set iff `f(x)`,
+    /// and its minterm rows (input `i` = bit `i` of `x`).
+    fn column(k: usize, f: impl Fn(usize) -> bool) -> (GateTable, Vec<Row>) {
+        let mut col = Mask::zero(k);
+        let mut rows = Vec::new();
+        for x in 0..1usize << k {
+            if f(x) {
+                col.set(x);
+            }
+            rows.push(((0..k).map(|i| (x >> i) & 1 == 1).collect(), vec![f(x)]));
+        }
+        let table = GateTable {
+            cols: vec![col],
+            n_in: k,
+            out_ty: bit(),
+        };
+        (table, rows)
+    }
+
+    fn cell_prim(name: &str, arity: usize, eval: impl Fn(&[bool]) -> Vec<bool>) -> PrimDef {
+        prim_from_bits(name, flat(arity), flat(arity), eval).unwrap()
+    }
+
+    // ── Packing order ──────────────────────────────────────────────
+
+    /// Pins the row packing: input `i` is bit `i` of the row (`bits_of`
+    /// order), read off each value's bits -- NOT its `enumerate_values`
+    /// index, which walks `Left` (bit 1) first, outer field first.
+    #[test]
+    fn row_order_pins_bits_of() {
+        let ty = flat(3);
+        let rows: Vec<usize> = enumerate_values(&ty)
+            .iter()
+            .map(|v| row_of(&bits_of(v, &ty).unwrap()))
+            .collect();
+        assert_eq!(rows, [7, 3, 5, 1, 6, 2, 4, 0]);
+
+        // Toffoli (c1, c2, t): the controls pass as LIT[0], LIT[1]; the
+        // target is LIT[2] ^ (LIT[0] & LIT[1]) over the 8 live rows.
+        let tof = cell_prim("tof", 3, |b| vec![b[0], b[1], b[2] ^ (b[0] & b[1])]);
+        let table = synthesize_gate(&tof).unwrap();
+        assert_eq!(table.n_in, 3);
+        assert_eq!(
+            table.cols,
+            [Mask::Word(0xAA), Mask::Word(0xCC), Mask::Word(0x78)]
+        );
+
+        // Uneven sum 1 + B×B: Left(()) pads to [1, 0, 0] (row 1); rows 3, 5,
+        // 7 are never produced and stay 0 in every column, as in the minterm
+        // expansion.
+        let ty = Type::sum(Type::One, Type::prod(bit(), bit()));
+        let pad = prim_from_bits("pad_id", ty.clone(), ty, <[bool]>::to_vec).unwrap();
+        let table = synthesize_gate(&pad).unwrap();
+        assert_eq!(
+            table.cols,
+            [Mask::Word(0x02), Mask::Word(0x44), Mask::Word(0x50)]
+        );
+        let vs = BddVariableSet::new_anonymous(10);
+        assert_prim_matches_oracle(&pad, &vs, &mut Rng(0xADC0_0050));
+    }
+
+    /// `Mask::Words` packs and splits like the one-word form: row `x` of a
+    /// multi-word column is word `x / 64`, and the input-0 cofactors of an
+    /// 8-input column regroup into the 7-, then 6-input layouts.
+    #[test]
+    fn wide_masks_pack_and_split() {
+        let mut m = Mask::zero(8);
+        for x in [0, 63, 64, 130, 255] {
+            m.set(x);
+        }
+        assert_eq!(m, Mask::Words(vec![1 | (1 << 63), 1, 1 << 2, 1 << 63]));
+        let (lo, hi) = m.split(8);
+        // x₀ = 0: rows 0, 64, 130 -> 0, 32, 65; x₀ = 1: rows 63, 255 -> 31, 127.
+        assert_eq!(lo, Mask::Words(vec![1 | (1 << 32), 1 << 1]));
+        assert_eq!(hi, Mask::Words(vec![1 << 31, 1 << 63]));
+        // x₀ = 0 again: rows 0, 32 -> 0, 16; x₀ = 1: row 65 -> 32.
+        assert_eq!(
+            lo.split(7),
+            (Mask::Word(1 | (1 << 16)), Mask::Word(1 << 32))
+        );
+    }
+
+    // ── Shannon build vs the oracle ────────────────────────────────
+
+    /// Constant and pass-through columns short-circuit: zero BDD ops, the
+    /// constant or the input BDD itself (or its complement), at every
+    /// width including the multi-word `k = 7, 8`.
+    #[test]
+    fn constant_and_pass_through_columns_cost_no_ops() {
+        let vs = BddVariableSet::new_anonymous(10);
+        let mut rng = Rng(0xC0_57A7);
+        for k in 0..=8 {
+            for inputs in input_sets(k, &vs, &mut rng) {
+                let mut cases = vec![
+                    (column(k, |_| false), vs.mk_false()),
+                    (column(k, |_| true), vs.mk_true()),
+                ];
+                for (j, input) in inputs.iter().enumerate() {
+                    cases.push((column(k, |x| (x >> j) & 1 == 1), input.clone()));
+                    cases.push((column(k, |x| (x >> j) & 1 == 0), input.not()));
+                }
+                for ((table, rows), expect) in cases {
+                    let (got, ops) = counted_apply(&table, &inputs, &vs);
+                    assert_eq!(ops, 0, "k={k}: short-circuit column issued {ops} ops");
+                    assert!(got[0] == expect, "k={k}: short-circuit column value");
+                    let want = apply_minterm(&rows, 1, &inputs, &vs);
+                    assert_same(&got, &want, &format!("k={k} short-circuit"));
+                }
+            }
+        }
+    }
+
+    /// Every function of ≤ 3 inputs, then random columns up to 8 inputs
+    /// (`k = 7, 8` take the multi-word path), on plain-variable and
+    /// composite inputs.
+    #[test]
+    fn synthetic_columns_match_minterm_oracle() {
+        let vs = BddVariableSet::new_anonymous(10);
+        let mut rng = Rng(0x5EED_0050);
+        for k in 0..=3 {
+            for bits in 0u64..1 << (1 << k) {
+                let (table, rows) = column(k, |x| (bits >> x) & 1 == 1);
+                for inputs in input_sets(k, &vs, &mut rng) {
+                    let got = apply_gate(&table, &inputs, &vs);
+                    let want = apply_minterm(&rows, 1, &inputs, &vs);
+                    assert_same(&got, &want, &format!("k={k} column {bits:#x}"));
+                }
+            }
+        }
+        for k in 4..=8 {
+            for _ in 0..4 {
+                let words: Vec<u64> = (0..(1usize << k).div_ceil(64))
+                    .map(|_| rng.next())
+                    .collect();
+                let (table, rows) = column(k, |x| (words[x / 64] >> (x % 64)) & 1 == 1);
+                for inputs in input_sets(k, &vs, &mut rng) {
+                    let got = apply_gate(&table, &inputs, &vs);
+                    let want = apply_minterm(&rows, 1, &inputs, &vs);
+                    assert_same(&got, &want, &format!("k={k} random column"));
+                }
+            }
+        }
+    }
+
+    /// The cell family (ADR-0027 K-cells, ADR-0040 R-cells; R2 is the
+    /// decoder's Toffoli, R3 its CCCNOT), both directions, matches the
+    /// oracle -- and the Shannon build pins their op counts: control
+    /// columns pass through (0 ops), a k-controlled swap arm is k nested
+    /// `ite`s, a k-controlled NOT is k-1 `ite`s around one `xor`. (The
+    /// minterm expansion spent `2^(n-1)·(n+1)` ops per balanced column.)
+    #[test]
+    fn cell_family_matches_minterm_oracle() {
+        let vs = BddVariableSet::new_anonymous(10);
+        let vars: Vec<Bdd> = vs.variables().iter().map(|&v| vs.mk_var(v)).collect();
+        let mut rng = Rng(0xCE11_0050);
+        let mut gates: Vec<(PrimDef, usize)> = Vec::new();
+        for (kind, ops) in [
+            (CellKind::K0, 0),
+            (CellKind::K1, 2),
+            (CellKind::K2, 4),
+            (CellKind::K3, 6),
+            (CellKind::R1, 1),
+        ] {
+            let name = format!("{kind:?}");
+            gates.push((cell_prim(&name, kind.arity(), |b| kind.eval(b)), ops));
+        }
+        for (kind, ops) in [
+            (RoleSwapKind::R1, 1),
+            (RoleSwapKind::R2, 2),
+            (RoleSwapKind::R3, 3),
+        ] {
+            let name = format!("role_{kind:?}");
+            gates.push((cell_prim(&name, kind.arity(), |b| kind.eval(b)), ops));
+        }
+        // Target-first CNOT (`instr::cnot_tc`): the xor folds either way.
+        gates.push((cell_prim("cnot_tc", 2, |b| vec![b[0] ^ b[1], b[1]]), 1));
+        for (def, ops) in &gates {
+            for def in [def.clone(), def.adjoint()] {
+                assert_prim_matches_oracle(&def, &vs, &mut rng);
+                let table = synthesize_gate(&def).unwrap();
+                let (_, n) = counted_apply(&table, &vars[..table.n_in], &vs);
+                assert_eq!(n, *ops, "{}: Shannon op count", def.forward_name);
+            }
+        }
+    }
+
+    /// Every prim one `step(rom)` / `system_step(rom)` walk applies, plus
+    /// its adjoint (what `Sym` hands `eval_bdd`), matches the oracle.
+    #[test]
+    fn step_prims_match_minterm_oracle() {
+        let defs = std::thread::Builder::new()
+            .stack_size(1024 * 1024 * 1024)
+            .spawn(|| {
+                let rom = [crate::asm::encode(Instr::Add { rd: 0, rs: 1 }).unwrap()];
+                let mut defs: Vec<PrimDef> = Vec::new();
+                for iso in [crate::step::step(&rom), crate::step::system_step(&rom)] {
+                    let mut stack = vec![&iso];
+                    while let Some(node) = stack.pop() {
+                        match node {
+                            Iso::Prim(def) if !defs.iter().any(|d| d == &**def) => {
+                                defs.push((**def).clone());
+                                defs.push(def.adjoint());
+                            }
+                            Iso::Sym(f)
+                            | Iso::Trace(_, f)
+                            | Iso::Iter(_, f)
+                            | Iso::Fold(_, f)
+                            | Iso::Unfold(_, f) => stack.push(f),
+                            Iso::Seq(f, g) | Iso::Plus(f, g) | Iso::Times(f, g) => {
+                                stack.push(f);
+                                stack.push(g);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                defs
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(!defs.is_empty(), "step/system_step applies no prims?");
+        let vs = BddVariableSet::new_anonymous(10);
+        let mut rng = Rng(0x57E9_0050);
+        for def in &defs {
+            assert_prim_matches_oracle(def, &vs, &mut rng);
+        }
+    }
 }
