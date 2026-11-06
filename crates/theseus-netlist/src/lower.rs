@@ -43,6 +43,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use theseus_core::domain::{
+    bit_width, bits_of_index, index_of_bits, valid_indices, value_of_index, BitTable, Entry,
+    MAX_INDEX_BITS,
+};
 use theseus_core::{admit, enumerate_values, Iso, PrimDef, Type, TypeError, Value};
 
 use crate::canonicalize::canonicalize;
@@ -230,11 +234,30 @@ pub fn prim_from_bits(
 ) -> Result<PrimDef, LowerError> {
     let mut forward = BTreeMap::new();
     let mut backward = BTreeMap::new();
-    for v in enumerate_values(&input_ty) {
-        let out_bits = f(&bits_of(&v, &input_ty)?);
-        let w = value_from_bits(&output_ty, &out_bits)?;
+    let mut add = |v: Value, in_bits: &[bool]| -> Result<(), LowerError> {
+        let w = value_from_bits(&output_ty, &f(in_bits))?;
         forward.insert(v.clone(), w.clone());
         backward.insert(w, v);
+        Ok(())
+    };
+    let w_in = bit_width(&input_ty);
+    if w_in <= MAX_INDEX_BITS {
+        // The domain as an index range (ADR-0051): an input's bits are its
+        // index's bits.
+        for (n, i) in valid_indices(&input_ty).enumerate() {
+            if n == 0 {
+                // `bits_of`'s error on the first input of a type without
+                // rails (`Flat`), which the index encoding does cover.
+                rail_width(&input_ty)?;
+            }
+            let v = value_of_index(&input_ty, i).expect("a valid index decodes");
+            add(v, &bits_of_index(i, w_in))?;
+        }
+    } else {
+        for v in enumerate_values(&input_ty) {
+            let in_bits = bits_of(&v, &input_ty)?;
+            add(v, &in_bits)?;
+        }
     }
     let def = PrimDef {
         forward_name: name.into(),
@@ -541,35 +564,39 @@ impl Builder {
         let w_in = rail_width(&def.input_ty)?;
         let w_out = rail_width(&def.output_ty)?;
         debug_assert_eq!(ins.len(), w_in);
+        // The forward map as a flat index table (ADR-0051), read once for
+        // every template check and the synthesis below.
+        let table = BitTable::from_def(def);
+        let table = table.as_ref();
 
         // Wiring identity (covers reshapes packaged as prims): 0 cells.
-        if w_in == w_out && prim_matches(def, |bits| bits.to_vec())? {
+        if w_in == w_out && prim_matches(def, table, |bits| bits.to_vec())? {
             return Ok(ins.to_vec());
         }
         // NOT: rail swap, 0 cells (ADR-0031 NOT-in-Permute).
-        if w_in == 1 && w_out == 1 && prim_matches(def, |bits| vec![!bits[0]])? {
+        if w_in == 1 && w_out == 1 && prim_matches(def, table, |bits| vec![!bits[0]])? {
             return Ok(vec![ins[0].rail_swapped()]);
         }
         // Fredkin `(c, a, b)`: one K1.
-        if w_in == 3 && w_out == 3 && prim_matches(def, |bits| CellKind::K1.eval(bits))? {
+        if w_in == 3 && w_out == 3 && prim_matches(def, table, |bits| CellKind::K1.eval(bits))? {
             return Ok(self.emit(CellKind::K1, ins));
         }
         // 2-controlled swap `(c1, c2, a, b)`: one K2.
-        if w_in == 4 && w_out == 4 && prim_matches(def, |bits| CellKind::K2.eval(bits))? {
+        if w_in == 4 && w_out == 4 && prim_matches(def, table, |bits| CellKind::K2.eval(bits))? {
             return Ok(self.emit(CellKind::K2, ins));
         }
         // 3-controlled swap `(c1, c2, c3, a, b)`: one K3.
-        if w_in == 5 && w_out == 5 && prim_matches(def, |bits| CellKind::K3.eval(bits))? {
+        if w_in == 5 && w_out == 5 && prim_matches(def, table, |bits| CellKind::K3.eval(bits))? {
             return Ok(self.emit(CellKind::K3, ins));
         }
         // CNOT `(c, t)`: one R1, zero ancillas (ADR-0040 phase C).
-        if w_in == 2 && w_out == 2 && prim_matches(def, |bits| CellKind::R1.eval(bits))? {
+        if w_in == 2 && w_out == 2 && prim_matches(def, table, |bits| CellKind::R1.eval(bits))? {
             return Ok(self.emit(CellKind::R1, ins));
         }
 
         // General CSWAP-network synthesis (B4.2): any other admitted
         // prim, via transformation-based multi-controlled-NOT synthesis.
-        self.synthesize_prim(def, ins)
+        self.synthesize_prim(def, table, ins)
     }
 
     /// General CSWAP-network synthesis (B4.2) for an arbitrary admitted
@@ -592,9 +619,14 @@ impl Builder {
     ///    [`Builder::controlled_apply`] can still promote the network by
     ///    one extra control inside `Branch`/`TraceLoop` (`K1 → K2`,
     ///    `R1 →` the K1-R1-K1 sandwich).
-    fn synthesize_prim(&mut self, def: &PrimDef, ins: &[BitAt]) -> Result<Vec<BitAt>, LowerError> {
+    fn synthesize_prim(
+        &mut self,
+        def: &PrimDef,
+        table: Option<&BitTable>,
+        ins: &[BitAt],
+    ) -> Result<Vec<BitAt>, LowerError> {
         let prev_origin = self.set_origin("prim_synth");
-        let out = self.synthesize_prim_inner(def, ins);
+        let out = self.synthesize_prim_inner(def, table, ins);
         self.anc_origin = prev_origin;
         out
     }
@@ -602,6 +634,7 @@ impl Builder {
     fn synthesize_prim_inner(
         &mut self,
         def: &PrimDef,
+        bit_table: Option<&BitTable>,
         ins: &[BitAt],
     ) -> Result<Vec<BitAt>, LowerError> {
         let w_in = rail_width(&def.input_ty)?;
@@ -617,8 +650,15 @@ impl Builder {
             return Ok(vec![]);
         }
         let size = 1usize << w;
+        // A side of at most `MAX_SYNTH_WIDTH` bits always fits a table.
+        let Some(bit_table) = bit_table else {
+            return Err(LowerError::UnsupportedPrim {
+                name: def.forward_name.clone(),
+            });
+        };
 
         // ── 1. Flattened truth table as padded bit patterns ──────────
+        // A pattern is the index (ADR-0051): `bits_of` packed LSB-first.
         let pattern = |bits: &[bool]| -> u32 {
             bits.iter()
                 .enumerate()
@@ -627,15 +667,21 @@ impl Builder {
         let mut table: Vec<Option<u32>> = vec![None; size];
         let mut used_out = vec![false; size];
         let mut valid: Vec<(u32, u32)> = Vec::new();
-        for v in enumerate_values(&def.input_ty) {
-            let Some(out) = def.forward.get(&v) else {
+        for &x in bit_table.inputs() {
+            let y = match bit_table.forward(x) {
+                Entry::Index(y) => y,
                 // Not total ⇒ inadmissible: refuse rather than guess.
-                return Err(LowerError::UnsupportedPrim {
-                    name: def.forward_name.clone(),
-                });
+                Entry::Missing => {
+                    return Err(LowerError::UnsupportedPrim {
+                        name: def.forward_name.clone(),
+                    })
+                }
+                // `bits_of` rejects the ill-typed image: surface its error.
+                Entry::IllTyped => {
+                    let out = &def.forward[&bit_table.input_value(x)];
+                    pattern(&bits_of(out, &def.output_ty)?)
+                }
             };
-            let x = pattern(&bits_of(&v, &def.input_ty)?);
-            let y = pattern(&bits_of(out, &def.output_ty)?);
             table[x as usize] = Some(y);
             used_out[y as usize] = true;
             valid.push((x, y));
@@ -1435,7 +1481,45 @@ fn mmd_gates(perm: &[u32], w: usize) -> Vec<McNot> {
 
 /// Does `def.forward` compute exactly `f` on flattened bits, over the
 /// whole (finite) domain?
-fn prim_matches(def: &PrimDef, f: impl Fn(&[bool]) -> Vec<bool>) -> Result<bool, LowerError> {
+///
+/// Walks `table`, `def.forward` as a flat index table (ADR-0051): an
+/// input's bits are its index's bits, and `f`'s output is compared with
+/// the image's index. Without a table (a type too wide or sparse for
+/// one), walks the enumerated values.
+fn prim_matches(
+    def: &PrimDef,
+    table: Option<&BitTable>,
+    f: impl Fn(&[bool]) -> Vec<bool>,
+) -> Result<bool, LowerError> {
+    let Some(table) = table else {
+        return prim_matches_by_values(def, f);
+    };
+    let (w_in, w_out) = (table.input_width(), table.output_width());
+    for &i in table.inputs() {
+        let image = match table.forward(i) {
+            // Not total ⇒ not this template (inadmissible anyway).
+            Entry::Missing => return Ok(false),
+            Entry::Index(o) => Some(o),
+            Entry::IllTyped => None,
+        };
+        let got = f(&bits_of_index(i.into(), w_in));
+        let same = match image {
+            Some(o) => got.len() == w_out && index_of_bits(&got) == u64::from(o),
+            // `bits_of` rejects the ill-typed image: surface its error.
+            None => got == bits_of(&def.forward[&table.input_value(i)], &def.output_ty)?,
+        };
+        if !same {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// [`prim_matches`] over enumerated values and map lookups.
+fn prim_matches_by_values(
+    def: &PrimDef,
+    f: impl Fn(&[bool]) -> Vec<bool>,
+) -> Result<bool, LowerError> {
     for v in enumerate_values(&def.input_ty) {
         let Some(w) = def.forward.get(&v) else {
             return Ok(false); // not total ⇒ not this template (inadmissible anyway)
@@ -1560,6 +1644,7 @@ pub fn lower_iso_with_ancillas_traced(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use theseus_core::domain::index_of;
     use theseus_core::type_of;
 
     fn bit() -> Type {
@@ -2124,6 +2209,204 @@ mod tests {
         assert_eq!(
             rail_width(&Type::sum(bit(), Type::prod(bit(), bit()))),
             Ok(3) // 1 + max(1, 2) = 3
+        );
+    }
+
+    // ── Flat index domains (ADR-0051) against `bits_of` ─────────────
+
+    /// splitmix64: fixed-seed types without a `rand` dependency.
+    struct Rng(u64);
+
+    impl Rng {
+        fn below(&mut self, n: usize) -> usize {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            ((z ^ (z >> 31)) % n as u64) as usize
+        }
+    }
+
+    /// `0`, `1`, `Bool` and (rail-less) `Flat` leaves under sums and
+    /// products.
+    fn random_type(rng: &mut Rng, depth: usize) -> Type {
+        if depth == 0 || rng.below(3) == 0 {
+            return match rng.below(10) {
+                0 => Type::Zero,
+                1..=3 => Type::One,
+                4..=8 => bit(),
+                _ => Type::Flat(1 + rng.below(2) as u8),
+            };
+        }
+        let (a, b) = (random_type(rng, depth - 1), random_type(rng, depth - 1));
+        if rng.below(2) == 0 {
+            Type::sum(a, b)
+        } else {
+            Type::prod(a, b)
+        }
+    }
+
+    /// Generated types up to 12 bits wide (sums of unequal arms,
+    /// uninhabited arms, nested products, `One`, `Zero`, `Flat`).
+    fn encoding_types() -> Vec<Type> {
+        let mut types = vec![
+            Type::One,
+            Type::Zero,
+            Type::sum(Type::Zero, bit()),
+            Type::sum(Type::prod(bit(), Type::Zero), Type::prod(bit(), bit())),
+            Type::numeral_ty(6),
+            Type::list_spine_ty(bit(), 3),
+            Type::prod(Type::Flat(2), bit()),
+        ];
+        let mut rng = Rng(0xB175_0F00);
+        while types.len() < 400 {
+            let ty = random_type(&mut rng, 4);
+            if bit_width(&ty) <= 12 && enumerate_values(&ty).len() <= 4096 {
+                types.push(ty);
+            }
+        }
+        types
+    }
+
+    /// The index encoding is `bits_of` packed: same width as `rail_width`,
+    /// same bits, and `value_from_bits` decodes each index's bits to its
+    /// value. Where `bits_of` has no encoding (a `Flat` leaf, a bare `0`),
+    /// it fails on every value with `rail_width`'s error -- which the index
+    /// paths report in its place.
+    #[test]
+    fn bits_of_is_the_packed_index() {
+        let (mut encodable, mut flat) = (0, 0);
+        for ty in encoding_types() {
+            let values = enumerate_values(&ty);
+            match rail_width(&ty) {
+                Ok(w) => {
+                    encodable += 1;
+                    assert_eq!(w, bit_width(&ty), "{ty}");
+                    for v in &values {
+                        let i = index_of(v, &ty);
+                        assert_eq!(bits_of(v, &ty), Ok(bits_of_index(i, w)), "{ty}: {v:?}");
+                        assert_eq!(value_from_bits(&ty, &bits_of_index(i, w)).as_ref(), Ok(v));
+                    }
+                }
+                Err(e) => {
+                    flat += usize::from(!values.is_empty());
+                    for v in &values {
+                        assert_eq!(bits_of(v, &ty), Err(e.clone()), "{ty}: {v:?}");
+                    }
+                }
+            }
+        }
+        assert!(
+            encodable > 200 && flat > 30,
+            "{encodable} encodable, {flat} not"
+        );
+    }
+
+    /// `prim_matches` on the table and on values agree, including on
+    /// non-total maps and ill-typed images (an error from `bits_of`).
+    #[test]
+    fn prim_matches_table_matches_values() {
+        type Template = fn(&[bool]) -> Vec<bool>;
+        let templates: [Template; 5] = [
+            |b| b.to_vec(),
+            |b| vec![!b[0]],
+            |b| CellKind::K1.eval(b),
+            |b| CellKind::K2.eval(b),
+            |b| CellKind::R1.eval(b),
+        ];
+        let identity3 = prim_from_fn("id3", three_bits(), three_bits(), |b| b.to_vec());
+        let mut prims = vec![
+            fredkin_prim(),
+            ccswap_prim(),
+            not_prim(),
+            cnot_prim(),
+            identity3,
+        ];
+        for base in prims.clone() {
+            let (k0, w0) = base
+                .forward
+                .iter()
+                .next()
+                .map(|(k, w)| (k.clone(), w.clone()))
+                .unwrap();
+            let last = base.forward.keys().last().unwrap().clone();
+            let mut missing = base.clone();
+            missing.forward.remove(&last);
+            let mut ill = base.clone();
+            ill.forward
+                .insert(last.clone(), Value::pair(Value::Unit, Value::Unit));
+            let mut ill_first = base.clone();
+            ill_first.forward.insert(k0, Value::left(w0));
+            prims.extend([missing, ill, ill_first]);
+        }
+        for def in &prims {
+            let table = BitTable::from_def(def);
+            assert!(table.is_some(), "{}", def.forward_name);
+            for (t, f) in templates.iter().enumerate() {
+                let (w_in, w_out) = (rail_width(&def.input_ty), rail_width(&def.output_ty));
+                let arity = [None, Some(1), Some(3), Some(4), Some(2)][t];
+                if arity.is_some_and(|n| w_in != Ok(n) || w_out != Ok(n)) {
+                    continue; // lower_prim's width guard
+                }
+                assert_eq!(
+                    prim_matches(def, table.as_ref(), f),
+                    prim_matches_by_values(def, f),
+                    "{} template {t}",
+                    def.forward_name
+                );
+            }
+        }
+    }
+
+    /// `prim_from_bits` builds the same def as from enumerated values, and
+    /// fails the same way on a type without rails.
+    #[test]
+    fn prim_from_bits_matches_value_construction() {
+        type Maps = (BTreeMap<Value, Value>, BTreeMap<Value, Value>);
+        fn by_values(
+            input_ty: &Type,
+            output_ty: &Type,
+            f: impl Fn(&[bool]) -> Vec<bool>,
+        ) -> Result<Maps, LowerError> {
+            let (mut forward, mut backward) = (BTreeMap::new(), BTreeMap::new());
+            for v in enumerate_values(input_ty) {
+                let w = value_from_bits(output_ty, &f(&bits_of(&v, input_ty)?))?;
+                forward.insert(v.clone(), w.clone());
+                backward.insert(w, v);
+            }
+            Ok((forward, backward))
+        }
+        let rot = |b: &[bool]| {
+            let mut o = b.to_vec();
+            o.rotate_left(1);
+            o
+        };
+        // `1 + Bool × Bool`: a tag and a padded arm.
+        let padded = Type::sum(Type::One, Type::prod(bit(), bit()));
+        let swap_payload = |b: &[bool]| {
+            if b[0] {
+                b.to_vec()
+            } else {
+                vec![false, b[2], b[1]]
+            }
+        };
+        for (ty, f) in [
+            (three_bits(), &rot as &dyn Fn(&[bool]) -> Vec<bool>),
+            (four_bits(), &rot),
+            (padded, &swap_payload),
+        ] {
+            let def = prim_from_bits("p", ty.clone(), ty.clone(), f).unwrap();
+            let (forward, backward) = by_values(&ty, &ty, f).unwrap();
+            assert_eq!((def.forward, def.backward), (forward, backward), "{ty}");
+        }
+        let flat = Type::prod(bit(), Type::Flat(2));
+        assert_eq!(
+            prim_from_bits("flat_in", flat.clone(), three_bits(), |b| b.to_vec()).map(|_| ()),
+            by_values(&flat, &three_bits(), |b: &[bool]| b.to_vec()).map(|_| ())
+        );
+        assert_eq!(
+            prim_from_bits("flat_out", three_bits(), flat.clone(), |b| b.to_vec()).map(|_| ()),
+            by_values(&three_bits(), &flat, |b: &[bool]| b.to_vec()).map(|_| ())
         );
     }
 }

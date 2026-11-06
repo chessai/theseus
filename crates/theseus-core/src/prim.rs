@@ -9,6 +9,7 @@
 use crate::bvexpr::{
     eval_expr_lanes, pack_lane, unpack_lane, BvExpr, Lane, LANES, LANE_ZERO, OPERAND_BITS,
 };
+use crate::domain::BitTable;
 use crate::ty::Type;
 use std::collections::BTreeMap;
 
@@ -187,10 +188,45 @@ pub enum AdmitError {
 ///   with an incomplete table (the partial-table+spec hang bypass).
 /// - Symbolic-only (table empty, spec present) → `SymbolicOnly`.
 ///
+/// The mutual-inverse check runs on flat index tables (ADR-0051,
+/// [`BitTable::is_bijection`]) when both types fit one, else on enumerated
+/// `Value`s; the verdict and error are the same either way.
+///
 /// **Both-present prims** (table AND spec) verify spec==table over the table
 /// domain (forward AND backward) after the mutual-inverse check, evaluating
-/// the spec lane-parallel (ADR-0049).
+/// the spec lane-parallel (ADR-0049), fed from the index tables when they
+/// cover the maps' keys.
 pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
+    admit_prechecks(def)?;
+
+    let table = BitTable::from_def(def);
+    match &table {
+        Some(table) => table.is_bijection()?,
+        None => mutual_inverse_by_values(def)?,
+    }
+
+    // Both-present: verify spec==table over the table domain, forward
+    // first, then backward (F4).
+    if let Some(spec) = &def.symbolic {
+        for (transfer, backward) in [(&spec.forward, false), (&spec.backward, true)] {
+            match table
+                .as_ref()
+                .and_then(|t| t.spec_matches(transfer, backward))
+            {
+                Some(verdict) => verdict?,
+                None if backward => {
+                    spec_matches_table(transfer, &def.backward, &def.output_ty, &def.input_ty)?
+                }
+                None => spec_matches_table(transfer, &def.forward, &def.input_ty, &def.output_ty)?,
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// `admit`'s checks that run before any enumeration (F3, F2).
+fn admit_prechecks(def: &PrimDef) -> Result<(), AdmitError> {
     // F3: validate spec against the prim's types FIRST (before any enumeration).
     if let Some(spec) = &def.symbolic {
         spec.validate_against(&def.input_ty, &def.output_ty)
@@ -209,7 +245,13 @@ pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
             return Err(AdmitError::PartialTableWithSpec);
         }
     }
+    Ok(())
+}
 
+/// The mutual-inverse check over enumerated `Value`s and map lookups: the
+/// path for types too wide or sparse for a [`BitTable`], and the reference
+/// [`BitTable::is_bijection`] is tested against.
+fn mutual_inverse_by_values(def: &PrimDef) -> Result<(), AdmitError> {
     let domain = enumerate_values(&def.input_ty);
     let codomain = enumerate_values(&def.output_ty);
 
@@ -244,15 +286,19 @@ pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
             _ => return Err(AdmitError::ForwardOfBackward { input: w.clone() }),
         }
     }
+    Ok(())
+}
 
-    // Both-present: verify spec==table over the table domain.
+/// `admit` as it was before index tables: every check on `Value`s and the
+/// maps. The oracle the table path is tested against.
+#[cfg(test)]
+pub(crate) fn admit_by_values(def: &PrimDef) -> Result<(), AdmitError> {
+    admit_prechecks(def)?;
+    mutual_inverse_by_values(def)?;
     if let Some(spec) = &def.symbolic {
-        // Forward spec vs forward table.
         spec_matches_table(&spec.forward, &def.forward, &def.input_ty, &def.output_ty)?;
-        // F4: backward spec vs backward table.
         spec_matches_table(&spec.backward, &def.backward, &def.output_ty, &def.input_ty)?;
     }
-
     Ok(())
 }
 
@@ -1173,5 +1219,329 @@ mod tests {
             errors > 30,
             "corruptions must mostly be caught, got {errors}"
         );
+    }
+
+    // ── Index tables (ADR-0051) vs the `Value` oracle ───────────────
+
+    /// A table prim from `f` over `in_ty`'s enumeration; backward is the
+    /// inverse map.
+    fn table_prim(name: &str, in_ty: Type, out_ty: Type, f: impl Fn(&Value) -> Value) -> PrimDef {
+        let forward: BTreeMap<Value, Value> = enumerate_values(&in_ty)
+            .into_iter()
+            .map(|v| {
+                let w = f(&v);
+                (v, w)
+            })
+            .collect();
+        let backward = forward
+            .iter()
+            .map(|(v, w)| (w.clone(), v.clone()))
+            .collect();
+        PrimDef {
+            forward_name: name.into(),
+            backward_name: format!("{name}_inv"),
+            input_ty: in_ty,
+            output_ty: out_ty,
+            forward,
+            backward,
+            symbolic: None,
+        }
+    }
+
+    /// Input `k` (enumeration position) goes to output `p(k)`.
+    fn position_prim(name: &str, in_ty: Type, out_ty: Type, p: impl Fn(usize) -> usize) -> PrimDef {
+        let (ins, outs) = (enumerate_values(&in_ty), enumerate_values(&out_ty));
+        table_prim(name, in_ty, out_ty, |v| {
+            outs[p(ins.iter().position(|x| x == v).unwrap())].clone()
+        })
+    }
+
+    /// An endo-prim rewriting leaf bytes with `g`.
+    fn leaf_prim(name: &str, ty: Type, g: impl Fn(&mut Vec<u8>)) -> PrimDef {
+        let t = ty.clone();
+        table_prim(name, ty.clone(), ty, move |v| {
+            let mut bytes = value_to_leaf_bytes(v, &t).unwrap();
+            g(&mut bytes);
+            value_from_leaf_bytes(&bytes, &t)
+        })
+    }
+
+    /// Inhabits none of the corpus types.
+    fn ill() -> Value {
+        Value::right(Value::right(Value::pair(Value::Unit, Value::Unit)))
+    }
+
+    /// Prims shaped like those the workspace's tests build, small enough
+    /// to sweep: core's own, `builtin_prim`'s `add_into` with its table,
+    /// the netlist/tisc gate and table prims, elaborated trace bodies, and
+    /// types too wide or sparse for a `BitTable` (the `Value` path).
+    fn admit_corpus() -> Vec<PrimDef> {
+        let b = bool_ty;
+        let f = Type::Flat;
+        let not = table_prim("not", b(), b(), |v| match v {
+            Value::Left(_) => ff(),
+            _ => tt(),
+        });
+        let mut corpus = vec![
+            not.clone(),
+            table_prim("id", b(), b(), Value::clone),
+            PrimDef {
+                backward: not.forward.clone(),
+                ..table_prim("id_not", b(), b(), Value::clone)
+            },
+            table_prim("flat4_id", f(4), f(4), Value::clone),
+            flat3_cube(),
+            flat3_sum(),
+            position_prim(
+                "w1x3_to_w2x2",
+                Type::prod(f(1), f(3)),
+                Type::prod(f(2), f(2)),
+                |k| (5 * k + 3) % 16,
+            ),
+            position_prim(
+                "one_plus_w2",
+                Type::sum(Type::One, f(2)),
+                Type::sum(Type::One, f(2)),
+                |k| (k + 1) % 5,
+            ),
+            position_prim(
+                "w1_plus_w2",
+                Type::sum(f(1), f(2)),
+                Type::sum(f(1), f(2)),
+                |k| (k + 1) % 6,
+            ),
+            leaf_prim(
+                "maskacc_w2",
+                Type::prod(f(2), Type::prod(f(2), f(2))),
+                |x| {
+                    x[0] ^= x[1] & x[2];
+                },
+            ),
+            leaf_prim(
+                "memexch",
+                Type::prod(
+                    f(2),
+                    Type::prod(f(1), Type::prod(f(2), Type::prod(f(2), Type::One))),
+                ),
+                |x| {
+                    let at = 2 + x[1] as usize;
+                    x.swap(0, at);
+                },
+            ),
+            leaf_prim("add_w3", Type::prod(f(3), f(3)), |x| {
+                x[1] = (x[0] + x[1]) % 8
+            }),
+            table_prim(
+                "fredkin",
+                Type::prod(b(), Type::prod(b(), b())),
+                Type::prod(b(), Type::prod(b(), b())),
+                |v| match v {
+                    Value::Pair(c, ab) if **c == tt() => match ab.as_ref() {
+                        Value::Pair(x, y) => {
+                            Value::pair(tt(), Value::pair((**y).clone(), (**x).clone()))
+                        }
+                        _ => unreachable!(),
+                    },
+                    _ => v.clone(),
+                },
+            ),
+            position_prim(
+                "trace_body",
+                Type::sum(Type::numeral_ty(3), b()),
+                Type::sum(Type::numeral_ty(3), b()),
+                |k| (k + 2) % 5,
+            ),
+            position_prim(
+                "spine_rev",
+                Type::list_spine_ty(b(), 3),
+                Type::list_spine_ty(b(), 3),
+                |k| 6 - k,
+            ),
+            position_prim(
+                "succ_n20",
+                Type::numeral_ty(20),
+                Type::numeral_ty(20),
+                |k| (k + 1) % 20,
+            ),
+            position_prim(
+                "succ_n30",
+                Type::numeral_ty(30),
+                Type::numeral_ty(30),
+                |k| (k + 1) % 30,
+            ),
+            table_prim("zero", Type::Zero, Type::Zero, Value::clone),
+            table_prim("one", Type::One, Type::One, Value::clone),
+            table_prim(
+                "dead_arm",
+                Type::sum(Type::Zero, b()),
+                Type::sum(Type::Zero, b()),
+                Value::clone,
+            ),
+            // Cardinalities differ: backward is not total, or not a
+            // right inverse.
+            table_prim("one_to_bool", Type::One, b(), |_| tt()),
+            PrimDef {
+                backward: [(tt(), Value::Unit), (ff(), Value::Unit)]
+                    .into_iter()
+                    .collect(),
+                ..table_prim("one_to_bool_total", Type::One, b(), |_| tt())
+            },
+            // Symbolic-only (`SymbolicOnly` before any table work).
+            builtin_prim(
+                ADD_INTO_KEY,
+                &Type::prod(f(2), f(2)),
+                &Type::prod(f(2), f(2)),
+            )
+            .unwrap(),
+        ];
+        // `Value`-level mutual inverses that are not a bijection of the
+        // types: an ill-typed key and image complete the round trips.
+        let mut stray = table_prim("one_bool_stray", Type::One, b(), |_| tt());
+        stray.forward.insert(ill(), ff());
+        stray.backward.insert(ff(), ill());
+        corpus.push(stray);
+        for w in 1..=3u8 {
+            let ty = Type::prod(f(w), f(w));
+            let spec = builtin_prim(ADD_INTO_KEY, &ty, &ty)
+                .unwrap()
+                .symbolic
+                .unwrap();
+            let both = both_present(ty, spec);
+            corpus.push(PrimDef {
+                symbolic: None,
+                ..both.clone()
+            });
+            corpus.push(both);
+        }
+        corpus
+    }
+
+    /// The mutations each corpus prim is also checked under: dropped and
+    /// duplicated entries, swapped outputs (one map or both), a corrupted
+    /// backward map, ill-typed images (round-tripping or not) and stray
+    /// keys.
+    fn mutants(def: &PrimDef) -> Vec<(String, PrimDef)> {
+        let keys: Vec<Value> = def.forward.keys().cloned().collect();
+        let bkeys: Vec<Value> = def.backward.keys().cloned().collect();
+        let mut out = Vec::new();
+        let mut add = |name: String, edit: &dyn Fn(&mut PrimDef)| {
+            let mut m = def.clone();
+            edit(&mut m);
+            out.push((name, m));
+        };
+        let (n, m) = (keys.len(), bkeys.len());
+        let mut positions = vec![0, n / 2, n.saturating_sub(1)];
+        positions.dedup();
+        for &p in positions.iter().filter(|&&p| p < n) {
+            let (k, q) = (&keys[p], &keys[(p + 1) % n]);
+            add(format!("drop fwd {p}"), &|d| {
+                d.forward.remove(k);
+            });
+            add(format!("ill fwd {p}"), &|d| {
+                d.forward.insert(k.clone(), ill());
+            });
+            add(format!("ill fwd {p}, round trip"), &|d| {
+                d.forward.insert(k.clone(), ill());
+                d.backward.insert(ill(), k.clone());
+            });
+            if n > 1 {
+                add(format!("dup out {p}"), &|d| {
+                    let w = d.forward[q].clone();
+                    d.forward.insert(k.clone(), w);
+                });
+                add(format!("swap fwd {p}"), &|d| {
+                    let (wk, wq) = (d.forward[k].clone(), d.forward[q].clone());
+                    d.forward.insert(k.clone(), wq);
+                    d.forward.insert(q.clone(), wk);
+                });
+                add(format!("swap both {p}"), &|d| {
+                    let (wk, wq) = (d.forward[k].clone(), d.forward[q].clone());
+                    d.forward.insert(k.clone(), wq.clone());
+                    d.forward.insert(q.clone(), wk.clone());
+                    d.backward.insert(wq, k.clone());
+                    d.backward.insert(wk, q.clone());
+                });
+            }
+        }
+        for &p in positions.iter().filter(|&&p| p < m) {
+            let (k, q) = (&bkeys[p], &bkeys[(p + 1) % m]);
+            add(format!("drop bwd {p}"), &|d| {
+                d.backward.remove(k);
+            });
+            add(format!("corrupt bwd {p}"), &|d| {
+                let v = d.backward[q].clone();
+                d.backward.insert(k.clone(), v);
+            });
+            add(format!("ill bwd {p}"), &|d| {
+                d.backward.insert(k.clone(), ill());
+            });
+            add(format!("ill bwd {p}, round trip"), &|d| {
+                d.backward.insert(k.clone(), ill());
+                d.forward.insert(ill(), k.clone());
+            });
+            add(format!("stray fwd key {p}"), &|d| {
+                d.forward.insert(ill(), k.clone());
+            });
+        }
+        if let Some(k) = keys.first() {
+            add("stray bwd key".into(), &|d| {
+                d.backward.insert(ill(), k.clone());
+            });
+        }
+        out
+    }
+
+    /// `admit` (index tables) and `admit_by_values` (the old `Value`
+    /// loops) agree -- verdict, variant and offending `Value` -- on the
+    /// corpus and every mutant, and so do `is_bijection` and the `Value`
+    /// mutual-inverse check.
+    #[test]
+    fn admit_tables_match_value_oracle() {
+        let mut variants = std::collections::BTreeSet::new();
+        let (mut cases, mut tabled) = (0, 0);
+        for def in admit_corpus() {
+            for ty in [&def.input_ty, &def.output_ty] {
+                assert_eq!(crate::domain::try_index_of(&ill(), ty), None, "{ty}");
+            }
+            let mut all = vec![("as built".to_string(), def.clone())];
+            all.extend(mutants(&def));
+            for (what, m) in all {
+                let expected = admit_by_values(&m);
+                assert_eq!(admit(&m), expected, "{} ({what})", def.forward_name);
+                if let Some(table) = BitTable::from_def(&m) {
+                    tabled += 1;
+                    assert_eq!(
+                        table.is_bijection(),
+                        mutual_inverse_by_values(&m),
+                        "{} ({what}): is_bijection",
+                        def.forward_name
+                    );
+                }
+                variants.insert(match &expected {
+                    Ok(()) => "Ok".to_string(),
+                    Err(e) => format!("{e:?}")
+                        .split(['(', ' '])
+                        .next()
+                        .unwrap()
+                        .to_string(),
+                });
+                cases += 1;
+            }
+        }
+        // Not vacuous: most cases ran on tables, and every outcome came up.
+        assert!(tabled * 10 > cases * 9, "{tabled} of {cases} on tables");
+        for v in [
+            "Ok",
+            "ForwardNotTotal",
+            "BackwardNotTotal",
+            "BackwardOfForward",
+            "ForwardOfBackward",
+            "SymbolicOnly",
+            "SpecTableMismatch",
+            "InvalidSpec",
+            "PartialTableWithSpec",
+        ] {
+            assert!(variants.contains(v), "{v} in {variants:?}");
+        }
     }
 }

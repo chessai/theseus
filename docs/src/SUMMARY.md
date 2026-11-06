@@ -57,6 +57,7 @@
   - [0048 Lane-parallel (bit-sliced) netlist simulation](adr/0048-lane-parallel-netlist-simulation.md)
   - [0049 Lane-parallel BvExpr evaluation](adr/0049-lane-parallel-bvexpr-eval.md)
   - [0050 Packed gate truth tables + Shannon BDD build](adr/0050-packed-gate-tables.md)
+  - [0051 Flat bit-encoded domains](adr/0051-flat-bit-encoded-domains.md)
 
 # Design Document
 
