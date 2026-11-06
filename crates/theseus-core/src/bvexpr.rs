@@ -352,24 +352,36 @@ impl LaneProgram {
             named.push((o, r));
         }
         // Lay out the slots: ZERO, then every operand's 8 planes, then the
-        // cells in emission (topological) order.
+        // cells in ASAP level order (1 + the deepest cell they read; stable
+        // within a level). Emission order is depth-first, so a cell usually
+        // reads the one just before it; level order puts independent cells
+        // side by side and their store-to-load chains overlap.
         let var_end = 1 + OPERAND_BITS * c.operands;
         let n_slots = var_end + c.cells.len();
-        let fix = |r: u32| {
-            if r & CELL != 0 {
-                let i = r & !(CELL | NEG);
-                (r & NEG) | (u32::try_from(var_end).expect("slot fits u32") + i)
-            } else {
-                r
-            }
+        let cell_of = |r: u32| (r & CELL != 0).then_some((r & !(CELL | NEG)) as usize);
+        let mut level = vec![0u32; c.cells.len()];
+        for i in 0..c.cells.len() {
+            let deepest = c.cells[i]
+                .iter()
+                .filter_map(|&r| cell_of(r))
+                .map(|j| level[j]);
+            level[i] = 1 + deepest.max().unwrap_or(0);
+        }
+        let mut order: Vec<usize> = (0..c.cells.len()).collect();
+        order.sort_by_key(|&i| level[i]);
+        let mut slot = vec![0u32; c.cells.len()];
+        for (pos, &i) in order.iter().enumerate() {
+            slot[i] = u32::try_from(var_end + pos).expect("slot fits u32");
+        }
+        let fix = |r: u32| match cell_of(r) {
+            Some(i) => (r & NEG) | slot[i],
+            None => r,
         };
-        let cells = c
-            .cells
+        let cells = order
             .iter()
-            .enumerate()
-            .map(|(i, &refs)| MuxCell {
-                refs: refs.map(fix),
-                dst: u32::try_from(var_end + i).expect("slot fits u32"),
+            .map(|&i| MuxCell {
+                refs: c.cells[i].map(fix),
+                dst: slot[i],
             })
             .collect();
         LaneProgram {
@@ -452,11 +464,14 @@ impl Compiler {
                     self.bad_bit = true;
                     return ZERO;
                 }
+                let slot = operand
+                    .checked_mul(OPERAND_BITS)
+                    .and_then(|s| s.checked_add(1 + bit))
+                    .and_then(|s| u32::try_from(s).ok())
+                    .filter(|&s| s < CELL)
+                    .expect("var slot fits the ref space");
                 self.operands = self.operands.max(operand + 1);
-                u32::try_from(1 + operand * OPERAND_BITS + bit)
-                    .ok()
-                    .filter(|&r| r < CELL)
-                    .expect("var slot fits the ref space")
+                slot
             }
             BvExpr::Const(false) => ZERO,
             BvExpr::Const(true) => ONES,

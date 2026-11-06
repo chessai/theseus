@@ -222,6 +222,7 @@ mod tests {
 
     #[test]
     fn levels_are_ordered_and_capped() {
+        eprintln!("detected SIMD level: {}", SimdLevel::detected());
         assert!(SimdLevel::Scalar < SimdLevel::Sse2 && SimdLevel::Sse2 < SimdLevel::Avx2);
         let detected = SimdLevel::detected();
         for l in SimdLevel::ALL {
