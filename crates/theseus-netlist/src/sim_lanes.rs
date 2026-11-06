@@ -1068,7 +1068,13 @@ mod kernel_tests {
     fn every_kernel_matches_the_reference() {
         let mut rng = Rng(0x51D_0052);
         let shapes = [(1, 0, 1), (3, 1, 2), (4, 4, 3), (8, 37, 5), (20, 300, 16)];
-        for &(n_inputs, cells, n_out) in &shapes {
+        // Miri: the small shapes only.
+        let shapes = if cfg!(miri) {
+            &shapes[..4]
+        } else {
+            &shapes[..]
+        };
+        for &(n_inputs, cells, n_out) in shapes {
             let plan = random_plan(&mut rng, n_inputs, cells, n_out);
             for n in 1..=MAX_WORDS {
                 let inputs: Vec<u64> = (0..n_inputs * n).map(|_| rng.next()).collect();
@@ -1128,8 +1134,16 @@ mod kernel_tests {
     #[test]
     fn pack_unpack_match_the_bit_loops() {
         let mut rng = Rng(0xBACC);
-        for width in [0usize, 1, 7, 8, 9, 63, 64, 65, 200, 686] {
-            for n_lanes in [0usize, 1, 31, 64, 65, 200, 256] {
+        let (widths, lanes): (&[usize], &[usize]) = if cfg!(miri) {
+            (&[0, 1, 9, 65], &[0, 1, 65, 130])
+        } else {
+            (
+                &[0, 1, 7, 8, 9, 63, 64, 65, 200, 686],
+                &[0, 1, 31, 64, 65, 200, 256],
+            )
+        };
+        for &width in widths {
+            for &n_lanes in lanes {
                 let vectors: Vec<Vec<bool>> = (0..n_lanes)
                     .map(|_| (0..width).map(|_| rng.next() & 1 == 1).collect())
                     .collect();
