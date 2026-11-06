@@ -189,27 +189,33 @@ fn t_instr_dense_byte_system_ring() {
         (0xC3, 0xA5, 0x00, "rs=0xC3, rt=0xA5 → rd^=0x81"),
     ];
 
-    for (rs_val, rt_val, rd_init, label) in &cases {
-        let state = StateVals {
-            regs: [*rd_init, *rs_val, *rt_val, 0x33, 0x44, 0x55, 0x66, 0x77],
+    let states: Vec<StateVals> = cases
+        .iter()
+        .map(|&(rs_val, rt_val, rd_init, _)| StateVals {
+            regs: [rd_init, rs_val, rt_val, 0x33, 0x44, 0x55, 0x66, 0x77],
             pc: 0,
             br: 0,
             ir: 0,
             scratch: [0; 8],
             mem: [0; MEM_WORDS],
-        };
+        })
+        .collect();
+    // Every case in one lane-parallel pass (ADR-0048).
+    let outs = ring.run_many(&states, 1);
 
+    for ((rs_val, rt_val, rd_init, label), (state, out)) in
+        cases.iter().zip(states.iter().zip(&outs))
+    {
         let expected_rd = rd_init ^ (rs_val & rt_val);
-        let out = ring.run(&state, 1);
 
         // Assert ancillas restored (ring closes).
         assert!(
-            ring.ancillas_restored(&state),
+            ring.ancillas_restored(state),
             "ancillas NOT restored for {label}"
         );
 
         // Assert bus quiescent.
-        assert!(ring.bus_quiescent(&state), "bus NOT quiescent for {label}");
+        assert!(ring.bus_quiescent(state), "bus NOT quiescent for {label}");
 
         // Assert rd got the right value.
         assert_eq!(

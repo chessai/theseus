@@ -34,6 +34,8 @@ use std::collections::BTreeMap;
 
 use theseus_core::Type;
 
+use crate::sim_lanes::Lanes;
+
 /// Number of clock phases `P` in the rotation (ADR-0026 C2.3: 4 for 2LAL,
 /// 8 under S2LAL). Moves into `TargetProfile` (C2.8) when profiles land.
 pub const PHASE_COUNT: u8 = 4;
@@ -167,6 +169,49 @@ impl CellKind {
             }
         }
     }
+
+    /// The bitwise shape of [`CellKind::eval`], shared by the lane
+    /// simulators ([`crate::sim_lanes`]).
+    pub(crate) fn lane_op(self) -> LaneOp {
+        match self {
+            CellKind::K0 => LaneOp::Pass,
+            CellKind::K1 => LaneOp::Swap(1),
+            CellKind::K2 => LaneOp::Swap(2),
+            CellKind::K3 => LaneOp::Swap(3),
+            CellKind::R1 => LaneOp::Flip(1),
+        }
+    }
+
+    /// [`CellKind::eval`] over bit-sliced lanes (ADR-0048): `ports[p]`
+    /// holds port `p`'s bit for every lane and is updated in place. Lane
+    /// `l` of the result is `eval` of lane `l` of the input.
+    pub fn eval_lanes<const N: usize>(self, ports: &mut [Lanes<N>]) {
+        assert_eq!(ports.len(), self.arity(), "cell port-count mismatch");
+        match self.lane_op() {
+            LaneOp::Pass => {}
+            LaneOp::Swap(k) => {
+                let s = ports[..k].iter().fold(Lanes::ONES, |s, &c| s & c);
+                let (a, b) = Lanes::cswap(s, ports[k], ports[k + 1]);
+                ports[k] = a;
+                ports[k + 1] = b;
+            }
+            LaneOp::Flip(k) => {
+                let s = ports[..k].iter().fold(Lanes::ONES, |s, &c| s & c);
+                ports[k] ^= s;
+            }
+        }
+    }
+}
+
+/// Bitwise shape of a cell (ADR-0048): `Swap(k)` exchanges the two
+/// ports after `k` controls iff all controls are 1 (the K-family);
+/// `Flip(k)` inverts the one port after `k` controls iff all are 1 (the
+/// R-family); `Pass` is the K0 buffer. Controls always pass through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LaneOp {
+    Pass,
+    Swap(usize),
+    Flip(usize),
 }
 
 /// Controlled rail-role swap (ADR-0040 proof-of-concept): `Rk` exchanges
@@ -799,6 +844,34 @@ mod tests {
                 line1_depth: 0
             })
         ));
+    }
+
+    #[test]
+    fn eval_lanes_matches_eval_on_every_lane() {
+        // Lane x carries input combination x (arity <= 5, so all 2^5
+        // combinations fit in one 64-lane word; the rest repeat mod 2^n).
+        for kind in [
+            CellKind::K0,
+            CellKind::K1,
+            CellKind::K2,
+            CellKind::K3,
+            CellKind::R1,
+        ] {
+            let n = kind.arity();
+            let mut ports = vec![Lanes::<2>::ZERO; n];
+            for lane in 0..Lanes::<2>::WIDTH {
+                for (p, port) in ports.iter_mut().enumerate() {
+                    port.set(lane, (lane >> p) & 1 == 1);
+                }
+            }
+            let before = ports.clone();
+            kind.eval_lanes(&mut ports);
+            for lane in 0..Lanes::<2>::WIDTH {
+                let bits: Vec<bool> = before.iter().map(|w| w.get(lane)).collect();
+                let got: Vec<bool> = ports.iter().map(|w| w.get(lane)).collect();
+                assert_eq!(got, kind.eval(&bits), "{kind:?} lane {lane}");
+            }
+        }
     }
 
     #[test]

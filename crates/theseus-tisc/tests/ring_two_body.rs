@@ -350,22 +350,23 @@ fn wide_strided_sample_states() -> Vec<StateVals> {
 fn two_body_matches_system_ring_and_eval_oracle() {
     let c = ctx();
     let samples = f5_sample_states();
+    let mut oracle = samples.clone();
 
-    for (si, start) in samples.iter().enumerate() {
-        let mut oracle = start.clone();
-        for r in 1..=2u32 {
-            oracle = eval_system_state(&format!("oracle/si={si}/r={r}"), &c.iso, &oracle);
+    // Every sample at once, lane-parallel (ADR-0048).
+    for r in 1..=2u32 {
+        oracle = eval_each(&format!("oracle/r={r}"), &c.iso, &oracle);
+        let two_results = c.two.run_many(&samples, r);
+        let sys_results = c.sys.run_many(&samples, r);
 
-            let two_result = c.two.run(start, r);
-            let sys_result = c.sys.run(start, r);
-
+        for (si, start) in samples.iter().enumerate() {
+            let (two_result, sys_result) = (&two_results[si], &sys_results[si]);
             assert_eq!(
-                two_result, oracle,
+                *two_result, oracle[si],
                 "TwoBodyRing.run(s, {r}) != eval^{r} at sample {si} (pc={})",
                 start.pc
             );
             assert_eq!(
-                sys_result, oracle,
+                *sys_result, oracle[si],
                 "SystemRing.run(s, {r}) != eval^{r} at sample {si} (pc={})",
                 start.pc
             );
@@ -382,22 +383,31 @@ fn two_body_matches_system_ring_and_eval_oracle() {
 fn two_body_matches_eval_oracle_wide_strided() {
     let c = wide_ctx();
     let samples = wide_strided_sample_states();
-    for (si, start) in samples.iter().enumerate() {
-        let mut oracle = start.clone();
-        for r in 1..=3u32 {
-            oracle = eval_system_state(&format!("wide/si={si}/r={r}"), &c.iso, &oracle);
-            let two_result = c.two.run(start, r);
-            let sys_result = c.sys.run(start, r);
+    let mut oracle = samples.clone();
+    for r in 1..=3u32 {
+        oracle = eval_each(&format!("wide/r={r}"), &c.iso, &oracle);
+        let two_results = c.two.run_many(&samples, r);
+        let sys_results = c.sys.run_many(&samples, r);
+        for si in 0..samples.len() {
             assert_eq!(
-                two_result, oracle,
+                two_results[si], oracle[si],
                 "TwoBodyRing.run(s, {r}) != eval^{r} at sample {si} (wide strided)"
             );
             assert_eq!(
-                sys_result, oracle,
+                sys_results[si], oracle[si],
                 "SystemRing.run(s, {r}) != eval^{r} at sample {si} (wide strided)"
             );
         }
     }
+}
+
+/// One `eval(system_step)` per state: the per-sample differential oracle.
+fn eval_each(tag: &str, iso: &Iso, states: &[StateVals]) -> Vec<StateVals> {
+    states
+        .iter()
+        .enumerate()
+        .map(|(si, s)| eval_system_state(&format!("{tag}/si={si}"), iso, s))
+        .collect()
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -420,12 +430,12 @@ fn per_body_ancilla_restoration() {
     // Do NOT assert on mem_body (Fredkin-only, may allocate none)
 
     let samples = f5_sample_states();
-    for (si, start) in samples.iter().enumerate() {
-        for r in 1..=2u32 {
-            let closed = c.two.run(start, r);
-            let open = c.two.run_open(start, r);
+    for r in 1..=2u32 {
+        let closed = c.two.run_many(&samples, r);
+        let open = c.two.run_open_many(&samples, r);
+        for (si, start) in samples.iter().enumerate() {
             assert_eq!(
-                closed, open,
+                closed[si], open[si],
                 "TwoBodyRing: run(s, {r}) != run_open(s, {r}) at sample {si} (pc={}) \
                  -- per-body ancilla restoration failed",
                 start.pc
@@ -439,12 +449,12 @@ fn per_body_ancilla_restoration() {
 fn per_body_ancilla_restoration_wide_strided() {
     let c = wide_ctx();
     let samples = wide_strided_sample_states();
-    for (si, start) in samples.iter().enumerate() {
-        for r in 1..=3u32 {
-            let closed = c.two.run(start, r);
-            let open = c.two.run_open(start, r);
+    for r in 1..=3u32 {
+        let closed = c.two.run_many(&samples, r);
+        let open = c.two.run_open_many(&samples, r);
+        for si in 0..samples.len() {
             assert_eq!(
-                closed, open,
+                closed[si], open[si],
                 "TwoBodyRing (wide): run != run_open at sample {si}, r={r}"
             );
         }

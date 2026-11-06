@@ -113,6 +113,28 @@ fn sample_state(pc_in: impl Into<u16>) -> StateVals {
 /// PCs to sample: three in-ROM addresses plus one out-of-ROM.
 const SAMPLE_PCS: [u8; 4] = [0, 1, 2, 4];
 
+/// The sampled starts, one per PC (run lane-parallel, ADR-0048).
+fn sample_states(pcs: &[u8]) -> Vec<StateVals> {
+    pcs.iter().map(|&pc| sample_state(pc)).collect()
+}
+
+/// One `eval(system_step)` per state: the per-start differential oracle.
+fn eval_each(tag: &str, iso: &Iso, states: &[StateVals], pcs: &[u8]) -> Vec<StateVals> {
+    states
+        .iter()
+        .zip(pcs)
+        .map(|(s, pc)| eval_system_state(&format!("{tag}/pc={pc}"), iso, s))
+        .collect()
+}
+
+/// Per-start equality, naming the start's PC on failure.
+fn assert_each_eq(got: &[StateVals], want: &[StateVals], pcs: &[u8], what: &str) {
+    assert_eq!(got.len(), want.len());
+    for ((got, want), pc) in got.iter().zip(want).zip(pcs) {
+        assert_eq!(got, want, "{what} at pc={pc}");
+    }
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // 1. Ancilla restoration -- system_step lowers ancilla-clean
 // ══════════════════════════════════════════════════════════════════════
@@ -159,28 +181,33 @@ fn system_ring_matches_eval_oracle_fast() {
     let c = ctx();
     const MAX_R: u32 = 2;
 
-    for &pc in &[0u8, 4] {
-        let start = sample_state(pc);
-        let mut oracle = start.clone();
+    let pcs = [0u8, 4];
+    let starts = sample_states(&pcs);
+    let mut oracle = starts.clone();
 
-        for r in 0..=MAX_R {
-            let ring_result = c.ring.run(&start, r);
-            assert_eq!(
-                ring_result, oracle,
-                "SystemRing.run(s, {r}) != eval^{r} at pc={pc}"
-            );
-            // run == run_open
-            let open_result = c.ring.run_open(&start, r);
-            assert_eq!(
-                open_result, ring_result,
-                "SystemRing: run_open(s, {r}) != run(s, {r}) at pc={pc}"
-            );
-            oracle = eval_system_state(&format!("fast_oracle/pc={pc}/r={r}"), &c.iso, &oracle);
-        }
+    for r in 0..=MAX_R {
+        let ring_result = c.ring.run_many(&starts, r);
+        assert_each_eq(
+            &ring_result,
+            &oracle,
+            &pcs,
+            &format!("SystemRing.run(s, {r}) != eval^{r}"),
+        );
+        // run == run_open
+        let open_result = c.ring.run_open_many(&starts, r);
+        assert_each_eq(
+            &open_result,
+            &ring_result,
+            &pcs,
+            &format!("SystemRing: run_open(s, {r}) != run(s, {r})"),
+        );
+        oracle = eval_each(&format!("fast_oracle/r={r}"), &c.iso, &oracle, &pcs);
+    }
 
-        // bus_quiescent
+    // bus_quiescent
+    for (start, pc) in starts.iter().zip(pcs) {
         assert!(
-            c.ring.bus_quiescent(&start),
+            c.ring.bus_quiescent(start),
             "SystemRing: bus NOT quiescent at pc={pc}"
         );
     }
@@ -192,18 +219,18 @@ fn ring_matches_eval_oracle() {
     let c = ctx();
     const MAX_R: u32 = 4;
 
-    for &pc in &SAMPLE_PCS {
-        let start = sample_state(pc);
-        let mut oracle = start.clone();
+    let starts = sample_states(&SAMPLE_PCS);
+    let mut oracle = starts.clone();
 
-        for r in 0..=MAX_R {
-            let ring_result = c.ring.run(&start, r);
-            assert_eq!(
-                ring_result, oracle,
-                "SystemRing.run(s, {r}) != eval^{r} at pc={pc}"
-            );
-            oracle = eval_system_state(&format!("oracle/pc={pc}/r={r}"), &c.iso, &oracle);
-        }
+    for r in 0..=MAX_R {
+        let ring_result = c.ring.run_many(&starts, r);
+        assert_each_eq(
+            &ring_result,
+            &oracle,
+            &SAMPLE_PCS,
+            &format!("SystemRing.run(s, {r}) != eval^{r}"),
+        );
+        oracle = eval_each(&format!("oracle/r={r}"), &c.iso, &oracle, &SAMPLE_PCS);
     }
 }
 
@@ -217,19 +244,21 @@ fn true_recirculation_matches_eval_oracle() {
     let c = ctx();
     const MAX_R: u32 = 4;
 
-    for &pc in &SAMPLE_PCS {
-        let start = sample_state(pc);
-        let mut oracle = start.clone();
+    let starts = sample_states(&SAMPLE_PCS);
+    let mut oracle = starts.clone();
 
-        for r in 0..=MAX_R {
-            let result = c.ring.run(&start, r);
-            assert_eq!(
-                result, oracle,
-                "SystemRing: run(s, {r}) != eval^{r} at pc={pc} -- \
-                 the closed (zero-garbage) runner must equal the eval oracle"
-            );
-            oracle = eval_system_state(&format!("true_recirc/pc={pc}/r={r}"), &c.iso, &oracle);
-        }
+    for r in 0..=MAX_R {
+        let result = c.ring.run_many(&starts, r);
+        assert_each_eq(
+            &result,
+            &oracle,
+            &SAMPLE_PCS,
+            &format!(
+                "SystemRing: run(s, {r}) != eval^{r} -- the closed (zero-garbage) \
+                 runner must equal the eval oracle"
+            ),
+        );
+        oracle = eval_each(&format!("true_recirc/r={r}"), &c.iso, &oracle, &SAMPLE_PCS);
     }
 }
 
@@ -243,16 +272,16 @@ fn open_vs_closed_equivalence() {
     let c = ctx();
     const MAX_R: u32 = 4;
 
-    for &pc in &SAMPLE_PCS {
-        let start = sample_state(pc);
-        for r in 0..=MAX_R {
-            let closed = c.ring.run(&start, r);
-            let open = c.ring.run_open(&start, r);
-            assert_eq!(
-                closed, open,
-                "SystemRing: run(s, {r}) != run_open(s, {r}) at pc={pc}"
-            );
-        }
+    let starts = sample_states(&SAMPLE_PCS);
+    for r in 0..=MAX_R {
+        let closed = c.ring.run_many(&starts, r);
+        let open = c.ring.run_open_many(&starts, r);
+        assert_each_eq(
+            &closed,
+            &open,
+            &SAMPLE_PCS,
+            &format!("SystemRing: run(s, {r}) != run_open(s, {r})"),
+        );
     }
 }
 
