@@ -6,7 +6,9 @@
 //! `forward ∘ backward = id_B` over the finite domains -- not merely that
 //! each is individually bijective.
 
-use crate::bvexpr::BvExpr;
+use crate::bvexpr::{
+    eval_expr_lanes, pack_lane, unpack_lane, BvExpr, Lane, LANES, LANE_ZERO, OPERAND_BITS,
+};
 use crate::ty::Type;
 use std::collections::BTreeMap;
 
@@ -186,7 +188,8 @@ pub enum AdmitError {
 /// - Symbolic-only (table empty, spec present) → `SymbolicOnly`.
 ///
 /// **Both-present prims** (table AND spec) verify spec==table over the table
-/// domain (forward AND backward) after the mutual-inverse check.
+/// domain (forward AND backward) after the mutual-inverse check, evaluating
+/// the spec lane-parallel (ADR-0049).
 pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
     // F3: validate spec against the prim's types FIRST (before any enumeration).
     if let Some(spec) = &def.symbolic {
@@ -245,31 +248,157 @@ pub fn admit(def: &PrimDef) -> Result<(), AdmitError> {
     // Both-present: verify spec==table over the table domain.
     if let Some(spec) = &def.symbolic {
         // Forward spec vs forward table.
-        for (in_val, table_out) in &def.forward {
-            let in_bytes =
-                value_to_leaf_bytes(in_val, &def.input_ty).map_err(AdmitError::InvalidSpec)?;
-            let out_bytes = spec.forward.eval_bytes(&in_bytes);
-            let spec_out = value_from_leaf_bytes(&out_bytes, &def.output_ty);
-            if &spec_out != table_out {
-                return Err(AdmitError::SpecTableMismatch {
-                    input: in_val.clone(),
-                });
-            }
-        }
+        spec_matches_table(&spec.forward, &def.forward, &def.input_ty, &def.output_ty)?;
         // F4: backward spec vs backward table.
-        for (in_val, table_out) in &def.backward {
-            let in_bytes =
-                value_to_leaf_bytes(in_val, &def.output_ty).map_err(AdmitError::InvalidSpec)?;
-            let out_bytes = spec.backward.eval_bytes(&in_bytes);
-            let spec_out = value_from_leaf_bytes(&out_bytes, &def.input_ty);
-            if &spec_out != table_out {
-                return Err(AdmitError::SpecTableMismatch {
-                    input: in_val.clone(),
-                });
-            }
-        }
+        spec_matches_table(&spec.backward, &def.backward, &def.output_ty, &def.input_ty)?;
     }
 
+    Ok(())
+}
+
+/// Check `transfer` against `table` entry by entry, in table (BTreeMap)
+/// order, failing on the first entry whose spec output differs.
+///
+/// Lane-parallel (ADR-0049): entries go `LANES` per tree walk and the
+/// lowest failing lane is reported, so the error -- variant and `Value` --
+/// is exactly [`spec_matches_table_scalar`]'s. Widths past the lane planes
+/// (only a malformed spec) take the scalar path.
+fn spec_matches_table(
+    transfer: &SpecTransfer,
+    table: &BTreeMap<Value, Value>,
+    in_ty: &Type,
+    out_ty: &Type,
+) -> Result<(), AdmitError> {
+    if transfer.width as usize > OPERAND_BITS {
+        return spec_matches_table_scalar(transfer, table, in_ty, out_ty);
+    }
+    let mut vars = vec![[LANE_ZERO; OPERAND_BITS]; count_leaves(in_ty)];
+    let mut out_bytes = vec![0u8; transfer.leaves.len()];
+    let mut chunk: Vec<(&Value, &Value)> = Vec::with_capacity(LANES);
+    let mut entries = table.iter();
+    loop {
+        chunk.clear();
+        // A decode error ends the chunk; it is reported after the lanes
+        // before it are checked, as the scalar loop would.
+        let mut decode_err = None;
+        for (in_val, table_out) in entries.by_ref() {
+            match value_to_leaf_bytes(in_val, in_ty) {
+                Ok(in_bytes) => {
+                    pack_lane(&mut vars, chunk.len(), &in_bytes);
+                    chunk.push((in_val, table_out));
+                }
+                Err(e) => {
+                    decode_err = Some(e);
+                    break;
+                }
+            }
+            if chunk.len() == LANES {
+                break;
+            }
+        }
+        if !chunk.is_empty() {
+            let out = transfer.eval_lanes(&vars);
+            for (i, &(in_val, table_out)) in chunk.iter().enumerate() {
+                unpack_lane(&out, i, &mut out_bytes);
+                let same = match leaf_bytes_match(&out_bytes, out_ty, table_out) {
+                    Some(same) => same,
+                    // Undecodable: decode anyway, to fail exactly as before.
+                    None => value_from_leaf_bytes(&out_bytes, out_ty) == *table_out,
+                };
+                if !same {
+                    return Err(AdmitError::SpecTableMismatch {
+                        input: in_val.clone(),
+                    });
+                }
+            }
+        }
+        if let Some(e) = decode_err {
+            return Err(AdmitError::InvalidSpec(e));
+        }
+        if chunk.len() < LANES {
+            return Ok(());
+        }
+    }
+}
+
+/// `Some(value_from_leaf_bytes(bytes, ty) == *v)` without building the value
+/// (a `Flat(8)` leaf decodes to up to 256 boxes), or `None` exactly where
+/// decoding fails.
+fn leaf_bytes_match(bytes: &[u8], ty: &Type, v: &Value) -> Option<bool> {
+    leaf_bytes_match_inner(bytes, ty, Some(v)).map(|(same, _)| same)
+}
+
+/// Mirrors [`try_value_from_leaf_bytes_inner`]'s walk -- driven by `bytes`
+/// and `ty` only, so it fails (`None`) on the same inputs -- comparing
+/// against `v` along the way (`v` is `None` below a shape mismatch).
+fn leaf_bytes_match_inner(bytes: &[u8], ty: &Type, v: Option<&Value>) -> Option<(bool, usize)> {
+    match ty {
+        Type::Zero => None,
+        Type::One => Some((v == Some(&Value::Unit), 0)),
+        Type::Sum(a, b) => {
+            let used = 1 + count_leaves(a).max(count_leaves(b));
+            let (inner_ty, inner_v) = if bytes[0] == 0 {
+                let inner = match v {
+                    Some(Value::Left(x)) => Some(x.as_ref()),
+                    _ => None,
+                };
+                (a, inner)
+            } else {
+                let inner = match v {
+                    Some(Value::Right(x)) => Some(x.as_ref()),
+                    _ => None,
+                };
+                (b, inner)
+            };
+            let (same, _) = leaf_bytes_match_inner(&bytes[1..], inner_ty, inner_v)?;
+            Some((same, used))
+        }
+        Type::Prod(a, b) => {
+            let (va, vb) = match v {
+                Some(Value::Pair(x, y)) => (Some(x.as_ref()), Some(y.as_ref())),
+                _ => (None, None),
+            };
+            let (same_a, na) = leaf_bytes_match_inner(bytes, a, va)?;
+            let (same_b, nb) = leaf_bytes_match_inner(&bytes[na..], b, vb)?;
+            Some((same_a && same_b, na + nb))
+        }
+        Type::Flat(n) => {
+            let byte = bytes[0];
+            if (byte as u64) >= (1u64 << n) {
+                return None;
+            }
+            // Thermometer Right^byte(Left(Unit)).
+            let same = v.is_some_and(|mut cur| {
+                for _ in 0..byte {
+                    match cur {
+                        Value::Right(rest) => cur = rest,
+                        _ => return false,
+                    }
+                }
+                matches!(cur, Value::Left(u) if u.as_ref() == &Value::Unit)
+            });
+            Some((same, 1))
+        }
+    }
+}
+
+/// Scalar reference for [`spec_matches_table`]: one `eval_bytes` per entry.
+fn spec_matches_table_scalar(
+    transfer: &SpecTransfer,
+    table: &BTreeMap<Value, Value>,
+    in_ty: &Type,
+    out_ty: &Type,
+) -> Result<(), AdmitError> {
+    for (in_val, table_out) in table {
+        let in_bytes = value_to_leaf_bytes(in_val, in_ty).map_err(AdmitError::InvalidSpec)?;
+        let out_bytes = transfer.eval_bytes(&in_bytes);
+        let spec_out = value_from_leaf_bytes(&out_bytes, out_ty);
+        if &spec_out != table_out {
+            return Err(AdmitError::SpecTableMismatch {
+                input: in_val.clone(),
+            });
+        }
+    }
     Ok(())
 }
 
@@ -411,6 +540,28 @@ impl SpecTransfer {
             }
         }
         out
+    }
+
+    /// Lane-parallel [`eval_bytes`](Self::eval_bytes) (ADR-0049): `vars`
+    /// holds the input leaves' bit planes (see [`pack_lane`]); returns one
+    /// plane set per output leaf, bits at and above `width` zero.
+    /// Requires `width <= OPERAND_BITS`.
+    pub fn eval_lanes(&self, vars: &[[Lane; OPERAND_BITS]]) -> Vec<[Lane; OPERAND_BITS]> {
+        let width = self.width as usize;
+        assert!(
+            width <= OPERAND_BITS,
+            "eval_lanes: width {width} > {OPERAND_BITS}"
+        );
+        self.leaves
+            .iter()
+            .map(|row| {
+                let mut planes = [LANE_ZERO; OPERAND_BITS];
+                for (plane, expr) in planes.iter_mut().zip(&row[..width]) {
+                    *plane = eval_expr_lanes(expr, vars);
+                }
+                planes
+            })
+            .collect()
     }
 
     /// Validate this transfer against the type it operates on (F3).
@@ -804,5 +955,223 @@ mod tests {
             symbolic: None,
         };
         assert_eq!(def.adjoint().adjoint(), def);
+    }
+
+    // ── Lane-parallel spec==table check vs the scalar reference ─────
+
+    use crate::bvexpr::testgen::{random_expr, SplitMix64};
+
+    /// Self-inverse spec over `leaves` leaves of width `w`: leaf `a` becomes
+    /// `a ^ mux(c_i, b_i, !b_{i+1})` with `b`, `c` the next two leaves;
+    /// every other leaf passes through.
+    fn masked_mux_transfer(leaves: usize, a: usize, w: usize) -> SpecTransfer {
+        let (b, c) = (a + 1, a + 2);
+        let rows = (0..leaves)
+            .map(|leaf| {
+                (0..w)
+                    .map(|i| {
+                        if leaf != a {
+                            return BvExpr::var(leaf, i);
+                        }
+                        let mixed = BvExpr::mux(
+                            BvExpr::var(c, i),
+                            BvExpr::var(b, i),
+                            BvExpr::var(b, (i + 1) % w).not(),
+                        );
+                        BvExpr::var(a, i).xor(mixed)
+                    })
+                    .collect()
+            })
+            .collect();
+        SpecTransfer {
+            leaves: rows,
+            width: w as u8,
+        }
+    }
+
+    /// A both-present prim whose table is generated from `spec` by the
+    /// scalar evaluator (so the uncorrupted def is admissible).
+    fn both_present(ty: Type, spec: PrimSpec) -> PrimDef {
+        let mut forward = BTreeMap::new();
+        for v in enumerate_values(&ty) {
+            let bytes = value_to_leaf_bytes(&v, &ty).unwrap();
+            let out = value_from_leaf_bytes(&spec.forward.eval_bytes(&bytes), &ty);
+            forward.insert(v, out);
+        }
+        let backward = forward
+            .iter()
+            .map(|(x, y)| (y.clone(), x.clone()))
+            .collect();
+        PrimDef {
+            forward_name: "mm".into(),
+            backward_name: "mm_inv".into(),
+            input_ty: ty.clone(),
+            output_ty: ty,
+            forward,
+            backward,
+            symbolic: Some(spec),
+        }
+    }
+
+    /// `Flat(3)^3`: 512 entries, two full chunks.
+    fn flat3_cube() -> PrimDef {
+        let f = Type::Flat(3);
+        let ty = Type::prod(f.clone(), Type::prod(f.clone(), f));
+        let t = masked_mux_transfer(3, 0, 3);
+        both_present(
+            ty,
+            PrimSpec {
+                forward: t.clone(),
+                backward: t,
+            },
+        )
+    }
+
+    /// `Flat(3)^3 + Flat(3)`: 520 entries (two full chunks and a partial
+    /// one); leaf 0 is the sum tag, `Right` payloads are zero-padded.
+    fn flat3_sum() -> PrimDef {
+        let f = Type::Flat(3);
+        let ty = Type::sum(Type::prod(f.clone(), Type::prod(f.clone(), f.clone())), f);
+        let t = masked_mux_transfer(4, 1, 3);
+        both_present(
+            ty,
+            PrimSpec {
+                forward: t.clone(),
+                backward: t,
+            },
+        )
+    }
+
+    /// The spec==table verdict via the scalar reference.
+    fn scalar_spec_check(def: &PrimDef) -> Result<(), AdmitError> {
+        let spec = def.symbolic.as_ref().unwrap();
+        spec_matches_table_scalar(&spec.forward, &def.forward, &def.input_ty, &def.output_ty)?;
+        spec_matches_table_scalar(&spec.backward, &def.backward, &def.output_ty, &def.input_ty)
+    }
+
+    /// Swap the forward outputs of entries `k1` and `k2` (keeping the table
+    /// a bijection) and return the key at `min(k1, k2)`.
+    fn swap_outputs(def: &mut PrimDef, k1: usize, k2: usize) -> Value {
+        let keys: Vec<Value> = def.forward.keys().cloned().collect();
+        let (v1, v2) = (keys[k1].clone(), keys[k2].clone());
+        let o1 = def.forward[&v1].clone();
+        let o2 = def.forward[&v2].clone();
+        def.forward.insert(v1.clone(), o2.clone());
+        def.forward.insert(v2.clone(), o1.clone());
+        def.backward.insert(o1, v2.clone());
+        def.backward.insert(o2, v1.clone());
+        if k1 < k2 {
+            v1
+        } else {
+            v2
+        }
+    }
+
+    /// `leaf_bytes_match` == decode-then-compare, including undecodable
+    /// bytes (out-of-range leaves, a `Zero` branch) and ill-shaped values.
+    #[test]
+    fn leaf_bytes_match_is_decode_then_compare() {
+        let f2 = Type::Flat(2);
+        let types = [
+            Type::sum(
+                Type::prod(f2.clone(), Type::prod(f2.clone(), f2.clone())),
+                f2.clone(),
+            ),
+            Type::prod(Type::One, Type::sum(Type::Zero, f2.clone())),
+            Type::sum(
+                Type::sum(Type::One, f2.clone()),
+                Type::prod(f2.clone(), Type::One),
+            ),
+        ];
+        let mut rng = SplitMix64(0x1EAF_0B17);
+        for ty in &types {
+            let mut values = enumerate_values(ty);
+            values.extend([
+                Value::Unit,
+                Value::left(Value::Unit),
+                Value::pair(Value::Unit, Value::Unit),
+            ]);
+            for _ in 0..3000 {
+                let bytes: Vec<u8> = (0..count_leaves(ty)).map(|_| rng.below(6) as u8).collect();
+                let v = &values[rng.below(values.len())];
+                let expected = try_value_from_leaf_bytes(&bytes, ty).ok().map(|d| d == *v);
+                assert_eq!(
+                    leaf_bytes_match(&bytes, ty, v),
+                    expected,
+                    "{bytes:?} vs {v:?} : {ty:?}"
+                );
+            }
+            // Every domain value matches its own encoding.
+            for v in enumerate_values(ty) {
+                let bytes = value_to_leaf_bytes(&v, ty).unwrap();
+                assert_eq!(leaf_bytes_match(&bytes, ty, &v), Some(true), "{v:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn spec_table_lanes_accept_admissible() {
+        for def in [flat3_cube(), flat3_sum()] {
+            assert_eq!(scalar_spec_check(&def), Ok(()));
+            assert_eq!(admit(&def), Ok(()));
+        }
+    }
+
+    /// A corrupted table fails at the same entry as the scalar path: the
+    /// lowest swapped entry, in any lane word and any chunk.
+    #[test]
+    fn spec_table_lanes_same_error_on_corrupt_table() {
+        for base in [flat3_cube(), flat3_sum()] {
+            let n = base.forward.len();
+            let mut rng = SplitMix64(0xAD_0117 + n as u64);
+            let mut pairs = vec![
+                (0, 1),
+                (63, 64),
+                (300, 64),
+                (127, 129),
+                (255, 256),
+                (n - 1, n - 2),
+                (LANES + 3, n - 1),
+            ];
+            pairs.extend((0..20).map(|_| (rng.below(n), rng.below(n))));
+            for (k1, k2) in pairs.into_iter().filter(|(k1, k2)| k1 != k2) {
+                let mut def = base.clone();
+                let input = swap_outputs(&mut def, k1, k2);
+                let expected = Err(AdmitError::SpecTableMismatch { input });
+                assert_eq!(scalar_spec_check(&def), expected, "scalar, swap {k1}/{k2}");
+                assert_eq!(admit(&def), expected, "lanes, swap {k1}/{k2}");
+            }
+        }
+    }
+
+    /// Random corruptions of the forward spec, the backward spec, or both:
+    /// `admit` reports exactly what the scalar reference reports (including
+    /// forward-before-backward when both are wrong).
+    #[test]
+    fn spec_table_lanes_same_error_on_corrupt_spec() {
+        let mut errors = 0;
+        for base in [flat3_cube(), flat3_sum()] {
+            let spec = base.symbolic.clone().unwrap();
+            let (leaves, w) = (spec.forward.leaves.len(), spec.forward.width as usize);
+            let mut rng = SplitMix64(0x5BEC_0000 + leaves as u64);
+            for case in 0..30 {
+                let mut def = base.clone();
+                let s = def.symbolic.as_mut().unwrap();
+                let (fwd, bwd) = (case % 3 != 1, case % 3 != 0);
+                for (on, t) in [(fwd, &mut s.forward), (bwd, &mut s.backward)] {
+                    if on {
+                        let (leaf, bit) = (rng.below(leaves), rng.below(w));
+                        t.leaves[leaf][bit] = random_expr(&mut rng, 4, leaves, w);
+                    }
+                }
+                let expected = scalar_spec_check(&def);
+                errors += usize::from(expected.is_err());
+                assert_eq!(admit(&def), expected, "case {case}");
+            }
+        }
+        assert!(
+            errors > 30,
+            "corruptions must mostly be caught, got {errors}"
+        );
     }
 }

@@ -625,6 +625,13 @@ fn bveq_major5_all_two_op_aliased_rejected() {
 
 // ── T6: reconciliation L-a (symbolic ≡ exec_instr, full domain) ─────
 
+/// Symbolic outputs for the 256 register files `regs(x)`, `x = 0..=255`, in
+/// one lane-parallel transfer walk (ADR-0049); lane `x` is input `x`.
+fn sym_outs(transfer: &RegTransfer, regs: impl Fn(u8) -> [u8; 8]) -> bveq::RegPlanes {
+    let inputs: Vec<[u8; 8]> = (0..=255u8).map(regs).collect();
+    bveq::eval_transfer_lanes(transfer, &bveq::pack_regs(&inputs))
+}
+
 #[test]
 fn bveq_reconciliation_la_full_domain() {
     // 2-operand instructions: 256^2 = 65536 iterations each.
@@ -640,9 +647,9 @@ fn bveq_reconciliation_la_full_domain() {
     for instr in &two_op {
         let transfer = bveq::instr_semantics(instr).unwrap();
         for a in 0..=255u8 {
+            let sym = sym_outs(&transfer, |b| [a, b, 0, 0, 0, 0, 0, 0]);
             for b in 0..=255u8 {
-                let regs = [a, b, 0, 0, 0, 0, 0, 0];
-                let sym_out = bveq::eval_transfer(&transfer, &regs);
+                let sym_out = bveq::unpack_regs(&sym, b as usize);
 
                 let mut state = StateVals::state_with_regs(&[a, b]);
                 exec_instr(*instr, &mut state);
@@ -673,9 +680,9 @@ fn bveq_reconciliation_la_full_domain() {
         let transfer = bveq::instr_semantics(instr).unwrap();
         for a in 0..=255u8 {
             for b in 0..=255u8 {
+                let sym = sym_outs(&transfer, |c| [a, b, c, 0, 0, 0, 0, 0]);
                 for c in 0..=255u8 {
-                    let regs = [a, b, c, 0, 0, 0, 0, 0];
-                    let sym_out = bveq::eval_transfer(&transfer, &regs);
+                    let sym_out = bveq::unpack_regs(&sym, c as usize);
 
                     let mut state = StateVals::state_with_regs(&[a, b, c]);
                     exec_instr(*instr, &mut state);
@@ -700,9 +707,9 @@ fn bveq_reconciliation_la_full_domain() {
         ];
         for instr in &imm_instrs {
             let transfer = bveq::instr_semantics(instr).unwrap();
+            let sym = sym_outs(&transfer, |a| [a, 0, 0, 0, 0, 0, 0, 0]);
             for a in 0..=255u8 {
-                let regs = [a, 0, 0, 0, 0, 0, 0, 0];
-                let sym_out = bveq::eval_transfer(&transfer, &regs);
+                let sym_out = bveq::unpack_regs(&sym, a as usize);
 
                 let mut state = StateVals::state_with_regs(&[a]);
                 exec_instr(*instr, &mut state);

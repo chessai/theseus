@@ -241,6 +241,8 @@ pub fn expr_to_bdd_shifted(
 // ── Concrete evaluator (re-exported from theseus-core::bvexpr) ──────
 
 /// Evaluate a full register transfer at concrete register values.
+///
+/// The scalar reference; whole-domain sweeps use [`eval_transfer_lanes`].
 pub fn eval_transfer(transfer: &RegTransfer, regs: &[u8; NUM_REGS]) -> [u8; NUM_REGS] {
     let mut result = [0u8; NUM_REGS];
     for (r, out_reg) in result.iter_mut().enumerate() {
@@ -251,6 +253,51 @@ pub fn eval_transfer(transfer: &RegTransfer, regs: &[u8; NUM_REGS]) -> [u8; NUM_
         }
     }
     result
+}
+
+// ── Lane-parallel evaluator (ADR-0049) ──────────────────────────────
+
+pub use theseus_core::bvexpr::{eval_expr_lanes, Lane, LANES};
+use theseus_core::bvexpr::{pack_lane, unpack_lane, LANE_ZERO, OPERAND_BITS};
+
+const _: () = assert!(BITS == OPERAND_BITS, "register planes are byte-wide");
+
+/// Register-file bit planes over up to [`LANES`] inputs: `planes[r][bit]`
+/// is the lane mask of bit `bit` of register `r` (lane `i` = input `i`).
+pub type RegPlanes = [[Lane; BITS]; NUM_REGS];
+
+/// Pack up to [`LANES`] register files (input `i` → lane `i`) into
+/// [`RegPlanes`]. Lanes past `inputs.len()` are zero.
+pub fn pack_regs(inputs: &[[u8; NUM_REGS]]) -> RegPlanes {
+    assert!(
+        inputs.len() <= LANES,
+        "pack_regs: {} inputs > LANES",
+        inputs.len()
+    );
+    let mut planes = [[LANE_ZERO; BITS]; NUM_REGS];
+    for (i, regs) in inputs.iter().enumerate() {
+        pack_lane(&mut planes, i, regs);
+    }
+    planes
+}
+
+/// Inverse of [`pack_regs`]: the register file held in lane `i`.
+pub fn unpack_regs(planes: &RegPlanes, i: usize) -> [u8; NUM_REGS] {
+    let mut regs = [0u8; NUM_REGS];
+    unpack_lane(planes, i, &mut regs);
+    regs
+}
+
+/// Lane-parallel [`eval_transfer`]: lane `i` of the result is
+/// `eval_transfer(transfer, input_i)` for the inputs packed in `vars`.
+pub fn eval_transfer_lanes(transfer: &RegTransfer, vars: &RegPlanes) -> RegPlanes {
+    let mut out = [[LANE_ZERO; BITS]; NUM_REGS];
+    for (r, planes) in out.iter_mut().enumerate() {
+        for (bit, plane) in planes.iter_mut().enumerate() {
+            *plane = eval_expr_lanes(&transfer.regs[r][bit], vars);
+        }
+    }
+    out
 }
 
 // ── Bitvector operation builders ────────────────────────────────────
@@ -1278,6 +1325,147 @@ fn substitute_bdd(
             let t = substitute_bdd(then_, first_bdds, map, width)?;
             let e = substitute_bdd(else_, first_bdds, map, width)?;
             Ok(s.and(&t).or(&s.not().and(&e)))
+        }
+    }
+}
+
+#[cfg(test)]
+mod lane_tests {
+    use super::*;
+
+    /// splitmix64: fixed-seed PRNG (no `rand` dependency).
+    struct SplitMix64(u64);
+
+    impl SplitMix64 {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next_u64() % n as u64) as usize
+        }
+    }
+
+    /// Chunk sizes covering a lone lane, every word boundary, partial
+    /// chunks, and the full chunk.
+    const SIZES: [usize; 13] = [1, 2, 63, 64, 65, 127, 128, 129, 191, 192, 193, 255, 256];
+
+    fn random_expr(rng: &mut SplitMix64, depth: usize) -> BvExpr {
+        if depth == 0 || rng.below(6) == 0 {
+            return if rng.below(8) == 0 {
+                BvExpr::Const(rng.below(2) == 1)
+            } else {
+                BvExpr::var(rng.below(NUM_REGS), rng.below(BITS))
+            };
+        }
+        let sub = |rng: &mut SplitMix64| random_expr(rng, depth - 1);
+        match rng.below(5) {
+            0 => sub(rng).not(),
+            1 => sub(rng).xor(sub(rng)),
+            2 => sub(rng).and(sub(rng)),
+            3 => sub(rng).or(sub(rng)),
+            _ => BvExpr::mux(sub(rng), sub(rng), sub(rng)),
+        }
+    }
+
+    /// A random register-pure instruction with distinct register operands.
+    fn random_instr(rng: &mut SplitMix64) -> Instr {
+        let mut regs = [0u8, 1, 2, 3, 4, 5, 6, 7];
+        for i in 0..3 {
+            regs.swap(i, i + rng.below(NUM_REGS - i));
+        }
+        let [rd, rs, rt, ..] = regs;
+        let imm = rng.next_u64() as u8;
+        match rng.below(13) {
+            0 => Instr::Add { rd, rs },
+            1 => Instr::Sub { rd, rs },
+            2 => Instr::Xor { rd, rs },
+            3 => Instr::Exch { rd, rs },
+            4 => Instr::Rotl { rd, rs },
+            5 => Instr::Rotr { rd, rs },
+            6 => Instr::Cswap { rd, rs, rt },
+            7 => Instr::Ccnot { rd, rs, rt },
+            8 => Instr::Addi { rd, imm },
+            9 => Instr::Subi { rd, imm },
+            10 => Instr::Xori { rd, imm },
+            11 => Instr::Rotli { rd, imm },
+            _ => Instr::Rotri { rd, imm },
+        }
+    }
+
+    fn assert_lanes_match(transfer: &RegTransfer, rng: &mut SplitMix64, n: usize, what: &str) {
+        let inputs: Vec<[u8; NUM_REGS]> = (0..n)
+            .map(|_| std::array::from_fn(|_| rng.next_u64() as u8))
+            .collect();
+        let out = eval_transfer_lanes(transfer, &pack_regs(&inputs));
+        for (i, regs) in inputs.iter().enumerate() {
+            assert_eq!(
+                unpack_regs(&out, i),
+                eval_transfer(transfer, regs),
+                "{what}: lane {i} of {n}, input {regs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pack_unpack_regs_round_trip() {
+        let mut rng = SplitMix64(0x2E95_0001);
+        let inputs: Vec<[u8; NUM_REGS]> = (0..LANES)
+            .map(|_| std::array::from_fn(|_| rng.next_u64() as u8))
+            .collect();
+        for &n in &SIZES {
+            let planes = pack_regs(&inputs[..n]);
+            for (i, regs) in inputs[..n].iter().enumerate() {
+                assert_eq!(unpack_regs(&planes, i), *regs, "lane {i} of {n}");
+            }
+            for i in n..LANES {
+                assert_eq!(unpack_regs(&planes, i), [0; NUM_REGS], "unused lane {i}");
+            }
+        }
+    }
+
+    /// Random full-frame transfers (trees of depth ≤ 8 over all 8 registers
+    /// × 8 bits): lane `i` of `eval_transfer_lanes` == `eval_transfer`.
+    #[test]
+    fn eval_transfer_lanes_matches_scalar_random_trees() {
+        let mut rng = SplitMix64(0x7EA2_5EED);
+        for case in 0..40 {
+            let regs = (0..NUM_REGS)
+                .map(|_| {
+                    (0..BITS)
+                        .map(|_| {
+                            let depth = rng.below(9);
+                            random_expr(&mut rng, depth)
+                        })
+                        .collect()
+                })
+                .collect();
+            let n = SIZES
+                .get(case)
+                .copied()
+                .unwrap_or_else(|| 1 + rng.below(LANES));
+            assert_lanes_match(&RegTransfer { regs }, &mut rng, n, "random tree");
+        }
+    }
+
+    /// Transfers of random instruction sequences (the shapes the compiler
+    /// and the reconciliation tests actually sweep).
+    #[test]
+    fn eval_transfer_lanes_matches_scalar_instr_sequences() {
+        let mut rng = SplitMix64(0x1257_5EED);
+        for case in 0..60 {
+            let len = 1 + rng.below(4);
+            let body: Vec<Instr> = (0..len).map(|_| random_instr(&mut rng)).collect();
+            let transfer = symbolic_exec(&body).expect("register-pure body");
+            let n = SIZES
+                .get(case)
+                .copied()
+                .unwrap_or_else(|| 1 + rng.below(LANES));
+            assert_lanes_match(&transfer, &mut rng, n, &format!("{body:?}"));
         }
     }
 }
