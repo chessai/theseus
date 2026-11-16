@@ -25,7 +25,7 @@ no `native_decide`).
 | This note | Lean (`Theseus.Coverage`) |
 |---|---|
 | Setup: values, patterns, `σ_p`, `p[ρ]` | `Val`, `Pat`, `Pat.matchBind`, `Pat.instantiate`. `enumerate`, `Pat.matchesVal`, `apply` transcribe the checker's `enumerate_values`, `matches_value`, and the first-match loop of `compute_bijection` |
-| (Typing), (Linearity), (Coverage) | `Clause.WellTyped`, `Clause.Linear`, `Covers`, bundled as `Accepted cs A B`. `Covers` is the checker's literal test ("exactly one clause matches each enumerated value"); `covers_iff` proves it equal to *exhaustive and pairwise non-overlapping*. `Clause.WellTyped` is the *specified* typing over core types (every sub-pattern at the type its position demands, every variable at one core type); `Clause.wellTyped_iff` gives it as a decision procedure. It is stronger than what `typing.rs` enforces today -- see "Known gap" below |
+| (Typing), (Linearity), (Coverage) | `Clause.WellTyped`, `Clause.Linear`, `Covers`, bundled as `Accepted cs A B`. `Covers` is the checker's literal test ("exactly one clause matches each enumerated value"); `covers_iff` proves it equal to *exhaustive and pairwise non-overlapping*. `Clause.WellTyped` is the *specified* typing over core types (every sub-pattern at the type its position demands, every variable at one core type); `Clause.wellTyped_iff` gives it as a decision procedure. `typing.rs` checks the same condition against core types -- see "Typing gap, closed" below |
 | L1 | `Pat.matchBind_instantiate`, `Pat.instantiate_matchBind`, `Pat.instantiate_matchBind_exact` |
 | L2 | `Clause.fire_swap`, `Clause.fire_swap_iff` |
 | TH-4a, `F` total | `apply_total` |
@@ -47,15 +47,16 @@ then match" half turns out to need no linearity.
 "Consequences" was false as originally stated; it now reads as proved. See
 "Soundness and completeness of the checker" below.
 
-**Known gap: the shipped `typing.rs` is weaker than (Typing).** The theorem
-assumes the specified typing. An adversarial review of the mechanization found
-two tables that `theseus-cli check` accepts (`ok`) although they violate it and
-are not bijections. The Rust matcher, linearity and coverage agree with the
-Lean model on both; only typing differs.
+**Typing gap, closed: the shipped `typing.rs` was weaker than (Typing).** The
+theorem assumes the specified typing. An adversarial review of the
+mechanization found two tables that `theseus-cli check` accepted (`ok`)
+although they violate it and are not bijections. The Rust matcher, linearity
+and coverage agreed with the Lean model on both; only typing differed.
+`typing.rs` now types every sub-pattern against the *core* type of its
+position, as `Clause.WellTyped` does, and rejects both with `T0102`.
 
-1. `type_admits_ctor` admits a constructor of a named type directly at an
-   anonymous sum type, while the matcher uses the constructor's path inside
-   its own type:
+1. A constructor of a named type was admitted directly at an anonymous sum
+   type, while the matcher uses the constructor's path inside its own type:
 
    ```
    iso h : Bit + Bit <-> Bit
@@ -63,8 +64,13 @@ Lean model on both; only typing differs.
    | I <-> I
    ```
 
-   sends four values onto two (Lean: `Fixtures.sumCtor_untyped_not_injective`).
-2. A variable's occurrences are compared by *lowered surface type*, which for
+   sent four values onto two (Lean: `Fixtures.sumCtor_untyped_not_injective`).
+   *Fix:* a constructor is well-typed only at its own named type (diagnostic
+   `0011`); the only pattern typed at `S + T` is a variable. The alternative
+   -- keep admitting it and make the matchers prefix the sum's injection --
+   needs a rule for which summand `O` selects at `Bit + Bit`, and changes both
+   matchers and the Lean model, to support a form no accepted program used.
+2. A variable's occurrences were compared by *lowered surface type*, which for
    a recursive type identifies positions at different unroll depths:
 
    ```
@@ -73,13 +79,26 @@ Lean model on both; only typing differs.
    | (Succ a, b) <-> (a, Succ b)
    ```
 
-   sends `(1, 3)` outside the depth-4 truncation (Lean:
-   `Fixtures.muEscape_untyped_escapes`).
+   sent `(1, 3)` outside the depth-4 truncation (Lean:
+   `Fixtures.muEscape_untyped_escapes`). *Fix:* the typing walk carries the
+   per-path unroll budget that `Env::lower` spends (one shared implementation,
+   `Env::unroll`), so a variable's occurrences are compared by the core type
+   at each (diagnostic `0012`). `Succ n <-> Succ n` stays accepted: `n` is one
+   unrolling deep on both sides. The same walk rejects a constructor at a
+   position past the μ-cutoff, where the core type is `0` (diagnostic `0013`).
+   That is a third table of this family, found while making the fix: a pattern
+   for the numeral `4` at depth-4 `Nat` matches no value, so coverage cannot
+   see it, yet as a right-hand side it sends `3` to `4`. (The fixture is the
+   smallest instance: `Succ Zero` at `Nat@1`.)
 
-So TH-4a certifies the checks *as specified*; it certifies the shipped checker
-only where `typing.rs` and the specification agree -- no bare constructor at an
-anonymous sum type, no recursive types. Closing the gap is a checker fix, not a
-proof obligation.
+So within the modelled fragment the shipped checker now enforces the theorem's
+hypothesis, and the two Lean fixtures describe tables it rejects. Two limits
+on that statement. The agreement of `typing.rs` with `Clause.WellTyped` is by
+inspection and tests, like the rest of the transcription (next paragraph). And
+numeric literal patterns are outside the model: `typing.rs` checks that a
+literal sits at a `U<n>` type but not that it is within the type's range, so
+`iso g : U1 <-> U1 | 2 <-> 0 | 0 <-> 1 | 1 <-> 2` passes `check` although
+clause 3 has no image.
 
 **Not mechanized.** Nothing links the Lean model to the Rust source -- the
 correspondence is by inspection, backed by replaying conformance fixtures
