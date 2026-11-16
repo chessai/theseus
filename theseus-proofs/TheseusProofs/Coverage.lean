@@ -25,23 +25,50 @@ WHAT IS MODELLED. The checker's *core* view of a clause table, i.e. what
     clause in declaration order, then instantiate its right-hand side);
   * `Clause.WellTyped` / `Clause.Linear` / `Covers` -- the conditions enforced
     by `typing.rs` (T0102), `linearity.rs` (T0201/T0202) and `coverage.rs`
-    (T0301/T0302).
+    (T0301/T0302);
+  * `LPat`, `LPat.matchBind` / `LPat.instantiate` / `LPat.matchesVal`,
+    `applyExt`, `LAccepted` -- the label-aware counterparts
+    (`match_bind_extended_inner`, `instantiate_extended`,
+    `matches_extended_value`, step 4 of `elab_clauses_label`,
+    `check_side_extended`).
+
+The Rust matchers also thread the surface type, but only to resolve `Nat`
+literals and to reject a tuple pattern at a non-product type; on well-typed
+patterns that is redundant, so the Lean matchers are untyped, like `Value`.
+
+WHY NOT `Reversibility.Ty`. That type has a primitive `bit` and no `0`, and is
+denoted intrinsically (`denoteTy : Ty → Type`). The checker instead works on
+*untyped* values enumerated per core type, where `Bit` is the sum `1 + 1` and
+`0` exists (it is what μ-type unrolling bottoms out in). Mirroring the checker
+needs the untyped `Val` + `enumerate`, so this file has its own `Ty`.
 
 WHAT IS PROVED (all under the axiom guard, `AxiomGuard.lean`):
 
-  * L1  `matchBind_instantiate`, `instantiate_matchBind`, `instantiate_matchBind_exact`
+  * transcription sanity: `mem_enumerate`, `Pat.isSome_matchBind`,
+    `covers_iff` (the counting test = exhaustive ∧ pairwise non-overlapping),
+    `Clause.wellTyped_iff` (declarative typing = the `var_types` test)
+  * L1  `Pat.matchBind_instantiate`, `Pat.instantiate_matchBind`,
+    `Pat.instantiate_matchBind_exact`
   * L2  `Clause.fire_swap`, `Clause.fire_swap_iff`
   * TH-4a soundness  `apply_total`, `apply_adjoint`, `adjoint_apply`,
     `denote_bijective`, `denote_adjoint_leftInverse`,
-    `denote_adjoint_rightInverse`, `toEquiv`
+    `denote_adjoint_rightInverse`, `toEquiv`, `rel_iff_apply`
   * TH-4a converse  `covers_of_totalBijection`, `coverage_iff_totalBijection`,
     and `completeness_needs_irredundant` (the converse is FALSE without the
     extra `Irredundant` hypothesis)
+  * TH-4a-label  `LPat.matchBind_eq` / `LPat.instantiate_eq` /
+    `LPat.matchesVal_eq` and `LAccepted.toPlain` (the tag-split reduction),
+    `applyExt_eq_apply`, `applyExt_total`, `applyExt_ladjoint`,
+    `ladjoint_applyExt`, `LAccepted.toEquiv`
+  * `Fixtures.*`: conformance-suite tables replayed (accepted / rejected)
 
 WHAT IS NOT. Nothing here links the Lean definitions to the Rust source: the
 correspondence is by inspection. Machine-word / numeric types (`Flat`, `U<n>`,
-`W<n>`), `Nat` literal patterns, the surface layer (names, constructor
-resolution, μ-type unrolling) and the elaboration to Core Π are not modelled.
+`W<n>`), `Nat` literal patterns, the surface layer (names, constructor and
+label-name resolution, label-carrier inference, μ-type unrolling), the
+elaboration to Core Π (`eval ⟦f⟧ =` the clause denotation), and the
+instantiation of TH-1 (`FiniteTrace.lean`) with the label body `Φ` are not
+modelled.
 -/
 import Mathlib
 
@@ -987,5 +1014,675 @@ theorem completeness_needs_irredundant :
   · intro h
     have := h (.inl .unit) (by simp [enumerate, bit])
     simp [redundantId, Pat.matchesVal] at this
+
+/-! ## TH-4a-label: the label-extended theorem, by reduction to the plain one
+
+A label iso `f : A <-> B` with labels `ℓ₀ … ℓₙ₋₁` of carrier types
+`U₀ … Uₙ₋₁` is checked and elaborated over the *extended* types `U + A` and
+`U + B`, where `U = U₀ + (U₁ + (… + Uₙ₋₁))` (`docs/src/theory/coverage-bijectivity-labels.md`).
+Each clause side is either a plain boundary pattern or a label pattern `$ℓ p`.
+
+This section transcribes the checker's label-aware matcher
+(`matches_extended_value`, `match_bind_extended_inner`, `instantiate_extended`)
+and proves it *equal* to the plain matcher run on the plain pattern
+`inr p` / `inl (inj_ℓ p)`. The label-extended checks are therefore literally
+the plain checks over `U + A`, `U + B`, and TH-4a-label is TH-4a. -/
+
+/-- One step of an injection path into a right-nested sum (`env::Inj`). -/
+inductive Inj
+  | L
+  | R
+  deriving DecidableEq, Repr
+
+/-- `env::injection_path`: the path selecting summand `index` of a right-nested
+    sum of `count` summands -- `R` `index` times, then `L` unless it is the
+    last summand; empty when there is at most one summand. -/
+def injectionPath (index count : Nat) : List Inj :=
+  if count ≤ 1 then []
+  else List.replicate index Inj.R ++ (if index < count - 1 then [Inj.L] else [])
+
+/-- `env::right_nested_sum`: the label carrier `U` (empty list ⇒ `0`). -/
+def rightNestedSum : List Ty → Ty
+  | []           => .zero
+  | [t]          => t
+  | t :: u :: us => .sum t (rightNestedSum (u :: us))
+
+/-- `env::navigate`: follow an injection path into a value. -/
+def navigate : Val → List Inj → Option Val
+  | v,      []         => some v
+  | .inl v, .L :: path => navigate v path
+  | .inr v, .R :: path => navigate v path
+  | _,      _ :: _     => none
+
+/-- `inject_value` (`elaborate.rs`): wrap a payload in the injections of a
+    path, first step outermost. -/
+def injectValue (v : Val) : List Inj → Val
+  | []         => v
+  | .L :: path => .inl (injectValue v path)
+  | .R :: path => .inr (injectValue v path)
+
+/-- The pattern-level counterpart of `injectValue`. -/
+def Pat.inject (p : Pat) : List Inj → Pat
+  | []         => p
+  | .L :: path => .inl (p.inject path)
+  | .R :: path => .inr (p.inject path)
+
+theorem injectionPath_succ {m k : Nat} (hm : m < k + 1) :
+    injectionPath (m + 1) (k + 2) = Inj.R :: injectionPath m (k + 1) := by
+  unfold injectionPath
+  cases k with
+  | zero =>
+    have hm0 : m = 0 := by omega
+    subst hm0
+    simp
+  | succ k => simp [List.replicate_succ]
+
+theorem Pat.vars_inject (p : Pat) (path : List Inj) : (p.inject path).vars = p.vars := by
+  induction path with
+  | nil => rfl
+  | cons i path ih => cases i <;> simpa [Pat.inject, Pat.vars] using ih
+
+theorem Pat.matchInto_inject (p : Pat) (path : List Inj) (v : Val) (e : Env) :
+    (p.inject path).matchInto v e = (navigate v path).bind fun w => p.matchInto w e := by
+  induction path generalizing v with
+  | nil => simp [Pat.inject, navigate]
+  | cons i path ih =>
+    cases i <;> cases v <;> simp [Pat.inject, Pat.matchInto, navigate, ih]
+
+theorem Pat.matchesVal_inject (p : Pat) (path : List Inj) (v : Val) :
+    (p.inject path).matchesVal v = (navigate v path).any p.matchesVal := by
+  induction path generalizing v with
+  | nil => simp [Pat.inject, navigate]
+  | cons i path ih =>
+    cases i <;> cases v <;> simp [Pat.inject, Pat.matchesVal, navigate, ih]
+
+theorem Pat.instantiate_inject (p : Pat) (path : List Inj) (e : Env) :
+    (p.inject path).instantiate e = (p.instantiate e).map fun u => injectValue u path := by
+  induction path with
+  | nil => simp [Pat.inject, injectValue]
+  | cons i path ih =>
+    cases i <;> simp [Pat.inject, Pat.instantiate, injectValue, ih, Function.comp_def]
+
+/-- A pattern for summand `ℓ`, wrapped in its injection path, is a pattern
+    for the whole right-nested sum. -/
+theorem Pat.HasTy.inject {Γ : Var → Ty} {p : Pat} {U : Ty} (hp : p.HasTy Γ U) :
+    ∀ {Us : List Ty} {ℓ : Nat}, Us[ℓ]? = some U →
+      (p.inject (injectionPath ℓ Us.length)).HasTy Γ (rightNestedSum Us) := by
+  intro Us
+  induction Us with
+  | nil => intro ℓ h; simp at h
+  | cons t Us ih =>
+    intro ℓ h
+    cases Us with
+    | nil =>
+      cases ℓ with
+      | zero =>
+        simp only [List.getElem?_cons_zero, Option.some.injEq] at h
+        subst h
+        simpa [injectionPath, Pat.inject, rightNestedSum] using hp
+      | succ m => simp at h
+    | cons u us =>
+      cases ℓ with
+      | zero =>
+        simp only [List.getElem?_cons_zero, Option.some.injEq] at h
+        subst h
+        simpa [injectionPath, Pat.inject, rightNestedSum] using Pat.HasTy.inl hp
+      | succ m =>
+        simp only [List.getElem?_cons_succ] at h
+        have hm : m < us.length + 1 := by
+          have := (List.getElem?_eq_some_iff.1 h).1
+          simpa using this
+        have hpath : injectionPath (m + 1) (t :: u :: us).length =
+            Inj.R :: injectionPath m (u :: us).length := by
+          simpa using injectionPath_succ hm
+        rw [hpath]
+        exact Pat.HasTy.inr (ih h)
+
+/-- One side of a label clause: a plain boundary pattern, or `$ℓ p`. The
+    label is named by its index in the iso's label list (the checker resolves
+    the name with `labels.iter().position`). -/
+inductive LPat
+  | plain (p : Pat)
+  | label (ℓ : Nat) (p : Pat)
+  deriving DecidableEq, Repr
+
+namespace LPat
+
+/-- Variables of a label-clause side; the `$ℓ` tag binds nothing. -/
+def vars : LPat → List Var
+  | plain p   => p.vars
+  | label _ p => p.vars
+
+/-- Typing of a label-clause side against label carriers `Us` and boundary
+    type `T`: a plain pattern is a pattern of `T`; `$ℓ p` requires `p` to be a
+    pattern of the `ℓ`-th carrier. -/
+def HasTy (Γ : Var → Ty) (Us : List Ty) (T : Ty) : LPat → Prop
+  | plain p   => p.HasTy Γ T
+  | label ℓ p => ∃ U, Us[ℓ]? = some U ∧ p.HasTy Γ U
+
+/-- The label is one of the iso's `n` labels. -/
+def Known (n : Nat) : LPat → Prop
+  | plain _   => True
+  | label ℓ _ => ℓ < n
+
+/-- `match_bind_extended_inner`: a label pattern matches only label states
+    `inl u` (navigating to its summand); a plain pattern matches only boundary
+    values `inr a`. -/
+def matchBind (n : Nat) : LPat → Val → Option Env
+  | label ℓ p, .inl u =>
+      if ℓ < n then (navigate u (injectionPath ℓ n)).bind p.matchBind else none
+  | plain p,   .inr a => p.matchBind a
+  | _,         _      => none
+
+/-- `instantiate_extended`. -/
+def instantiate (n : Nat) : LPat → Env → Option Val
+  | label ℓ p, e =>
+      if ℓ < n then (p.instantiate e).map fun u => .inl (injectValue u (injectionPath ℓ n))
+      else none
+  | plain p,   e => (p.instantiate e).map .inr
+
+/-- `matches_extended_value` (`coverage.rs`). -/
+def matchesVal (n : Nat) : LPat → Val → Bool
+  | label ℓ p, .inl u => decide (ℓ < n) && (navigate u (injectionPath ℓ n)).any p.matchesVal
+  | plain p,   .inr a => p.matchesVal a
+  | _,         _      => false
+
+/-- The reading of a label-clause side as an ordinary pattern over `U + T`:
+    `$ℓ p ↦ inl (inj_ℓ p)`, plain `p ↦ inr p`. -/
+def toPat (n : Nat) : LPat → Pat
+  | plain p   => .inr p
+  | label ℓ p => .inl (p.inject (injectionPath ℓ n))
+
+theorem vars_toPat (n : Nat) (lp : LPat) : (lp.toPat n).vars = lp.vars := by
+  cases lp <;> simp [toPat, vars, Pat.vars, Pat.vars_inject]
+
+theorem HasTy.known {Γ : Var → Ty} {Us : List Ty} {T : Ty} {lp : LPat}
+    (h : lp.HasTy Γ Us T) : lp.Known Us.length := by
+  cases lp with
+  | plain p => trivial
+  | label ℓ p =>
+    obtain ⟨U, hU, _⟩ := h
+    exact (List.getElem?_eq_some_iff.1 hU).1
+
+/-- Typing is preserved by the reading: a well-typed label-clause side is a
+    well-typed plain pattern over the extended type. -/
+theorem HasTy.toPat {Γ : Var → Ty} {Us : List Ty} {T : Ty} {lp : LPat}
+    (h : lp.HasTy Γ Us T) : (lp.toPat Us.length).HasTy Γ (.sum (rightNestedSum Us) T) := by
+  cases lp with
+  | plain p => exact Pat.HasTy.inr h
+  | label ℓ p =>
+    obtain ⟨U, hU, hp⟩ := h
+    exact Pat.HasTy.inl (hp.inject hU)
+
+/-- **Tag split, matching.** The label-aware matcher *is* the plain matcher on
+    the plain reading. -/
+theorem matchBind_eq {n : Nat} {lp : LPat} (h : lp.Known n) (v : Val) :
+    lp.matchBind n v = (lp.toPat n).matchBind v := by
+  cases lp with
+  | plain p => cases v <;> simp [matchBind, toPat, Pat.matchBind, Pat.matchInto]
+  | label ℓ p =>
+    have hℓ : ℓ < n := h
+    cases v <;>
+      simp [matchBind, toPat, Pat.matchBind, Pat.matchInto, Pat.matchInto_inject, hℓ]
+
+/-- **Tag split, instantiation.** -/
+theorem instantiate_eq {n : Nat} {lp : LPat} (h : lp.Known n) (e : Env) :
+    lp.instantiate n e = (lp.toPat n).instantiate e := by
+  cases lp with
+  | plain p => simp [instantiate, toPat, Pat.instantiate]
+  | label ℓ p =>
+    have hℓ : ℓ < n := h
+    simp [instantiate, toPat, Pat.instantiate, Pat.instantiate_inject, hℓ, Function.comp_def]
+
+/-- **Tag split, coverage.** The label-aware coverage matcher *is* the plain
+    coverage matcher on the plain reading. -/
+theorem matchesVal_eq {n : Nat} {lp : LPat} (h : lp.Known n) (v : Val) :
+    lp.matchesVal n v = (lp.toPat n).matchesVal v := by
+  cases lp with
+  | plain p => cases v <;> simp [matchesVal, toPat, Pat.matchesVal]
+  | label ℓ p =>
+    have hℓ : ℓ < n := h
+    cases v <;> simp [matchesVal, toPat, Pat.matchesVal, Pat.matchesVal_inject, hℓ]
+
+end LPat
+
+/-- A label clause. -/
+abbrev LClause := LPat × LPat
+
+/-- A label clause table, in declaration order. -/
+abbrev LClauseSet := List LClause
+
+/-- Typing of a label clause: both sides typed, each variable at one type,
+    each label at one carrier (the same `Us`) on both columns. -/
+def LClause.WellTyped (Us : List Ty) (A B : Ty) (c : LClause) : Prop :=
+  ∃ Γ : Var → Ty, c.1.HasTy Γ Us A ∧ c.2.HasTy Γ Us B
+
+/-- Linearity of a label clause, exactly as for a plain clause. -/
+def LClause.Linear (c : LClause) : Prop :=
+  c.1.vars.Nodup ∧ c.2.vars.Nodup ∧ ∀ x, x ∈ c.1.vars ↔ x ∈ c.2.vars
+
+instance (c : LClause) : Decidable c.Linear :=
+  decidable_of_iff
+    (c.1.vars.Nodup ∧ c.2.vars.Nodup ∧
+      (∀ x ∈ c.1.vars, x ∈ c.2.vars) ∧ ∀ x ∈ c.2.vars, x ∈ c.1.vars)
+    ⟨fun h => ⟨h.1, h.2.1, fun x => ⟨h.2.2.1 x, h.2.2.2 x⟩⟩,
+     fun h => ⟨h.1, h.2.1, fun x => (h.2.2 x).1, fun x => (h.2.2 x).2⟩⟩
+
+/-- A label clause read as a plain clause over the extended types. -/
+def LClause.toClause (n : Nat) (c : LClause) : Clause := (c.1.toPat n, c.2.toPat n)
+
+/-- A label clause table read as a plain clause table `U + A <-> U + B`. -/
+def elabLabels (n : Nat) (cs : LClauseSet) : ClauseSet := cs.map (LClause.toClause n)
+
+/-- The label clause table read right-to-left. -/
+def ladjoint (cs : LClauseSet) : LClauseSet := cs.map Prod.swap
+
+theorem elabLabels_ladjoint (n : Nat) (cs : LClauseSet) :
+    elabLabels n (ladjoint cs) = adjoint (elabLabels n cs) := by
+  simp [elabLabels, ladjoint, adjoint, List.map_map, Function.comp_def, LClause.toClause]
+
+/-- The body map `Φ` of a label iso, as the checker computes it
+    (step 4 of `elab_clauses_label`): first matching clause under the
+    label-aware matcher, then label-aware instantiation. -/
+def applyExt (n : Nat) : LClauseSet → Val → Option Val
+  | [],      _ => none
+  | c :: cs, v =>
+      match c.1.matchBind n v with
+      | some e => c.2.instantiate n e
+      | none   => applyExt n cs v
+
+/-- A label clause table accepted by the label-extended static checks, for
+    label carriers `Us` and boundary types `A <-> B`. Coverage is over the
+    extended types `U + A` and `U + B` (`check_side_extended`); T0301 and
+    T0303 are the two tags of one exhaustiveness condition. -/
+structure LAccepted (cs : LClauseSet) (Us : List Ty) (A B : Ty) : Prop where
+  /-- Typing, with one carrier per label shared by both columns. -/
+  typed  : ∀ c ∈ cs, c.WellTyped Us A B
+  /-- Linearity, unchanged from the plain case. -/
+  linear : ∀ c ∈ cs, c.Linear
+  /-- Coverage of the left column over `U + A`. -/
+  coverL : ∀ v ∈ enumerate (.sum (rightNestedSum Us) A),
+    (cs.map Prod.fst).countP (fun p => p.matchesVal Us.length v) = 1
+  /-- Coverage of the right column over `U + B`. -/
+  coverR : ∀ v ∈ enumerate (.sum (rightNestedSum Us) B),
+    (cs.map Prod.snd).countP (fun p => p.matchesVal Us.length v) = 1
+
+theorem LAccepted.known {cs : LClauseSet} {Us : List Ty} {A B : Ty} (h : LAccepted cs Us A B) :
+    ∀ c ∈ cs, c.1.Known Us.length ∧ c.2.Known Us.length := by
+  intro c hc
+  obtain ⟨Γ, hl, hr⟩ := h.typed c hc
+  exact ⟨hl.known, hr.known⟩
+
+/-- **Tag-split lemma (the reduction).** The label-extended checks on a label
+    clause table are the plain TH-4a checks on its reading over `U + A`,
+    `U + B`. -/
+theorem LAccepted.toPlain {cs : LClauseSet} {Us : List Ty} {A B : Ty}
+    (h : LAccepted cs Us A B) :
+    Accepted (elabLabels Us.length cs) (.sum (rightNestedSum Us) A)
+      (.sum (rightNestedSum Us) B) where
+  typed := by
+    intro c hc
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.1 hc
+    obtain ⟨Γ, hl, hr⟩ := h.typed d hd
+    exact ⟨Γ, hl.toPat, hr.toPat⟩
+  linear := by
+    intro c hc
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.1 hc
+    simpa [Clause.Linear, LClause.Linear, LClause.toClause, LPat.vars_toPat] using h.linear d hd
+  coverL := by
+    intro v hv
+    have hmap : (elabLabels Us.length cs).map Prod.fst =
+        (cs.map Prod.fst).map (LPat.toPat Us.length) := by
+      simp [elabLabels, LClause.toClause, List.map_map, Function.comp_def]
+    rw [hmap, List.countP_map, ← h.coverL v hv]
+    apply List.countP_congr
+    intro lp hlp
+    obtain ⟨c, hc, rfl⟩ := List.mem_map.1 hlp
+    simp [LPat.matchesVal_eq (h.known c hc).1]
+  coverR := by
+    intro v hv
+    have hmap : (elabLabels Us.length cs).map Prod.snd =
+        (cs.map Prod.snd).map (LPat.toPat Us.length) := by
+      simp [elabLabels, LClause.toClause, List.map_map, Function.comp_def]
+    rw [hmap, List.countP_map, ← h.coverR v hv]
+    apply List.countP_congr
+    intro lp hlp
+    obtain ⟨c, hc, rfl⟩ := List.mem_map.1 hlp
+    simp [LPat.matchesVal_eq (h.known c hc).2]
+
+/-- The checker's label-aware body map is the plain clause-table function of
+    the reading. -/
+theorem applyExt_eq_apply {n : Nat} {cs : LClauseSet}
+    (hk : ∀ c ∈ cs, c.1.Known n ∧ c.2.Known n) (v : Val) :
+    applyExt n cs v = apply (elabLabels n cs) v := by
+  induction cs with
+  | nil => rfl
+  | cons c cs ih =>
+    have hc := hk c List.mem_cons_self
+    have ih' := ih fun d hd => hk d (List.mem_cons_of_mem _ hd)
+    simp only [applyExt, elabLabels, List.map_cons, apply, LClause.toClause,
+      LPat.matchBind_eq hc.1, LPat.instantiate_eq hc.2]
+    cases (c.1.toPat n).matchBind v with
+    | none => simpa [elabLabels] using ih'
+    | some e => rfl
+
+/-- The label checks are symmetric in the two columns. -/
+theorem LAccepted.ladjoint {cs : LClauseSet} {Us : List Ty} {A B : Ty}
+    (h : LAccepted cs Us A B) : LAccepted (Coverage.ladjoint cs) Us B A where
+  typed := by
+    intro c hc
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.1 hc
+    obtain ⟨Γ, hl, hr⟩ := h.typed d hd
+    exact ⟨Γ, hr, hl⟩
+  linear := by
+    intro c hc
+    obtain ⟨d, hd, rfl⟩ := List.mem_map.1 hc
+    obtain ⟨h1, h2, h3⟩ := h.linear d hd
+    exact ⟨h2, h1, fun x => (h3 x).symm⟩
+  coverL := by
+    have hmap : (Coverage.ladjoint cs).map Prod.fst = cs.map Prod.snd := by
+      simp [Coverage.ladjoint, List.map_map, Function.comp_def]
+    rw [hmap]; exact h.coverR
+  coverR := by
+    have hmap : (Coverage.ladjoint cs).map Prod.snd = cs.map Prod.fst := by
+      simp [Coverage.ladjoint, List.map_map, Function.comp_def]
+    rw [hmap]; exact h.coverL
+
+/-- **TH-4a-label (totality).** The body map of an accepted label iso is
+    total on `U + A` and lands in `U + B`. -/
+theorem applyExt_total {cs : LClauseSet} {Us : List Ty} {A B : Ty} (h : LAccepted cs Us A B)
+    {a : Val} (ha : a.HasTy (.sum (rightNestedSum Us) A)) :
+    ∃ b, applyExt Us.length cs a = some b ∧ b.HasTy (.sum (rightNestedSum Us) B) := by
+  rw [applyExt_eq_apply h.known]
+  exact apply_total h.toPlain ha
+
+/-- **TH-4a-label (the adjoint is a left inverse).** -/
+theorem applyExt_ladjoint {cs : LClauseSet} {Us : List Ty} {A B : Ty}
+    (h : LAccepted cs Us A B) {a b : Val} (ha : a.HasTy (.sum (rightNestedSum Us) A))
+    (hab : applyExt Us.length cs a = some b) :
+    applyExt Us.length (ladjoint cs) b = some a := by
+  rw [applyExt_eq_apply h.known] at hab
+  rw [applyExt_eq_apply h.ladjoint.known, elabLabels_ladjoint]
+  exact apply_adjoint h.toPlain ha hab
+
+/-- **TH-4a-label (the adjoint is a right inverse).** -/
+theorem ladjoint_applyExt {cs : LClauseSet} {Us : List Ty} {A B : Ty}
+    (h : LAccepted cs Us A B) {a b : Val} (hb : b.HasTy (.sum (rightNestedSum Us) B))
+    (hba : applyExt Us.length (ladjoint cs) b = some a) :
+    applyExt Us.length cs a = some b := by
+  rw [applyExt_eq_apply h.ladjoint.known, elabLabels_ladjoint] at hba
+  rw [applyExt_eq_apply h.known]
+  exact adjoint_apply h.toPlain hb hba
+
+/-- **TH-4a-label, packaged.** An accepted label clause table denotes an
+    equivalence `Φ : U + A ≃ U + B`, the body `trace` consumes (TH-1's
+    hypothesis). -/
+def LAccepted.toEquiv {cs : LClauseSet} {Us : List Ty} {A B : Ty} (h : LAccepted cs Us A B) :
+    TVal (.sum (rightNestedSum Us) A) ≃ TVal (.sum (rightNestedSum Us) B) :=
+  Coverage.toEquiv h.toPlain
+
+/-- `Φ` is the checker's body map. -/
+theorem LAccepted.applyExt_eq_toEquiv {cs : LClauseSet} {Us : List Ty} {A B : Ty}
+    (h : LAccepted cs Us A B) (a : TVal (.sum (rightNestedSum Us) A)) :
+    applyExt Us.length cs a.1 = some (h.toEquiv a).1 := by
+  rw [applyExt_eq_apply h.known]
+  exact apply_eq_denote h.toPlain a
+
+/-- `Φ⁻¹` is the checker's body map of the label table read right-to-left. -/
+theorem LAccepted.applyExt_ladjoint_eq_toEquiv_symm {cs : LClauseSet} {Us : List Ty} {A B : Ty}
+    (h : LAccepted cs Us A B) (b : TVal (.sum (rightNestedSum Us) B)) :
+    applyExt Us.length (Coverage.ladjoint cs) b.1 = some (h.toEquiv.symm b).1 := by
+  rw [applyExt_eq_apply h.ladjoint.known, elabLabels_ladjoint]
+  exact apply_eq_denote h.toPlain.adjoint b
+
+/-! ## The checks as decision procedures
+
+`Accepted` and `LAccepted` are stated declaratively (typing is "there is a
+variable-type assignment"). This section shows they are decidable by the
+checker's own procedure: record the type at which each variable occurrence is
+checked (`var_types` in `typing.rs`) and reject a variable seen at two types.
+That makes acceptance of a concrete table a closed, kernel-checkable fact. -/
+
+/-- The typed variable occurrences of `p` checked against `T`, left to right;
+    `none` if the pattern's shape does not fit the type. -/
+def Pat.occs : Pat → Ty → Option (List (Var × Ty))
+  | .var x,    T         => some [(x, T)]
+  | .unit,     .unit     => some []
+  | .inl p,    .sum a _  => p.occs a
+  | .inr p,    .sum _ b  => p.occs b
+  | .pair p q, .prod a b => (p.occs a).bind fun l => (q.occs b).map fun r => l ++ r
+  | _,         _         => none
+
+/-- `Γ` gives every recorded occurrence its recorded type. -/
+def Agrees (Γ : Var → Ty) (occ : List (Var × Ty)) : Prop := ∀ o ∈ occ, Γ o.1 = o.2
+
+/-- No variable is recorded at two different types (the `var_types` test). -/
+def Consistent (occ : List (Var × Ty)) : Prop :=
+  ∀ a ∈ occ, ∀ b ∈ occ, a.1 = b.1 → a.2 = b.2
+
+instance (occ : List (Var × Ty)) : Decidable (Consistent occ) := by
+  unfold Consistent
+  infer_instance
+
+theorem Pat.hasTy_iff_occs {Γ : Var → Ty} {p : Pat} {T : Ty} :
+    p.HasTy Γ T ↔ ∃ occ, p.occs T = some occ ∧ Agrees Γ occ := by
+  constructor
+  · intro h
+    induction h with
+    | @var x T hx => exact ⟨[(x, T)], rfl, by simpa [Agrees] using hx⟩
+    | unit => exact ⟨[], rfl, by simp [Agrees]⟩
+    | inl _ ih =>
+      obtain ⟨occ, h1, h2⟩ := ih
+      exact ⟨occ, by simpa [Pat.occs] using h1, h2⟩
+    | inr _ ih =>
+      obtain ⟨occ, h1, h2⟩ := ih
+      exact ⟨occ, by simpa [Pat.occs] using h1, h2⟩
+    | pair _ _ ihp ihq =>
+      obtain ⟨l, hl, hla⟩ := ihp
+      obtain ⟨r, hr, hra⟩ := ihq
+      refine ⟨l ++ r, by simp [Pat.occs, hl, hr], ?_⟩
+      intro o ho
+      exact (List.mem_append.1 ho).elim (hla o) (hra o)
+  · rintro ⟨occ, h1, h2⟩
+    induction p generalizing T occ with
+    | var x =>
+      simp only [Pat.occs, Option.some.injEq] at h1
+      subst h1
+      exact .var (by simpa [Agrees] using h2)
+    | unit =>
+      cases T with
+      | unit => exact .unit
+      | _ => simp [Pat.occs] at h1
+    | inl p ih =>
+      cases T with
+      | sum a b => exact .inl (ih _ (by simpa [Pat.occs] using h1) h2)
+      | _ => simp [Pat.occs] at h1
+    | inr p ih =>
+      cases T with
+      | sum a b => exact .inr (ih _ (by simpa [Pat.occs] using h1) h2)
+      | _ => simp [Pat.occs] at h1
+    | pair p q ihp ihq =>
+      cases T with
+      | prod a b =>
+        simp only [Pat.occs] at h1
+        cases hl : p.occs a with
+        | none => simp [hl] at h1
+        | some l =>
+          cases hr : q.occs b with
+          | none => simp [hl, hr] at h1
+          | some r =>
+            simp only [hl, hr, Option.bind_some, Option.map_some, Option.some.injEq] at h1
+            subst h1
+            exact .pair (ihp _ hl fun o ho => h2 o (List.mem_append_left _ ho))
+              (ihq _ hr fun o ho => h2 o (List.mem_append_right _ ho))
+      | _ => simp [Pat.occs] at h1
+
+theorem exists_agrees_iff {occ : List (Var × Ty)} : (∃ Γ, Agrees Γ occ) ↔ Consistent occ := by
+  constructor
+  · rintro ⟨Γ, h⟩ a ha b hb hab
+    rw [← h a ha, ← h b hb, hab]
+  · intro h
+    refine ⟨fun x => ((occ.find? fun o => o.1 == x).map Prod.snd).getD .unit, ?_⟩
+    intro o ho
+    cases hf : occ.find? (fun o' => o'.1 == o.1) with
+    | none =>
+      have := List.find?_eq_none.1 hf o ho
+      simp at this
+    | some o' =>
+      have hmem := List.mem_of_find?_eq_some hf
+      have hp := List.find?_some hf
+      simp only [hf, Option.map_some, Option.getD_some]
+      exact h o' hmem o ho (by simpa using hp)
+
+/-- The typing test of one clause, as the checker runs it: both sides fit
+    their types and the recorded occurrences are consistent. -/
+def typeCheckOccs (oL oR : Option (List (Var × Ty))) : Bool :=
+  match oL, oR with
+  | some l, some r => decide (Consistent (l ++ r))
+  | _,      _      => false
+
+theorem typeCheckOccs_iff {PL PR : (Var → Ty) → Prop} {oL oR : Option (List (Var × Ty))}
+    (hL : ∀ Γ, PL Γ ↔ ∃ occ, oL = some occ ∧ Agrees Γ occ)
+    (hR : ∀ Γ, PR Γ ↔ ∃ occ, oR = some occ ∧ Agrees Γ occ) :
+    typeCheckOccs oL oR = true ↔ ∃ Γ, PL Γ ∧ PR Γ := by
+  cases oL with
+  | none => simp [typeCheckOccs, hL]
+  | some l =>
+    cases oR with
+    | none => simp [typeCheckOccs, hR]
+    | some r =>
+      simp only [typeCheckOccs, decide_eq_true_eq, ← exists_agrees_iff]
+      constructor
+      · rintro ⟨Γ, h⟩
+        exact ⟨Γ, (hL Γ).2 ⟨l, rfl, fun o ho => h o (List.mem_append_left _ ho)⟩,
+          (hR Γ).2 ⟨r, rfl, fun o ho => h o (List.mem_append_right _ ho)⟩⟩
+      · rintro ⟨Γ, h1, h2⟩
+        obtain ⟨l', hl', hla⟩ := (hL Γ).1 h1
+        obtain ⟨r', hr', hra⟩ := (hR Γ).1 h2
+        cases hl'
+        cases hr'
+        exact ⟨Γ, fun o ho => (List.mem_append.1 ho).elim (hla o) (hra o)⟩
+
+/-- **Typing is the checker's `var_types` test.** A clause is well-typed iff
+    both sides fit their types and no variable occurs at two types. -/
+theorem Clause.wellTyped_iff {A B : Ty} {c : Clause} :
+    typeCheckOccs (c.1.occs A) (c.2.occs B) = true ↔ c.WellTyped A B :=
+  typeCheckOccs_iff (fun _ => Pat.hasTy_iff_occs) (fun _ => Pat.hasTy_iff_occs)
+
+instance (A B : Ty) (c : Clause) : Decidable (c.WellTyped A B) :=
+  decidable_of_iff _ Clause.wellTyped_iff
+
+instance (cs : ClauseSet) (A B : Ty) : Decidable (Accepted cs A B) :=
+  decidable_of_iff
+    ((∀ c ∈ cs, c.WellTyped A B) ∧ (∀ c ∈ cs, c.Linear) ∧
+      Covers (cs.map Prod.fst) A ∧ Covers (cs.map Prod.snd) B)
+    ⟨fun h => ⟨h.1, h.2.1, h.2.2.1, h.2.2.2⟩, fun h => ⟨h.typed, h.linear, h.coverL, h.coverR⟩⟩
+
+/-- Typed variable occurrences of a label-clause side. -/
+def LPat.occs (Us : List Ty) (T : Ty) : LPat → Option (List (Var × Ty))
+  | .plain p   => p.occs T
+  | .label ℓ p => Us[ℓ]?.bind p.occs
+
+theorem LPat.hasTy_iff_occs {Γ : Var → Ty} {Us : List Ty} {T : Ty} {lp : LPat} :
+    lp.HasTy Γ Us T ↔ ∃ occ, lp.occs Us T = some occ ∧ Agrees Γ occ := by
+  cases lp with
+  | plain p => exact Pat.hasTy_iff_occs
+  | label ℓ p =>
+    simp only [LPat.HasTy, LPat.occs]
+    cases Us[ℓ]? with
+    | none => simp
+    | some U => simp [Pat.hasTy_iff_occs]
+
+theorem LClause.wellTyped_iff {Us : List Ty} {A B : Ty} {c : LClause} :
+    typeCheckOccs (c.1.occs Us A) (c.2.occs Us B) = true ↔ c.WellTyped Us A B :=
+  typeCheckOccs_iff (fun _ => LPat.hasTy_iff_occs) (fun _ => LPat.hasTy_iff_occs)
+
+instance (Us : List Ty) (A B : Ty) (c : LClause) : Decidable (c.WellTyped Us A B) :=
+  decidable_of_iff _ LClause.wellTyped_iff
+
+instance (cs : LClauseSet) (Us : List Ty) (A B : Ty) : Decidable (LAccepted cs Us A B) :=
+  decidable_of_iff
+    ((∀ c ∈ cs, c.WellTyped Us A B) ∧ (∀ c ∈ cs, c.Linear) ∧
+      (∀ v ∈ enumerate (.sum (rightNestedSum Us) A),
+        (cs.map Prod.fst).countP (fun p => p.matchesVal Us.length v) = 1) ∧
+      (∀ v ∈ enumerate (.sum (rightNestedSum Us) B),
+        (cs.map Prod.snd).countP (fun p => p.matchesVal Us.length v) = 1))
+    ⟨fun h => ⟨h.1, h.2.1, h.2.2.1, h.2.2.2⟩, fun h => ⟨h.typed, h.linear, h.coverL, h.coverR⟩⟩
+
+/-! ## Conformance fixtures, replayed
+
+The clause tables of the repository's conformance suite, desugared by hand to
+core patterns, with the verdict the Rust checker gives each. These are sanity
+checks that the definitions above are neither vacuous nor over-strict; they
+are not a mechanical link to the Rust implementation. -/
+
+namespace Fixtures
+
+/-- `O` of `type Bit = O | I`. -/
+abbrev O : Pat := .inl .unit
+/-- `I` of `type Bit = O | I`. -/
+abbrev I : Pat := .inr .unit
+/-- `Nothing` of `type MaybeBit = Nothing | Just Bit` (`1 + (1 + 1)`). -/
+abbrev nothing : Pat := .inl .unit
+/-- `Just p` of `type MaybeBit = Nothing | Just Bit`. -/
+abbrev just (p : Pat) : Pat := .inr p
+/-- `MaybeBit`, lowered. -/
+abbrev maybeBit : Ty := .sum .unit bit
+
+/-- P0001 `swapMaybe : MaybeBit <-> MaybeBit`. -/
+def swapMaybe : ClauseSet :=
+  [(nothing, nothing), (just O, just I), (just I, just O)]
+
+/-- P0004 `cnot : (Bit, Bit) <-> (Bit, Bit)`. -/
+def cnot : ClauseSet :=
+  [(.pair O (.var "b"), .pair O (.var "b")), (.pair I O, .pair I I), (.pair I I, .pair I O)]
+
+/-- D0001 `bad`: `Just I` is uncovered on both sides (T0301). -/
+def nonexhaustive : ClauseSet := [(nothing, nothing), (just O, just O)]
+
+/-- D0002 `dup`: `Just O` is covered twice on both sides (T0302). -/
+def overlap : ClauseSet :=
+  [(just O, just O), (just (.var "b"), just (.var "b")), (nothing, nothing)]
+
+/-- D0003 `diag`: `b` used twice on a side (T0201). -/
+def nonlinear : ClauseSet := [(.pair (.var "b") (.var "b"), .pair (.var "b") (.var "b"))]
+
+/-- D0004 `drop`: `a` is erased (T0202). -/
+def erasure : ClauseSet := [(.pair (.var "a") (.var "b"), .var "b")]
+
+/-- P0011 `spin : Bit <-> Bit`, one label `$go` of carrier `(Bit, (Bit, Bit))`. -/
+def spin : LClauseSet :=
+  [ (.plain (.var "b"),                         .label 0 (.pair (.var "b") (.pair O O))),
+    (.label 0 (.pair (.var "b") (.pair O O)),   .label 0 (.pair (.var "b") (.pair O I))),
+    (.label 0 (.pair (.var "b") (.pair O I)),   .label 0 (.pair (.var "b") (.pair I O))),
+    (.label 0 (.pair (.var "b") (.pair I O)),   .label 0 (.pair (.var "b") (.pair I I))),
+    (.label 0 (.pair (.var "b") (.pair I I)),   .plain (.var "b")) ]
+
+/-- D0008 `stuck : Bit <-> Bit`, one label `$go` of carrier `Bit`:
+    `$go I` is uncovered on the left (T0303), `I` on the right (T0301). -/
+def stuck : LClauseSet :=
+  [ (.plain (.var "b"), .label 0 (.var "b")), (.label 0 O, .plain O) ]
+
+theorem swapMaybe_accepted : Accepted swapMaybe maybeBit maybeBit := by decide
+
+theorem cnot_accepted : Accepted cnot (.prod bit bit) (.prod bit bit) := by decide
+
+theorem nonexhaustive_rejected : ¬Accepted nonexhaustive maybeBit maybeBit := by decide
+
+theorem overlap_rejected : ¬Accepted overlap maybeBit maybeBit := by decide
+
+theorem nonlinear_rejected : ¬Accepted nonlinear (.prod bit bit) (.prod bit bit) := by decide
+
+theorem erasure_rejected : ¬Accepted erasure (.prod bit bit) bit := by decide
+
+theorem spin_accepted : LAccepted spin [.prod bit (.prod bit bit)] bit bit := by decide
+
+theorem stuck_rejected : ¬LAccepted stuck [bit] bit bit := by decide
+
+/-- `cnot` computes what it should: `(I, O) ↦ (I, I)`. -/
+example : apply cnot (.pair (.inr .unit) (.inl .unit)) =
+    some (.pair (.inr .unit) (.inr .unit)) := by decide
+
+end Fixtures
 
 end Theseus.Coverage

@@ -17,6 +17,24 @@ label machinery adds no new bijectivity obligation. What is genuinely new is
 the `T0301`/`T0303` code split is a *reporting* partition of one condition
 (coverage over the extended type), not two independent obligations.
 
+**Mechanization status.** Lean-mechanized in
+`theseus-proofs/TheseusProofs/Coverage.lean` (under the build-time axiom guard),
+as the reduction this note describes. The checker's label-aware matcher,
+instantiator and coverage matcher (`match_bind_extended_inner`,
+`instantiate_extended`, `matches_extended_value`) are transcribed and proved
+*equal* to the plain ones on the reading `$ℓ p ↦ inl (inj_ℓ p)`, `p ↦ inr p`
+(`LPat.matchBind_eq`, `LPat.instantiate_eq`, `LPat.matchesVal_eq`). The
+tag-split Lemma is `LAccepted.toPlain`; TH-4a-label is `applyExt_total`,
+`applyExt_ladjoint`, `ladjoint_applyExt`, `LAccepted.toEquiv`, with
+`applyExt_eq_apply` identifying the checker's body map with the plain clause
+function. Fixtures `spin` (P0011, accepted) and `stuck` (D0008, rejected) are
+replayed. **Not mechanized:** the per-tag `T0301`/`T0303` filing of witnesses
+(only the single exhaustiveness condition over `U + A` is); the derived
+`|A| = |B|`; the Corollary's composition with TH-1 (the Lean `Φ` is not fed to
+`FiniteTrace.lean`); label-carrier inference (labels are modelled by index,
+with their carriers given); and scope items 1, 3 and 6 below, which remain
+inputs.
+
 Scope: the finite fragment (finite label carriers, no guards), matching
 ADR-0009's v0.1 core (Π + `trace`) and ADR-0009's ruling that "fold clause
 sets reuse the ordinary coverage machinery." The `trace`-over-infinite-`u`

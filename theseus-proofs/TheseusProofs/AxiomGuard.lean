@@ -85,7 +85,32 @@ elab "#assert_only_base_axioms " : command => do
     ``Theseus.Coverage.Accepted.irredundant,
     ``Theseus.Coverage.covers_of_totalBijection,
     ``Theseus.Coverage.coverage_iff_totalBijection,
-    ``Theseus.Coverage.completeness_needs_irredundant ]
+    ``Theseus.Coverage.completeness_needs_irredundant,
+    -- Coverage (TH-4a-label): the label-aware matcher/checks are the plain ones
+    -- over `U + A` / `U + B`, so the label body is a total bijection
+    ``Theseus.Coverage.LPat.matchBind_eq,
+    ``Theseus.Coverage.LPat.instantiate_eq,
+    ``Theseus.Coverage.LPat.matchesVal_eq,
+    ``Theseus.Coverage.LAccepted.toPlain,
+    ``Theseus.Coverage.applyExt_eq_apply,
+    ``Theseus.Coverage.applyExt_total,
+    ``Theseus.Coverage.applyExt_ladjoint,
+    ``Theseus.Coverage.ladjoint_applyExt,
+    ``Theseus.Coverage.LAccepted.toEquiv,
+    ``Theseus.Coverage.LAccepted.applyExt_eq_toEquiv,
+    ``Theseus.Coverage.LAccepted.applyExt_ladjoint_eq_toEquiv_symm,
+    -- Coverage: typing as the checker's `var_types` test, and the conformance
+    -- fixtures replayed (kernel `decide`, no `native_decide`)
+    ``Theseus.Coverage.Clause.wellTyped_iff,
+    ``Theseus.Coverage.LClause.wellTyped_iff,
+    ``Theseus.Coverage.Fixtures.swapMaybe_accepted,
+    ``Theseus.Coverage.Fixtures.cnot_accepted,
+    ``Theseus.Coverage.Fixtures.nonexhaustive_rejected,
+    ``Theseus.Coverage.Fixtures.overlap_rejected,
+    ``Theseus.Coverage.Fixtures.nonlinear_rejected,
+    ``Theseus.Coverage.Fixtures.erasure_rejected,
+    ``Theseus.Coverage.Fixtures.spin_accepted,
+    ``Theseus.Coverage.Fixtures.stuck_rejected ]
   for t in targets do
     let axs ← liftCoreM <| collectAxioms t
     let bad := axs.filter (fun a =>
