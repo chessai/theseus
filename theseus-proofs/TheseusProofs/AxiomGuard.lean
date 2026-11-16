@@ -17,6 +17,7 @@ build, not by anyone remembering to run a command.
 -/
 import TheseusProofs.Reversibility
 import TheseusProofs.FiniteTrace
+import TheseusProofs.Coverage
 
 open Lean Elab Command
 
@@ -61,7 +62,30 @@ elab "#assert_only_base_axioms " : command => do
     ``Theseus.FiniteTrace.run_symm_entry,
     ``Theseus.FiniteTrace.traj_cross_injective,
     ``Theseus.FiniteTrace.traj_disjoint,
-    ``Theseus.FiniteTrace.traj_card_bound ]
+    ``Theseus.FiniteTrace.traj_card_bound,
+    -- Coverage (TH-4a, plain fragment): checker transcription, L1, L2, soundness
+    -- (total bijection + adjoint is the inverse), converse (+ its counterexample)
+    ``Theseus.Coverage.mem_enumerate,
+    ``Theseus.Coverage.Pat.isSome_matchBind,
+    ``Theseus.Coverage.covers_iff,
+    ``Theseus.Coverage.Pat.matchBind_instantiate,
+    ``Theseus.Coverage.Pat.instantiate_matchBind,
+    ``Theseus.Coverage.Pat.instantiate_matchBind_exact,
+    ``Theseus.Coverage.Clause.fire_swap,
+    ``Theseus.Coverage.Clause.fire_swap_iff,
+    ``Theseus.Coverage.apply_total,
+    ``Theseus.Coverage.apply_adjoint,
+    ``Theseus.Coverage.adjoint_apply,
+    ``Theseus.Coverage.rel_iff_apply,
+    ``Theseus.Coverage.denote_bijective,
+    ``Theseus.Coverage.denote_adjoint_leftInverse,
+    ``Theseus.Coverage.denote_adjoint_rightInverse,
+    ``Theseus.Coverage.toEquiv,
+    ``Theseus.Coverage.Accepted.totalBijection,
+    ``Theseus.Coverage.Accepted.irredundant,
+    ``Theseus.Coverage.covers_of_totalBijection,
+    ``Theseus.Coverage.coverage_iff_totalBijection,
+    ``Theseus.Coverage.completeness_needs_irredundant ]
   for t in targets do
     let axs ← liftCoreM <| collectAxioms t
     let bad := axs.filter (fun a =>
