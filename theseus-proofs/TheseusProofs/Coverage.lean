@@ -23,9 +23,13 @@ WHAT IS MODELLED. The checker's *core* view of a clause table, i.e. what
     `Pat.matchesVal` of `matches_value` in `coverage.rs`;
   * `apply` -- the per-value loop of `compute_bijection` (first matching
     clause in declaration order, then instantiate its right-hand side);
-  * `Clause.WellTyped` / `Clause.Linear` / `Covers` -- the conditions enforced
-    by `typing.rs` (T0102), `linearity.rs` (T0201/T0202) and `coverage.rs`
-    (T0301/T0302);
+  * `Clause.Linear` / `Covers` -- the conditions enforced by `linearity.rs`
+    (T0201/T0202) and `coverage.rs` (T0301/T0302);
+  * `Clause.WellTyped` -- the typing condition of the *specification*
+    (`docs/src/spec/static-semantics.md` §Typing, T0102): every sub-pattern at
+    the type its position demands, every variable at one core type. This is
+    the hypothesis the written proof uses. It is NOT what `typing.rs`
+    enforces -- see "KNOWN GAP" below;
   * `LPat`, `LPat.matchBind` / `LPat.instantiate` / `LPat.matchesVal`,
     `applyExt`, `LAccepted` -- the label-aware counterparts
     (`match_bind_extended_inner`, `instantiate_extended`,
@@ -42,22 +46,46 @@ denoted intrinsically (`denoteTy : Ty → Type`). The checker instead works on
 `0` exists (it is what μ-type unrolling bottoms out in). Mirroring the checker
 needs the untyped `Val` + `enumerate`, so this file has its own `Ty`.
 
+KNOWN GAP between `Clause.WellTyped` and the shipped `typing.rs` (found while
+reviewing this file; both reproduced with `theseus-cli check`, which prints
+`ok`). In each case the Rust matchers, linearity and coverage agree with the
+Lean ones; only typing differs, and the accepted table is not a bijection:
+
+  1. `type_admits_ctor` admits a constructor of a named type directly at an
+     anonymous sum type, while the matcher uses the constructor's path inside
+     its own type. `iso h : Bit + Bit <-> Bit | O <-> O | I <-> I` is accepted
+     and sends four values onto two. In core terms the left patterns are
+     `inl ()`, `inr ()` at type `(1+1)+(1+1)`: not `Pat.HasTy`.
+  2. A variable's occurrences are compared by *lowered surface type*, which
+     for a recursive type identifies positions at different unroll depths.
+     `iso f : Nat * Nat <-> Nat * Nat | (Zero, b) <-> (b, Zero)
+     | (Succ a, b) <-> (a, Succ b)` is accepted and sends typed values outside
+     the truncated type. In core terms `a` occurs at two different types.
+
+So the theorems below are about the specified checks; they certify the shipped
+checker only on programs where `typing.rs` and the specification agree (no
+bare constructor at an anonymous sum type, no recursive types).
+
 WHAT IS PROVED (all under the axiom guard, `AxiomGuard.lean`):
 
   * transcription sanity: `mem_enumerate`, `Pat.isSome_matchBind`,
     `covers_iff` (the counting test = exhaustive ∧ pairwise non-overlapping),
-    `Clause.wellTyped_iff` (declarative typing = the `var_types` test)
+    `Clause.wellTyped_iff` (declarative typing = "each side fits its core
+    type, and no variable is recorded at two core types")
   * L1  `Pat.matchBind_instantiate`, `Pat.instantiate_matchBind`,
     `Pat.instantiate_matchBind_exact`
   * L2  `Clause.fire_swap`, `Clause.fire_swap_iff`
   * TH-4a soundness  `apply_total`, `apply_adjoint`, `adjoint_apply`,
     `denote_bijective`, `denote_adjoint_leftInverse`,
     `denote_adjoint_rightInverse`, `toEquiv`, `rel_iff_apply`
-  * TH-4a converse  `covers_of_totalBijection`, `coverage_iff_totalBijection`,
-    and `completeness_needs_irredundant` (the converse is FALSE without the
-    extra `Irredundant` hypothesis)
+  * TH-4a converse, for the order-free clause relation `Rel`:
+    `covers_of_totalBijection`, `coverage_iff_totalBijection`, with
+    `completeness_needs_irredundant` (FALSE without the extra `Irredundant`
+    hypothesis) and `firstMatch_bijection_not_covered` (FALSE for the
+    first-match function `apply`, even with `Irredundant`)
   * TH-4a-label  `LPat.matchBind_eq` / `LPat.instantiate_eq` /
-    `LPat.matchesVal_eq` and `LAccepted.toPlain` (the tag-split reduction),
+    `LPat.matchesVal_eq` and `LAccepted.toPlain` (the tag-split reduction, in
+    the direction soundness needs: label checks ⇒ plain checks),
     `applyExt_eq_apply`, `applyExt_total`, `applyExt_ladjoint`,
     `ladjoint_applyExt`, `LAccepted.toEquiv`
   * `Fixtures.*`: conformance-suite tables replayed (accepted / rejected)
@@ -184,10 +212,12 @@ def vars : Pat → List Var
   | inr p    => p.vars
   | pair p q => p.vars ++ q.vars
 
-/-- Pattern typing under a variable-type assignment `Γ` (`check_pattern` in
-    `typing.rs`). Every occurrence of `x` is at type `Γ x`, which is the
-    declarative form of the checker's `var_types` map: a variable seen at two
-    different types is rejected (T0102). -/
+/-- Pattern typing under a variable-type assignment `Γ`: the specification's
+    typing condition (`spec/static-semantics.md` §Typing), over core types.
+    Every sub-pattern is at the type its position demands and every occurrence
+    of `x` is at the core type `Γ x`. `check_pattern` in `typing.rs` has this
+    shape (a `var_types` map, T0102 on a clash) but is weaker in two places;
+    see "KNOWN GAP" in the file header. -/
 inductive HasTy (Γ : Var → Ty) : Pat → Ty → Prop
   | var {x : Var} {T : Ty} : Γ x = T → HasTy Γ (.var x) T
   | unit : HasTy Γ .unit .unit
@@ -499,8 +529,9 @@ namespace Clause
 /-- The clause read right-to-left. -/
 abbrev swap (c : Clause) : Clause := Prod.swap c
 
-/-- Typing (`typing.rs`, T0102): the left pattern has type `A`, the right
-    pattern has type `B`, and each variable has one type across both sides. -/
+/-- Typing, as specified (T0102): the left pattern has type `A`, the right
+    pattern has type `B`, and each variable has one core type across both
+    sides. Stronger than what `typing.rs` checks; see the file header. -/
 def WellTyped (A B : Ty) (c : Clause) : Prop :=
   ∃ Γ : Var → Ty, c.1.HasTy Γ A ∧ c.2.HasTy Γ B
 
@@ -968,8 +999,11 @@ theorem coverage_iff_totalBijection {cs : ClauseSet} {A B : Ty}
 `| x <-> x | O <-> O` over `Bit = 1 + 1` is well-typed and linear, and both its
 clause relation and its first-match function are the identity on `Bit` -- a
 total bijection. Yet the checker rejects it (T0302: `O` is matched by both
-clauses). So "bijection ⇒ coverage" is false as stated; what coverage adds over
-bijectivity is exactly `Irredundant`. -/
+clauses). So "bijection ⇒ coverage" is false as stated. For the order-free
+relation `Rel`, what coverage adds over bijectivity is exactly `Irredundant`
+(`coverage_iff_totalBijection`). For the first-match function `apply` even
+that is not enough: see `firstMatch_bijection_not_covered` at the end of the
+file. -/
 
 /-- `Bit = O | I`, lowered: `1 + 1`. -/
 def bit : Ty := .sum .unit .unit
@@ -1313,9 +1347,10 @@ theorem LAccepted.known {cs : LClauseSet} {Us : List Ty} {A B : Ty} (h : LAccept
   obtain ⟨Γ, hl, hr⟩ := h.typed c hc
   exact ⟨hl.known, hr.known⟩
 
-/-- **Tag-split lemma (the reduction).** The label-extended checks on a label
-    clause table are the plain TH-4a checks on its reading over `U + A`,
-    `U + B`. -/
+/-- **Tag-split lemma (the reduction), in the direction soundness needs.** A
+    label clause table that passes the label-extended checks passes the plain
+    TH-4a checks on its reading over `U + A`, `U + B`. (The converse is not
+    proved here; it needs every label index to be in range.) -/
 theorem LAccepted.toPlain {cs : LClauseSet} {Us : List Ty} {A B : Ty}
     (h : LAccepted cs Us A B) :
     Accepted (elabLabels Us.length cs) (.sum (rightNestedSum Us) A)
@@ -1609,6 +1644,52 @@ instance (cs : LClauseSet) (Us : List Ty) (A B : Ty) : Decidable (LAccepted cs U
         (cs.map Prod.snd).countP (fun p => p.matchesVal Us.length v) = 1))
     ⟨fun h => ⟨h.1, h.2.1, h.2.2.1, h.2.2.2⟩, fun h => ⟨h.typed, h.linear, h.coverL, h.coverR⟩⟩
 
+instance (cs : ClauseSet) (A : Ty) : Decidable (Irredundant cs A) :=
+  decidable_of_iff
+    (cs.Pairwise fun c d =>
+      ∀ a ∈ enumerate A, ¬((c.fire a).isSome = true ∧ c.fire a = d.fire a))
+    ⟨fun h => h.imp fun hcd a ha b hf =>
+        hcd a (mem_enumerate.2 ha) ⟨by rw [hf.1]; rfl, hf.1.trans hf.2.symm⟩,
+     fun h => h.imp fun hcd a ha hf => by
+        obtain ⟨b, hb⟩ := Option.isSome_iff_exists.1 hf.1
+        exact hcd a (mem_enumerate.1 ha) b ⟨hb, hf.2 ▸ hb⟩⟩
+
+/-! ## The converse does not hold for first-match dispatch
+
+`coverage_iff_totalBijection` is about the order-free relation `Rel`. Under
+first-match dispatch a later clause can be *shadowed*: `| O <-> I | I <-> O
+| x <-> x` over `Bit` is well-typed, linear and irredundant, `apply` is a total
+bijection on `Bit` (negation) with the adjoint table as its two-sided inverse,
+and yet neither column passes coverage (T0302). The order-free relation of
+this table is not single-valued (`O` is related to both `I` and `O`), which is
+what the coverage check is detecting. -/
+
+/-- `| O <-> I | I <-> O | x <-> x`. -/
+def shadowedSwap : ClauseSet :=
+  [(.inl .unit, .inr .unit), (.inr .unit, .inl .unit), (.var "x", .var "x")]
+
+/-- **Bijectivity of the first-match function does not imply coverage**, even
+    for a well-typed, linear, irredundant table. -/
+theorem firstMatch_bijection_not_covered :
+    (∀ c ∈ shadowedSwap, c.WellTyped bit bit) ∧ (∀ c ∈ shadowedSwap, c.Linear) ∧
+      Irredundant shadowedSwap bit ∧
+      (∀ a, a.HasTy bit → ∃ b, b.HasTy bit ∧ apply shadowedSwap a = some b ∧
+        apply (adjoint shadowedSwap) b = some a) ∧
+      (∀ b, b.HasTy bit → ∃ a, a.HasTy bit ∧ apply (adjoint shadowedSwap) b = some a ∧
+        apply shadowedSwap a = some b) ∧
+      ¬Covers (shadowedSwap.map Prod.fst) bit ∧ ¬Covers (shadowedSwap.map Prod.snd) bit := by
+  refine ⟨by decide, by decide, by decide, ?_, ?_, by decide, by decide⟩
+  · intro a ha
+    have h : ∀ a ∈ enumerate bit, ∃ b ∈ enumerate bit, apply shadowedSwap a = some b ∧
+        apply (adjoint shadowedSwap) b = some a := by decide
+    obtain ⟨b, hb, hab⟩ := h a (mem_enumerate.2 ha)
+    exact ⟨b, mem_enumerate.1 hb, hab⟩
+  · intro b hb
+    have h : ∀ b ∈ enumerate bit, ∃ a ∈ enumerate bit,
+        apply (adjoint shadowedSwap) b = some a ∧ apply shadowedSwap a = some b := by decide
+    obtain ⟨a, ha, hba⟩ := h b (mem_enumerate.2 hb)
+    exact ⟨a, mem_enumerate.1 ha, hba⟩
+
 /-! ## Conformance fixtures, replayed
 
 The clause tables of the repository's conformance suite, desugared by hand to
@@ -1678,6 +1759,52 @@ theorem erasure_rejected : ¬Accepted erasure (.prod bit bit) bit := by decide
 theorem spin_accepted : LAccepted spin [.prod bit (.prod bit bit)] bit bit := by decide
 
 theorem stuck_rejected : ¬LAccepted stuck [bit] bit bit := by decide
+
+/-! ### Typing is load-bearing: the two tables `typing.rs` wrongly accepts
+
+Both tables below pass `theseus-cli check` today. In the Lean model they pass
+linearity and coverage on both columns -- so the Rust and Lean matchers agree
+on them -- but they are not `WellTyped`, and they are not bijections. They are
+the "KNOWN GAP" of the file header, as kernel-checked facts. -/
+
+/-- `iso h : Bit + Bit <-> Bit | O <-> O | I <-> I`, in core terms. The
+    constructor `O` of `Bit` is used at the anonymous sum `Bit + Bit`, where
+    its path `[L]` selects the whole left summand. -/
+def sumCtor : ClauseSet := [(O, O), (I, I)]
+
+/-- Linear and covered on both columns, not well-typed, and not injective. -/
+theorem sumCtor_untyped_not_injective :
+    (∀ c ∈ sumCtor, c.Linear) ∧ Covers (sumCtor.map Prod.fst) (.sum bit bit) ∧
+      Covers (sumCtor.map Prod.snd) bit ∧ ¬(∀ c ∈ sumCtor, c.WellTyped (.sum bit bit) bit) ∧
+      apply sumCtor (.inl (.inl .unit)) = apply sumCtor (.inl (.inr .unit)) := by
+  decide
+
+/-- `Nat = Zero | Succ Nat` unrolled to depth 4: `1 + (1 + (1 + (1 + 0)))`. -/
+abbrev nat4 : Ty := .sum .unit (.sum .unit (.sum .unit (.sum .unit .zero)))
+/-- `Zero`. -/
+abbrev zero : Pat := .inl .unit
+/-- `Succ p`. -/
+abbrev succ (p : Pat) : Pat := .inr p
+
+/-- `iso f : Nat * Nat <-> Nat * Nat | (Zero, b) <-> (b, Zero)
+    | (Succ a, b) <-> (a, Succ b)`, in core terms. `a` and `b` each occur at
+    two different unroll depths. -/
+def muEscape : ClauseSet :=
+  [ (.pair zero (.var "b"), .pair (.var "b") zero),
+    (.pair (succ (.var "a")) (.var "b"), .pair (.var "a") (succ (.var "b"))) ]
+
+/-- Linear and covered on both columns, not well-typed, and it sends a typed
+    value (`(1, 3)`) to an ill-typed one (`(0, 4)`). -/
+theorem muEscape_untyped_escapes :
+    (∀ c ∈ muEscape, c.Linear) ∧ Covers (muEscape.map Prod.fst) (.prod nat4 nat4) ∧
+      Covers (muEscape.map Prod.snd) (.prod nat4 nat4) ∧
+      ¬(∀ c ∈ muEscape, c.WellTyped (.prod nat4 nat4) (.prod nat4 nat4)) ∧
+      ∃ a b, a.HasTy (.prod nat4 nat4) ∧ apply muEscape a = some b ∧
+        ¬b.HasTy (.prod nat4 nat4) := by
+  refine ⟨by decide, by decide, by decide, by decide,
+    .pair (.inr (.inl .unit)) (.inr (.inr (.inr (.inl .unit)))),
+    .pair (.inl .unit) (.inr (.inr (.inr (.inr (.inl .unit))))),
+    by decide, by decide, by decide⟩
 
 /-- `cnot` computes what it should: `(I, O) ↦ (I, I)`. -/
 example : apply cnot (.pair (.inr .unit) (.inl .unit)) =

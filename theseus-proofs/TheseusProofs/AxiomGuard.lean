@@ -86,6 +86,7 @@ elab "#assert_only_base_axioms " : command => do
     ``Theseus.Coverage.covers_of_totalBijection,
     ``Theseus.Coverage.coverage_iff_totalBijection,
     ``Theseus.Coverage.completeness_needs_irredundant,
+    ``Theseus.Coverage.firstMatch_bijection_not_covered,
     -- Coverage (TH-4a-label): the label-aware matcher/checks are the plain ones
     -- over `U + A` / `U + B`, so the label body is a total bijection
     ``Theseus.Coverage.LPat.matchBind_eq,
@@ -110,7 +111,10 @@ elab "#assert_only_base_axioms " : command => do
     ``Theseus.Coverage.Fixtures.nonlinear_rejected,
     ``Theseus.Coverage.Fixtures.erasure_rejected,
     ``Theseus.Coverage.Fixtures.spin_accepted,
-    ``Theseus.Coverage.Fixtures.stuck_rejected ]
+    ``Theseus.Coverage.Fixtures.stuck_rejected,
+    -- Coverage: the two tables `typing.rs` wrongly accepts (typing is load-bearing)
+    ``Theseus.Coverage.Fixtures.sumCtor_untyped_not_injective,
+    ``Theseus.Coverage.Fixtures.muEscape_untyped_escapes ]
   for t in targets do
     let axs ← liftCoreM <| collectAxioms t
     let bad := axs.filter (fun a =>

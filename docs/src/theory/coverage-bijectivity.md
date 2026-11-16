@@ -2,15 +2,18 @@
 
 This note discharges the **semantic** half of the coverage-checker soundness
 claim: that the four static checks of `spec/static-semantics.md` (names,
-typing, linearity, coverage) are together *exactly* the condition for a
-clause set to denote a total bijection on typed values. It is the proof
-underwriting ADR-0004's "coverage is the invertibility, not a style lint,"
-and publication item #1 ("totality-for-free"). It is proved for the **plain
-fragment**: finite types, no labels, no guards (v0.1 first M1 slice). The
-label-extended case reduces to this one once label elaboration is specified
-(deferred); the *encoding* half -- that the bijection's mux/demux lowering is
-invertible under the padded bit encoding -- is a separate downstream
-obligation (TH-4b, ADR-0012, M2) and is **not** claimed here.
+typing, linearity, coverage) are together *sufficient* for a clause set to
+denote a total bijection on typed values, with the right-to-left reading as
+its inverse. (They are *not* exactly the condition: the converse needs an
+extra hypothesis, see "Soundness and completeness of the checker" below.) It
+is the proof underwriting ADR-0004's "coverage is the invertibility, not a
+style lint," and publication item #1 ("totality-for-free"). It is proved for
+the **plain fragment**: finite types, no labels, no guards (v0.1 first M1
+slice). The label-extended case reduces to this one
+(`theory/coverage-bijectivity-labels.md`); the *encoding* half -- that the
+bijection's mux/demux lowering is invertible under the padded bit encoding --
+is a separate downstream obligation (TH-4b, ADR-0012, M2) and is **not**
+claimed here.
 
 ## Mechanization status
 
@@ -22,14 +25,14 @@ no `native_decide`).
 | This note | Lean (`Theseus.Coverage`) |
 |---|---|
 | Setup: values, patterns, `σ_p`, `p[ρ]` | `Val`, `Pat`, `Pat.matchBind`, `Pat.instantiate`. `enumerate`, `Pat.matchesVal`, `apply` transcribe the checker's `enumerate_values`, `matches_value`, and the first-match loop of `compute_bijection` |
-| (Typing), (Linearity), (Coverage) | `Clause.WellTyped`, `Clause.Linear`, `Covers`, bundled as `Accepted cs A B`. `Covers` is the checker's literal test ("exactly one clause matches each enumerated value"); `covers_iff` proves it equal to *exhaustive and pairwise non-overlapping*. `Clause.wellTyped_iff` proves the declarative typing equal to the checker's per-clause `var_types` test |
+| (Typing), (Linearity), (Coverage) | `Clause.WellTyped`, `Clause.Linear`, `Covers`, bundled as `Accepted cs A B`. `Covers` is the checker's literal test ("exactly one clause matches each enumerated value"); `covers_iff` proves it equal to *exhaustive and pairwise non-overlapping*. `Clause.WellTyped` is the *specified* typing over core types (every sub-pattern at the type its position demands, every variable at one core type); `Clause.wellTyped_iff` gives it as a decision procedure. It is stronger than what `typing.rs` enforces today -- see "Known gap" below |
 | L1 | `Pat.matchBind_instantiate`, `Pat.instantiate_matchBind`, `Pat.instantiate_matchBind_exact` |
 | L2 | `Clause.fire_swap`, `Clause.fire_swap_iff` |
 | TH-4a, `F` total | `apply_total` |
 | TH-4a, `F` a bijection | `denote_bijective`, `toEquiv` |
 | TH-4a, the adjoint is the inverse | `apply_adjoint`, `adjoint_apply`, `denote_adjoint_leftInverse`, `denote_adjoint_rightInverse` |
 | First-match `F` = the order-free clause relation | `rel_iff_apply` |
-| Converse (see below) | `coverage_iff_totalBijection`, `covers_of_totalBijection`, `completeness_needs_irredundant` |
+| Converse (see below) | `coverage_iff_totalBijection`, `covers_of_totalBijection`, `completeness_needs_irredundant`, `firstMatch_bijection_not_covered` |
 
 **The model.** The checker's *core* view: untyped values over the types
 `0 | 1 | a + b | a × b`, and patterns `x | () | inl p | inr p | (p, q)`. A named
@@ -43,6 +46,40 @@ then match" half turns out to need no linearity.
 **What the mechanization corrected.** The completeness claim under
 "Consequences" was false as originally stated; it now reads as proved. See
 "Soundness and completeness of the checker" below.
+
+**Known gap: the shipped `typing.rs` is weaker than (Typing).** The theorem
+assumes the specified typing. An adversarial review of the mechanization found
+two tables that `theseus-cli check` accepts (`ok`) although they violate it and
+are not bijections. The Rust matcher, linearity and coverage agree with the
+Lean model on both; only typing differs.
+
+1. `type_admits_ctor` admits a constructor of a named type directly at an
+   anonymous sum type, while the matcher uses the constructor's path inside
+   its own type:
+
+   ```
+   iso h : Bit + Bit <-> Bit
+   | O <-> O
+   | I <-> I
+   ```
+
+   sends four values onto two (Lean: `Fixtures.sumCtor_untyped_not_injective`).
+2. A variable's occurrences are compared by *lowered surface type*, which for
+   a recursive type identifies positions at different unroll depths:
+
+   ```
+   iso f : Nat * Nat <-> Nat * Nat
+   | (Zero, b)   <-> (b, Zero)
+   | (Succ a, b) <-> (a, Succ b)
+   ```
+
+   sends `(1, 3)` outside the depth-4 truncation (Lean:
+   `Fixtures.muEscape_untyped_escapes`).
+
+So TH-4a certifies the checks *as specified*; it certifies the shipped checker
+only where `typing.rs` and the specification agree -- no bare constructor at an
+anonymous sum type, no recursive types. Closing the gap is a checker fix, not a
+proof obligation.
 
 **Not mechanized.** Nothing links the Lean model to the Rust source -- the
 correspondence is by inspection, backed by replaying conformance fixtures
@@ -160,11 +197,25 @@ adjoint denotes `F⁻¹`. ∎
   matched by clauses 1 and 2; Lean: `completeness_needs_irredundant`). So
   "each check negated exhibits a value with 0 or ≥2 images" holds only when
   images are counted *per clause*: an uncovered value has no image (a real
-  non-bijection), but an overlap may be two clauses agreeing. Coverage is
+  non-bijection), but an overlap may be two clauses agreeing. That iff is
+  about the *order-free* clause relation ("some clause sends `a` to `b`").
+  For the first-match function it fails even with irredundancy: in
+
+  ```
+  iso s : Bit <-> Bit
+  | O <-> I
+  | I <-> O
+  | x <-> x
+  ```
+
+  the last clause is shadowed, first-match dispatch is negation -- a total
+  bijection with the right-to-left table as inverse -- and the table is
+  rejected (T0302; Lean: `firstMatch_bijection_not_covered`). Its order-free
+  relation is not single-valued, which is what coverage detects. Coverage is
   therefore invertibility **plus** order-independence-by-construction: a
-  rejected well-typed linear table is either not a bijection or has a
-  redundant clause instance. Soundness -- the direction ADR-0004 leans on --
-  is unaffected.
+  rejected well-typed linear table is one whose order-free relation is not a
+  bijection, or one with a redundant clause instance. Soundness -- the
+  direction ADR-0004 leans on -- is unaffected.
 - **The two columns are independent.** The proof uses the LHS partition and
   the RHS partition separately; neither implies the other. This is why the
   checker enumerates both columns (a variable pattern can make one side
