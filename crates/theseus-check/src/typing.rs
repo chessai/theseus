@@ -2,19 +2,35 @@
 //!
 //! For each iso with clauses, checks that every pattern in each clause is
 //! well-typed against the iso's declared domain (lhs) or codomain (rhs).
-//! A constructor `C p*` is well-typed at type `T` iff `C` is a constructor of
-//! `T` (via `env`) and its argument patterns match `C`'s payload type; a tuple
-//! pattern `(p1, p2)` against a product type `A * B`; a var pattern against any
-//! type; a `Nat` literal against a `U<n>` type. Mismatches are `T0102` with the
-//! offending `side:` and 1-indexed `clauses:`.
+//! A constructor `C p*` is well-typed at a position iff the type there is the
+//! named type `T` that declares `C`, that occurrence of `T` is not past the
+//! μ-cutoff, and the argument patterns match `C`'s payload type; a tuple
+//! pattern `(p1, p2)` against a product type `A * B`; a var pattern against
+//! any type; a `Nat` literal against a `U<n>` type. Mismatches are `T0102`
+//! with the offending `side:` and 1-indexed `clauses:`.
+//!
+//! Typing is against the **core** type at each position, which is what the
+//! matchers and coverage see (`Clause.WellTyped` in
+//! `theseus-proofs/TheseusProofs/Coverage.lean`, the hypothesis of TH-4a).
+//! Two consequences, each closing a hole through which a non-bijection used
+//! to pass every check:
+//!
+//! * A constructor is admitted only at its own named type, never at an
+//!   anonymous sum `S + T` that merely mentions it: the matchers navigate the
+//!   constructor's injection path inside its own type, not inside the sum.
+//! * A recursive type has a different core type at each unroll depth
+//!   (ADR-0035), so the walk carries the unroll budget ([`Fuel`]) spent so
+//!   far. A variable must have one core type across both sides of a clause,
+//!   and a constructor at an exhausted budget (core type `0`) is ill-typed.
 
 use std::collections::BTreeMap;
 
-use theseus_syntax::ast::{Decl, IsoBody, IsoDecl, Pattern, Program, Type as SurfType};
+use theseus_core::ty::Type as CoreType;
+use theseus_syntax::ast::{Decl, IsoBody, IsoDecl, Pattern, Program, Type as SurfType, UpperName};
 
 use crate::diagnostics::{Code, Diagnostic, Side};
 use crate::elaborate;
-use crate::env::Env;
+use crate::env::{Env, Fuel};
 
 /// Run the typing check over a whole program.
 pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
@@ -117,7 +133,7 @@ fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
     if let IsoBody::Clauses(clauses) = &id.body {
         for (i, clause) in clauses.iter().enumerate() {
             let clause_index = i + 1; // 1-indexed
-            let mut var_types: BTreeMap<String, SurfType> = BTreeMap::new();
+            let mut var_types: BTreeMap<String, CoreType> = BTreeMap::new();
             check_pattern(
                 &clause.lhs,
                 &id.lhs,
@@ -126,6 +142,7 @@ fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
                 clause_index,
                 labels,
                 true,
+                &mut Fuel::new(),
                 &mut var_types,
                 diags,
             );
@@ -137,6 +154,7 @@ fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
                 clause_index,
                 labels,
                 true,
+                &mut Fuel::new(),
                 &mut var_types,
                 diags,
             );
@@ -147,11 +165,12 @@ fn check_iso(id: &IsoDecl, env: &Env, diags: &mut Vec<Diagnostic>) {
     }
 }
 
-/// Check that `pat` is well-typed at surface type `ty`. If not, push a T0102.
+/// Check that `pat` is well-typed at surface type `ty`, reached with the
+/// unroll budget `fuel` -- i.e. at core type `env.lower_at(ty, fuel)`. If not,
+/// push a T0102.
 /// `at_root` is true only when `pat` is the top-level pattern of a clause side.
-/// `var_types` tracks each variable's first-seen surface type within a clause;
-/// if the same variable appears at an incompatible type (comparing lowered core
-/// types), a T0102 is emitted.
+/// `var_types` tracks each variable's first-seen core type within a clause; if
+/// the same variable appears at a different core type, a T0102 is emitted.
 #[allow(clippy::too_many_arguments)]
 fn check_pattern(
     pat: &Pattern,
@@ -161,7 +180,8 @@ fn check_pattern(
     clause_index: usize,
     labels: &[(String, SurfType)],
     at_root: bool,
-    var_types: &mut BTreeMap<String, SurfType>,
+    fuel: &mut Fuel,
+    var_types: &mut BTreeMap<String, CoreType>,
     diags: &mut Vec<Diagnostic>,
 ) {
     // Unwrap Paren on the type side.
@@ -169,14 +189,19 @@ fn check_pattern(
 
     match pat {
         Pattern::Var(name) => {
-            // Record the variable's expected type; if already recorded,
-            // check cross-side consistency via lowered core types.
+            // Record the variable's core type at this position; if already
+            // recorded, every other occurrence must have the same one. The
+            // comparison is on the depth-aware core type, not on the surface
+            // type: `Nat` under one `Succ` and `Nat` at the root are the same
+            // surface type but different core types (ADR-0035), and a
+            // variable carried between them would leave the truncated domain.
+            let core_ty = env.lower_at(ty, fuel);
             match var_types.get(&name.text) {
                 None => {
-                    var_types.insert(name.text.clone(), ty.clone());
+                    var_types.insert(name.text.clone(), core_ty);
                 }
                 Some(prev_ty) => {
-                    if env.lower(prev_ty) != env.lower(ty) {
+                    if *prev_ty != core_ty {
                         diags.push(
                             Diagnostic::new(Code::T0102, name.span)
                                 .with_side(side)
@@ -208,8 +233,11 @@ fn check_pattern(
                 );
                 return;
             }
-            // Check label args against the inferred carrier type.
+            // Check label args against the inferred carrier type. The carrier
+            // is a summand of the label state space `U`, lowered on its own
+            // (`env::label_carrier`), so it starts from a fresh unroll budget.
             if let Some((_, carrier)) = labels.iter().find(|(n, _)| n == &name.text) {
+                let fuel = &mut Fuel::new();
                 match args.len() {
                     0 => { /* nullary label -- carrier is unit, nothing to check */ }
                     1 => {
@@ -221,6 +249,7 @@ fn check_pattern(
                             clause_index,
                             labels,
                             false,
+                            fuel,
                             var_types,
                             diags,
                         );
@@ -233,6 +262,7 @@ fn check_pattern(
                             side,
                             clause_index,
                             labels,
+                            fuel,
                             var_types,
                             diags,
                         );
@@ -245,54 +275,66 @@ fn check_pattern(
                 // Unknown ctor -- Names (T0101) already reported this; skip.
                 return;
             };
-            // The ctor must belong to the type at this position.
-            if !type_admits_ctor(ty, &ctor_info.type_name) {
+            let ill_typed = |diags: &mut Vec<Diagnostic>| {
                 diags.push(
                     Diagnostic::new(Code::T0102, name.span)
                         .with_side(side)
                         .with_clauses(vec![clause_index]),
                 );
+            };
+            // The type at this position must be the ctor's own named type.
+            let Some(ty_name) = ctor_position(ty, &ctor_info.type_name) else {
+                ill_typed(diags);
                 return;
-            }
-            // Recursively check the ctor's arguments against its payload type.
-            match (&ctor_info.payload, args.as_slice()) {
-                (None, []) => {
-                    // Nullary ctor applied to no args -- fine.
+            };
+            // Recursively check the ctor's arguments against its payload
+            // type, one unrolling of the named type deeper.
+            let unrolled = env.unroll(ty_name, fuel, |fuel| {
+                match (&ctor_info.payload, args.as_slice()) {
+                    (None, []) => {
+                        // Nullary ctor applied to no args -- fine.
+                    }
+                    (Some(payload_ty), [arg]) => {
+                        check_pattern(
+                            arg,
+                            payload_ty,
+                            env,
+                            side,
+                            clause_index,
+                            labels,
+                            false,
+                            fuel,
+                            var_types,
+                            diags,
+                        );
+                    }
+                    (Some(payload_ty), args) if args.len() > 1 => {
+                        check_curried_args(
+                            args,
+                            payload_ty,
+                            env,
+                            side,
+                            clause_index,
+                            labels,
+                            fuel,
+                            var_types,
+                            diags,
+                        );
+                    }
+                    _ => {
+                        // Arity mismatch (e.g. nullary ctor given args, or
+                        // ctor expecting payload given none). Report T0102.
+                        ill_typed(diags);
+                    }
                 }
-                (Some(payload_ty), [arg]) => {
-                    check_pattern(
-                        arg,
-                        payload_ty,
-                        env,
-                        side,
-                        clause_index,
-                        labels,
-                        false,
-                        var_types,
-                        diags,
-                    );
-                }
-                (Some(payload_ty), args) if args.len() > 1 => {
-                    check_curried_args(
-                        args,
-                        payload_ty,
-                        env,
-                        side,
-                        clause_index,
-                        labels,
-                        var_types,
-                        diags,
-                    );
-                }
-                _ => {
-                    // Arity mismatch (e.g. nullary ctor given args, or
-                    // ctor expecting payload given none). Report T0102.
-                    diags.push(
-                        Diagnostic::new(Code::T0102, name.span)
-                            .with_side(side)
-                            .with_clauses(vec![clause_index]),
-                    );
-                }
+            });
+            if unrolled.is_none() {
+                // μ-cutoff: the type at this position has core type `0`
+                // (ADR-0035), which no constructor inhabits. Such a pattern
+                // matches no value of the truncated domain, so coverage would
+                // not see it -- but as the other side of a clause it would
+                // send a value outside the domain.
+                ill_typed(diags);
             }
         }
         Pattern::Tuple(a, b, _) => {
@@ -306,6 +348,7 @@ fn check_pattern(
                     clause_index,
                     labels,
                     false,
+                    fuel,
                     var_types,
                     diags,
                 );
@@ -317,6 +360,7 @@ fn check_pattern(
                     clause_index,
                     labels,
                     false,
+                    fuel,
                     var_types,
                     diags,
                 );
@@ -337,6 +381,7 @@ fn check_pattern(
                 clause_index,
                 labels,
                 at_root,
+                fuel,
                 var_types,
                 diags,
             );
@@ -355,7 +400,8 @@ fn check_curried_args(
     side: Side,
     clause_index: usize,
     labels: &[(String, SurfType)],
-    var_types: &mut BTreeMap<String, SurfType>,
+    fuel: &mut Fuel,
+    var_types: &mut BTreeMap<String, CoreType>,
     diags: &mut Vec<Diagnostic>,
 ) {
     let ty = peel_paren_type(ty);
@@ -368,6 +414,7 @@ fn check_curried_args(
             clause_index,
             labels,
             false,
+            fuel,
             var_types,
             diags,
         );
@@ -382,6 +429,7 @@ fn check_curried_args(
             clause_index,
             labels,
             false,
+            fuel,
             var_types,
             diags,
         );
@@ -392,6 +440,7 @@ fn check_curried_args(
             side,
             clause_index,
             labels,
+            fuel,
             var_types,
             diags,
         );
@@ -405,13 +454,22 @@ fn check_curried_args(
     }
 }
 
-/// Does the surface type `ty` admit a constructor belonging to `type_name`?
-fn type_admits_ctor(ty: &SurfType, type_name: &str) -> bool {
-    let ty = peel_paren_type(ty);
-    match ty {
-        SurfType::Name(n) => n.text == type_name,
-        SurfType::Sum(a, b, _) => type_admits_ctor(a, type_name) || type_admits_ctor(b, type_name),
-        _ => false,
+/// If the surface type `ty` admits a constructor belonging to `type_name`,
+/// the named-type occurrence it is admitted at.
+///
+/// Only the constructor's own named type admits it. In particular an
+/// anonymous sum `S + T` does not, even when `S` or `T` is that type: the
+/// surface language has no injection patterns, and the matchers
+/// (`coverage::matches_value`, `elaborate::match_bind_inner`) navigate a
+/// constructor's injection path inside its *own* type. Admitting `O` at
+/// `Bit + Bit` would type it as a `Bit` while matching it against the sum's
+/// top-level tag, and `h : Bit + Bit <-> Bit | O <-> O | I <-> I` (four values
+/// onto two) would pass every check. The only pattern typed at `S + T` is a
+/// variable; to take a sum apart, name it (`type E = L S | R T`).
+fn ctor_position<'a>(ty: &'a SurfType, type_name: &str) -> Option<&'a UpperName> {
+    match peel_paren_type(ty) {
+        SurfType::Name(n) if n.text == type_name => Some(n),
+        _ => None,
     }
 }
 
@@ -442,10 +500,11 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn type_mismatch_reports_t0102() {
+    /// Typing must report exactly what `conformance/diagnostics/<stem>.diag`
+    /// lists (set-compared, see [`testkit::assert_diags`]).
+    fn assert_fixture_t0102(stem: &str) {
         let root = testkit::repo_root();
-        let prog_path = root.join("conformance/diagnostics/0005-type-mismatch.thse");
+        let prog_path = root.join(format!("conformance/diagnostics/{stem}.thse"));
         let diag_path = prog_path.with_extension("diag");
 
         let program = testkit::load_program(&prog_path);
@@ -456,6 +515,122 @@ mod tests {
             .unwrap_or_else(|e| panic!("reading {}: {e}", diag_path.display()));
         let expected = testkit::parse_diag(&expected_text);
         testkit::assert_diags(&reported, &expected);
+    }
+
+    #[test]
+    fn type_mismatch_reports_t0102() {
+        assert_fixture_t0102("0005-type-mismatch");
+    }
+
+    // ── Typing is against the core type of each position (TH-4a hypothesis) ──
+    // Each of the three fixtures below passed names, typing, linearity and
+    // coverage before these checks, and none is a bijection.
+
+    #[test]
+    fn ctor_at_anonymous_sum_reports_t0102() {
+        // `O`/`I` at `Bit + Bit`: 4 values onto 2.
+        assert_fixture_t0102("0011-ctor-at-sum");
+    }
+
+    #[test]
+    fn var_across_unroll_depths_reports_t0102() {
+        // `a` under one `Succ` on the left, at the root on the right (and `b`
+        // the other way): (1, 3) would go to (0, 4), outside the domain.
+        assert_fixture_t0102("0012-mu-depth-crossing");
+    }
+
+    #[test]
+    fn ctor_past_mu_cutoff_reports_t0102() {
+        // `Succ Zero` at `Nat@1` (whose only inhabitant is `Zero`) matches
+        // nothing, so coverage cannot see it; as a right-hand side it sends
+        // `Zero` to `Succ Zero`.
+        assert_fixture_t0102("0013-mu-cutoff-ctor");
+
+        // The same at the default depth: a pattern for the numeral 4 at
+        // depth-4 `Nat`. Clause 1's left side and clause 5's right side match
+        // no value, both columns are covered, and clause 5 sends 3 to 4.
+        let d = typing_only(check_src(
+            "type Nat = Zero | Succ Nat\n\
+             iso g : Nat <-> Nat\n\
+             | Succ (Succ (Succ (Succ Zero))) <-> Zero\n\
+             | Zero <-> Succ Zero\n\
+             | Succ Zero <-> Succ (Succ Zero)\n\
+             | Succ (Succ Zero) <-> Succ (Succ (Succ Zero))\n\
+             | Succ (Succ (Succ Zero)) <-> Succ (Succ (Succ (Succ Zero)))\n",
+        ));
+        let at = |side, clause| {
+            d.iter()
+                .any(|x| x.side == Some(side) && x.clauses == Some(vec![clause]))
+        };
+        assert!(
+            d.len() == 2 && at(Side::Left, 1) && at(Side::Right, 5),
+            "expected T0102 at clause 1 left and clause 5 right only, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn var_at_anonymous_sum_no_t0102() {
+        // A variable is still well-typed at `S + T`; only constructors of a
+        // summand are not.
+        let d = check_src(
+            "type Bit = O | I\n\
+             iso s : Bit + Bit <-> Bit + Bit\n\
+             | x <-> x\n",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn var_at_same_unroll_depth_no_t0102() {
+        // `n` sits under exactly one `Succ` on both sides: one core type.
+        let d = check_src(
+            "type Nat = Zero | Succ Nat\n\
+             iso idNat : Nat <-> Nat\n\
+             | Zero <-> Zero\n\
+             | Succ n <-> Succ n\n",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+    }
+
+    #[test]
+    fn var_types_compare_by_core_type_not_surface_depth() {
+        // `n` is `Nat` under one `Succ` on the left and `Nat@3` on the right:
+        // different surface positions, the same core type `1+(1+(1+0))`.
+        let d = check_src(
+            "type Nat = Zero | Succ Nat\n\
+             type M = N | J Nat@3\n\
+             iso q : Nat <-> M\n\
+             | Zero <-> N\n\
+             | Succ n <-> J n\n",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
+        // The same table against the un-annotated payload is not a bijection
+        // (`J n` would have to cover `J 3`) and must be rejected at `n`.
+        let d = typing_only(check_src(
+            "type Nat = Zero | Succ Nat\n\
+             type M = N | J Nat\n\
+             iso q : Nat <-> M\n\
+             | Zero <-> N\n\
+             | Succ n <-> J n\n",
+        ));
+        assert!(
+            d.iter().any(|x| x.name.as_deref() == Some("n")),
+            "expected T0102 naming n, got: {d:?}"
+        );
+    }
+
+    #[test]
+    fn label_carrier_starts_from_fresh_unroll_budget() {
+        // `$go`'s carrier is `Nat` lowered on its own, so `n` under one `Succ`
+        // inside it has the same core type as `n` under `Succ` at the boundary.
+        let d = check_src(
+            "type Nat = Zero | Succ Nat\n\
+             iso f : Nat <-> Nat\n\
+             | Zero <-> $go Zero\n\
+             | Succ n <-> $go (Succ n)\n\
+             | $go m <-> m\n",
+        );
+        assert!(d.is_empty(), "unexpected diagnostics: {d:?}");
     }
 
     #[test]

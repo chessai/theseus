@@ -370,7 +370,14 @@ fn conformance_diagnostics() {
     // Floor: a parser regression could turn all diag fixtures into
     // parse-error skips, leaving tested == 0 with the test still green.
     // Must-test stems: ensure critical diagnostic fixtures are not silently skipped.
-    const MUST_TEST_DIAG: &[&str] = &["0008-label-coverage"];
+    const MUST_TEST_DIAG: &[&str] = &[
+        "0008-label-coverage",
+        // Typing against the core type of each position (the TH-4a typing
+        // hypothesis): each of these once passed every check.
+        "0011-ctor-at-sum",
+        "0012-mu-depth-crossing",
+        "0013-mu-cutoff-ctor",
+    ];
     let diag_stems: Vec<&str> = fixtures
         .iter()
         .filter_map(|p| p.file_stem()?.to_str())

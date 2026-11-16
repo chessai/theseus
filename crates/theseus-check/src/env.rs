@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use theseus_core::prim::Value;
 use theseus_core::ty::Type as CoreType;
-use theseus_syntax::ast::{self, Ctor, Decl, Program, Span, Type as SurfType};
+use theseus_syntax::ast::{self, Ctor, Decl, Program, Span, Type as SurfType, UpperName};
 
 use crate::labels::Clash;
 
@@ -99,6 +99,11 @@ pub struct IsoCollision {
 /// branching recursion (a binary tree at `D = 4` has 26 inhabitants) while
 /// still exercising multiple levels of nesting.
 pub const DEFAULT_UNROLL_DEPTH: usize = 4;
+
+/// The per-path unroll budget of [`Env::lower`]: for each recursive type name
+/// entered on the way to the current position, how many further unrollings
+/// remain. A name absent from the map still has the full depth `D`.
+pub(crate) type Fuel = BTreeMap<String, usize>;
 
 /// The resolution environment: indexed lookup tables plus type lowering.
 ///
@@ -259,13 +264,67 @@ impl Env {
     /// unaffected and non-recursive programs lower exactly as before -- a type
     /// can only re-enter itself along a path if it is recursive.
     pub fn lower(&self, ty: &SurfType) -> CoreType {
-        let mut fuel: BTreeMap<String, usize> = BTreeMap::new();
-        self.lower_with(ty, &mut fuel)
+        self.lower_at(ty, &Fuel::new())
+    }
+
+    /// Lower `ty` as it stands at a position *inside* a boundary type, where
+    /// `fuel` is the unroll budget already spent on the way there (see
+    /// [`Env::unroll`]). `lower_at(ty, &Fuel::new())` is [`Env::lower`].
+    ///
+    /// This is the core type a sub-pattern at that position is typed against.
+    /// For a recursive type it depends on the depth: inside one `Succ` the
+    /// payload `Nat` is `1+(1+(1+0))`, not the depth-4 `Nat`.
+    pub(crate) fn lower_at(&self, ty: &SurfType, fuel: &Fuel) -> CoreType {
+        self.lower_with(ty, &mut fuel.clone())
+    }
+
+    /// Run `body` inside one unrolling of the named-type occurrence `n`, or
+    /// return `None` at the μ-cutoff (the occurrence lowers to `Zero`, so no
+    /// constructor of the type is well-typed there).
+    ///
+    /// This is the single statement of ADR-0035's per-path budget discipline,
+    /// shared by lowering and by the typing stage so the two cannot disagree
+    /// about the core type at a position: a use-site `T@D` annotation resets
+    /// the budget for this occurrence; entering spends one unit; both are
+    /// undone on exit (sibling occurrences are unaffected).
+    pub(crate) fn unroll<R>(
+        &self,
+        n: &UpperName,
+        fuel: &mut Fuel,
+        body: impl FnOnce(&mut Fuel) -> R,
+    ) -> Option<R> {
+        let annotated = self
+            .depth_overrides
+            .get(&n.span.start)
+            .map(|&depth| fuel.insert(n.text.clone(), depth));
+        let remaining = fuel.entry(n.text.clone()).or_insert(self.unroll_depth);
+        let out = if *remaining == 0 {
+            // μ-cutoff: a value would need ≥ D unfoldings of `n` -- outside
+            // the truncated domain (empty, not junk: see ADR-0035).
+            None
+        } else {
+            *remaining -= 1;
+            let r = body(fuel);
+            // Restore the budget: it is per-path, not global (sibling
+            // occurrences of `n` each get the full depth).
+            *fuel.get_mut(&n.text).expect("fuel entry inserted above") += 1;
+            Some(r)
+        };
+        match annotated {
+            Some(Some(outer)) => {
+                fuel.insert(n.text.clone(), outer);
+            }
+            Some(None) => {
+                fuel.remove(&n.text);
+            }
+            None => {}
+        }
+        out
     }
 
     /// Lowering worker: `fuel` tracks, per type name, the remaining re-entry
     /// budget along the current path (see [`Env::lower`]).
-    fn lower_with(&self, ty: &SurfType, fuel: &mut BTreeMap<String, usize>) -> CoreType {
+    fn lower_with(&self, ty: &SurfType, fuel: &mut Fuel) -> CoreType {
         match ty {
             SurfType::Empty(_) => CoreType::Zero,
             SurfType::Unit(_) => CoreType::One,
@@ -277,63 +336,40 @@ impl Env {
             SurfType::Sum(a, b, _) => {
                 CoreType::sum(self.lower_with(a, fuel), self.lower_with(b, fuel))
             }
-            SurfType::Name(n) => {
-                if let Some(&depth) = self.depth_overrides.get(&n.span.start) {
-                    let old = fuel.insert(n.text.clone(), depth);
-                    let result = self.lower_named(&n.text, fuel);
-                    match old {
-                        Some(v) => {
-                            fuel.insert(n.text.clone(), v);
-                        }
-                        None => {
-                            fuel.remove(&n.text);
-                        }
-                    }
-                    result
-                } else {
-                    self.lower_named(&n.text, fuel)
-                }
-            }
+            SurfType::Name(n) => self.lower_named(n, fuel),
         }
     }
 
     /// Lower a named ADT into its right-nested sum-of-products, spending one
     /// unit of the name's per-path unroll budget (μ-cutoff ⇒ `Zero`).
-    fn lower_named(&self, name: &str, fuel: &mut BTreeMap<String, usize>) -> CoreType {
+    fn lower_named(&self, n: &UpperName, fuel: &mut Fuel) -> CoreType {
         // Builtin U<n>/W<n> types are not user-declared; intercept before ADT
         // lookup.
-        if let Some(ct) = lower_un(name) {
+        if let Some(ct) = lower_un(&n.text) {
             return ct;
         }
-        if let Some(ct) = lower_wn(name) {
+        if let Some(ct) = lower_wn(&n.text) {
             return ct;
         }
-        let Some(info) = self.types.get(name) else {
+        let Some(info) = self.types.get(&n.text) else {
             // Unknown type: total fallback. Names reports the real error.
             return CoreType::Zero;
         };
-        let remaining = fuel.entry(name.to_string()).or_insert(self.unroll_depth);
-        if *remaining == 0 {
-            // μ-cutoff: a value would need ≥ D unfoldings of `name` -- outside
-            // the truncated domain (empty, not junk: see ADR-0035).
-            return CoreType::Zero;
-        }
-        *remaining -= 1;
-        let summands: Vec<CoreType> = info
-            .ctors
-            .iter()
-            .map(|c| {
-                self.ctors
-                    .get(c)
-                    .and_then(|ci| ci.payload.as_ref())
-                    .map(|p| self.lower_with(p, fuel))
-                    .unwrap_or(CoreType::One)
-            })
-            .collect();
-        // Restore the budget: it is per-path, not global (sibling occurrences
-        // of `name` each get the full depth).
-        *fuel.get_mut(name).expect("fuel entry inserted above") += 1;
-        right_nested_sum(&summands)
+        self.unroll(n, fuel, |fuel| {
+            let summands: Vec<CoreType> = info
+                .ctors
+                .iter()
+                .map(|c| {
+                    self.ctors
+                        .get(c)
+                        .and_then(|ci| ci.payload.as_ref())
+                        .map(|p| self.lower_with(p, fuel))
+                        .unwrap_or(CoreType::One)
+                })
+                .collect();
+            right_nested_sum(&summands)
+        })
+        .unwrap_or(CoreType::Zero)
     }
 }
 

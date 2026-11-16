@@ -53,13 +53,29 @@ first become expressible and an annotation has something to say.
 ## Diagnostics at the depth boundary
 
 No new diagnostic code. A value needing ≥ `D` unfoldings does not inhabit
-the truncated domain, so an iso that escapes the depth -- e.g. successor,
-whose image misses `Zero` and overflows the deepest numeral -- fails
-ordinary coverage with `T0301` and a concrete witness
-(`coverage::tests::mu_depth_escaping_iso_rejected_t0301`). Accepted isos
-are exactly the bijections on the truncated domain, so evaluation can
-never step outside it and the finite-fragment totality argument
-(ADR-0007) applies unchanged.
+the truncated domain, so an iso that escapes the depth is rejected by the
+ordinary checks, in two stages:
+
+- **Typing (`T0102`).** A position inside a recursive type has the core
+  type of its unroll depth: under one `Succ`, `Nat` is `1+(1+(1+0))`, not
+  the depth-4 `Nat`. Typing walks a pattern with the same per-path budget
+  lowering spends (`Env::unroll`), so a variable must sit at one depth on
+  both sides of a clause, and a constructor at a position past the cutoff
+  (core type `0`) is ill-typed. Successor, `Succ n <-> Succ (Succ n)`,
+  fails here: `n` is one unrolling deep on the left and two on the right.
+  So do `(Succ a, b) <-> (a, Succ b)` (diagnostic `0012`) and a clause
+  that names an out-of-domain numeral outright -- `4` at depth 4, or
+  `Succ Zero` at `Nat@1` (diagnostic `0013`). Coverage alone does not
+  catch the last two -- both columns are covered -- which is why the depth
+  has to be part of typing. `Succ n <-> Succ n` is accepted.
+- **Coverage (`T0301`).** With every pattern typed inside the truncated
+  domain, an iso whose image misses a value fails coverage with a concrete
+  witness (`coverage::tests::mu_depth_escaping_iso_rejected_t0301` runs
+  the coverage stage alone on successor: `Zero` is never produced).
+
+Accepted isos are bijections on the truncated domain (TH-4a,
+`theory/coverage-bijectivity.md`), so evaluation can never step outside it
+and the finite-fragment totality argument (ADR-0007) applies unchanged.
 
 Known limitation: the CLI value bridge (`theseus-cli/src/value.rs`)
 constructs core values from surface text without checking depth, so a
