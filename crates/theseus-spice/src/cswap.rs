@@ -554,6 +554,22 @@ pub fn cell_netlist(
         src_wires.push((format!("r{sig}"), wires));
     }
 
+    // Every source-driven node starts at its own t = 0 value. `tran ... uic`
+    // starts any node without an `.ic` at 0 V, so without these lines the
+    // bulk bias, φ2 and every mirror gate line step 0 → VDD in the first
+    // timestep, and that step couples through the PMOS junction and overlap
+    // capacitances onto the floating data wires and internal nodes. Measured
+    // at rung 1 on R1: +0.12 V on an output rail, +0.37 V on its mirror and
+    // +0.73 V on a 5 fF internal node, before any token arrives. A wire
+    // keeps that charge until its line is first connected to a clock, so a
+    // line that has never pulsed read 0.23 V where it should rest at 0.
+    l.push(format!(".ic V(vdd)={vdd:.4} V(p0)=0.0000 V(p2)={vdd:.4}"));
+    for (_, wires) in &src_wires {
+        for w in wires {
+            l.push(format!(".ic V({w}p)=0.0000 V({w}m)={vdd:.4}"));
+        }
+    }
+
     // A full CMOS TG between nodes `x` and `y`, gated by token line `gate`
     // (NMOS ← rail, PMOS ← mirror; rest-off). W = 4/8 µm, L = [`TG_L_UM`].
     // Rung-1 reality this geometry buys and pays for: unlike the always-on
