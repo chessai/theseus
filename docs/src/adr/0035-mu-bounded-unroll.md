@@ -52,6 +52,21 @@ and restored after lowering so sibling occurrences are unaffected. An
 un-annotated type name continues to use `DEFAULT_UNROLL_DEPTH`. Conformance
 program 0021 exercises the annotation end-to-end.
 
+## Follow-up: typing is depth-aware
+The Decision's last bullet relied on coverage alone to reject a
+depth-escaping iso. That is not enough: `(Succ a, b) <-> (a, Succ b)` over
+`Nat * Nat` covers both columns and sends `(1, 3)` to `(0, 4)`, because
+typing compared a variable's occurrences by lowered *surface* type and so
+identified `Nat` at different unroll depths. The typing stage now walks a
+pattern with the same per-path budget lowering spends (`Env::unroll`,
+shared with `Env::lower`): a variable has one *core* type across a clause,
+and a constructor at a position past the cutoff (core type `0`) is
+ill-typed. Both are `T0102` (diagnostics 0012, 0013); still no new
+diagnostic code. Successor is now rejected at typing; coverage (`T0301`)
+remains the check for an image that misses a value. See
+`design/mu-types.md` §Diagnostics at the depth boundary and
+`theory/coverage-bijectivity.md` §Typing gap, closed.
+
 ## Alternatives rejected
 Core `Mu`/`Fold` variants now (fattens core before ADR-0009's primitives
 are designed, and every backend would need cases it cannot lower);

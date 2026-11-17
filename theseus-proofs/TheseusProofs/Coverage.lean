@@ -28,8 +28,8 @@ WHAT IS MODELLED. The checker's *core* view of a clause table, i.e. what
   * `Clause.WellTyped` -- the typing condition of the *specification*
     (`docs/src/spec/static-semantics.md` §Typing, T0102): every sub-pattern at
     the type its position demands, every variable at one core type. This is
-    the hypothesis the written proof uses. It is NOT what `typing.rs`
-    enforces -- see "KNOWN GAP" below;
+    the hypothesis the written proof uses. `typing.rs` checks it against
+    core types too, since the fix recorded under "TYPING GAP (CLOSED)" below;
   * `LPat`, `LPat.matchBind` / `LPat.instantiate` / `LPat.matchesVal`,
     `applyExt`, `LAccepted` -- the label-aware counterparts
     (`match_bind_extended_inner`, `instantiate_extended`,
@@ -46,25 +46,34 @@ denoted intrinsically (`denoteTy : Ty → Type`). The checker instead works on
 `0` exists (it is what μ-type unrolling bottoms out in). Mirroring the checker
 needs the untyped `Val` + `enumerate`, so this file has its own `Ty`.
 
-KNOWN GAP between `Clause.WellTyped` and the shipped `typing.rs` (found while
-reviewing this file; both reproduced with `theseus-cli check`, which prints
-`ok`). In each case the Rust matchers, linearity and coverage agree with the
-Lean ones; only typing differs, and the accepted table is not a bijection:
+TYPING GAP (CLOSED) between `Clause.WellTyped` and the shipped `typing.rs`.
+Reviewing this file turned up two tables that `theseus-cli check` accepted
+(`ok`). In each case the Rust matchers, linearity and coverage agreed with the
+Lean ones; only typing differed, and the accepted table is not a bijection:
 
-  1. `type_admits_ctor` admits a constructor of a named type directly at an
+  1. `typing.rs` admitted a constructor of a named type directly at an
      anonymous sum type, while the matcher uses the constructor's path inside
-     its own type. `iso h : Bit + Bit <-> Bit | O <-> O | I <-> I` is accepted
+     its own type. `iso h : Bit + Bit <-> Bit | O <-> O | I <-> I` was accepted
      and sends four values onto two. In core terms the left patterns are
      `inl ()`, `inr ()` at type `(1+1)+(1+1)`: not `Pat.HasTy`.
-  2. A variable's occurrences are compared by *lowered surface type*, which
+  2. A variable's occurrences were compared by *lowered surface type*, which
      for a recursive type identifies positions at different unroll depths.
      `iso f : Nat * Nat <-> Nat * Nat | (Zero, b) <-> (b, Zero)
-     | (Succ a, b) <-> (a, Succ b)` is accepted and sends typed values outside
+     | (Succ a, b) <-> (a, Succ b)` was accepted and sends typed values outside
      the truncated type. In core terms `a` occurs at two different types.
 
-So the theorems below are about the specified checks; they certify the shipped
-checker only on programs where `typing.rs` and the specification agree (no
-bare constructor at an anonymous sum type, no recursive types).
+`typing.rs` now types every sub-pattern against the core type of its position,
+as `Pat.HasTy` does, and rejects both with T0102 (conformance diagnostics
+`0011-ctor-at-sum`, `0012-mu-depth-crossing`): a constructor is admitted only
+at its own named type, and the typing walk carries the μ-unroll budget, so a
+variable is compared by core type. The same walk rejects a constructor at a
+position past the μ-cutoff (core type `0`), a third table of the same family
+(`0013-mu-cutoff-ctor`). The two tables stay below as `Fixtures.sumCtor` and
+`Fixtures.muEscape`: they show the typing hypothesis is load-bearing.
+
+The correspondence between `typing.rs` and `Clause.WellTyped` is still by
+inspection and tests, like the rest of this transcription, and it covers the
+modelled fragment only (numeric literal patterns are outside it).
 
 WHAT IS PROVED (all under the axiom guard, `AxiomGuard.lean`):
 
@@ -216,8 +225,8 @@ def vars : Pat → List Var
     typing condition (`spec/static-semantics.md` §Typing), over core types.
     Every sub-pattern is at the type its position demands and every occurrence
     of `x` is at the core type `Γ x`. `check_pattern` in `typing.rs` has this
-    shape (a `var_types` map, T0102 on a clash) but is weaker in two places;
-    see "KNOWN GAP" in the file header. -/
+    shape (a `var_types` map of core types, T0102 on a clash); it was weaker
+    in two places, see "TYPING GAP (CLOSED)" in the file header. -/
 inductive HasTy (Γ : Var → Ty) : Pat → Ty → Prop
   | var {x : Var} {T : Ty} : Γ x = T → HasTy Γ (.var x) T
   | unit : HasTy Γ .unit .unit
@@ -531,7 +540,7 @@ abbrev swap (c : Clause) : Clause := Prod.swap c
 
 /-- Typing, as specified (T0102): the left pattern has type `A`, the right
     pattern has type `B`, and each variable has one core type across both
-    sides. Stronger than what `typing.rs` checks; see the file header. -/
+    sides. `typing.rs` used to check less; see the file header. -/
 def WellTyped (A B : Ty) (c : Clause) : Prop :=
   ∃ Γ : Var → Ty, c.1.HasTy Γ A ∧ c.2.HasTy Γ B
 
@@ -1760,12 +1769,14 @@ theorem spin_accepted : LAccepted spin [.prod bit (.prod bit bit)] bit bit := by
 
 theorem stuck_rejected : ¬LAccepted stuck [bit] bit bit := by decide
 
-/-! ### Typing is load-bearing: the two tables `typing.rs` wrongly accepts
+/-! ### Typing is load-bearing: the two tables `typing.rs` wrongly accepted
 
-Both tables below pass `theseus-cli check` today. In the Lean model they pass
-linearity and coverage on both columns -- so the Rust and Lean matchers agree
-on them -- but they are not `WellTyped`, and they are not bijections. They are
-the "KNOWN GAP" of the file header, as kernel-checked facts. -/
+Both tables below passed `theseus-cli check` until `typing.rs` was fixed; it
+now rejects them with T0102 (conformance diagnostics `0011`, `0012`). In the
+Lean model they pass linearity and coverage on both columns -- so the Rust and
+Lean matchers agree on them -- but they are not `WellTyped`, and they are not
+bijections. They are the "TYPING GAP (CLOSED)" of the file header, as
+kernel-checked facts. -/
 
 /-- `iso h : Bit + Bit <-> Bit | O <-> O | I <-> I`, in core terms. The
     constructor `O` of `Bit` is used at the anonymous sum `Bit + Bit`, where

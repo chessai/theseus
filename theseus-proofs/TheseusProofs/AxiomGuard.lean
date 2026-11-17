@@ -112,7 +112,7 @@ elab "#assert_only_base_axioms " : command => do
     ``Theseus.Coverage.Fixtures.erasure_rejected,
     ``Theseus.Coverage.Fixtures.spin_accepted,
     ``Theseus.Coverage.Fixtures.stuck_rejected,
-    -- Coverage: the two tables `typing.rs` wrongly accepts (typing is load-bearing)
+    -- Coverage: the two tables `typing.rs` wrongly accepted (typing is load-bearing)
     ``Theseus.Coverage.Fixtures.sumCtor_untyped_not_injective,
     ``Theseus.Coverage.Fixtures.muEscape_untyped_escapes ]
   for t in targets do

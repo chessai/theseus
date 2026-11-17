@@ -37,7 +37,8 @@ replayed. **Not mechanized:** the per-tag `T0301`/`T0303` filing of witnesses
 `FiniteTrace.lean`); label-carrier inference (labels are modelled by index,
 with their carriers given); and scope items 1, 3 and 6 below, which remain
 inputs. The typing gap between the specification and the shipped `typing.rs`
-recorded in `theory/coverage-bijectivity.md` ("Known gap") applies here too.
+recorded in `theory/coverage-bijectivity.md` ("Typing gap, closed") is closed
+here too: a label's arguments are typed against the core type of its carrier.
 
 Scope: the finite fragment (finite label carriers, no guards), matching
 ADR-0009's v0.1 core (Π + `trace`) and ADR-0009's ruling that "fold clause
