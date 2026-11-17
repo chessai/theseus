@@ -1,3 +1,4 @@
 import TheseusProofs.FiniteTrace
 import TheseusProofs.Reversibility
+import TheseusProofs.Coverage
 import TheseusProofs.AxiomGuard
