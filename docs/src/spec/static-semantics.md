@@ -54,6 +54,10 @@ clause. Three consequences, each `T0102`:
 - A constructor at a position past the unroll cutoff, where the core type is
   `0`, is mis-typed (diagnostic `0013`).
 
+A numeric literal `k` is well-typed only at a builtin `U<n>` and only for
+`k < 2^n` (diagnostic `0014`): an out-of-range literal matches no value, so
+Coverage cannot reject it.
+
 ### 3. Linearity -- `T0201`, `T0202`
 
 For each clause, over the variables of `lᵢ` and of `rᵢ`:

@@ -175,6 +175,10 @@ fn print_pattern(p: &Pattern, out: &mut String) {
 /// parentheses so re-parsing keeps them as a single argument.
 fn print_atom_pattern(p: &Pattern, out: &mut String) {
     match p {
+        // A source-level paren wrapper is transparent, so decide on what it
+        // wraps: `Succ (Succ Zero)` parses as `Ctor(Succ, [Paren(Ctor ..)])`
+        // and must not print as the curried `Succ Succ Zero`.
+        Pattern::Paren(inner, _) => print_atom_pattern(inner, out),
         Pattern::Ctor(_, args, _) if !args.is_empty() => {
             out.push('(');
             print_pattern(p, out);

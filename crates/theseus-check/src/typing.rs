@@ -6,8 +6,9 @@
 //! named type `T` that declares `C`, that occurrence of `T` is not past the
 //! μ-cutoff, and the argument patterns match `C`'s payload type; a tuple
 //! pattern `(p1, p2)` against a product type `A * B`; a var pattern against
-//! any type; a `Nat` literal against a `U<n>` type. Mismatches are `T0102`
-//! with the offending `side:` and 1-indexed `clauses:`.
+//! any type; a `Nat` literal `k` against a builtin `U<n>` type with
+//! `k < 2^n`. Mismatches are `T0102` with the offending `side:` and
+//! 1-indexed `clauses:`.
 //!
 //! Typing is against the **core** type at each position, which is what the
 //! matchers and coverage see (`Clause.WellTyped` in
@@ -30,7 +31,7 @@ use theseus_syntax::ast::{Decl, IsoBody, IsoDecl, Pattern, Program, Type as Surf
 
 use crate::diagnostics::{Code, Diagnostic, Side};
 use crate::elaborate;
-use crate::env::{Env, Fuel};
+use crate::env::{self, Env, Fuel};
 
 /// Run the typing check over a whole program.
 pub fn check(program: &Program, env: &Env) -> Vec<Diagnostic> {
@@ -212,9 +213,10 @@ fn check_pattern(
                 }
             }
         }
-        Pattern::Nat(_, _) => {
-            // Nat literals are well-typed only at U<n> types.
-            if !is_un_type(ty) {
+        Pattern::Nat(k, _) => {
+            // A literal is well-typed only at a builtin `U<n>` and within
+            // its range.
+            if !un_admits_literal(ty, *k) {
                 diags.push(
                     Diagnostic::new(Code::T0102, pat.span())
                         .with_side(side)
@@ -473,10 +475,22 @@ fn ctor_position<'a>(ty: &'a SurfType, type_name: &str) -> Option<&'a UpperName>
     }
 }
 
-/// Is this surface type a `U<n>` builtin numeric type?
-fn is_un_type(ty: &SurfType) -> bool {
-    let ty = peel_paren_type(ty);
-    matches!(ty, SurfType::Name(n) if n.text.strip_prefix('U').is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit())))
+/// Is the numeric literal `k` well-typed at this surface type? Only at a
+/// builtin `U<n>` (ADR-0017), and only for `k < 2^n`.
+///
+/// Both halves are load-bearing. The matchers read a literal as "the `k`-th
+/// enumerated value of the position's type", so an out-of-range literal
+/// matches no value and coverage cannot see it; as a right-hand side it has
+/// no image. `g : U1 <-> U1 | 2 <-> 0 | 0 <-> 1 | 1 <-> 2` covers both
+/// columns and sends `1` nowhere. The same table can be written over a
+/// user-declared type that only looks numeric (`type U3 = A | B`), so the
+/// name's shape is not enough: the type must be the builtin.
+fn un_admits_literal(ty: &SurfType, k: u128) -> bool {
+    let SurfType::Name(n) = peel_paren_type(ty) else {
+        return false;
+    };
+    // `checked_shr` is `None` for `n >= 128`, where every `u128` is in range.
+    env::parse_un_bits(&n.text).is_some_and(|bits| k.checked_shr(bits).is_none_or(|hi| hi == 0))
 }
 
 /// Peel off any Paren wrappers on a surface type.
@@ -566,6 +580,53 @@ mod tests {
             d.len() == 2 && at(Side::Left, 1) && at(Side::Right, 5),
             "expected T0102 at clause 1 left and clause 5 right only, got: {d:?}"
         );
+    }
+
+    #[test]
+    fn literal_out_of_range_reports_t0102() {
+        // `2` at `U1` matches nothing, so coverage cannot see it; as a
+        // right-hand side it sends `1` nowhere.
+        assert_fixture_t0102("0014-literal-out-of-range");
+
+        // The boundary at a wider type: `U2` admits exactly 0..=3.
+        let d = typing_only(check_src(
+            "iso g : U2 <-> U2\n\
+             | 3 <-> 4\n\
+             | x <-> x\n",
+        ));
+        assert_eq!(d.len(), 1, "{d:?}");
+        assert_eq!(d[0].side, Some(Side::Right));
+        assert_eq!(d[0].clauses, Some(vec![1]));
+    }
+
+    #[test]
+    fn literal_in_range_no_t0102() {
+        let d = typing_only(check_src(
+            "iso f : U1 * U2 <-> U1 * U2\n\
+             | (0, 0) <-> (1, 3)\n\
+             | (1, 3) <-> (0, 0)\n",
+        ));
+        assert!(d.is_empty(), "{d:?}");
+    }
+
+    #[test]
+    fn literal_at_user_type_named_like_un_reports_t0102() {
+        // `U3` is not a builtin (3 is not a power of two), so this is an
+        // ordinary two-constructor type. A literal there was read as "the
+        // k-th value", which reopens the out-of-range hole: `2` matches
+        // nothing.
+        let d = typing_only(check_src(
+            "type U3 = A | B\n\
+             iso g : U3 <-> U3\n\
+             | 2 <-> A\n\
+             | A <-> B\n\
+             | B <-> 2\n",
+        ));
+        assert_eq!(d.len(), 2, "{d:?}");
+        assert_eq!(d[0].side, Some(Side::Left));
+        assert_eq!(d[0].clauses, Some(vec![1]));
+        assert_eq!(d[1].side, Some(Side::Right));
+        assert_eq!(d[1].clauses, Some(vec![3]));
     }
 
     #[test]

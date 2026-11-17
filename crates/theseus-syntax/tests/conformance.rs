@@ -114,6 +114,36 @@ fn ac2_parse_pretty_roundtrip_is_identity() {
     assert!(checked >= 1);
 }
 
+#[test]
+fn ac2_roundtrip_keeps_parens_around_applied_ctor_argument() {
+    // An applied constructor (or label) in argument position parses as a
+    // transparent `Paren` around the application. Printing it without the
+    // parentheses gives `Succ Succ Zero`, which re-parses as `Succ` applied
+    // to two arguments.
+    let src = "type Nat = Zero | Succ Nat\n\
+               iso f : Nat <-> Nat\n\
+               | Succ (Succ Zero) <-> Succ ((Succ Zero))\n\
+               | Succ (Zero) <-> $l (Succ n) (Zero)\n\
+               | $l (Succ n) (Zero) <-> Zero\n";
+    let ast1 = parse(src).unwrap_or_else(|e| panic!("must parse: {e}"));
+    let printed = pretty_program(&ast1);
+    assert!(
+        printed.contains("| Succ (Succ Zero) <-> Succ (Succ Zero)\n"),
+        "nested applied constructor lost its parentheses:\n{printed}"
+    );
+    assert!(
+        printed.contains("| Succ Zero <-> $l (Succ n) Zero\n"),
+        "parentheses must stay only around applied arguments:\n{printed}"
+    );
+    let ast2 = parse(&printed)
+        .unwrap_or_else(|e| panic!("re-parsing pretty output failed: {e}\n{printed}"));
+    assert_eq!(
+        normalize_program(&ast1),
+        normalize_program(&ast2),
+        "parse ∘ pretty ≡ id failed\n--- printed ---\n{printed}"
+    );
+}
+
 // -------- AC2: precedence consequences from grammar.md --------
 
 const ZERO: Span = Span { start: 0, end: 0 };

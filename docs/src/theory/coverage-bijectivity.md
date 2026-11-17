@@ -95,10 +95,15 @@ So within the modelled fragment the shipped checker now enforces the theorem's
 hypothesis, and the two Lean fixtures describe tables it rejects. Two limits
 on that statement. The agreement of `typing.rs` with `Clause.WellTyped` is by
 inspection and tests, like the rest of the transcription (next paragraph). And
-numeric literal patterns are outside the model: `typing.rs` checks that a
-literal sits at a `U<n>` type but not that it is within the type's range, so
-`iso g : U1 <-> U1 | 2 <-> 0 | 0 <-> 1 | 1 <-> 2` passes `check` although
-clause 3 has no image.
+numeric literal patterns are outside the model, so the theorem says nothing
+about them. They had the same hole as the μ-cutoff: the matchers read a
+literal as "the `k`-th value of the position's type", so an out-of-range
+literal matches nothing, and
+`iso g : U1 <-> U1 | 2 <-> 0 | 0 <-> 1 | 1 <-> 2` passed `check` although
+clause 3 has no image. `typing.rs` now admits a literal `k` only at a builtin
+`U<n>` with `k < 2^n` (diagnostic `0014`), which is what the spec's "every
+numeric literal within its stdlib type" asks for; that this suffices for
+literal tables is argued by the analogy with the cutoff, not proved.
 
 **Not mechanized.** Nothing links the Lean model to the Rust source -- the
 correspondence is by inspection, backed by replaying conformance fixtures

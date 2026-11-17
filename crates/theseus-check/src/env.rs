@@ -427,7 +427,7 @@ fn is_builtin_type(name: &str) -> bool {
 
 /// Parse a `U<n>` name and return the bit-width `n` if it is a valid builtin
 /// numeric type (a power of two ≥ 1).
-fn parse_un_bits(name: &str) -> Option<u32> {
+pub(crate) fn parse_un_bits(name: &str) -> Option<u32> {
     let digits = name.strip_prefix('U')?;
     if digits.is_empty() {
         return None;
