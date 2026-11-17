@@ -13,6 +13,6 @@ const ADDER_SRC: &str = include_str!("../../../conformance/programs/0024-adder.t
 
 #[test]
 fn surface_ha4_lowers_and_agrees_with_eval() {
-    let iso = elaborate_with_prelude(ADDER_SRC, "ha4");
+    let iso = elaborate(ADDER_SRC, "ha4");
     assert_lowering_agrees(&iso, 100_000, None);
 }

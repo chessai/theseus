@@ -1,5 +1,4 @@
 -- Conformance P0013 (dialect: synthesizable)
-type Bit = O | I
 
 iso twice : Bit <-> Bit
 = n ; n

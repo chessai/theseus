@@ -1,7 +1,6 @@
 -- Conformance 0025 (dialect: software — ADR-0043 M-B bare-sum test)
 -- swapMaybe as a bare-sum program: a Plus on MaybeBit, exercising
 -- the tag+payload representation and SWAPBR skip-block codegen.
-type Bit = O | I
 type MaybeBit = Nothing | Just Bit
 
 iso swapMaybe : MaybeBit <-> MaybeBit

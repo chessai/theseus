@@ -2,7 +2,6 @@
 -- `Nat@1` has the single inhabitant `Zero`; under `Succ` its payload has the
 -- empty core type `0`, so `Succ Zero` matches no value. Both columns are
 -- covered -- yet clause 2 sends `Zero` to `Succ Zero`, outside the type.
-type Nat = Zero | Succ Nat
 
 iso g : Nat@1 <-> Nat@1
 | Succ Zero <-> Zero

@@ -1,5 +1,4 @@
 -- Conformance P0006 (dialect: synthesizable)
-type Bit = O | I
 
 iso tof : (Bit, Bit, Bit) <-> (Bit, Bit, Bit)
 | (O, b, t) <-> (O, b, t)

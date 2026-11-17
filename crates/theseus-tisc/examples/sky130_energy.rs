@@ -63,7 +63,7 @@ fn fib8_source(n_steps: usize) -> String {
 }
 
 fn elaborate(src: &str, name: &str) -> Result<Iso, Box<dyn Error>> {
-    let program = theseus_syntax::parse(src).map_err(|e| format!("parse: {e:?}"))?;
+    let program = theseus_check::parse(src).map_err(|e| format!("parse: {e:?}"))?;
     let diags = theseus_check::check(&program);
     if !diags.is_empty() {
         return Err(format!("check: {diags:?}").into());

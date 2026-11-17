@@ -1,5 +1,4 @@
 -- D0008: label state $go I never eliminated; plain I never produced.
-type Bit = O | I
 
 iso stuck : Bit <-> Bit
 | b <-> $go b

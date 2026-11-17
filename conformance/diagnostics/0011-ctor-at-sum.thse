@@ -1,6 +1,5 @@
 -- D0011: a named type's constructor at an anonymous sum. `O`/`I` are typed
 -- at `Bit`, not at `Bit + Bit`; admitted, the table would send 4 values onto 2.
-type Bit = O | I
 
 iso h : Bit + Bit <-> Bit
 | O <-> O

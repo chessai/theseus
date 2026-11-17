@@ -62,28 +62,13 @@ pub fn extend_with_ancilla(data_bits: &[bool], ancillas: &[bool]) -> Vec<bool> {
 }
 
 /// Elaborate a Theseus source program to the named iso (parse -> check ->
-/// resolve -> elaborate), without the implicit prelude.
+/// resolve -> elaborate), with the implicit prelude merged in.
 pub fn elaborate(src: &str, iso_name: &str) -> Iso {
-    let program = theseus_syntax::parse(src).expect("parse");
+    let program = theseus_check::parse(src).expect("parse");
     let diags = theseus_check::check(&program);
     assert!(diags.is_empty(), "check diagnostics: {diags:?}");
     let env = theseus_check::env::resolve(&program);
     let isos = theseus_check::elaborate::elaborate_program(&program, &env);
-    isos.get(iso_name)
-        .unwrap_or_else(|| panic!("iso {iso_name:?} not found in elaboration"))
-        .clone()
-        .unwrap_or_else(|e| panic!("elaboration of {iso_name:?} failed: {e:?}"))
-}
-
-/// Like [`elaborate`], but merges the implicit prelude (`with_prelude`)
-/// before checking -- for programs that use prelude combinators.
-pub fn elaborate_with_prelude(src: &str, iso_name: &str) -> Iso {
-    let program = theseus_syntax::parse(src).expect("parse");
-    let merged = theseus_check::prelude::with_prelude(&program);
-    let diags = theseus_check::check(&merged);
-    assert!(diags.is_empty(), "check diagnostics: {diags:?}");
-    let env = theseus_check::env::resolve(&merged);
-    let isos = theseus_check::elaborate::elaborate_program(&merged, &env);
     isos.get(iso_name)
         .unwrap_or_else(|| panic!("iso {iso_name:?} not found in elaboration"))
         .clone()

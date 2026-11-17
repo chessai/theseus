@@ -1,7 +1,6 @@
 -- Conformance P0030 (dialect: synthesizable)
 -- A bijection between two DIFFERENT types of equal size: the sum tag becomes
 -- the first bit of a pair. Both columns are exhaustive and non-overlapping.
-type Bit = O | I
 type Either = L Bit | R Bit
 
 iso retag : Either <-> (Bit, Bit)

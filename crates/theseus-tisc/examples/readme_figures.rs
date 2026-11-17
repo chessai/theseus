@@ -385,7 +385,7 @@ fn price_benchmark(
     input: &Value,
     db: &CharDb,
 ) -> Result<BenchResult, Box<dyn Error>> {
-    let program = theseus_syntax::parse(src).map_err(|e| format!("parse: {e:?}"))?;
+    let program = theseus_check::parse(src).map_err(|e| format!("parse: {e:?}"))?;
     let env = theseus_check::env::resolve(&program);
     let isos = theseus_check::elaborate::elaborate_program(&program, &env);
     let iso = isos

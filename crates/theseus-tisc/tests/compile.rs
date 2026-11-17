@@ -46,7 +46,7 @@ const SHIFT_SRC: &str = include_str!("../../../conformance/programs/0020-unfold-
 // ── Surface → core Iso (same pattern as fib_lowering.rs) ─────────────
 
 fn elaborate(src: &str, iso_name: &str) -> Iso {
-    let program = theseus_syntax::parse(src).expect("parse");
+    let program = theseus_check::parse(src).expect("parse");
     let diags = theseus_check::check(&program);
     assert!(diags.is_empty(), "check diagnostics: {diags:?}");
     let env = theseus_check::env::resolve(&program);
