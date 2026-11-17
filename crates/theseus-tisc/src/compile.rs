@@ -5088,6 +5088,208 @@ pub fn run_on_cpu<E: std::fmt::Debug>(
     Ok(unmarshal(&final_state, &out_ty))
 }
 
+// ── Forward-then-backward run of a compiled program ────────────────
+
+/// Which simulated machine a round trip runs on. Mirrors [`run_on_cpu`]'s
+/// choice, so the forward half is the same run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CpuMachine {
+    /// The CPU-only ring `step_with(layout, rom)` at the program's own
+    /// auto-derived layout: a program that never touches memory.
+    Cpu(Layout),
+    /// The composite `system_step(rom)` on `((CpuState, MemState), BusMsg)` at
+    /// the default layout: a program that uses memory (`MEXCH`).
+    System,
+}
+
+impl CpuMachine {
+    /// One forward machine cycle for `rom`.
+    fn step_iso(&self, rom: &[u32]) -> Iso {
+        match self {
+            CpuMachine::Cpu(layout) => crate::step::step_with(layout, rom),
+            CpuMachine::System => crate::step::system_step(rom),
+        }
+    }
+
+    fn encode(&self, s: &StateVals) -> Value {
+        match self {
+            CpuMachine::Cpu(layout) => s.encode_with(layout),
+            CpuMachine::System => encode_system(s),
+        }
+    }
+
+    fn decode(&self, v: &Value) -> StateVals {
+        match self {
+            CpuMachine::Cpu(layout) => StateVals::decode_with(layout, v),
+            CpuMachine::System => decode_system(v),
+        }
+    }
+
+    /// Size of the PC address space the parked PC must stay inside.
+    fn pc_addr_space(&self) -> usize {
+        match self {
+            CpuMachine::Cpu(layout) => layout.pc_addr_space(),
+            CpuMachine::System => PC_ADDR_SPACE,
+        }
+    }
+}
+
+/// The complete machine-state history of a compiled program run forwards for
+/// its whole step budget and then backwards, by the adjoint machine, to the
+/// start. Produced by [`run_on_cpu_round_trip`].
+#[derive(Clone, Debug)]
+pub struct CpuRoundTrip {
+    /// The compiled ROM.
+    pub instrs: Vec<Instr>,
+    /// The machine the program ran on.
+    pub machine: CpuMachine,
+    /// The layout that machine was built at (the per-program layout for
+    /// [`CpuMachine::Cpu`], the default layout for [`CpuMachine::System`]).
+    pub layout: Layout,
+    /// The static step budget `B` (the program's WCET).
+    pub budget: usize,
+    /// `forward[t]` is the machine state after `t` forward steps.
+    /// `budget + 1` entries; `forward[0]` is the marshalled input.
+    pub forward: Vec<StateVals>,
+    /// `backward[t]` is the machine state after `t` steps of the adjoint
+    /// machine starting from `forward[budget]`. `budget + 1` entries.
+    pub backward: Vec<StateVals>,
+    /// The program's output, unmarshalled from `forward[budget]`.
+    pub output: Value,
+    /// The input recovered by the backward run, unmarshalled from
+    /// `backward[budget]`.
+    pub recovered_input: Value,
+}
+
+/// Apply `cycle` (a machine cycle or its adjoint) `steps` times from `start`,
+/// recording every state. Returns `steps + 1` states.
+fn trace_machine<E: std::fmt::Debug>(
+    machine: &CpuMachine,
+    cycle: &Iso,
+    start: &StateVals,
+    steps: usize,
+    eval_fn: &impl Fn(&Iso, Value, &mut u64) -> Result<Value, E>,
+) -> Result<Vec<StateVals>, CompileError> {
+    let mut fuel = ((steps as u64) * 500_000_000u64).max(8_000_000_000);
+    let mut states = Vec::with_capacity(steps + 1);
+    states.push(start.clone());
+    let mut cur = machine.encode(start);
+    for _ in 0..steps {
+        cur = eval_fn(cycle, cur, &mut fuel)
+            .map_err(|e| CompileError::Deferred(format!("CPU eval failed: {e:?}")))?;
+        states.push(machine.decode(&cur));
+    }
+    Ok(states)
+}
+
+/// Run `steps` steps of the **adjoint** machine from a full machine state
+/// `end`, recording every state. This is reverse execution: no instruction is
+/// "undone" by a separate mechanism -- the same machine-cycle iso is driven
+/// through its adjoint (ADR-0034 D2), so `PC` walks back down the ROM.
+pub fn run_rom_backward<E: std::fmt::Debug>(
+    machine: &CpuMachine,
+    instrs: &[Instr],
+    end: &StateVals,
+    steps: usize,
+    eval_fn: impl Fn(&Iso, Value, &mut u64) -> Result<Value, E>,
+) -> Result<Vec<StateVals>, CompileError> {
+    if let CpuMachine::Cpu(_) = machine {
+        assert!(
+            is_cpu_only(instrs),
+            "run_rom_backward: the CPU-only machine cannot run MEXCH"
+        );
+        assert!(
+            end.mem.iter().all(|&m| m == 0),
+            "run_rom_backward: the CPU-only machine needs quiescent memory"
+        );
+    }
+    let rom =
+        assemble(instrs).map_err(|e| CompileError::Deferred(format!("assemble failed: {e}")))?;
+    let uncycle = Iso::sym(machine.step_iso(&rom));
+    trace_machine(machine, &uncycle, end, steps, &eval_fn)
+}
+
+/// Compile `iso`, run it **forwards** on the simulated CPU for its whole step
+/// budget `B`, then run the **adjoint machine** for `B` steps from the
+/// resulting machine state, recording every state both ways.
+///
+/// The forward half is [`run_on_cpu`]'s run: same compiled ROM, same choice of
+/// machine (the CPU-only ring at the auto-derived layout, or the composite
+/// `system_step` for a program that uses memory), same park-safety and
+/// terminal checks. The backward half makes no use of the forward trace: it
+/// starts from the final machine state alone. Because the machine cycle is a
+/// bijection on the whole state (ADR-0034 D4), `backward[t]` must equal
+/// `forward[B - t]` field for field, and in particular `backward[B]` is the
+/// initial state -- callers assert it.
+pub fn run_on_cpu_round_trip<E: std::fmt::Debug>(
+    iso: &Iso,
+    input: &Value,
+    eval_fn: impl Fn(&Iso, Value, &mut u64) -> Result<Value, E>,
+) -> Result<CpuRoundTrip, CompileError> {
+    let (in_ty, out_ty) = theseus_core::type_of(iso)
+        .map_err(|e| CompileError::Deferred(format!("type error: {e:?}")))?;
+
+    let lowered = compile_with_metadata(iso)?;
+    let budget = lowered.wcet();
+    let s_max_val = lowered.s_max();
+    let init = marshal(input, &in_ty);
+
+    let cpu_only = is_cpu_only(&lowered.instrs) && init.mem.iter().all(|&m| m == 0);
+    let (machine, layout) = if cpu_only {
+        let layout = derive_full_layout_from_lowered(iso, &lowered);
+        (CpuMachine::Cpu(layout), layout)
+    } else {
+        // As `run_rom_on_cpu`: there is no wide (`w_br = 16`) composite
+        // machine, so a two-byte come-from with memory is refused, not run
+        // on the narrow netlist.
+        let rom_wide = lowered
+            .instrs
+            .iter()
+            .any(|i| matches!(i, Instr::Swapbr { rs, .. } if *rs != 0));
+        if rom_wide {
+            return Err(CompileError::Deferred(
+                "run_on_cpu_round_trip: a wide (two-byte come-from) loop with memory \
+                 has no composite machine to run on yet"
+                    .into(),
+            ));
+        }
+        (CpuMachine::System, Layout::default())
+    };
+    if budget + s_max_val > machine.pc_addr_space() {
+        return Err(CompileError::Deferred(format!(
+            "parked PC B+S_max={} exceeds PC address space {}",
+            budget + s_max_val,
+            machine.pc_addr_space()
+        )));
+    }
+
+    let rom = assemble(&lowered.instrs)
+        .map_err(|e| CompileError::Deferred(format!("assemble failed: {e}")))?;
+    let cycle = machine.step_iso(&rom);
+    let forward = trace_machine(&machine, &cycle, &init, budget, &eval_fn)?;
+
+    let end = &forward[budget];
+    if end.br != 0 || end.scratch[0] != 0 || end.scratch[1] != 0 {
+        return Err(CompileError::Deferred(format!(
+            "terminal precondition violated (BR={}/s0={}/s1={} != 0)",
+            end.br, end.scratch[0], end.scratch[1]
+        )));
+    }
+
+    let backward = run_rom_backward(&machine, &lowered.instrs, end, budget, &eval_fn)?;
+
+    Ok(CpuRoundTrip {
+        output: unmarshal(end, &out_ty),
+        recovered_input: unmarshal(&backward[budget], &in_ty),
+        instrs: lowered.instrs,
+        machine,
+        layout,
+        budget,
+        forward,
+        backward,
+    })
+}
+
 // ── Fast direct TISC-1 simulator (M-B) ─────────────────────────────
 //
 // Direct byte-level interpretation of the TISC-1 instruction set,
