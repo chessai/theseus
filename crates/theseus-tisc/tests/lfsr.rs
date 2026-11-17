@@ -16,7 +16,7 @@ use theseus_tisc::compile::{compile, compile_with_metadata, marshal, run_on_cpu,
 const LFSR_SRC: &str = include_str!("../../../conformance/programs/0026-lfsr.thse");
 
 fn elaborate(src: &str, iso_name: &str) -> Iso {
-    let program = theseus_syntax::parse(src).expect("parse");
+    let program = theseus_check::parse(src).expect("parse");
     let diags = theseus_check::check(&program);
     assert!(diags.is_empty(), "check diagnostics: {diags:?}");
     let env = theseus_check::env::resolve(&program);

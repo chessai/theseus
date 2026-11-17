@@ -330,7 +330,7 @@ fn conformance_diagnostics() {
         // 0007-parse is a parse-error test -- parse will fail, can't run check.
         let src = fs::read_to_string(thse_path)
             .unwrap_or_else(|e| panic!("reading {}: {e}", thse_path.display()));
-        let prog = match theseus_syntax::parse(&src) {
+        let prog = match theseus_check::parse(&src) {
             Ok(p) => p,
             Err(_) => {
                 eprintln!("[skip] diag {stem}: parse error fixture (cannot run check)");

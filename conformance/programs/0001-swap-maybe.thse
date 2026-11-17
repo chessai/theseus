@@ -1,6 +1,5 @@
 -- Conformance 0001 (dialect: synthesizable)
 -- First program of the suite: total, finite, no labels.
-type Bit = O | I
 type MaybeBit = Nothing | Just Bit
 
 iso swapMaybe : MaybeBit <-> MaybeBit

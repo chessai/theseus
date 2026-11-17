@@ -4,7 +4,6 @@
 -- the same body: ⟨yᵢ, dᵢ₋₁⟩ = ⟨dᵢ, xᵢ⟩ walks the spine tail-to-head, giving
 -- ⟨[x₁ … xₖ], acc⟩ |-> ⟨[x₂ … xₖ, acc], x₁⟩ — a left shift through the
 -- accumulator (fold with the same body would shift the other way).
-type Bit = O | I
 type BitList = Nil | Cons (Bit * BitList)
 
 iso swp : Bit * Bit <-> Bit * Bit

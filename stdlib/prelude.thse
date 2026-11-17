@@ -1,4 +1,9 @@
--- Theseus standard prelude: implicit types and isos available in every program.
+-- Theseus standard prelude: implicit types, isos and prims available in every
+-- program. A program that declares one of these names itself keeps its own
+-- declaration and the prelude copy is dropped.
+--
+-- Do not declare a prelude `prim` at a type variable (`a * a`): that passes
+-- `check` but does not elaborate (a known gap, ADR-0047).
 
 type Bit = O | I
 type Nat = Zero | Succ Nat
@@ -20,3 +25,10 @@ iso toffoli : (Bit, Bit, Bit) <-> (Bit, Bit, Bit)
 | (I, O, t) <-> (I, O, t)
 | (I, I, O) <-> (I, I, I)
 | (I, I, I) <-> (I, I, O)
+
+-- Built-in primitives (ADR-0047). The key is width-parametric over W1..W8, but
+-- a `prim` declaration fixes one type, so the prelude name is fixed at W8. A
+-- program at another width declares its own, e.g.
+--   prim add_into : W4 * W4 <-> W4 * W4 = "theseus.arith.add_into"
+-- (which replaces this one) or the same line under a different name.
+prim add_into : W8 * W8 <-> W8 * W8 = "theseus.arith.add_into"

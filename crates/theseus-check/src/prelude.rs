@@ -4,6 +4,9 @@
 //! once per call to [`with_prelude`]. Structural dedup ensures that if a user
 //! program already declares a type or iso with the same name as a prelude
 //! declaration, the user's copy wins (the prelude copy is dropped).
+//!
+//! Callers normally go through [`crate::parse`], which parses source and merges
+//! the prelude in one step; `theseus_syntax::parse` is the no-prelude path.
 
 use std::collections::HashSet;
 

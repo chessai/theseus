@@ -3,7 +3,6 @@
 -- of a list, keep the tail. At depth D = 4 BitList lowers to the finite type
 -- 1 + (Bit × L₃) (15 inhabitants); elaboration synthesizes
 -- Plus(Id, Times(not, Id)) — no new core Iso/Type variants needed.
-type Bit = O | I
 type BitList = Nil | Cons (Bit * BitList)
 
 iso flipHead : BitList <-> BitList

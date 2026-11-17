@@ -65,7 +65,7 @@ fn main() {
         _ => panic!("usage: fib_round_trip [A B] [--json]"),
     };
 
-    let prog = theseus_syntax::parse(FIB8_SRC).expect("parse");
+    let prog = theseus_check::parse(FIB8_SRC).expect("parse");
     let diags = theseus_check::check(&prog);
     assert!(diags.is_empty(), "check diagnostics: {diags:?}");
     let env = resolve(&prog);

@@ -252,9 +252,6 @@ Additional checks layered on in `iter_lowering.rs`:
 File: `conformance/programs/0022-fib.thse`
 
 ```
-type Bit = O | I
-type Nat = Zero | Succ Nat
-
 iso swap2 : Bit * Bit <-> Bit * Bit
 | (a, b) <-> (b, a)
 

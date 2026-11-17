@@ -28,6 +28,17 @@ pub mod typing;
 pub use diagnostics::{Code, Diagnostic, Side};
 
 use theseus_syntax::ast::Program;
+use theseus_syntax::parser::ParseError;
+
+/// Parse `src` as a user program and merge the implicit prelude into it.
+///
+/// This is the entry point for turning source into a program to [`check`] or
+/// elaborate: every prelude name (`stdlib/prelude.thse`) the program does not
+/// declare itself is available. To load a program *without* the prelude, call
+/// [`theseus_syntax::parse`] directly.
+pub fn parse(src: &str) -> Result<Program, ParseError> {
+    Ok(prelude::with_prelude(&theseus_syntax::parse(src)?))
+}
 
 /// Run the full staged static-semantics judgment with global gating.
 ///

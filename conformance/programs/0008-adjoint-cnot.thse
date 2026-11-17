@@ -1,10 +1,5 @@
 -- Conformance P0008 (dialect: synthesizable)
-type Bit = O | I
-
-iso cnot : (Bit, Bit) <-> (Bit, Bit)
-| (O, b) <-> (O, b)
-| (I, O) <-> (I, I)
-| (I, I) <-> (I, O)
+-- `cnot` comes from the implicit prelude.
 
 iso uncnot : (Bit, Bit) <-> (Bit, Bit)
 = ~cnot

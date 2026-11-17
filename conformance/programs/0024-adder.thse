@@ -17,27 +17,8 @@
 --
 -- All routing uses adjacent-transposition primitives (asc/swapBit) following
 -- the fib_gen pattern. No dense truth tables.
-
-type Bit = O | I
-
--- Prelude gates (structural dedup drops these when the prelude is applied)
-iso notb : Bit <-> Bit
-| O <-> I
-| I <-> O
-
-iso swapBit : Bit * Bit <-> Bit * Bit
-| (a, b) <-> (b, a)
-
-iso cnot : Bit * Bit <-> Bit * Bit
-| (O, b) <-> (O, b)
-| (I, O) <-> (I, I)
-| (I, I) <-> (I, O)
-
-iso toffoli : (Bit, Bit, Bit) <-> (Bit, Bit, Bit)
-| (O, b, t) <-> (O, b, t)
-| (I, O, t) <-> (I, O, t)
-| (I, I, O) <-> (I, I, I)
-| (I, I, I) <-> (I, I, O)
+--
+-- `Bit`, `swapBit`, `cnot` and `toffoli` come from the implicit prelude.
 
 -- Bit identity (1-wire)
 iso idb : Bit <-> Bit

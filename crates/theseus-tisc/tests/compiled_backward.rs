@@ -28,7 +28,7 @@ const LFSR_SRC: &str = include_str!("../../../conformance/programs/0026-lfsr.ths
 
 /// Parse, check (must be clean), resolve, elaborate; return the named iso.
 fn elaborate(src: &str, iso: &str) -> Iso {
-    let prog = theseus_syntax::parse(src).expect("parse");
+    let prog = theseus_check::parse(src).expect("parse");
     let diags = theseus_check::check(&prog);
     assert!(diags.is_empty(), "check diagnostics: {diags:?}");
     let env = resolve(&prog);
