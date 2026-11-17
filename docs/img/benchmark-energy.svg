@@ -1,41 +1,65 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="520" viewBox="0 0 880 520" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
 <rect width="880" height="520" fill="#ffffff"/>
-<text x="78" y="30" font-size="18" font-weight="700" fill="#111111" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">Per-benchmark energy: reversible vs CMOS-equivalent</text>
-<text x="78" y="50" font-size="12" fill="#666666" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">compiled TISC-1 ROMs priced at t_ramp = 1e-6 s (log scale)</text>
+<text x="78" y="30" font-size="18" font-weight="700" fill="#111111" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">Whole-program energy on sky130</text>
+<text x="78" y="50" font-size="12" fill="#666666" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">compiled ROMs at T = 1e-6 s, the energy minimum (log scale)</text>
+<line x1="78" y1="427.252" x2="852" y2="427.252" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="410.435" x2="852" y2="410.435" stroke="#eeeeee" stroke-width="0.75"/>
 <line x1="78" y1="398.503" x2="852" y2="398.503" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="389.248" x2="852" y2="389.248" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="381.687" x2="852" y2="381.687" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="375.293" x2="852" y2="375.293" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="369.755" x2="852" y2="369.755" stroke="#eeeeee" stroke-width="0.75"/>
 <line x1="78" y1="364.87" x2="852" y2="364.87" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="341.007" x2="852" y2="341.007" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="322.497" x2="852" y2="322.497" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="307.373" x2="852" y2="307.373" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="294.586" x2="852" y2="294.586" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="283.51" x2="852" y2="283.51" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="273.74" x2="852" y2="273.74" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="331.752" x2="852" y2="331.752" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="314.935" x2="852" y2="314.935" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="303.003" x2="852" y2="303.003" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="293.748" x2="852" y2="293.748" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="286.187" x2="852" y2="286.187" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="279.793" x2="852" y2="279.793" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="274.255" x2="852" y2="274.255" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="269.37" x2="852" y2="269.37" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="236.252" x2="852" y2="236.252" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="219.435" x2="852" y2="219.435" stroke="#eeeeee" stroke-width="0.75"/>
 <line x1="78" y1="207.503" x2="852" y2="207.503" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="198.248" x2="852" y2="198.248" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="190.687" x2="852" y2="190.687" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="184.293" x2="852" y2="184.293" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="178.755" x2="852" y2="178.755" stroke="#eeeeee" stroke-width="0.75"/>
 <line x1="78" y1="173.87" x2="852" y2="173.87" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="150.007" x2="852" y2="150.007" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="131.497" x2="852" y2="131.497" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="116.373" x2="852" y2="116.373" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="103.586" x2="852" y2="103.586" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="92.51" x2="852" y2="92.51" stroke="#eeeeee" stroke-width="0.75"/>
-<line x1="78" y1="82.74" x2="852" y2="82.74" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="140.752" x2="852" y2="140.752" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="123.935" x2="852" y2="123.935" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="112.003" x2="852" y2="112.003" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="102.748" x2="852" y2="102.748" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="95.187" x2="852" y2="95.187" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="88.793" x2="852" y2="88.793" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="83.255" x2="852" y2="83.255" stroke="#eeeeee" stroke-width="0.75"/>
+<line x1="78" y1="78.37" x2="852" y2="78.37" stroke="#eeeeee" stroke-width="0.75"/>
 <line x1="78" y1="456" x2="852" y2="456" stroke="#d0d0d0" stroke-width="1"/>
-<text x="68" y="460" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-9</tspan></text><line x1="78" y1="265" x2="852" y2="265" stroke="#d0d0d0" stroke-width="1"/>
-<text x="68" y="269" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-8</tspan></text><line x1="78" y1="74" x2="852" y2="74" stroke="#d0d0d0" stroke-width="1"/>
-<text x="68" y="78" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-7</tspan></text><rect x="78" y="74" width="774" height="382" fill="none" stroke="#333333" stroke-width="1.25"/>
-<rect x="139.92" y="377.281" width="126.317" height="78.719" fill="#1b9e77" rx="2"/>
-<text x="203.078" y="372.281" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">2.58e-9</text>
-<rect x="276.763" y="81.864" width="126.317" height="374.136" fill="#d95f02" rx="2"/>
-<text x="339.922" y="76.864" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">9.10e-8</text>
-<text x="271.5" y="478" font-size="12.5" fill="#222222" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">fib (u8)</text>
-<rect x="526.92" y="441.009" width="126.317" height="14.991" fill="#1b9e77" rx="2"/>
-<text x="590.078" y="436.009" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">1.20e-9</text>
-<rect x="663.763" y="128.764" width="126.317" height="327.236" fill="#d95f02" rx="2"/>
-<text x="726.922" y="123.764" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">5.17e-8</text>
-<text x="658.5" y="478" font-size="12.5" fill="#222222" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">adder</text>
+<text x="68" y="460" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-10</tspan></text><line x1="78" y1="360.5" x2="852" y2="360.5" stroke="#d0d0d0" stroke-width="1"/>
+<text x="68" y="364.5" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-9</tspan></text><line x1="78" y1="265" x2="852" y2="265" stroke="#d0d0d0" stroke-width="1"/>
+<text x="68" y="269" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-8</tspan></text><line x1="78" y1="169.5" x2="852" y2="169.5" stroke="#d0d0d0" stroke-width="1"/>
+<text x="68" y="173.5" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-7</tspan></text><line x1="78" y1="74" x2="852" y2="74" stroke="#d0d0d0" stroke-width="1"/>
+<text x="68" y="78" font-size="12" fill="#333333" text-anchor="end" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">10<tspan dy="-6" font-size="9">-6</tspan></text><rect x="78" y="74" width="774" height="382" fill="none" stroke="#333333" stroke-width="1.25"/>
+<rect x="139.92" y="238.018" width="83.042" height="217.982" fill="#1b9e77" rx="2"/>
+<text x="181.441" y="233.018" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">1.92e-8</text>
+<rect x="229.979" y="398.595" width="83.042" height="57.405" fill="#66c2a5" rx="2"/>
+<text x="271.5" y="393.595" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">3.99e-10</text>
+<rect x="320.038" y="231.87" width="83.042" height="224.13" fill="#d95f02" rx="2"/>
+<text x="361.559" y="226.87" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">2.22e-8</text>
+<text x="271.5" y="478" font-size="12.5" fill="#222222" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">fib (u8), 10 steps</text>
+<rect x="526.92" y="261.857" width="83.042" height="194.143" fill="#1b9e77" rx="2"/>
+<text x="568.441" y="256.857" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">1.08e-8</text>
+<rect x="616.979" y="410.899" width="83.042" height="45.101" fill="#66c2a5" rx="2"/>
+<text x="658.5" y="405.899" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">2.97e-10</text>
+<rect x="707.038" y="245.597" width="83.042" height="210.403" fill="#d95f02" rx="2"/>
+<text x="748.559" y="240.597" font-size="10.5" fill="#222222" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">1.60e-8</text>
+<text x="658.5" y="478" font-size="12.5" fill="#222222" text-anchor="middle" font-weight="600" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">half-adder</text>
 <text x="22" y="265" font-size="13" fill="#333333" text-anchor="middle" transform="rotate(-90 22 265)" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">total energy (J)</text>
-<rect x="88" y="84" width="250" height="52" rx="6" fill="#ffffff" fill-opacity="0.96" stroke="#cccccc"/>
+<rect x="88" y="84" width="250" height="70" rx="6" fill="#ffffff" fill-opacity="0.96" stroke="#cccccc"/>
 <line x1="96" y1="101" x2="116" y2="101" stroke="#1b9e77" stroke-width="3"/>
-<text x="124" y="105" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">reversible (total)</text>
-<line x1="96" y1="119" x2="116" y2="119" stroke="#d95f02" stroke-width="3"/>
-<text x="124" y="123" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">CMOS-equivalent</text>
+<text x="124" y="105" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">reversible, whole machine</text>
+<line x1="96" y1="119" x2="116" y2="119" stroke="#66c2a5" stroke-width="3"/>
+<text x="124" y="123" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">reversible, active logic only</text>
+<line x1="96" y1="137" x2="116" y2="137" stroke="#d95f02" stroke-width="3"/>
+<text x="124" y="141" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">CMOS-equivalent</text>
 </svg>

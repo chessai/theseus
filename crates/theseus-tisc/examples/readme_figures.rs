@@ -5,16 +5,20 @@
 //! Run: `cargo run -p theseus-tisc --example readme_figures --release`
 //!
 //! Emits (into `docs/img/`):
-//!   * `cpu-money-plot.svg`  -- Figure 1: energy/step vs power-clock ramp,
-//!     reversible curves sliding below the flat CMOS 1/2 CV^2 floor (OFFLINE).
+//!   * `cpu-money-plot.svg`  -- Figure 1: energy per CPU step vs power-clock
+//!     period on **sky130**, against the CMOS-equivalent reference, with the
+//!     ideal-transistor curve for contrast (OFFLINE).
 //!   * `sky130-money-plot.svg` -- Figure 2: three device families on sky130
 //!     (ADIABATIC-TG / pFAL / static CMOS). Requires ngspice + the sky130 PDK;
 //!     SKIPPED with a note when unavailable.
-//!   * `benchmark-energy.svg` -- Figure 3: reversible vs CMOS-equivalent
-//!     energy per compiled benchmark program (OFFLINE).
+//!   * `benchmark-energy.svg` -- Figure 3: whole-program energy of compiled
+//!     benchmarks on **sky130** at the best period (OFFLINE).
 //!
-//! Figure 1 lowering takes a couple of minutes and some GB; figure 3 lowers
-//! one step-net per benchmark. The output is deterministic (no clock/random).
+//! Figures 1 and 3 are priced from the committed sky130 characterization
+//! database (`theseus_spice::chardb::sky130_measured`): our own dual-rail
+//! cells, built from sky130 primitive transistors and measured in ngspice,
+//! plus a static-CMOS reference gate in the same transistors at the same wire
+//! load. They need no simulator. The output is deterministic (no clock/random).
 
 use std::error::Error;
 use std::fs;
@@ -22,24 +26,34 @@ use std::path::Path;
 
 use theseus_core::{Iso, Value};
 use theseus_netlist::lower_iso;
-use theseus_spice::chardb::rung0_measured;
-use theseus_tisc::money_plot::{cmos_crossing_t_ramp, cpu_money_plot, CMOS_STATIC_E_PER_GATE_J};
-use theseus_tisc::step::step;
+use theseus_spice::chardb::{rung0_measured, sky130_measured, CharDb};
+use theseus_tisc::compile::{compile_with_metadata, derive_full_layout_from_lowered};
+use theseus_tisc::energy::rom_program_energy;
+use theseus_tisc::money_plot::cpu_money_plot;
+use theseus_tisc::step::{step, step_with};
 
 use svg::{bar_chart, log_log_chart, Annotation, BarGroup, BarValue, Series};
 
-/// Power-clock ramp / period axis, ~2 points/decade across the characterized
-/// [1e-8, 1e-5] s range (shared by every figure for comparability).
+/// Power-clock period axis for the ngspice-backed Figure 2, ~2 points/decade
+/// across [1e-8, 1e-5] s.
 const AXIS: [f64; 7] = [1e-8, 3.16e-8, 1e-7, 3.16e-7, 1e-6, 3.16e-6, 1e-5];
 
-/// Fixed reference ramp for the per-benchmark bar chart (Figure 3).
-const T_RAMP_REF: f64 = 1e-6;
+/// The ten periods the sky130 database was measured at (three per decade,
+/// 1e-8 s ..= 1e-5 s). Figures 1 and 3 sample exactly these, so every plotted
+/// point is a sum of measurements, not of interpolations.
+fn periods() -> Vec<f64> {
+    (0..=9).map(|i| 10f64.powf(-8.0 + i as f64 / 3.0)).collect()
+}
+
+/// Period for the per-benchmark bar chart (Figure 3): 1 µs, where the
+/// compiled machine's energy on sky130 is lowest.
+const T_REF: f64 = 1e-6;
 
 /// Colorblind-friendly palette (ColorBrewer Dark2 / RdBu accents).
 const C_REVERSIBLE: &str = "#1b9e77"; // strong teal -- full reversible step
 const C_REVERSIBLE_2: &str = "#66c2a5"; // lighter teal -- active-logic subset
 const C_CMOS: &str = "#d95f02"; // warm orange -- CMOS reference (dashed)
-const C_PRODUCTIVE: &str = "#7570b3"; // muted violet -- productive share
+const C_PRODUCTIVE: &str = "#7570b3"; // muted violet -- ideal-device contrast
 
 const OUT_DIR: &str = "docs/img";
 
@@ -51,23 +65,25 @@ const FIB8_STEPS: usize = 10;
 fn main() -> Result<(), Box<dyn Error>> {
     let out = Path::new(OUT_DIR);
     fs::create_dir_all(out)?;
-    let db = rung0_measured();
+    let sky130 = sky130_measured();
 
-    figure1_cpu_money_plot(out, &db)?;
+    figure1_cpu_money_plot(out, &sky130, &rung0_measured())?;
     figure2_sky130(out)?;
-    figure3_benchmarks(out, &db)?;
+    figure3_benchmarks(out, &sky130)?;
 
     Ok(())
 }
 
 // --------------------------------------------------------------------------
-// Figure 1 -- CPU money plot (OFFLINE): reversible energy/step slides below
-// the flat CMOS 1/2 CV^2 floor as the power-clock ramp lengthens.
+// Figure 1 -- CPU money plot (OFFLINE): energy per step on sky130 falls as
+// ~1/T, bottoms out where leakage takes over, and rises again; the same
+// machine on ideal transistors keeps falling.
 // --------------------------------------------------------------------------
 
 fn figure1_cpu_money_plot(
     out: &Path,
-    db: &theseus_spice::chardb::CharDb,
+    sky130: &CharDb,
+    ideal: &CharDb,
 ) -> Result<(), Box<dyn Error>> {
     // The reference ROM from `cpu_money_plot.rs`: `decode_execute` dominates the
     // step, so the exact program barely moves the machine-level energy.
@@ -76,64 +92,111 @@ fn figure1_cpu_money_plot(
         (0b101u32 << 25) | (1 << 20) | 0xFF, // reserved I-format opc (decodes None)
     ];
 
-    eprintln!("[fig1] lowering the TISC-1 step (~2 min, unbalanced)...");
+    eprintln!("[fig1] lowering the TISC step (unbalanced)...");
     let net = lower_iso(&step(&rom))?;
-    let plot = cpu_money_plot(&net, db, &AXIS).map_err(|e| format!("cpu_money_plot: {e:?}"))?;
+    let ts = periods();
+    let plot = cpu_money_plot(&net, sky130, &ts).map_err(|e| format!("cpu_money_plot: {e:?}"))?;
+    let plot_ideal =
+        cpu_money_plot(&net, ideal, &ts).map_err(|e| format!("cpu_money_plot ideal: {e:?}"))?;
 
-    let full: Vec<(f64, f64)> = plot
-        .full_step
+    let xy = |pts: &[theseus_tisc::money_plot::SweepPoint]| -> Vec<(f64, f64)> {
+        pts.iter().map(|p| (p.t_ramp, p.energy_j)).collect()
+    };
+    // The CMOS reference at each period: one measured static gate per active
+    // cell. It is flat to within a few percent.
+    let cmos: Vec<(f64, f64)> = ts
         .iter()
-        .map(|p| (p.t_ramp, p.energy_j))
+        .map(|&t| {
+            let per_gate = theseus_tisc::money_plot::cmos_energy_per_gate_j(sky130, t);
+            (t, plot.active_cells as f64 * per_gate)
+        })
         .collect();
-    let logic: Vec<(f64, f64)> = plot
-        .active_logic
-        .iter()
-        .map(|p| (p.t_ramp, p.energy_j))
-        .collect();
-
-    // The CMOS reference is T-independent: a flat line spanning the x-range.
-    let (xmin, xmax) = (AXIS[0], AXIS[AXIS.len() - 1]);
-    let cmos: Vec<(f64, f64)> = vec![(xmin, plot.cmos_ref_j), (xmax, plot.cmos_ref_j)];
 
     let series = vec![
         Series {
-            label: format!("reversible: full step ({} cells)", plot.active_cells),
+            label: "full step, sky130".to_string(),
             color: C_REVERSIBLE,
-            points: full.clone(),
+            points: xy(&plot.full_step),
             dashed: false,
             marker: true,
         },
         Series {
-            label: format!("reversible: active logic ({} R1 cells)", plot.r1_cells),
+            label: "active logic only, sky130".to_string(),
             color: C_REVERSIBLE_2,
-            points: logic,
+            points: xy(&plot.active_logic),
             dashed: false,
             marker: true,
         },
         Series {
-            label: "CMOS reference (1/2 CV^2)".to_string(),
+            label: format!("CMOS-equivalent ({} gates, same load)", plot.active_cells),
             color: C_CMOS,
-            points: cmos,
+            points: cmos.clone(),
+            dashed: true,
+            marker: false,
+        },
+        Series {
+            label: "full step, ideal transistors".to_string(),
+            color: C_PRODUCTIVE,
+            points: xy(&plot_ideal.full_step),
             dashed: true,
             marker: false,
         },
     ];
 
-    // Annotate the crossover: where the full-step curve dives below CMOS.
+    // Annotate the minimum of the sky130 full-step curve.
     let mut annotations = Vec::new();
-    if let Some(tc) = cmos_crossing_t_ramp(&plot.full_step, plot.cmos_ref_j) {
+    if let Some(min) = plot.full_step_minimum() {
+        let cmos_at_min = cmos
+            .iter()
+            .find(|(t, _)| (t / min.t_ramp - 1.0).abs() < 1e-9)
+            .map_or(plot.cmos_ref_j, |&(_, e)| e);
+        let active_at_min = plot
+            .active_logic
+            .iter()
+            .find(|p| (p.t_ramp / min.t_ramp - 1.0).abs() < 1e-9)
+            .map_or(f64::NAN, |p| p.energy_j);
+        eprintln!(
+            "[fig1] {} active cells ({} R1), {} balance buffers; sky130 minimum {:.4e} J at T = {:.1e} s; \
+             CMOS-equivalent {:.4e} J ({:.2}x); active logic {:.4e} J ({:.1}x)",
+            plot.active_cells,
+            plot.r1_cells,
+            plot.buffer_cells,
+            min.energy_j,
+            min.t_ramp,
+            cmos_at_min,
+            cmos_at_min / min.energy_j,
+            active_at_min,
+            cmos_at_min / active_at_min,
+        );
+        // Two corner notes (the callout would otherwise sit on the curves);
+        // the first also circles the minimum.
         annotations.push(Annotation {
-            x: tc,
-            y: plot.cmos_ref_j,
-            text: format!("crossover ~ {tc:.1e} s"),
+            x: min.t_ramp,
+            y: min.energy_j,
+            text: format!(
+                "circled: sky130 minimum, {:.1e} J per step at T = {:.0e} s",
+                min.energy_j, min.t_ramp
+            ),
             dot: true,
+            corner: true,
+        });
+        annotations.push(Annotation {
+            x: min.t_ramp,
+            y: min.energy_j,
+            text: format!(
+                "there: whole machine {:.1}x below CMOS-equivalent, active logic {:.0}x",
+                cmos_at_min / min.energy_j,
+                cmos_at_min / active_at_min
+            ),
+            dot: false,
+            corner: true,
         });
     }
 
     let svg = log_log_chart(
-        "TISC-1 reversible CPU: energy per step",
-        "adiabatic dissipation slides below the CMOS 1/2 CV^2 floor as the clock slows",
-        "power-clock ramp t_ramp (s)",
+        "Reversible CPU on sky130: energy per step",
+        "falls as ~1/T until leakage turns it back up; ideal transistors (dashed) have no floor",
+        "power-clock period T (s)",
         "energy per step (J)",
         &series,
         &annotations,
@@ -189,7 +252,7 @@ fn figure2_sky130(out: &Path) -> Result<(), Box<dyn Error>> {
 
     let svg = log_log_chart(
         "sky130 device families: energy per op",
-        "adiabatic-TG recovers charge (slope ~ -1); pFAL falls then floors; static CMOS is flat",
+        "adiabatic-TG recovers charge (slope ~ -1); pFAL falls, then leakage turns it up; static CMOS is flat",
         "power-clock period (s)",
         "energy per op (J)",
         &series,
@@ -199,21 +262,22 @@ fn figure2_sky130(out: &Path) -> Result<(), Box<dyn Error>> {
 }
 
 // --------------------------------------------------------------------------
-// Figure 3 -- per-benchmark energy (OFFLINE): reversible total_j vs a
-// CMOS-equivalent baseline, grouped bars at a fixed t_ramp.
+// Figure 3 -- per-benchmark energy (OFFLINE): whole compiled programs on
+// sky130 at the best period, against the CMOS-equivalent reference.
 // --------------------------------------------------------------------------
 
-/// One benchmark's priced result at [`T_RAMP_REF`].
+/// One benchmark's priced result at [`T_REF`].
 struct BenchResult {
     label: String,
+    /// The whole machine for the whole run: active logic + balance buffers.
     reversible_j: f64,
+    /// The active logic's share of `reversible_j`.
+    active_j: f64,
+    /// One static-CMOS gate per active cell per productive step.
     cmos_equiv_j: f64,
 }
 
-fn figure3_benchmarks(
-    out: &Path,
-    db: &theseus_spice::chardb::CharDb,
-) -> Result<(), Box<dyn Error>> {
+fn figure3_benchmarks(out: &Path, db: &CharDb) -> Result<(), Box<dyn Error>> {
     let mut results = Vec::new();
 
     // fib (u8): a real byte-wide Fibonacci -- FIB8_STEPS reversible steps of
@@ -221,10 +285,10 @@ fn figure3_benchmarks(
     // reversible datapath `EXCH ; ADD` (the `add_into` W8 prim recognized as a
     // single TISC `Add`, ADR-0047). Compiled from real surface source (parse ->
     // check -> elaborate), seeded (0, 1); after 10 steps the registers hold
-    // (fib_10, fib_11) = (55, 89) -- the same fib the CPU runs in tests/fib_cpu.rs.
+    // (fib_10, fib_11) = (55, 89).
     let fib8_input = Value::pair(therm(0), therm(1)); // (a, b) = (0, 1) as W8
     match price_benchmark(
-        "fib (u8)",
+        "fib (u8), 10 steps",
         &fib8_source(FIB8_STEPS),
         "fib8",
         &fib8_input,
@@ -238,7 +302,7 @@ fn figure3_benchmarks(
     let one = || Value::right(Value::Unit); // Bit I
     let zero = || Value::left(Value::Unit); // Bit O
     let adder_input = Value::pair(one(), Value::pair(one(), Value::pair(zero(), zero())));
-    match price_benchmark("adder", ADDER_SRC, "ha4", &adder_input, db) {
+    match price_benchmark("half-adder", ADDER_SRC, "ha4", &adder_input, db) {
         Ok(r) => results.push(r),
         Err(e) => eprintln!("[fig3] SKIP adder: {e}"),
     }
@@ -254,9 +318,14 @@ fn figure3_benchmarks(
             label: r.label.clone(),
             bars: vec![
                 BarValue {
-                    label: "reversible (total)".to_string(),
+                    label: "reversible, whole machine".to_string(),
                     color: C_REVERSIBLE,
                     value: r.reversible_j,
+                },
+                BarValue {
+                    label: "reversible, active logic only".to_string(),
+                    color: C_REVERSIBLE_2,
+                    value: r.active_j,
                 },
                 BarValue {
                     label: "CMOS-equivalent".to_string(),
@@ -268,8 +337,8 @@ fn figure3_benchmarks(
         .collect();
 
     let svg = bar_chart(
-        "Per-benchmark energy: reversible vs CMOS-equivalent",
-        &format!("compiled TISC-1 ROMs priced at t_ramp = {T_RAMP_REF:.0e} s (log scale)"),
+        "Whole-program energy on sky130",
+        &format!("compiled ROMs at T = {T_REF:.0e} s, the energy minimum (log scale)"),
         "total energy (J)",
         &groups,
         true,
@@ -292,7 +361,7 @@ fn therm(k: u32) -> Value {
 /// steps of `fibStep = swap2 ; add_into` (i.e. `(a, b) |-> (b, a + b mod 256)`)
 /// over the machine word `W8` (ADR-0047). Dogfoods the real surface prim through
 /// the full front end; unrolled, it compiles to `2 * n_steps` instructions
-/// (`EXCH ; ADD` per step) -- the exact ROM shape tests/fib_cpu.rs runs.
+/// (`EXCH ; ADD` per step).
 fn fib8_source(n_steps: usize) -> String {
     assert!(n_steps >= 1, "fib8 needs >= 1 step");
     let mut steps = String::from("fibStep");
@@ -308,15 +377,13 @@ fn fib8_source(n_steps: usize) -> String {
     )
 }
 
-/// Compile, lower, and price one program to `(reversible_j, cmos_equiv_j)` at
-/// [`T_RAMP_REF`]. The CMOS-equivalent baseline charges every productively
-/// executed step for `active_cells` static-CMOS gate switchings.
+/// Parse, elaborate, compile and price one program at [`T_REF`].
 fn price_benchmark(
     name: &str,
     src: &str,
     iso_name: &str,
     input: &Value,
-    db: &theseus_spice::chardb::CharDb,
+    db: &CharDb,
 ) -> Result<BenchResult, Box<dyn Error>> {
     let program = theseus_syntax::parse(src).map_err(|e| format!("parse: {e:?}"))?;
     let env = theseus_check::env::resolve(&program);
@@ -329,40 +396,48 @@ fn price_benchmark(
     price_iso(name, &iso, input, db)
 }
 
-/// Price an already-built core `Iso` (the source-independent core of
-/// [`price_benchmark`], also used for the Rust-constructed `fib (u8)`).
+/// Price a core `Iso` as a compiled program: the machine it actually runs on
+/// (the step lowered at the program's own auto-derived layout), for its whole
+/// step budget. The CMOS-equivalent reference charges one static gate per
+/// active cell per productively executed step.
 fn price_iso(
     name: &str,
     iso: &Iso,
     input: &Value,
-    db: &theseus_spice::chardb::CharDb,
+    db: &CharDb,
 ) -> Result<BenchResult, Box<dyn Error>> {
     eprintln!("[fig3] pricing '{name}'...");
 
-    let lowered =
-        theseus_tisc::compile::compile_with_metadata(iso).map_err(|e| format!("compile: {e:?}"))?;
+    let lowered = compile_with_metadata(iso).map_err(|e| format!("compile: {e:?}"))?;
     let rom = theseus_tisc::asm::assemble(&lowered.instrs).map_err(|e| format!("assemble: {e}"))?;
+    let layout = derive_full_layout_from_lowered(iso, &lowered);
+    let step_net =
+        lower_iso(&step_with(&layout, &rom)).map_err(|e| format!("lower step: {e:?}"))?;
 
-    let step_net = lower_iso(&step(&rom)).map_err(|e| format!("lower step: {e:?}"))?;
-
-    let pe = theseus_tisc::energy::rom_program_energy(iso, input, db, T_RAMP_REF, &step_net)
+    let pe = rom_program_energy(iso, input, db, T_REF, &step_net)
         .map_err(|e| format!("rom_program_energy: {e:?}"))?;
-
-    // Derive the per-step CMOS-equivalent from THIS program's step-net, so the
-    // baseline reflects the real active-cell inventory.
-    let plot = cpu_money_plot(&step_net, db, &[T_RAMP_REF])
-        .map_err(|e| format!("cpu_money_plot: {e:?}"))?;
-    let cmos_step_j = plot.active_cells as f64 * CMOS_STATIC_E_PER_GATE_J;
-    let cmos_equiv_j = pe.steps_t as f64 * cmos_step_j;
+    let plot =
+        cpu_money_plot(&step_net, db, &[T_REF]).map_err(|e| format!("cpu_money_plot: {e:?}"))?;
+    let active_j = pe.steps_b as f64 * plot.active_logic[0].energy_j;
+    let cmos_equiv_j = pe.steps_t as f64 * plot.cmos_ref_j;
 
     eprintln!(
-        "[fig3]   '{name}': {} steps (T={}), reversible {:.3e} J, CMOS-equiv {:.3e} J",
-        pe.steps_b, pe.steps_t, pe.total_j, cmos_equiv_j
+        "[fig3]   '{name}': {} steps ({} productive), {} active cells + {} buffers; \
+         reversible {:.4e} J (active logic {:.4e} J), CMOS-equiv {:.4e} J ({:.2}x)",
+        pe.steps_b,
+        pe.steps_t,
+        plot.active_cells,
+        plot.buffer_cells,
+        pe.total_j,
+        active_j,
+        cmos_equiv_j,
+        cmos_equiv_j / pe.total_j
     );
 
     Ok(BenchResult {
         label: name.to_string(),
         reversible_j: pe.total_j,
+        active_j,
         cmos_equiv_j,
     })
 }
@@ -420,6 +495,10 @@ mod svg {
         pub text: String,
         /// Draw a small emphasis dot at `(x, y)`.
         pub dot: bool,
+        /// Put the text in the plot's bottom-left corner (successive corner
+        /// notes stack upwards) instead of beside the point. For a callout
+        /// that would otherwise sit on top of the curves.
+        pub corner: bool,
     }
 
     /// One bar within a grouped-bar chart.
@@ -568,7 +647,14 @@ mod svg {
     /// Legend box at the top-right of the plot region: swatch + label per entry.
     fn legend(s: &mut String, p: &Plot, entries: &[(&str, &str, bool)], left: bool) {
         // entries: (label, color, dashed)
-        let box_w = 250.0;
+        // Wide enough for the longest label (~6.6 px per character at this
+        // font size, plus the swatch and padding), never narrower than 250.
+        let longest = entries
+            .iter()
+            .map(|e| e.0.chars().count())
+            .max()
+            .unwrap_or(0);
+        let box_w = (longest as f64 * 6.6 + 48.0).max(250.0);
         let row_h = 18.0;
         let pad = 8.0;
         let n = entries.len() as f64;
@@ -731,6 +817,8 @@ mod svg {
         }
 
         // --- Annotations (callouts). ---
+        let n_corner = annotations.iter().filter(|a| a.corner).count();
+        let mut corner_seen = 0usize;
         for a in annotations {
             if a.x <= 0.0 || a.y <= 0.0 {
                 continue;
@@ -746,12 +834,19 @@ mod svg {
                     fnum(ay),
                 );
             }
+            let (tx, ty) = if a.corner {
+                corner_seen += 1;
+                let lines_below = (n_corner - corner_seen) as f64;
+                (p.x0 + 10.0, p.y1 - 10.0 - lines_below * 15.0)
+            } else {
+                (ax + 8.0, ay - 8.0)
+            };
             let _ = writeln!(
                 s,
                 "<text x=\"{}\" y=\"{}\" font-size=\"11.5\" fill=\"#111111\" \
                  font-weight=\"600\" font-family=\"{FONT}\">{}</text>",
-                fnum(ax + 8.0),
-                fnum(ay - 8.0),
+                fnum(tx),
+                fnum(ty),
                 esc(&a.text),
             );
         }
@@ -794,11 +889,21 @@ mod svg {
         let min_v = vals.filter(|v| *v > 0.0).fold(f64::INFINITY, f64::min);
 
         // Y mapper.
-        let (ylo, yhi) = if log_y {
+        let (ylo, mut yhi) = if log_y {
             decade_bounds(groups.iter().flat_map(|g| g.bars.iter().map(|b| b.value)))
         } else {
             (0, 0) // unused in linear branch
         };
+        if log_y && max_v > 0.0 {
+            // Headroom: keep the tallest bar and its value label clear of the
+            // legend in the plot's top-left corner (10 px inset, 16 px padding,
+            // 18 px per series, 14 px for the label above the bar).
+            let n_series = groups.first().map_or(0, |g| g.bars.len()) as f64;
+            let legend_px = 10.0 + 16.0 + n_series * 18.0 + 14.0;
+            while (yhi as f64 - max_v.log10()) / (yhi - ylo) as f64 * (p.y1 - p.y0) < legend_px {
+                yhi += 1;
+            }
+        }
         let lin_top = if max_v > 0.0 { max_v * 1.15 } else { 1.0 };
         let py = |v: f64| -> f64 {
             if log_y {
