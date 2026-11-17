@@ -14,9 +14,14 @@
 //! decomposition): mixed-sum clause tables (e.g. `swapMaybe`), controlled
 //! multi-clause ops (`cnot`/`toffoli`), and `U<n>` literal isos (e.g. `flip1`).
 //!
+//! A clause table with no structural decomposition (an arbitrary permutation
+//! such as a 3-cycle, or a table between two *different* types) elaborates to
+//! an admitted table [`Iso::Prim`] built from the same oracle, so every clause
+//! iso the checker accepts has a core denotation ([`table_prim`]).
+//!
 //! E4 label elaboration: label clause sets are elaborated to
 //! [`Iso::trace`]`(u, Φ)` where `u` is the label carrier and `Φ` is the
-//! body bijection over the extended type `Sum(u, boundary)`.
+//! body bijection over the extended types `Sum(u, lhs)` / `Sum(u, rhs)`.
 
 use std::collections::BTreeMap;
 
@@ -109,7 +114,7 @@ fn elab_iso_rec(
         IsoBody::Clauses(cs) => {
             let labels = env.iso_labels(&iso.name.text);
             if labels.is_empty() {
-                elab_clauses(cs, &iso.lhs, &iso.rhs, env)
+                elab_clauses(cs, &iso.lhs, &iso.rhs, env, &iso.name.text)
             } else {
                 elab_clauses_label(cs, &iso.lhs, &iso.rhs, labels, env, &iso.name.text)
             }
@@ -250,9 +255,20 @@ fn infer_combinator_id_body(
     }
 }
 
-fn elab_clauses(cs: &[Clause], lhs_ty: &SurfType, rhs_ty: &SurfType, env: &Env) -> ElabResult {
-    // 1. Identity -- every clause maps a pattern to itself.
-    if !cs.is_empty() && cs.iter().all(|c| pattern_eq(&c.lhs, &c.rhs)) {
+fn elab_clauses(
+    cs: &[Clause],
+    lhs_ty: &SurfType,
+    rhs_ty: &SurfType,
+    env: &Env,
+    iso_name: &str,
+) -> ElabResult {
+    // 1. Identity -- every clause maps a pattern to itself. Only an identity
+    //    when both sides have the same core type: `| x <-> x` between two
+    //    distinct types is a relabelling, which the general path handles.
+    if !cs.is_empty()
+        && cs.iter().all(|c| pattern_eq(&c.lhs, &c.rhs))
+        && env.lower(lhs_ty) == env.lower(rhs_ty)
+    {
         return Ok(Iso::Id(env.lower(lhs_ty)));
     }
     // 2. Single-clause product rearrangement (swap / reassoc).
@@ -265,11 +281,46 @@ fn elab_clauses(cs: &[Clause], lhs_ty: &SurfType, rhs_ty: &SurfType, env: &Env) 
     if let Some(iso) = elab_sum_swap(cs, lhs_ty, rhs_ty, env) {
         return Ok(iso);
     }
-    // 4. General: oracle (match_bind/instantiate) + structural synthesis.
-    if let Some(iso) = elab_clauses_general(cs, lhs_ty, rhs_ty, env) {
+    // 4. General: oracle (match_bind/instantiate) + structural synthesis,
+    //    falling back to an admitted table prim.
+    if let Some(iso) = elab_clauses_general(cs, lhs_ty, rhs_ty, env, iso_name) {
         return Ok(iso);
     }
     unsupported()
+}
+
+/// Wrap an oracle-computed bijection that has no structural decomposition as
+/// an admitted table [`Iso::Prim`].
+///
+/// The table is the clause set's own denotation, so the prim is correct by
+/// construction; `admit` (ADR-0013) still re-verifies that `forward` and its
+/// transpose are mutual inverses over the two finite domains, which also
+/// rejects an output outside `output_ty`. Returns `None` if admission fails.
+///
+/// `input_ty` and `output_ty` may differ: a clause table between two distinct
+/// types of equal cardinality is a bijection like any other.
+fn table_prim(
+    forward: BTreeMap<Value, Value>,
+    input_ty: &CoreType,
+    output_ty: &CoreType,
+    forward_name: String,
+    backward_name: String,
+) -> Option<Iso> {
+    let backward: BTreeMap<Value, Value> = forward
+        .iter()
+        .map(|(k, v)| (v.clone(), k.clone()))
+        .collect();
+    let def = theseus_core::PrimDef {
+        forward_name,
+        backward_name,
+        input_ty: input_ty.clone(),
+        output_ty: output_ty.clone(),
+        forward,
+        backward,
+        symbolic: None,
+    };
+    theseus_core::prim::admit(&def).ok()?;
+    Some(Iso::Prim(Box::new(def)))
 }
 
 fn elab_product_rearrange(c: &Clause, lhs_ty: &SurfType, env: &Env) -> Option<Iso> {
@@ -346,14 +397,27 @@ fn elab_clauses_general(
     lhs_ty: &SurfType,
     rhs_ty: &SurfType,
     env: &Env,
+    iso_name: &str,
 ) -> Option<Iso> {
     let core_lhs = env.lower(lhs_ty);
     let core_rhs = env.lower(rhs_ty);
-    if core_lhs != core_rhs {
-        return None;
-    }
     let sigma = compute_bijection(cs, &core_lhs, lhs_ty, rhs_ty, env)?;
-    synthesize(&sigma, &core_lhs)
+    // Structural synthesis decomposes an endo-bijection along its type; it
+    // has nothing to say about a table between two different types.
+    if core_lhs == core_rhs {
+        if let Some(iso) = synthesize(&sigma, &core_lhs) {
+            return Some(iso);
+        }
+    }
+    // No structural form (e.g. a 3-cycle, or lhs/rhs of different types):
+    // the clause table itself is the denotation.
+    table_prim(
+        sigma,
+        &core_lhs,
+        &core_rhs,
+        format!("<clauses:{iso_name}>"),
+        format!("<clauses-inv:{iso_name}>"),
+    )
 }
 
 /// Compute the value bijection σ: for each core value, match it against clauses,
@@ -756,12 +820,8 @@ fn elab_clauses_label(
     let ext_lhs = CoreType::sum(carrier.clone(), boundary_lhs);
     let ext_rhs = CoreType::sum(carrier.clone(), boundary_rhs);
 
-    // 3. Only handle ext_lhs == ext_rhs (A == B) for now.
-    if ext_lhs != ext_rhs {
-        return unsupported();
-    }
-
-    // 4. Build the body bijection Φ over the extended type.
+    // 3./4. Build the body bijection Φ : ext_lhs → ext_rhs. The boundary
+    //    types may differ (a label iso `A <-> B`); the carrier is shared.
     let values = enumerate_values(&ext_lhs);
     let mut phi = BTreeMap::new();
     for v in &values {
@@ -793,29 +853,26 @@ fn elab_clauses_label(
     //    TH-4a-label) and has static bound 0, so B(trace) = |u|+1 holds.
     //    The structural (demux) Φ is owed for M2 lowering
     //    (design/elaboration.md §E4); the Prim interim is eval-complete.
-    let body = match synthesize(&phi, &ext_lhs) {
+    let structural = if ext_lhs == ext_rhs {
+        synthesize(&phi, &ext_lhs)
+    } else {
+        None
+    };
+    let body = match structural {
         Some(iso) => iso,
-        None => {
-            let backward: BTreeMap<Value, Value> =
-                phi.iter().map(|(k, v)| (v.clone(), k.clone())).collect();
-            // Full admissibility guard (ADR-0013): verify the (forward,
-            // backward) pair are mutual inverses over the finite domains.
-            // This is strictly stronger than the old len-check -- it also
-            // catches Φ outputs that fall outside the codomain type.
-            let def = theseus_core::PrimDef {
-                forward_name: format!("<trace-body:{iso_name}>"),
-                backward_name: format!("<trace-body-inv:{iso_name}>"),
-                input_ty: ext_lhs.clone(),
-                output_ty: ext_rhs.clone(),
-                forward: phi,
-                backward,
-                symbolic: None,
-            };
-            if theseus_core::prim::admit(&def).is_err() {
-                return unsupported();
-            }
-            Iso::Prim(Box::new(def))
-        }
+        // Full admissibility guard (ADR-0013) inside `table_prim`: the
+        // (forward, backward) pair must be mutual inverses over the finite
+        // domains, which also catches Φ outputs outside the codomain type.
+        None => match table_prim(
+            phi,
+            &ext_lhs,
+            &ext_rhs,
+            format!("<trace-body:{iso_name}>"),
+            format!("<trace-body-inv:{iso_name}>"),
+        ) {
+            Some(iso) => iso,
+            None => return unsupported(),
+        },
     };
 
     // 6. Wrap in trace.
@@ -1454,5 +1511,155 @@ mod tests {
             result.is_err(),
             "instantiate failure should abort elaboration, got: {result:?}"
         );
+    }
+
+    // ── Accepted ⇒ elaborated: every bijection on a small type ──────────
+
+    /// All permutations of `0..n`, in lexicographic order.
+    fn permutations(n: usize) -> Vec<Vec<usize>> {
+        fn go(prefix: &mut Vec<usize>, n: usize, out: &mut Vec<Vec<usize>>) {
+            if prefix.len() == n {
+                out.push(prefix.clone());
+                return;
+            }
+            for i in 0..n {
+                if !prefix.contains(&i) {
+                    prefix.push(i);
+                    go(prefix, n, out);
+                    prefix.pop();
+                }
+            }
+        }
+        let mut out = Vec::new();
+        go(&mut Vec::new(), n, &mut out);
+        out
+    }
+
+    /// For every bijection between `lhs` and `rhs` (given as parallel lists of
+    /// surface spellings and their core values), write it as a clause table and
+    /// require: the checker accepts it, it elaborates, and it evaluates to
+    /// exactly that table forwards and to its inverse backwards.
+    fn assert_all_bijections_elaborate(
+        decls: &str,
+        lhs_ty: &str,
+        lhs: &[(&str, Value)],
+        rhs_ty: &str,
+        rhs: &[(&str, Value)],
+    ) {
+        assert_eq!(lhs.len(), rhs.len());
+        for perm in permutations(lhs.len()) {
+            let mut src = format!("{decls}iso f : {lhs_ty} <-> {rhs_ty}\n");
+            for (i, &j) in perm.iter().enumerate() {
+                src.push_str(&format!("| {} <-> {}\n", lhs[i].0, rhs[j].0));
+            }
+            let prog = theseus_syntax::parse(&src).expect("parses");
+            let diags = crate::check(&prog);
+            assert!(
+                diags.is_empty(),
+                "checker rejected a bijection:\n{src}\n{diags:?}"
+            );
+            let env = crate::env::resolve(&prog);
+            let map = elaborate_program(&prog, &env);
+            let iso = map
+                .get("f")
+                .expect("no iso f")
+                .as_ref()
+                .unwrap_or_else(|e| panic!("accepted but not elaborated ({e:?}):\n{src}"));
+            let inverse = Iso::sym(iso.clone());
+            for (i, &j) in perm.iter().enumerate() {
+                assert_eq!(run(iso, lhs[i].1.clone()), rhs[j].1, "forward:\n{src}");
+                assert_eq!(
+                    run(&inverse, rhs[j].1.clone()),
+                    lhs[i].1,
+                    "backward:\n{src}"
+                );
+            }
+        }
+    }
+
+    /// Regression for "passes `check`, then cannot be elaborated": a clause
+    /// table with no structural form (any 3-cycle, for one) must still get a
+    /// core denotation. Exhaustive over all 6 bijections on a 3-constructor
+    /// type and all 24 on `(Bit, Bit)`.
+    #[test]
+    fn every_endo_bijection_on_a_small_type_elaborates() {
+        let u = || Value::Unit;
+        assert_all_bijections_elaborate(
+            "type T = A | B | C\n",
+            "T",
+            &[
+                ("A", Value::left(u())),
+                ("B", Value::right(Value::left(u()))),
+                ("C", Value::right(Value::right(u()))),
+            ],
+            "T",
+            &[
+                ("A", Value::left(u())),
+                ("B", Value::right(Value::left(u()))),
+                ("C", Value::right(Value::right(u()))),
+            ],
+        );
+        let pairs = [
+            ("(O, O)", Value::pair(o(), o())),
+            ("(O, I)", Value::pair(o(), i())),
+            ("(I, O)", Value::pair(i(), o())),
+            ("(I, I)", Value::pair(i(), i())),
+        ];
+        assert_all_bijections_elaborate(
+            "type Bit = O | I\n",
+            "(Bit, Bit)",
+            &pairs,
+            "(Bit, Bit)",
+            &pairs,
+        );
+    }
+
+    /// The two sides of an iso may be different types. All 24 bijections
+    /// between `Either = L Bit | R Bit` and `(Bit, Bit)` must elaborate.
+    #[test]
+    fn every_bijection_between_two_types_elaborates() {
+        assert_all_bijections_elaborate(
+            "type Bit = O | I\ntype Either = L Bit | R Bit\n",
+            "Either",
+            &[
+                ("L O", Value::left(o())),
+                ("L I", Value::left(i())),
+                ("R O", Value::right(o())),
+                ("R I", Value::right(i())),
+            ],
+            "(Bit, Bit)",
+            &[
+                ("(O, O)", Value::pair(o(), o())),
+                ("(O, I)", Value::pair(o(), i())),
+                ("(I, O)", Value::pair(i(), o())),
+                ("(I, I)", Value::pair(i(), i())),
+            ],
+        );
+    }
+
+    /// A label iso whose two boundary types differ (`Either <-> (Bit, Bit)`,
+    /// routed through a label) elaborates to a trace and evaluates correctly.
+    #[test]
+    fn label_iso_between_two_types_elaborates() {
+        let src = "type Bit = O | I\ntype Either = L Bit | R Bit\n\
+                   iso f : Either <-> (Bit, Bit)\n\
+                   | L b <-> $go (O, b)\n\
+                   | R b <-> $go (I, b)\n\
+                   | $go (x, y) <-> (x, y)\n";
+        let prog = theseus_syntax::parse(src).expect("parses");
+        let diags = crate::check(&prog);
+        assert!(diags.is_empty(), "checker rejected: {diags:?}");
+        let env = crate::env::resolve(&prog);
+        let map = elaborate_program(&prog, &env);
+        let iso = map
+            .get("f")
+            .expect("no iso f")
+            .as_ref()
+            .unwrap_or_else(|e| panic!("accepted but not elaborated: {e:?}"));
+        assert!(matches!(iso, Iso::Trace(..)), "label iso must be a trace");
+        assert_eq!(run(iso, Value::left(i())), Value::pair(o(), i()));
+        assert_eq!(run(iso, Value::right(o())), Value::pair(i(), o()));
+        let inverse = Iso::sym(iso.clone());
+        assert_eq!(run(&inverse, Value::pair(i(), i())), Value::right(i()));
     }
 }

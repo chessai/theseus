@@ -1,0 +1,10 @@
+-- Conformance P0028 (dialect: synthesizable)
+-- A 3-cycle on a three-constructor type. It has no structural form (it is
+-- neither tag-preserving nor a full swap), so it elaborates to an admitted
+-- table prim. Regression: this used to pass `check` and then fail to run.
+type T = A | B | C
+
+iso rot : T <-> T
+| A <-> B
+| B <-> C
+| C <-> A

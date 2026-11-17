@@ -261,6 +261,11 @@ fn conformance_programs() {
         // μ-type depth annotation (ADR-0035 follow-up): use-site depth must
         // grade end-to-end (parse → check → elaborate → eval, fwd+bwd).
         "0021-mu-depth",
+        // Clause tables with no structural form (a 3-cycle) and tables between
+        // two different types: accepted by the checker, so they must run.
+        "0028-rot3",
+        "0029-cycle",
+        "0030-retag",
     ];
     let graded_stems: Vec<&str> = fixtures
         .iter()

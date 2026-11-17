@@ -1,0 +1,5 @@
+# iso: retag
+L O |-> (O, O)
+L I |-> (O, I)
+R O |-> (I, O)
+R I |-> (I, I)
