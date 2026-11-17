@@ -155,6 +155,7 @@ mod tests {
                 const_cell("cswap-k0", e_k0, 1e-8, 1e-5),
                 const_cell("cswap-k1", e_k1, 1e-8, 1e-5),
             ]),
+            query_mode: Default::default(),
         }
     }
 
@@ -237,6 +238,7 @@ mod tests {
     fn missing_kind_is_a_hard_error() {
         let db = CharDb {
             cells: BTreeMap::new(),
+            query_mode: Default::default(),
         };
         assert_eq!(
             compiled_energy(&one_buffer(), &db, 1e-7),
@@ -268,6 +270,7 @@ mod tests {
         };
         let db = CharDb {
             cells: BTreeMap::from([("cswap-k0".to_string(), cell)]),
+            query_mode: Default::default(),
         };
         let r = compiled_energy(&one_buffer(), &db, 1e-7).unwrap();
         assert!((r.total_j - 1e-14).abs() < 1e-20, "got {}", r.total_j);

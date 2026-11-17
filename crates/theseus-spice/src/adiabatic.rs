@@ -705,6 +705,18 @@ pub fn cmos_baseline_netlist(period_s: f64) -> String {
 ///   not assumed),
 /// * `vmax`/`vmin` -- output-rail extremes, to prove full-swing operation.
 pub fn cmos_baseline_netlist_rung(period_s: f64, rung: DeviceRung) -> String {
+    cmos_baseline_netlist_load(period_s, rung, CMOS_BASELINE_LOAD_F)
+}
+
+/// Output load of the historical CMOS baseline deck: 1 pF, matching the
+/// single adiabatic-TG buffer it is plotted against.
+pub const CMOS_BASELINE_LOAD_F: f64 = 1e-12;
+
+/// [`cmos_baseline_netlist_rung`] with an explicit output load `c_load_f`
+/// (farads). A static gate dumps ~`C*VDD^2` per cycle, so a CMOS reference is
+/// only comparable to an adiabatic cell when both drive the same load: pass
+/// [`crate::cswap::WIRE_LOAD_F`] to compare against the k-CSWAP / R1 cells.
+pub fn cmos_baseline_netlist_load(period_s: f64, rung: DeviceRung, c_load_f: f64) -> String {
     let half = period_s / 2.0;
     let edge = (period_s / 1000.0).min(1e-10); // fast edges: no energy recovery
     let vdd = rung.vdd();
@@ -729,7 +741,7 @@ Vdd vdd 0 DC {vdd}
 Vin in 0 PULSE(0 {vdd} 0 {edge:.9e} {edge:.9e} {half:.9e} {stop:.9e})
 {m1}
 {m2}
-Cout out 0 1p
+Cout out 0 {c_load_f:.6e}
 Bpwr pwr 0 V = V(vdd)*I(Vdd)
 .control
 tran {step:.9e} {stop:.9e} uic
@@ -750,7 +762,7 @@ Vdd vdd 0 DC {vdd}
 Vin in 0 PULSE(0 {vdd} 0 {edge:.9e} {edge:.9e} {half:.9e} {period_s:.9e})
 {m1}
 {m2}
-Cout out 0 1p
+Cout out 0 {c_load_f:.6e}
 Bvdd pvdd 0 V = -V(vdd)*I(Vdd)
 Bin  pin  0 V = -V(in)*I(Vin)
 Btot ptot 0 V = V(pvdd)+V(pin)
@@ -782,6 +794,16 @@ pub fn cmos_baseline_curve(periods: &[f64]) -> MoneyPlotCurve {
 /// (rail + input gate driver) over the settled second cycle -- so the gate-
 /// charge energy is counted, not hidden. Energy is a positive magnitude.
 pub fn cmos_baseline_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotCurve {
+    cmos_baseline_curve_load(periods, rung, CMOS_BASELINE_LOAD_F)
+}
+
+/// [`cmos_baseline_curve_rung`] with an explicit output load (farads); see
+/// [`cmos_baseline_netlist_load`].
+pub fn cmos_baseline_curve_load(
+    periods: &[f64],
+    rung: DeviceRung,
+    c_load_f: f64,
+) -> MoneyPlotCurve {
     let (dut, meas) = match rung {
         DeviceRung::Rung0Level1 => ("cmos-static", "evdd"),
         DeviceRung::Rung1Sky130 => ("cmos-static-sky130", "etot"),
@@ -791,7 +813,7 @@ pub fn cmos_baseline_curve_rung(periods: &[f64], rung: DeviceRung) -> MoneyPlotC
         .map(|&t| {
             (
                 t,
-                run_energy(&cmos_baseline_netlist_rung(t, rung), meas).abs(),
+                run_energy(&cmos_baseline_netlist_load(t, rung, c_load_f), meas).abs(),
             )
         })
         .collect();

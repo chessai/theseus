@@ -440,6 +440,11 @@ fn token_line_pwl(
 /// cycle (τ ≈ C·V/I_leak ≈ 140 ns) and the floor is cleanly measurable.
 const TG_L_UM: f64 = 0.15;
 
+/// Capacitive load on every cell output wire, farads (100 fF). A static-CMOS
+/// reference is only comparable to these cells when it drives the same load
+/// (see [`crate::adiabatic::cmos_baseline_netlist_load`]).
+pub const WIRE_LOAD_F: f64 = 100e-15;
+
 /// Fill warmup before the measured cycle (single stage: fill ≤ 1 cycle, +2
 /// to settle; rung 1 additionally pays its one-time BSIM charge-up here).
 const WARMUP_CYCLES: usize = 3;
@@ -628,7 +633,7 @@ pub fn cell_netlist(
                         prev = next;
                     }
                 }
-                l.push(format!("C{wire} {wire} 0 100f"));
+                l.push(format!("C{wire} {wire} 0 {:.0}f", WIRE_LOAD_F * 1e15));
                 l.push(format!(".ic V({wire})={park:.4}"));
             }
         }
