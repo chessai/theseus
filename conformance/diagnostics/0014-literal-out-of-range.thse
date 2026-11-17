@@ -1,0 +1,7 @@
+-- D0014: a numeric literal outside the range of its stdlib type (ADR-0017).
+-- `U1` has the values `0` and `1`; the literal `2` matches no value. Both
+-- columns are covered -- yet clause 3 sends `1` to `2`, outside the type.
+iso g : U1 <-> U1
+| 2 <-> 0
+| 0 <-> 1
+| 1 <-> 2

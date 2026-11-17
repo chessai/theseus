@@ -377,6 +377,7 @@ fn conformance_diagnostics() {
         "0011-ctor-at-sum",
         "0012-mu-depth-crossing",
         "0013-mu-cutoff-ctor",
+        "0014-literal-out-of-range",
     ];
     let diag_stems: Vec<&str> = fixtures
         .iter()
