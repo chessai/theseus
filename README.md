@@ -3,7 +3,8 @@
 theseus is a reversible-computing stack: a small reversible programming
 language, a compiler that lowers it to a reversible instruction set, and a
 model of an adiabatic (energy-recovering) CPU that runs the result and reports
-what it costs in energy. The core correctness properties are proved in Lean.
+what it costs in energy. The language's core guarantees are machine-checked in
+Lean.
 
 Every program is a bijection -- it runs forwards and backwards. In the
 synthesizable fragment every program is a *total* bijection with a static
@@ -43,8 +44,9 @@ flowchart TD
     class phys phys;
 ```
 
-The whole stack is backed by Lean 4 proofs: reversible by construction, loops
-terminate, branches are reversible (see [Proofs](#proofs)).
+The language's guarantees are machine-checked in Lean 4 -- accepted clause
+tables are bijections, loops terminate -- and the compiler is checked against
+the interpreter (see [Proofs](#proofs)).
 
 ## Energy: the whole point
 
@@ -200,21 +202,34 @@ expected-output file. Good ones to read first:
 
 ## Proofs
 
-The `theseus-proofs/` Lean 4 project proves the core guarantees:
+The `theseus-proofs/` Lean 4 project machine-checks the language's core
+guarantees:
 
     nix develop .#proofs
     cd theseus-proofs && lake build
 
+- **Coverage is bijectivity.** A clause table that is well-typed, linear (every
+  variable used exactly once on each side) and covered on both columns (every
+  value matched by exactly one clause) denotes a bijection, and reading its
+  clauses right to left gives the inverse. Label loops reduce to the same
+  theorem (`Coverage.lean`).
 - **Reversibility is a theorem, not an assumption.** Every combinator denotes a
-  bijection, and the syntactic adjoint computes its true inverse
-  (`Reversibility.lean`).
+  bijection, and its adjoint denotes the inverse (`Reversibility.lean`).
 - **Loops terminate.** A reversible loop over a finite state space exits within
-  `|state| + 1` steps (`FiniteTrace.lean`).
-- **Branches are reversible.** The come-from branch instruction is its own
-  inverse.
+  `|state| + 1` steps, in both directions (`FiniteTrace.lean`).
+- **The branch primitive is its own inverse.** The register swap underneath the
+  come-from branch is an involution.
 
 The build refuses `sorry`, `native_decide`, or any stray axiom
 (`AxiomGuard.lean`), so a green build is a real proof.
+
+**What is not proved.** These are theorems about a Lean model of the language.
+Nothing mechanically links that model to the Rust checker and compiler: the
+correspondence is by inspection and by tests. The compiler is checked rather
+than proved -- lowered netlists and compiled ROMs are compared against the
+interpreter over whole input domains, and the CPU's instruction logic is
+checked against an independent specification by combinational equivalence
+checking.
 
 ## Project layout
 
