@@ -1,11 +1,7 @@
 -- Conformance P0010 (dialect: synthesizable)
 -- Pins ADR-0017: constructor order = structural sum order (L = left).
-type Bit = O | I
+-- `notb` comes from the implicit prelude.
 type Either = L Bit | R Bit
-
-iso notb : Bit <-> Bit
-| O <-> I
-| I <-> O
 
 iso idb : Bit <-> Bit
 | O <-> O

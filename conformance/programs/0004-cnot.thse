@@ -1,5 +1,6 @@
 -- Conformance P0004 (dialect: synthesizable)
-type Bit = O | I
+-- `cnot` is this file's subject, so it is declared here; it replaces the
+-- (identical) prelude copy.
 
 iso cnot : (Bit, Bit) <-> (Bit, Bit)
 | (O, b) <-> (O, b)

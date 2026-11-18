@@ -12,8 +12,11 @@ use theseus_core::{Iso, Value};
 use theseus_tisc::asm::Instr;
 use theseus_tisc::compile::compile_with_metadata;
 
-/// Shared decls: the prim, the structural swap, and one fib step.
-const PRELUDE: &str = "\
+/// Shared decls: the prim, the structural swap, and one fib step. `add_into` is
+/// also in the implicit prelude; it is declared here on purpose and parsed
+/// without the prelude, so this file pins the `prim ... = "key"` declaration
+/// path itself.
+const DECLS: &str = "\
 prim add_into : W8 * W8 <-> W8 * W8 = \"theseus.arith.add_into\"
 iso swap2 : W8 * W8 <-> W8 * W8
 | (a, b) <-> (b, a)
@@ -61,12 +64,12 @@ fn fib8_src(n_steps: usize) -> String {
     for _ in 1..n_steps {
         steps.push_str(" ; fibStep");
     }
-    format!("{PRELUDE}iso fib8 : W8 * W8 <-> W8 * W8 = {steps}\n")
+    format!("{DECLS}iso fib8 : W8 * W8 <-> W8 * W8 = {steps}\n")
 }
 
 #[test]
 fn add_into_compiles_to_single_add() {
-    let src = format!("{PRELUDE}iso addw : W8 * W8 <-> W8 * W8 = add_into\n");
+    let src = format!("{DECLS}iso addw : W8 * W8 <-> W8 * W8 = add_into\n");
     let iso = elaborate(&src, "addw");
     let lowered = compile_with_metadata(&iso).expect("add_into compiles");
     assert_eq!(
@@ -84,7 +87,7 @@ fn add_into_compiles_to_single_add() {
 
 #[test]
 fn add_into_eval_semantics_including_overflow() {
-    let src = format!("{PRELUDE}iso addw : W8 * W8 <-> W8 * W8 = add_into\n");
+    let src = format!("{DECLS}iso addw : W8 * W8 <-> W8 * W8 = add_into\n");
     let iso = elaborate(&src, "addw");
     for (a, b) in [(5u8, 7u8), (200, 100), (255, 1), (0, 0), (128, 128)] {
         let out = theseus_eval::eval(&iso, pair(a, b), &mut 1_000_000u64).expect("eval");

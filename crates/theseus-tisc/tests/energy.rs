@@ -249,7 +249,7 @@ fn print_clause_energy_table() {
 const FIB_SRC: &str = include_str!("../../../conformance/programs/0022-fib.thse");
 
 fn elaborate(src: &str, iso_name: &str) -> theseus_core::Iso {
-    let program = theseus_syntax::parse(src).expect("parse");
+    let program = theseus_check::parse(src).expect("parse");
     let diags = theseus_check::check(&program);
     assert!(diags.is_empty(), "check diagnostics: {diags:?}");
     let env = theseus_check::env::resolve(&program);

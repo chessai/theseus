@@ -1,27 +1,28 @@
-//! CPU "money plot" (ADR-0028/0030): energy per TISC-1 step vs the
-//! power-clock ramp time -- the machine-level analogue of the M3a
-//! cell-level money plot.
+//! CPU "money plot" (ADR-0028/0030): energy per TISC step vs the
+//! power-clock period -- the machine-level analogue of the M3a cell-level
+//! money plot.
 //!
 //! # What it shows
 //!
-//! Every cell in this adiabatic fabric dissipates `E(T) = k_adia/T +
-//! k_leak·T + k_res` (ADR-0028), so the whole compiled step, summed over
-//! its cell inventory, inherits the same shape: energy per cycle falls as
-//! ~`1/T` (log-log slope ≈ −1) as the power-clock is slowed, until the
-//! tiny leakage/residual floor. An *irreversible* CMOS implementation of
-//! the same logic pays a flat `½CV²` per gate per cycle, **independent of
-//! T** -- it cannot be driven below that floor. The plot is that contrast
-//! at the machine level: the reversible CPU's curve sliding below the
-//! flat CMOS line.
+//! Every cell in this adiabatic fabric loses less energy the more slowly it
+//! is clocked (`~1/T`, ADR-0028), so the whole compiled step, summed over its
+//! cell inventory, inherits that shape. What happens at long periods depends
+//! on the devices:
+//!
+//! * on the **rung-0 ideal transistors** there is no leakage, and the curve
+//!   keeps falling with log-log slope ≈ −1;
+//! * on **sky130** leakage grows with `T`, so the curve has a minimum (near
+//!   `T` = 1 µs for the step) and rises again beyond it.
+//!
+//! A static CMOS gate instead dumps about `C·V²` per cycle whatever the
+//! period. The plot sets the reversible machine against that flat reference.
 //!
 //! # Reproducibility
 //!
-//! The adiabatic curves come entirely from the committed rung-0
-//! characterization DB fits summed over the **zero-garbage** step's cell
-//! inventory (ADR-0040 phase C: the R1-based lowering, priced as
-//! `cswap-r1`) -- no ngspice needed. The flat CMOS reference is a single
-//! ngspice-derived constant ([`CMOS_STATIC_E_PER_GATE_J`]), committed so
-//! the whole artifact reproduces offline.
+//! The curves come entirely from a committed characterization database
+//! (`theseus_spice::chardb::{sky130_measured, rung0_measured}`) summed over
+//! the **zero-garbage** step's cell inventory (ADR-0040 phase C: the R1-based
+//! lowering, priced as `cswap-r1`) -- no ngspice needed.
 //!
 //! Two adiabatic curves are reported (ADR-0028 attribution):
 //! * **full step** -- active logic + the K0 tick-alignment balance
@@ -30,11 +31,13 @@
 //!   (which have no irreversible counterpart -- CMOS needs no tick
 //!   alignment): the logic-proper energy.
 //!
-//! The CMOS reference counts one `½CV²` gate per *active* reversible cell
-//! (1:1, a deliberately conservative gate-count proxy -- a Fredkin or an
-//! adder's Toffoli is worth more than one CMOS gate, so this understates
-//! the reversible win). The balance buffers are excluded from the CMOS
-//! gate count on purpose.
+//! The CMOS reference counts one static gate per *active* reversible cell
+//! (1:1, a gate-count proxy, not a competing design; the balance buffers are
+//! excluded from the count on purpose). Its per-gate energy comes from the
+//! database when the database has measured one -- sky130 does, in the same
+//! transistors at the cells' own wire load -- and otherwise from the rung-0
+//! constant, which was measured into ten times that load
+//! ([`cmos_energy_per_gate_j`]).
 
 use theseus_netlist::PhasedCellNetlist;
 use theseus_spice::chardb::{CharDb, QueryError};
@@ -54,6 +57,25 @@ use crate::energy::balanced_energy;
 /// `cmos-static` curve's asymptotic point).
 pub const CMOS_STATIC_E_PER_GATE_J: f64 = 1.01922e-12;
 
+/// Characterization-DB key of the measured irreversible reference: a static
+/// CMOS gate in the same devices as the reversible cells, driving the same
+/// wire load. Present in the sky130 database; absent from rung 0.
+pub const CMOS_STATIC_KEY: &str = "cmos-static";
+
+/// Energy one static-CMOS gate dissipates per cycle, for comparison against
+/// the cells in `db`.
+///
+/// If `db` carries a measured [`CMOS_STATIC_KEY`] entry (the sky130 database
+/// does: same transistors, same 100 fF wire load as the cells), that
+/// measurement at `t_ramp` is used -- it is flat in `t_ramp`. Otherwise this
+/// falls back to the rung-0 constant [`CMOS_STATIC_E_PER_GATE_J`], which was
+/// measured into a **1 pF** load, ten times the cells' wire load, and so
+/// flatters the reversible side by about that factor.
+pub fn cmos_energy_per_gate_j(db: &CharDb, t_ramp: f64) -> f64 {
+    db.query(CMOS_STATIC_KEY, t_ramp)
+        .unwrap_or(CMOS_STATIC_E_PER_GATE_J)
+}
+
 /// One `(t_ramp, energy)` point of a swept curve.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SweepPoint {
@@ -72,6 +94,9 @@ pub struct CpuMoneyPlot {
     pub active_logic: Vec<SweepPoint>,
     /// Flat CMOS reference energy for the same active-logic gate count.
     pub cmos_ref_j: f64,
+    /// The per-gate CMOS energy behind `cmos_ref_j`
+    /// ([`cmos_energy_per_gate_j`]).
+    pub cmos_per_gate_j: f64,
     /// Active-logic cell count (the 1:1 CMOS-equivalent gate count).
     pub active_cells: usize,
     /// K0 balance-buffer count (no irreversible counterpart).
@@ -145,12 +170,16 @@ pub fn cpu_money_plot(
         r1_cells = bd.by_kind.get("cswap-r1").map(|v| v.count).unwrap_or(0);
     }
 
-    let cmos_ref_j = active_cells as f64 * CMOS_STATIC_E_PER_GATE_J;
+    let cmos_per_gate_j = t_ramps
+        .first()
+        .map_or(CMOS_STATIC_E_PER_GATE_J, |&t| cmos_energy_per_gate_j(db, t));
+    let cmos_ref_j = active_cells as f64 * cmos_per_gate_j;
 
     Ok(CpuMoneyPlot {
         full_step,
         active_logic,
         cmos_ref_j,
+        cmos_per_gate_j,
         active_cells,
         buffer_cells,
         r1_cells,
@@ -166,6 +195,16 @@ impl CpuMoneyPlot {
     /// Slope of the active-logic adiabatic curve (≈ −1).
     pub fn active_logic_slope(&self) -> f64 {
         log_log_slope(&self.active_logic)
+    }
+
+    /// The sampled ramp at which the full-step energy is lowest, and that
+    /// energy. On ideal devices this is simply the slowest ramp; on real
+    /// devices leakage turns the curve back up and the minimum is interior.
+    pub fn full_step_minimum(&self) -> Option<SweepPoint> {
+        self.full_step
+            .iter()
+            .copied()
+            .min_by(|a, b| a.energy_j.total_cmp(&b.energy_j))
     }
 
     /// True iff the active-logic energy is below the CMOS floor at every
@@ -194,7 +233,7 @@ impl std::fmt::Display for CpuMoneyPlot {
         writeln!(
             f,
             "  CMOS reference (flat): {} gates x {:.4e} J = {:.4e} J/step",
-            self.active_cells, CMOS_STATIC_E_PER_GATE_J, self.cmos_ref_j
+            self.active_cells, self.cmos_per_gate_j, self.cmos_ref_j
         )?;
         writeln!(f, "{:-<64}", "")?;
         writeln!(

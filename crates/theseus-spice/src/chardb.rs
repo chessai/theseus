@@ -23,10 +23,41 @@ pub struct CellChar {
     pub fit: EnergyFit,
 }
 
+/// How [`CharDb::query`] turns a cell's sweep into an energy at a ramp time
+/// between the measured points.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum QueryMode {
+    /// Evaluate the fitted ADR-0028 model `k_adia/t + k_leak*t + k_res`.
+    ///
+    /// Right for the rung-0 ideal-device sweeps, which are a clean `1/t` line.
+    #[default]
+    Fit,
+    /// Interpolate the *measured* points linearly in log-log space, so a
+    /// query at a measured ramp returns the measured energy exactly.
+    ///
+    /// Right for real-device (sky130) sweeps. Their curves bend twice -- the
+    /// `R_on*C` knee at the fast end and the leakage floor at the slow end --
+    /// and the three-term model misses the minimum between them by tens of
+    /// percent (it is fitted unweighted, so the large fast-end energies
+    /// dominate). The minimum is exactly where programs get priced.
+    LogLogInterp,
+}
+
+impl QueryMode {
+    fn is_fit(&self) -> bool {
+        *self == QueryMode::Fit
+    }
+}
+
 /// The full characterization database (deterministic key order via BTreeMap).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CharDb {
     pub cells: BTreeMap<String, CellChar>,
+    /// How [`CharDb::query`] evaluates between measured points. Omitted from
+    /// the serialized form when it is the default ([`QueryMode::Fit`]), so
+    /// the rung-0 database's RON is unchanged.
+    #[serde(default, skip_serializing_if = "QueryMode::is_fit")]
+    pub query_mode: QueryMode,
 }
 
 /// Errors returned by [`CharDb::query`].
@@ -84,7 +115,21 @@ pub fn rebuild(raw: &[(String, Vec<CharPoint>)]) -> CharDb {
             },
         );
     }
-    CharDb { cells }
+    CharDb {
+        cells,
+        query_mode: QueryMode::Fit,
+    }
+}
+
+/// [`rebuild`], but the resulting database answers queries by log-log
+/// interpolation of the measured points ([`QueryMode::LogLogInterp`]) instead
+/// of evaluating the fitted model. The fit is still computed and stored, as a
+/// record of how far the three-term model is from the data.
+pub fn rebuild_interpolated(raw: &[(String, Vec<CharPoint>)]) -> CharDb {
+    CharDb {
+        query_mode: QueryMode::LogLogInterp,
+        ..rebuild(raw)
+    }
 }
 
 /// Characterize every admitted reversible cell at `rung` over `periods` and
@@ -165,6 +210,24 @@ pub fn rung0_measured() -> CharDb {
     CharDb::from_ron(include_str!("../data/rung0-chardb.ron")).expect("golden rung0 char DB parses")
 }
 
+/// The real sky130 (rung-1) ngspice characterization, committed at
+/// `data/sky130-chardb.ron`: the same six cells as [`rung0_measured`], built
+/// from sky130 primitive transistors (`sky130_fd_pr` nfet/pfet_01v8, `tt`
+/// corner, VDD = 1.8 V) and swept over ten power-clock periods, three per
+/// decade from 1e-8 s to 1e-5 s.
+///
+/// Unlike rung 0 these curves have a minimum: energy falls as `~1/T` until
+/// sub-threshold leakage, which grows with `T`, takes over (near T = 1e-6 s
+/// for these cells). Queries interpolate the measured points
+/// ([`QueryMode::LogLogInterp`]).
+///
+/// Regenerate (needs ngspice + the PDK, i.e. `nix develop .#char`) via
+/// `cargo run --release --example characterize_sky130 > data/sky130-chardb.ron`.
+pub fn sky130_measured() -> CharDb {
+    CharDb::from_ron(include_str!("../data/sky130-chardb.ron"))
+        .expect("golden sky130 char DB parses")
+}
+
 impl CharDb {
     /// Serialize to pretty RON text (deterministic).
     pub fn to_ron(&self) -> String {
@@ -177,7 +240,9 @@ impl CharDb {
         ron::from_str(s)
     }
 
-    /// Query the fitted energy for `key` at `t_ramp`.
+    /// Query the energy for `key` at `t_ramp`: the fitted model's value, or
+    /// the log-log interpolation of the measured points, per
+    /// [`CharDb::query_mode`].
     ///
     /// **Contract (ADR-0028 C3.1):** only values within the cell's swept
     /// `[min, max]` range are accepted -- no extrapolation.
@@ -199,8 +264,28 @@ impl CharDb {
             });
         }
 
-        Ok(cell.fit.eval(t_ramp))
+        Ok(match self.query_mode {
+            QueryMode::Fit => cell.fit.eval(t_ramp),
+            QueryMode::LogLogInterp => loglog_interp(&cell.points, t_ramp),
+        })
     }
+}
+
+/// Piecewise-linear interpolation of `points` (sorted ascending by `t_ramp`)
+/// in `(ln t, ln E)` space. `t_ramp` must already be within the swept range.
+/// Exact at every measured point.
+fn loglog_interp(points: &[CharPoint], t_ramp: f64) -> f64 {
+    // First segment whose right end is at or beyond `t_ramp`.
+    let hi = points
+        .iter()
+        .position(|p| p.t_ramp >= t_ramp)
+        .expect("t_ramp is within the swept range");
+    if points[hi].t_ramp == t_ramp || hi == 0 {
+        return points[hi].energy;
+    }
+    let (a, b) = (&points[hi - 1], &points[hi]);
+    let frac = (t_ramp.ln() - a.t_ramp.ln()) / (b.t_ramp.ln() - a.t_ramp.ln());
+    (a.energy.ln() + frac * (b.energy.ln() - a.energy.ln())).exp()
 }
 
 #[cfg(test)]

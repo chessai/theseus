@@ -8,8 +8,8 @@
 --
 -- Starting from (1,1), three steps give:
 --   (1,1) -> (1,0) -> (0,1) -> (1,1)   (mod 2, period 3)
-
-type Bit = O | I
+--
+-- `Bit` comes from the implicit prelude.
 
 iso swap2 : Bit * Bit <-> Bit * Bit
 | (a, b) <-> (b, a)

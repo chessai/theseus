@@ -10,6 +10,21 @@ canonical form, so elaboration needs only to be *correct and deterministic*,
 not minimal. Scope: the plain fragment (E1-E3 below) plus **label elaboration
 to `trace`** (E4), the M1 slice-2 addition. Guards remain out (v0.2).
 
+**Implementation status.** The `demux` construction below is the specified
+structural form; `crates/theseus-check/src/elaborate.rs` does not build it yet.
+What it does instead: enumerate the input type, compute the clause table with
+the match/instantiate oracle, and decompose that table structurally where it
+recognizes the shape (tag-preserving, full tag swap, independent product
+factors, a controlled operation). Any other table -- an arbitrary permutation
+such as a 3-cycle, or a table whose two sides are different types -- becomes an
+admitted table `Prim` carrying the table itself (`table_prim`; admission
+re-checks that the table and its transpose are mutual inverses). So elaboration
+is total on accepted clause isos, but not always structural: a table `Prim`
+lowers through general reversible synthesis rather than as free rewiring. The
+"accepted implies elaborated" property is tested exhaustively over every
+bijection on a three-constructor type and on `(Bit, Bit)`, and over every
+bijection between `Either` and `(Bit, Bit)`.
+
 ## Expression bodies
 
 An `= expr` body (P0007-10, P0013) elaborates compositionally, one core

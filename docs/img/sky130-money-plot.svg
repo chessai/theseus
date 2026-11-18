@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="520" viewBox="0 0 880 520" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
 <rect width="880" height="520" fill="#ffffff"/>
 <text x="78" y="30" font-size="18" font-weight="700" fill="#111111" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">sky130 device families: energy per op</text>
-<text x="78" y="50" font-size="12" fill="#666666" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">adiabatic-TG recovers charge (slope ~ -1); pFAL falls then floors; static CMOS is flat</text>
+<text x="78" y="50" font-size="12" fill="#666666" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">adiabatic-TG recovers charge (slope ~ -1); pFAL falls, then leakage turns it up; static CMOS is flat</text>
 <line x1="124.599" y1="74" x2="124.599" y2="456" stroke="#eeeeee" stroke-width="0.75"/>
 <line x1="151.858" y1="74" x2="151.858" y2="456" stroke="#eeeeee" stroke-width="0.75"/>
 <line x1="171.199" y1="74" x2="171.199" y2="456" stroke="#eeeeee" stroke-width="0.75"/>
@@ -121,11 +121,11 @@
 <circle cx="697.2" cy="110.979" r="3.2" fill="#d95f02"/>
 <text x="465" y="502" font-size="13" fill="#333333" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">power-clock period (s)</text>
 <text x="22" y="265" font-size="13" fill="#333333" text-anchor="middle" transform="rotate(-90 22 265)" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">energy per op (J)</text>
-<rect x="592" y="84" width="250" height="70" rx="6" fill="#ffffff" fill-opacity="0.96" stroke="#cccccc"/>
-<line x1="600" y1="101" x2="620" y2="101" stroke="#1b9e77" stroke-width="3"/>
-<text x="628" y="105" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">adiabatic-tg-sky130 (slope -0.94)</text>
-<line x1="600" y1="119" x2="620" y2="119" stroke="#66c2a5" stroke-width="3"/>
-<text x="628" y="123" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">pfal-sky130 (slope -0.42)</text>
-<line x1="600" y1="137" x2="620" y2="137" stroke="#d95f02" stroke-width="3" stroke-dasharray="5,3"/>
-<text x="628" y="141" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">cmos-static-sky130 (slope +0.00)</text>
+<rect x="576.2" y="84" width="265.8" height="70" rx="6" fill="#ffffff" fill-opacity="0.96" stroke="#cccccc"/>
+<line x1="584.2" y1="101" x2="604.2" y2="101" stroke="#1b9e77" stroke-width="3"/>
+<text x="612.2" y="105" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">adiabatic-tg-sky130 (slope -0.94)</text>
+<line x1="584.2" y1="119" x2="604.2" y2="119" stroke="#66c2a5" stroke-width="3"/>
+<text x="612.2" y="123" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">pfal-sky130 (slope -0.42)</text>
+<line x1="584.2" y1="137" x2="604.2" y2="137" stroke="#d95f02" stroke-width="3" stroke-dasharray="5,3"/>
+<text x="612.2" y="141" font-size="11.5" fill="#222222" font-family="system-ui, -apple-system, Segoe UI, Roboto, sans-serif">cmos-static-sky130 (slope +0.00)</text>
 </svg>

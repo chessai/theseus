@@ -16,9 +16,8 @@
 -- The whole program elaborates to a core Iso and lowers to a k-CSWAP/R1 cell
 -- netlist whose untimed evaluation matches the interpreter over the entire
 -- finite domain (see theseus-netlist `tests/fib_lowering.rs`).
-
-type Bit = O | I
-type Nat = Zero | Succ Nat
+--
+-- `Bit` and `Nat` come from the implicit prelude.
 
 -- Swap the two registers.
 iso swap2 : Bit * Bit <-> Bit * Bit

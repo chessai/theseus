@@ -261,6 +261,11 @@ fn conformance_programs() {
         // μ-type depth annotation (ADR-0035 follow-up): use-site depth must
         // grade end-to-end (parse → check → elaborate → eval, fwd+bwd).
         "0021-mu-depth",
+        // Clause tables with no structural form (a 3-cycle) and tables between
+        // two different types: accepted by the checker, so they must run.
+        "0028-rot3",
+        "0029-cycle",
+        "0030-retag",
     ];
     let graded_stems: Vec<&str> = fixtures
         .iter()
@@ -325,7 +330,7 @@ fn conformance_diagnostics() {
         // 0007-parse is a parse-error test -- parse will fail, can't run check.
         let src = fs::read_to_string(thse_path)
             .unwrap_or_else(|e| panic!("reading {}: {e}", thse_path.display()));
-        let prog = match theseus_syntax::parse(&src) {
+        let prog = match theseus_check::parse(&src) {
             Ok(p) => p,
             Err(_) => {
                 eprintln!("[skip] diag {stem}: parse error fixture (cannot run check)");
@@ -370,7 +375,15 @@ fn conformance_diagnostics() {
     // Floor: a parser regression could turn all diag fixtures into
     // parse-error skips, leaving tested == 0 with the test still green.
     // Must-test stems: ensure critical diagnostic fixtures are not silently skipped.
-    const MUST_TEST_DIAG: &[&str] = &["0008-label-coverage"];
+    const MUST_TEST_DIAG: &[&str] = &[
+        "0008-label-coverage",
+        // Typing against the core type of each position (the TH-4a typing
+        // hypothesis): each of these once passed every check.
+        "0011-ctor-at-sum",
+        "0012-mu-depth-crossing",
+        "0013-mu-cutoff-ctor",
+        "0014-literal-out-of-range",
+    ];
     let diag_stems: Vec<&str> = fixtures
         .iter()
         .filter_map(|p| p.file_stem()?.to_str())

@@ -5,7 +5,8 @@
 //! * [`parse_diag`] for the `.diag` sidecar grammar;
 //! * [`parse_expect`] for the `.expect` forward-table grammar;
 //! * [`assert_diags`], the **set-based** diagnostic comparison (see below);
-//! * [`load_program`] which parses a `.thse` file, panicking with context.
+//! * [`load_program`] which parses a `.thse` file (prelude merged), panicking
+//!   with context.
 //!
 //! # Set-based comparison ([`assert_diags`])
 //!
@@ -75,11 +76,12 @@ fn collect_with_ext(dir: &Path, ext: &str) -> Vec<PathBuf> {
     out
 }
 
-/// Parse a `.thse` source file into a [`Program`], panicking with context.
+/// Parse a `.thse` source file into a [`Program`] with the implicit prelude
+/// merged in (via [`crate::parse`]), panicking with context.
 pub fn load_program(path: &Path) -> Program {
     let src =
         fs::read_to_string(path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
-    theseus_syntax::parse(&src).unwrap_or_else(|e| panic!("parsing {}: {e:?}", path.display()))
+    crate::parse(&src).unwrap_or_else(|e| panic!("parsing {}: {e:?}", path.display()))
 }
 
 /// Parse a `.diag` sidecar into expected diagnostic blocks.

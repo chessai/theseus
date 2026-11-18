@@ -17,6 +17,7 @@ build, not by anyone remembering to run a command.
 -/
 import TheseusProofs.Reversibility
 import TheseusProofs.FiniteTrace
+import TheseusProofs.Coverage
 
 open Lean Elab Command
 
@@ -61,7 +62,59 @@ elab "#assert_only_base_axioms " : command => do
     ``Theseus.FiniteTrace.run_symm_entry,
     ``Theseus.FiniteTrace.traj_cross_injective,
     ``Theseus.FiniteTrace.traj_disjoint,
-    ``Theseus.FiniteTrace.traj_card_bound ]
+    ``Theseus.FiniteTrace.traj_card_bound,
+    -- Coverage (TH-4a, plain fragment): checker transcription, L1, L2, soundness
+    -- (total bijection + adjoint is the inverse), converse (+ its counterexample)
+    ``Theseus.Coverage.mem_enumerate,
+    ``Theseus.Coverage.Pat.isSome_matchBind,
+    ``Theseus.Coverage.covers_iff,
+    ``Theseus.Coverage.Pat.matchBind_instantiate,
+    ``Theseus.Coverage.Pat.instantiate_matchBind,
+    ``Theseus.Coverage.Pat.instantiate_matchBind_exact,
+    ``Theseus.Coverage.Clause.fire_swap,
+    ``Theseus.Coverage.Clause.fire_swap_iff,
+    ``Theseus.Coverage.apply_total,
+    ``Theseus.Coverage.apply_adjoint,
+    ``Theseus.Coverage.adjoint_apply,
+    ``Theseus.Coverage.rel_iff_apply,
+    ``Theseus.Coverage.denote_bijective,
+    ``Theseus.Coverage.denote_adjoint_leftInverse,
+    ``Theseus.Coverage.denote_adjoint_rightInverse,
+    ``Theseus.Coverage.toEquiv,
+    ``Theseus.Coverage.Accepted.totalBijection,
+    ``Theseus.Coverage.Accepted.irredundant,
+    ``Theseus.Coverage.covers_of_totalBijection,
+    ``Theseus.Coverage.coverage_iff_totalBijection,
+    ``Theseus.Coverage.completeness_needs_irredundant,
+    ``Theseus.Coverage.firstMatch_bijection_not_covered,
+    -- Coverage (TH-4a-label): the label-aware matcher/checks are the plain ones
+    -- over `U + A` / `U + B`, so the label body is a total bijection
+    ``Theseus.Coverage.LPat.matchBind_eq,
+    ``Theseus.Coverage.LPat.instantiate_eq,
+    ``Theseus.Coverage.LPat.matchesVal_eq,
+    ``Theseus.Coverage.LAccepted.toPlain,
+    ``Theseus.Coverage.applyExt_eq_apply,
+    ``Theseus.Coverage.applyExt_total,
+    ``Theseus.Coverage.applyExt_ladjoint,
+    ``Theseus.Coverage.ladjoint_applyExt,
+    ``Theseus.Coverage.LAccepted.toEquiv,
+    ``Theseus.Coverage.LAccepted.applyExt_eq_toEquiv,
+    ``Theseus.Coverage.LAccepted.applyExt_ladjoint_eq_toEquiv_symm,
+    -- Coverage: typing as the checker's `var_types` test, and the conformance
+    -- fixtures replayed (kernel `decide`, no `native_decide`)
+    ``Theseus.Coverage.Clause.wellTyped_iff,
+    ``Theseus.Coverage.LClause.wellTyped_iff,
+    ``Theseus.Coverage.Fixtures.swapMaybe_accepted,
+    ``Theseus.Coverage.Fixtures.cnot_accepted,
+    ``Theseus.Coverage.Fixtures.nonexhaustive_rejected,
+    ``Theseus.Coverage.Fixtures.overlap_rejected,
+    ``Theseus.Coverage.Fixtures.nonlinear_rejected,
+    ``Theseus.Coverage.Fixtures.erasure_rejected,
+    ``Theseus.Coverage.Fixtures.spin_accepted,
+    ``Theseus.Coverage.Fixtures.stuck_rejected,
+    -- Coverage: the two tables `typing.rs` wrongly accepted (typing is load-bearing)
+    ``Theseus.Coverage.Fixtures.sumCtor_untyped_not_injective,
+    ``Theseus.Coverage.Fixtures.muEscape_untyped_escapes ]
   for t in targets do
     let axs ← liftCoreM <| collectAxioms t
     let bad := axs.filter (fun a =>

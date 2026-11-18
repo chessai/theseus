@@ -41,6 +41,23 @@ is `Bit` (diagnostic `0005`) -- is `T0102` with the offending `side:` and
 1-indexed `clauses:`. (Names catches *unknown* constructors; Typing catches
 *known but mis-typed* ones.)
 
+"The type its position demands" is the **core** type at that position
+(§Types), and a variable MUST have one core type across both sides of its
+clause. Three consequences, each `T0102`:
+
+- A constructor is well-typed only at the named type that declares it -- not
+  at an anonymous sum `S + T` one of whose summands is that type (diagnostic
+  `0011`). The only pattern typed at `S + T` is a variable.
+- Inside a recursive type the core type depends on the unroll depth
+  (ADR-0035), so a variable bound under one constructor of `Nat` and used at
+  a different depth is mis-typed (diagnostic `0012`; `name:` the variable).
+- A constructor at a position past the unroll cutoff, where the core type is
+  `0`, is mis-typed (diagnostic `0013`).
+
+A numeric literal `k` is well-typed only at a builtin `U<n>` and only for
+`k < 2^n` (diagnostic `0014`): an out-of-range literal matches no value, so
+Coverage cannot reject it.
+
 ### 3. Linearity -- `T0201`, `T0202`
 
 For each clause, over the variables of `lᵢ` and of `rᵢ`:

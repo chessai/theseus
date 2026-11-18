@@ -1,0 +1,9 @@
+error: T0102
+side: right
+clauses: 2
+name: a
+
+error: T0102
+side: right
+clauses: 2
+name: b

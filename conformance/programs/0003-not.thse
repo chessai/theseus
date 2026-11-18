@@ -1,5 +1,6 @@
 -- Conformance P0003 (dialect: synthesizable)
-type Bit = O | I
+-- `notb` is this file's subject, so it is declared here; it replaces the
+-- (identical) prelude copy.
 
 iso notb : Bit <-> Bit
 | O <-> I

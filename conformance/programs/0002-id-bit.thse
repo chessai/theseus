@@ -1,5 +1,4 @@
 -- Conformance P0002 (dialect: synthesizable)
-type Bit = O | I
 
 iso idb : Bit <-> Bit
 | O <-> O

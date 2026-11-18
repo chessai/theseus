@@ -96,6 +96,7 @@ fn composite_energy_is_3_ek0_plus_1_ek1() {
     let (e_k0, e_k1) = (2.0e-15, 7.0e-15);
     let db = CharDb {
         cells: BTreeMap::from([const_cell("cswap-k0", e_k0), const_cell("cswap-k1", e_k1)]),
+        query_mode: Default::default(),
     };
     let net = composite_net();
 
@@ -129,6 +130,7 @@ fn composite_energy_is_3_ek0_plus_1_ek1() {
 fn annotation_inherits_the_interpolation_contract() {
     let db = CharDb {
         cells: BTreeMap::from([const_cell("cswap-k0", 2e-15), const_cell("cswap-k1", 7e-15)]),
+        query_mode: Default::default(),
     };
     let net = composite_net();
     // Out-of-range ramp: hard error, no extrapolation (C3.1).
@@ -139,6 +141,7 @@ fn annotation_inherits_the_interpolation_contract() {
     // A DB missing a placed kind: hard error.
     let db_k0_only = CharDb {
         cells: BTreeMap::from([const_cell("cswap-k0", 2e-15)]),
+        query_mode: Default::default(),
     };
     assert_eq!(
         compiled_energy(&net, &db_k0_only, 1e-7),
@@ -170,6 +173,7 @@ fn fixture_energy_tracks_the_fitted_model_not_the_raw_points() {
     };
     let db = CharDb {
         cells: BTreeMap::from([("cswap-k1".to_string(), cell)]),
+        query_mode: Default::default(),
     };
     let net = lower_iso(&fredkin_iso()).unwrap();
     let e1 = compiled_energy(&net, &db, 1e-7).unwrap().total_j;

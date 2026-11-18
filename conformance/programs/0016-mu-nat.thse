@@ -2,6 +2,8 @@
 -- A recursive nominal type, checked and elaborated via bounded unrolling at
 -- the default depth D = 4: Nat lowers to 1 + (1 + (1 + (1 + 0))), i.e. the
 -- numerals 0..=3. Coverage enumerates the truncated (finite) domain.
+-- `Nat` is this file's subject, so it is declared here; it replaces the
+-- (identical) prelude copy.
 type Nat = Zero | Succ Nat
 
 iso idNat : Nat <-> Nat

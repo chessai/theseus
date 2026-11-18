@@ -97,7 +97,8 @@ library and emits a single reversible `Add`; a byte-wide Fibonacci
     `= swap2` at the wrong width pass). For a structural iso this only permutes; for
     `add_into` it can mint values outside the declared type (a `W8` sum at a `W4`
     site). Fix: a whole-iso `type_of(body) == lower(sig)` check (blast radius across
-    all isos -> its own change).
+    all isos -> its own change). **Closed since:** `check` now rejects this program
+    with `T0102` on `f` (re-tested 2026-11-17).
   - *Builtin type names are reserved silently.* A user `type W8 = ...` (or `U8`,
     `W08`) is shadowed by the builtin with no diagnostic. No program in the corpus
     declares one; a reserved-name diagnostic is the fix.
@@ -105,3 +106,25 @@ library and emits a single reversible `Add`; a byte-wide Fibonacci
     elaborates to the `unsupported()` sentinel, so `check` reports `ok` on a program
     that cannot run. CLI value marshaling also `panic!`s (rather than erroring) on an
     out-of-range literal (e.g. `256` at `W8`) -- both shared with `U<n>`.
+  - *Type variables in iso and prim signatures are accepted but never
+    instantiated* (found 2026-11-17, open). The grammar admits a `tyvar` wherever
+    a `ty` is allowed, which includes iso and prim signatures, but type parameters
+    are only monomorphized for `type` declarations: isos and prims are monomorphic.
+    The checker treats the two inconsistently:
+    - `iso idv : a <-> a | x <-> x` checks `ok` on its own, but using it at a
+      concrete type (`iso f : W8 * W8 <-> W8 * W8 = idv`) is `T0102`. So a
+      polymorphic `swap2 : a * b <-> b * a` cannot be written in the surface
+      language, although Core Π has `swapˣ : a × b ↔ b × a`.
+    - `prim p : a * a <-> a * a = "theseus.arith.add_into"` checks `ok`, and so
+      does every use of `p`, at `W8 * W8`, at `W4 * W4`, and at `Bit * Bit` (which
+      the builtin does not support). None of them elaborates (`iso f could not be
+      elaborated`). This is the previous gap (rejected prim references are silent)
+      reached through a type variable, which also defeats the body-vs-signature
+      check.
+
+    Nothing runs wrongly, since every case stops at elaboration, but `check`
+    reports `ok` on programs that cannot run. One key at several widths works
+    today by declaring it under several names (`prim add4 : W4 * W4 ...`,
+    `prim add8 : W8 * W8 ...`). Fix, either: reject type variables in iso and
+    prim signatures (`T0102`) until iso polymorphism exists; or implement
+    instantiation at use sites, which is a language feature of its own.

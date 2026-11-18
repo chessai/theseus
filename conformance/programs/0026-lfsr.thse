@@ -15,22 +15,8 @@
 -- Full program: iter Nat@6 lfsrStep — domain = 6 × 16 = 96.
 -- ROM 104 instrs, wcet B = 104, 10 Swapbr (2 guard × 5 copies).
 -- 5-step orbit from seed 0b0001: 1 → 9 → 13 → 15 → 14 → 7.
-
-type Nat = Zero | Succ Nat
-type Bit = O | I
-
--- Prelude gates (structural dedup drops these when the prelude is applied)
-iso notb : Bit <-> Bit
-| O <-> I
-| I <-> O
-
-iso swapBit : Bit * Bit <-> Bit * Bit
-| (a, b) <-> (b, a)
-
-iso cnot : Bit * Bit <-> Bit * Bit
-| (O, b) <-> (O, b)
-| (I, O) <-> (I, I)
-| (I, I) <-> (I, O)
+--
+-- `Nat`, `Bit`, `swapBit` and `cnot` come from the implicit prelude.
 
 -- Bit identity (1-wire)
 iso idb : Bit <-> Bit

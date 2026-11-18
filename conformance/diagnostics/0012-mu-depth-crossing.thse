@@ -1,0 +1,7 @@
+-- D0012: a variable at two unroll depths of a recursive type (ADR-0035).
+-- `a` is bound under one `Succ` (numerals 0..2) and used at the root (0..3);
+-- `b` the other way, so (1, 3) would go to (0, 4), outside the depth-4 domain.
+
+iso f : Nat * Nat <-> Nat * Nat
+| (Zero, b)   <-> (b, Zero)
+| (Succ a, b) <-> (a, Succ b)
