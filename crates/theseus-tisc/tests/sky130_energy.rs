@@ -98,11 +98,11 @@ fn cmos_reference_is_the_databases_own_measurement() {
 /// the full step netlist.
 ///
 /// What the numbers say: per step the machine is best at a 1 µs period, where
-/// it dissipates about 0.67 nJ -- 1.7x less than charging its 3290 active
+/// it dissipates about 0.77 nJ -- 1.5x less than charging its 3290 active
 /// cells as static-CMOS gates at the same wire load. Its active logic alone
-/// is about 54x below that reference; the difference is the ~589k
+/// is about 45x below that reference; the difference is the ~589k
 /// tick-alignment buffers, which carry ~97% of the energy. Away from the
-/// minimum (faster than ~0.3 µs or slower than ~3 µs) the reference wins.
+/// minimum (faster than ~0.3 µs or slower than ~2 µs) the reference wins.
 #[cfg(feature = "heavy-tests")]
 #[test]
 fn full_step_on_sky130_golden() {
@@ -123,7 +123,7 @@ fn full_step_on_sky130_golden() {
         min.t_ramp
     );
     assert!(
-        close(min.energy_j, 6.6619e-10),
+        close(min.energy_j, 7.6850e-10),
         "full step {:e} J",
         min.energy_j
     );
@@ -138,9 +138,9 @@ fn full_step_on_sky130_golden() {
     let (full, active) = at(1e-6);
     let cmos = plot.active_cells as f64 * sky130().query(CMOS_STATIC_KEY, 1e-6).unwrap();
     assert!(close(cmos, 1.1491e-9), "CMOS-equivalent {cmos:e} J");
-    assert!(close(cmos / full, 1.725), "CMOS/reversible {}", cmos / full);
-    assert!(close(active, 2.1442e-11), "active logic {active:e} J");
-    assert!(cmos / active > 50.0);
+    assert!(close(cmos / full, 1.495), "CMOS/reversible {}", cmos / full);
+    assert!(close(active, 2.5288e-11), "active logic {active:e} J");
+    assert!(cmos / active > 40.0);
     // Buffers dominate: active logic is a few percent of the step.
     assert!(active / full < 0.05);
 

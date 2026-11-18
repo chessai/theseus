@@ -436,8 +436,18 @@ fn token_line_pwl(
 /// mid-period energy rises ~7× (R_on and gate charge grow) and the leak
 /// gets so small that floating 0-token wires drift for many cycles, so the
 /// settled-cycle energy is no longer periodic at slow T (etot even turns
-/// negative). At L = 0.15 the leak-balance equilibrium is reached within a
-/// cycle (τ ≈ C·V/I_leak ≈ 140 ns) and the floor is cleanly measurable.
+/// negative).
+///
+/// At L = 0.15 an idle rail still drifts, only less. While its line carries
+/// no token it has no path to a supply, and OFF-gate leakage from the clock
+/// rails lifts it by 3 to 4 mV per µs (k0 and R1 outputs, 100 fF,
+/// T = 1e-6; measured over 40 cycles, still rising at the end). The leakage
+/// it draws falls as it rises, so at T = 1e-6 and slower the energy of a
+/// cycle depends on how long the idle rails have floated. k0 at T = 1e-6
+/// measures 1.26e-15 J on the cycle the database records (rails start at
+/// 0 V, `WARMUP_CYCLES` cycles earlier) and 1.04e-15 J 36 cycles later; at
+/// T = 1e-7 the two differ by under 0.1 %. The database value is the cost
+/// with recently used rails, near the top of that range.
 const TG_L_UM: f64 = 0.15;
 
 /// Capacitive load on every cell output wire, farads (100 fF). A static-CMOS
@@ -1195,7 +1205,7 @@ mod tests {
         truth_table_sky130_topo(CellTopo::R1);
     }
 
-    /// Rung-1 slope over the adiabatic regime (2.5 decades). Real silicon:
+    /// Rung-1 slope over a cell's adiabatic window. Real silicon:
     /// expect ≈ −1 with a leakage-set shallowing at the slow end; the bound
     /// still fails on any qualitative regression (a stranded-charge dump or
     /// crowbar path flattens the curve far above it).
@@ -1238,14 +1248,16 @@ mod tests {
         );
     }
 
-    // Per-cell adiabatic windows, each 2 decades (measured):
+    // Per-cell adiabatic windows, 2 decades each for k0..k2 and 1.5 for k3
+    // (measured):
     // * below the fast end the ramp approaches the branch R_on·C_load knee
     //   (k2's 3-series-TG path pushes its knee ~⅓ decade higher: at
     //   T = 3.16e-9 its output only reaches 1.62 V = 0.90·VDD);
     // * above the slow end the OFF-gate subthreshold floor (~7e-10 W for
     //   k0 at L = 0.15) takes over -- the k0 curve bottoms at T ≈ 1e-6
-    //   (1.09e-15 J) and RISES again by 3.16e-6 (2.13e-15 J), the textbook
-    //   leakage knee. Measured slopes: k0 −0.93, k1 −0.88, k2 −0.87.
+    //   (1.26e-15 J) and RISES again by 4.64e-6 (3.30e-15 J), the textbook
+    //   leakage knee. Measured slopes: k0 −0.91, k1 −0.88, k2 −0.84,
+    //   k3 −0.86.
 
     #[test]
     fn cswap_k0_slope_sky130() {
@@ -1263,10 +1275,12 @@ mod tests {
     }
 
     // k = 3: 4 series TGs in the swap path push the R_on·C knee ~½ decade
-    // higher than k = 2; shift the window accordingly.
+    // higher than k = 2, so the window starts at 3.16e-8. It ends at 1e-6:
+    // k3's energy minimum is near 2e-6, and a window reaching 3.16e-6 fits
+    // the leakage rise as well (slope −0.68, outside the bound).
 
     #[test]
     fn cswap_k3_slope_sky130() {
-        slope_sky130(3, [3.16e-8, 3.16e-7, 3.16e-6], -1.15, -0.7);
+        slope_sky130(3, [3.16e-8, 1.78e-7, 1e-6], -1.15, -0.7);
     }
 }

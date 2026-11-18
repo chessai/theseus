@@ -13,13 +13,13 @@ what makes programs safe to run on reversible hardware, where information is
 never erased and so never has to pay the Landauer energy cost of erasure.
 
 <p align="center">
-  <img src="docs/img/cpu-money-plot.svg" width="760" alt="Energy per CPU step on sky130 device models falls as ~1/T as the power clock slows, reaches a minimum near a 1 microsecond period where leakage takes over, and rises again. At the minimum the whole machine is 1.7x below the CMOS-equivalent reference and its active logic is 54x below it. On ideal transistors the curve keeps falling."><br>
+  <img src="docs/img/cpu-money-plot.svg" width="760" alt="Energy per CPU step on sky130 device models falls as ~1/T as the power clock slows, reaches a minimum near a 1 microsecond period where leakage takes over, and rises again. At the minimum the whole machine is 1.5x below the CMOS-equivalent reference and its active logic is 45x below it. On ideal transistors the curve keeps falling."><br>
   <em>Energy per CPU step on SkyWater sky130 device models. Slowing the power
   clock recovers more of the switching energy, so the step gets cheaper as
   ~1/T -- until leakage, which grows with T, turns the curve back up. At the
-  best period (1 &micro;s) the whole machine dissipates <strong>1.7&times;</strong>
+  best period (1 &micro;s) the whole machine dissipates <strong>1.5&times;</strong>
   less than the CMOS-equivalent reference; its logic alone,
-  <strong>54&times;</strong> less.</em>
+  <strong>45&times;</strong> less.</em>
 </p>
 
 ## The pipeline
@@ -81,21 +81,21 @@ At the best clock period, 1 &micro;s:
 
 | | reversible | CMOS-equivalent | advantage |
 |---|---|---|---|
-| one CPU step, whole machine | 0.67 nJ | 1.15 nJ | 1.7&times; |
-| one CPU step, active logic only | 0.021 nJ | 1.15 nJ | 54&times; |
-| `fib` (u8), 10 steps, whole program | 19.2 nJ | 22.2 nJ | 1.16&times; |
-| half-adder, whole program | 10.8 nJ | 16.0 nJ | 1.5&times; |
+| one CPU step, whole machine | 0.77 nJ | 1.15 nJ | 1.5&times; |
+| one CPU step, active logic only | 0.025 nJ | 1.15 nJ | 45&times; |
+| `fib` (u8), 10 steps, whole program | 22.1 nJ | 22.2 nJ | 1.01&times; |
+| half-adder, whole program | 12.4 nJ | 16.0 nJ | 1.3&times; |
 
 Three things to read off the plot above:
 
-- **The logic wins by 54&times;; the machine by 1.7&times;.** In this fabric
+- **The logic wins by 45&times;; the machine by 1.5&times;.** In this fabric
   every wire is re-registered on every clock tick, so signals that reconverge
   must be padded to arrive together. The CPU step has 3,290 active cells and
   about 589,000 of those tick-alignment buffers, which carry about 97% of its
   energy. That overhead, not the logic, is what stands between the two numbers.
 - **There is a best speed.** Clocked faster than about 0.3 &micro;s, resistive
   loss dominates and the reference wins. Clocked slower than about
-  3 &micro;s, leakage dominates and the reference wins again.
+  2 &micro;s, leakage dominates and the reference wins again.
 - **The floor is the transistors', not the logic's.** The dashed curve is the
   same machine on ideal transistors with no leakage: it keeps falling as
   `1/T` for as long as you are willing to wait.
@@ -112,8 +112,10 @@ adiabatic logic falls and then turns back up, and static CMOS stays flat.
   100 fF per rail, so compare the shapes, not the heights.</em>
 </p>
 
-**On real programs** the whole-machine and logic-only energies bracket the
-reference the same way. The byte-wide (U8) Fibonacci below is ten reversible
+**On real programs** the picture is the same, with less margin: the half-adder
+machine is 1.3&times; below the reference, and the Fibonacci machine only
+breaks even with it (22.1 nJ against 22.2 nJ), while the active logic of each
+is 45 to 47&times; below. The byte-wide (U8) Fibonacci below is ten reversible
 `(a, b) |-> (b, a + b mod 256)` steps, each compiling to the two-word datapath
 `EXCH ; ADD`.
 
@@ -126,7 +128,12 @@ reference the same way. The byte-wide (U8) Fibonacci below is ten reversible
 **What this is not.** It is a model, not silicon: the power clocks are ideal
 sources (no clock-generator or resonator loss), there are no layout parasitics,
 and a program's energy is a sum of per-cell measurements, not a SPICE run of the
-whole netlist.
+whole netlist. At periods of 1 &micro;s and slower a cell's energy also depends
+on how long its unused rails have been floating: they drift upward through
+leakage, and draw less as they do. The database records the cost with recently
+used rails, which is near the top of that range (in a 40-cycle run at
+1 &micro;s the buffer cell falls from 1.26 fJ to 1.04 fJ per cycle and is
+still falling).
 
 Reproduce:
 
